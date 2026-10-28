@@ -14,6 +14,15 @@ description: 维护「鱼缸」这个 QQ 群机器人时使用：查状态、看
 `MASTER_QQ` / `GROUPS`。`npm start`、`probe`、`ops`、`ping` 都会自动加载它。
 模块 key 不在 `.env` 里，在 `config/auth.json`。
 
+## 拉起 / 收掉
+
+```bash
+npm run doctor     # 体检
+npm run up         # 等协议端 → 起鱼
+npm run down       # 收掉
+npm run protocol status   # 协议端装没装、WS 通不通
+```
+
 ## 查状态
 
 ```bash

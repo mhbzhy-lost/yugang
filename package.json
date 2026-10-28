@@ -14,7 +14,11 @@
     "prompts": "node scripts/prompts.ts",
     "ops": "node --env-file-if-exists=.env scripts/ops.ts",
     "ping": "node --env-file-if-exists=.env scripts/ping.ts",
-    "creds": "node scripts/creds.ts"
+    "creds": "node scripts/creds.ts",
+    "protocol": "node --env-file-if-exists=.env scripts/protocol.ts",
+    "up": "node --env-file-if-exists=.env scripts/up.ts",
+    "down": "node --env-file-if-exists=.env scripts/down.ts",
+    "doctor": "node --env-file-if-exists=.env scripts/doctor.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",

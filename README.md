@@ -205,6 +205,27 @@ cp .env.example .env      # 已经在仓库里给你放好一份了
 
 `npm start` / `probe` / `ops` / `ping` 都会自动读 `.env`（`--env-file-if-exists`），不用手动 export。
 
+## 一条命令
+
+```bash
+npm run doctor     # 体检：缺什么、怎么补
+npm run up         # 体检 → 等/拉协议端 → 起鱼；Ctrl-C 一起收
+npm run down       # 收掉 up 起的进程
+```
+
+`npm run up` 会等协议端就绪（最多 5 分钟，期间你去扫码），就绪后再启动鱼。
+如果想让 up 顺手拉起协议端，在 `.env` 里填 `PROTOCOL_CMD`。
+
+协议端安装（下载 + 写 OneBot 配置）：
+
+```bash
+npm run protocol install    # 下载 NapCat 到 var/protocol/napcat，按 .env 写好 WS 服务
+npm run protocol status     # 装了没、QQ 在不在、WS 通不通
+```
+
+macOS 上 NapCat 只有框架包、没有启动脚本：需要先 `brew install --cask qq`，再用
+LiteLoaderQQNT 挂进去，然后扫码。这条链路的最后两步是 GUI 操作，脚本只能把包准备好。
+
 ## 跑起来
 
 ```bash
