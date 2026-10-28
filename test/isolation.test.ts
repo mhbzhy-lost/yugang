@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
@@ -39,6 +40,8 @@ test("模型正文不出境，只有 say 的 text 会", async () => {
     models,
     model: { provider: faux.provider.id, modelId: faux.models[0].id },
     persona,
+    skillsRoot: fileURLToPath(new URL("../skills", import.meta.url)),
+    workspaceRoot: mediaRoot(),
     mediaRoot: mediaRoot(),
     emit: (_id, payload) => {
       outbox.push(payload.text);
@@ -78,6 +81,8 @@ test("从思考里抄来的话被拒，且以 tool 错误返回", async () => {
     models,
     model: { provider: faux.provider.id, modelId: faux.models[0].id },
     persona,
+    skillsRoot: fileURLToPath(new URL("../skills", import.meta.url)),
+    workspaceRoot: mediaRoot(),
     mediaRoot: mediaRoot(),
     emit: (_id, payload) => {
       outbox.push(payload.text);

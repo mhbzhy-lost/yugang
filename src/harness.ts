@@ -1,11 +1,17 @@
 /**
  * 把 pi-durable 组装成「鱼」。
  *
- * 一个 Conversation = 一个 QQ 群。Harness 负责答案、工具调用、崩溃恢复；
- * 我们只贡献三样东西：人格 section、say 工具、以及一个不暴露 transcript 的出站口。
+ * 一只鱼身上只有三样东西：
+ *   两只手  bash + read        （能力全靠 skills 里的脚本，用 bash 调）
+ *   一张嘴  say                （唯一出口，硬校验）
+ *
+ * 一个 Conversation = 一个 QQ 群，自带 cwd 与 env，互不串。
  */
+import { mkdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, type Models } from "@earendil-works/pi-ai/models";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import {
   Harness,
   createRegistry,
@@ -17,6 +23,8 @@ import {
 } from "@earendil-works/pi-durable";
 import { DEFAULT_LIMITS, type EgressLimits } from "./egress/policy.ts";
 import { createSayTool, type OutboundPayload } from "./egress/say.ts";
+import { createHands } from "./sandbox.ts";
+import { discoverSkills, renderSkillsPrompt } from "./skills.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -27,15 +35,17 @@ export interface ModelRef {
 
 export interface FishOptions {
   storage: Storage;
-  /** 已经配好 provider 的 Models；不传就新建一个空的。 */
   models?: Models;
   model: ModelRef;
-  /** 人格书全文，作为 system prompt 的一个 section。 */
+  /** 人格书全文。 */
   persona: string;
-  /** 媒体白名单根目录（发图只能发这里的）。 */
+  /** skills 根目录；每个子目录一个 SKILL.md。 */
+  skillsRoot: string;
+  /** 媒体白名单根目录（发图只能发这里面的）。 */
   mediaRoot: string;
+  /** 每个群的工作目录根；实际 cwd 是 <workspaceRoot>/<groupKey>。 */
+  workspaceRoot: string;
   limits?: Partial<Omit<EgressLimits, "mediaRoot">>;
-  /** 出站口：校验通过的消息落到这里，由 QQ 适配器负责真正发出去。 */
   emit: (conversationId: ConversationId, payload: OutboundPayload) => void | Promise<void>;
   now?: () => number;
 }
@@ -43,7 +53,7 @@ export interface FishOptions {
 export interface Fish {
   harness: Harness;
   models: Models;
-  /** 取（或创建）某个群的会话。groupKey 建议用 `qq:group:<群号>`。 */
+  skills: ReturnType<typeof discoverSkills>;
   group(groupKey: string): Promise<Conversation>;
   close(): Promise<void>;
 }
@@ -51,34 +61,66 @@ export interface Fish {
 export async function openFish(options: FishOptions): Promise<Fish> {
   const models = options.models ?? createModels();
   const now = options.now ?? Date.now;
-
   const limits: EgressLimits = { ...DEFAULT_LIMITS, ...options.limits, mediaRoot: options.mediaRoot };
 
-  const say = createSayTool({ limits, emit: options.emit, now });
+  // 脚本要在任意 cwd 下都能跑，所以这两个根必须是绝对路径
+  const skillsRoot = resolve(options.skillsRoot);
+  const mediaRoot = resolve(options.mediaRoot);
+  const workspaceRoot = resolve(options.workspaceRoot);
+  limits.mediaRoot = mediaRoot;
 
-  const fish = defineExtension({
+  const skills = discoverSkills(skillsRoot);
+  const say = createSayTool({ limits, emit: options.emit, now });
+  const hands = createHands({ mediaRoot, skillsRoot });
+
+  // 手：bash + read，就这两样
+  const Hands = defineExtension({ name: "hands", tools: [hands.bash, hands.read] });
+
+  // 嘴 + 身份 + 手艺清单
+  const Fish = defineExtension({
     name: "fish",
-    // 人格书：不是「语气提示」而是身份，放最前面
-    sections: [section("persona", () => options.persona, { tag: false })],
     tools: [say],
+    sections: [
+      section("persona", () => options.persona, { tag: false }),
+      section("skills", () => renderSkillsPrompt(skills), { tag: true }),
+    ],
   });
 
   const registry = createRegistry();
-  registry.install(fish);
+  registry.install(Hands);
+  registry.install(Fish);
 
-  const harness = await Harness.open(options.storage, { models, registry, now }, ctx);
+  mkdirSync(workspaceRoot, { recursive: true });
+
+  const harness = await Harness.open(
+    options.storage,
+    {
+      models,
+      registry,
+      now,
+      // 每个群一个 cwd：文件、临时产物、skill 生成的东西都落在这里
+      env: (target) => {
+        const cwd = target.cwd ?? join(workspaceRoot, String(target.conversationId));
+        mkdirSync(cwd, { recursive: true });
+        return new NodeExecutionEnv({ cwd });
+      },
+    },
+    ctx,
+  );
 
   const groups = new Map<string, Promise<Conversation>>();
 
   return {
     harness,
     models,
+    skills,
     group(groupKey) {
       let existing = groups.get(groupKey);
       if (!existing) {
-        // 一个群一个 conversation：transcript、上下文、记忆、工具都自然隔离
+        const cwd = join(workspaceRoot, safeName(groupKey));
+        mkdirSync(cwd, { recursive: true });
         existing = harness.createConversation(
-          { ownership: { kind: "ownerless" }, agent: { model: options.model } },
+          { ownership: { kind: "ownerless" }, agent: { model: options.model, cwd } },
           ctx,
         );
         groups.set(groupKey, existing);
@@ -89,4 +131,8 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       await harness.close(ctx);
     },
   };
+}
+
+function safeName(key: string): string {
+  return key.replace(/[^A-Za-z0-9._-]+/g, "_");
 }

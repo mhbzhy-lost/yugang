@@ -8,10 +8,14 @@
 群消息 ──► 规则闸（零 LLM）──► conversation.submit()
                                       │
                                 pi-durable 跑 agent loop
-                                ├── thinking      ✗ 不出境
-                                ├── tool calls    ✗ 不出境
-                                ├── 正文          ✗ 不出境
+                                ├── thinking          ✗ 不出境
+                                ├── tool calls        ✗ 不出境
+                                ├── 正文              ✗ 不出境
                                 └── say(text, media)  ✓ 硬校验 → fish.outbound → QQ
+
+鱼身上只有三样东西：
+  两只手  bash + read   能力扩展全部是 skills/<name>/SKILL.md + 脚本，用 bash 跑
+  一张嘴  say           唯一出口
 ```
 
 ## 为什么出口是一个 tool
@@ -22,6 +26,32 @@
 - **出境必须是一次显式调用**，参数受结构校验，失败会作为 tool 错误回到模型，同一轮里改口重说。
 - **`callers: ["model"]`**：脚本、嵌套工具调用（`api.executeTool`）都碰不到 `say`，绕不过校验。
 - **拒绝不静默丢弃**：静默丢弃 = 群里一片死寂，而且模型永远学不会。
+
+## 为什么只有 bash + read
+
+**能力扩展不该长在宿主上。** 每加一个能力就改一次宿主代码、装一次依赖、重启一次进程，
+最后你会得到一个 90 个工具的怪物，prompt 里塞满它这辈子用不上的工具说明。
+
+skills 的做法是把能力放回磁盘：
+
+```
+skills/draw/
+  SKILL.md            name + description + 步骤（模型按需 read，不占常驻上下文）
+  scripts/make.mjs    纯标准库脚本，用 bash 跑
+```
+
+常驻上下文里每个 skill 只占一行：名字 + 什么时候用 + 路径。要做什么事，模型自己
+`read` 那个 SKILL.md，再 `bash` 跑脚本。加一项能力 = 扔一个目录进去，不重启、不改代码。
+
+`say` 是例外，而且必须是工具：如果"说话"是一个 skill 脚本，那脚本就得知道群号，
+而且任何 bash 命令都能写那个出口文件——校验就形同虚设。**说必须是能力，不能是副作用。**
+
+## 三条命令之外没有别的
+
+- `bash` 的 `prepare` 钩子会：不继承宿主环境变量（key 不进 shell）、cwd 锁在本群 workspace、
+  拦掉 `rm -rf /` / `sudo` / `mkfs` / `ssh` / 写 `/etc` 这类自杀命令
+- 脚本能拿到 `$YUGANG_SKILL_DIR`、`$YUGANG_MEDIA_ROOT`、`$YUGANG_WORKSPACE`
+- ⚠️ 这不是沙箱。真隔离请上容器或 seatbelt/bwrap；这份代码里的 bash 依然是一个全权限 shell
 
 ## 校验分两类
 
@@ -44,9 +74,14 @@ src/
     policy.ts       结构校验 + 溯源校验（纯函数，好测）
     ledger.ts       每群的出口账本：最近说了什么、本轮几条、secret 缓冲
     absorb.ts       把 transcript 里的 thinking / tool 结果喂给溯源校验
+  skills.ts         扫描 SKILL.md，渲染成 prompt 里的一行一项
+  sandbox.ts        bash 的 prepare：环境、cwd、自杀命令拦截
   qq/
     onebot.ts       零依赖 OneBot v11 客户端（Node 内置 WebSocket）
     gate.ts         门外规则闸 + 群消息结构化包装
+skills/
+  draw/             画图（纯标准库生成 PNG，走 $YUGANG_MEDIA_ROOT）
+  meme/             本地表情包挑选
 persona/fish.md     人格书
 test/               node --test，不需要网络和 API key
 ```
@@ -72,10 +107,13 @@ npm start
 
 ## 已验证
 
-`npm test` 覆盖两件事：
+`npm test` 12 项，其中三条是设计约束：
 
 1. **正文不出境**：脚本化的模型先 `say("在的")` 再输出长段正文，断言群里只收到前者。
 2. **抄写被拦**：`say` 里塞入本轮 thinking 的片段，断言被拒、原因为 tool 错误、重说的那句才放行。
+3. **技能全链路**：模型按 SKILL.md 用 bash 跑 `skills/draw` 的脚本，再 `say({text, media})`，
+   断言产出的图片路径进了 media、正文里没有混进 `[IMAGE:...]`，并且 agent 的工具恰好是
+   `["bash", "read", "say"]`。
 
 ## 还没做（按优先级）
 
