@@ -37,19 +37,21 @@ function boot() {
     emit: (_id, payload) => {
       outbox.push({ text: payload.items.join("|"), media: payload.media });
     },
+    react: () => {},
+    master: "1",
   });
   return { faux, mediaRoot, outbox, fish };
 }
 
-test("工具面只有 say / react / look，没有 bash", async () => {
+test("工具面为窄接口：无 bash，自改工具已注册", async () => {
   const { fish } = boot();
   const open = await fish;
   try {
     const root = await open.harness.root(ctx);
     const names = (await root.agent(ctx)).tools.map((t) => t.name);
-    assert.deepEqual(names, ["say", "react", "look", "search", "video", "meme"]);
+    assert.deepEqual(names, ["say", "react", "look", "search", "video", "meme", "read", "edit", "write", "delete", "restart"]);
     assert.ok(!names.includes("bash"), "bash 必须不存在");
-    assert.ok(!names.includes("read"), "read 也必须不存在");
+    assert.ok(!names.includes("shell"), "shell 必须不存在");
   } finally {
     await open.close();
   }

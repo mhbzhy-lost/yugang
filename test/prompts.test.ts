@@ -45,6 +45,7 @@ test("工具说明逐字来自 prompt/tools/*.md", async () => {
     workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
     emit: () => {},
     react: () => {},
+    master: "1",
   });
 
   try {
@@ -148,6 +149,7 @@ test("messages.md 里没有死文案，tools/ 里没有死文件", async () => {
     workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
     emit: () => {},
     react: () => {},
+    master: "1",
   });
 
   try {

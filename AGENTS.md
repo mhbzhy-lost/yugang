@@ -43,9 +43,12 @@
 `say` 是例外里的一处：它住在 `src/egress/say.ts`（因为它属于出口，不属于能力），
 但**同样要**有 `prompt/tools/say.md`。
 
-### 3. 能力面必须是可枚举的窄接口
+### 3. 能力面必须是可枚举的窄接口（2026-10 修订：主人解锁下有限自改）
 
-禁止引入：shell / 脚本执行 / 通用文件读取 / MCP server。
+禁止 shell / 脚本执行 / MCP server。文件读写另设五个语义工具（read/edit/write/delete/restart）：
+- 范围硬围栏：仅仓库工作区；.env、config/auth.json、.git、node_modules、.trash 硬封禁
+- 身份闸（机械判定）：仅主人（MASTER_QQ）触发的轮里可用，execute 内核对 triggerOf 的 userId
+- delete 只移入 .trash/ 可恢复；全部操作打审计日志；自改大事故靠 git 回滚
 `look` 是唯一能读文件的东西，它只能读媒体目录里的图片，且一轮最多两次。
 
 原因：这些都是一条「通往一切的边」，而群里坐着的是可以被 prompt 注入的陌生人。

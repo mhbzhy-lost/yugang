@@ -38,7 +38,7 @@ export interface SayDeps {
   prompts: PromptSet;
   now?: () => number;
   /** submissionId → 本轮触发消息；宿主注入，能把引用目标绑在轮上。 */
-  triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean } | undefined;
+  triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
 }
 
 export function createSayTool(deps: SayDeps) {

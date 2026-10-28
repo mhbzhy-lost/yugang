@@ -10,19 +10,36 @@ import { createLookTool } from "./look.ts";
 import { createSearchTool } from "./search.ts";
 import { createVideoTool } from "./video.ts";
 import { createMemeTool } from "./meme.ts";
+import { createFsTools } from "./fs.ts";
+import { createRestartTool } from "./restart.ts";
 
 export interface ToolDeps {
   mediaRoot: string;
   prompts: PromptSet;
   /** DeepSeek Search API 的 key；有才具备联网搜索能力。 */
   searchKey?: string;
+  /** 主人 QQ：fs/restart 自改工具的身份闸。缺省则这些工具不可用（永远拒绝）。 */
+  master?: string;
+  /** submissionId → 本轮触发消息；与 say 的引用绑定同源。 */
+  triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
 }
 
 export function createTools(deps: ToolDeps): ToolRegistration[] {
+  const fsTools = deps.master
+    ? (() => {
+        const { read, edit, write, del } = createFsTools({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf });
+        return [read, edit, write, del];
+      })()
+    : [];
+  const restartTool = deps.master
+    ? [createRestartTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf })]
+    : [];
   return [
     createLookTool(deps),
     createSearchTool({ prompts: deps.prompts, key: deps.searchKey }),
     createVideoTool({ prompts: deps.prompts }),
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
+    ...fsTools,
+    ...restartTool,
   ];
 }

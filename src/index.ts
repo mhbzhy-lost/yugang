@@ -95,6 +95,7 @@ const fish = await openFish({
       return undefined;
     }
   })(),
+  master: config.master,
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
   workspaceRoot: config.workspaceRoot,
   compact: {
@@ -242,6 +243,7 @@ onebot.onMessage((raw) => {
     triggerOf.set(String(submission.id), {
       messageId: msg.messageId,
       mentionsBot: msg.mentionsBot,
+      userId: msg.userId,
     });
 
     const settled = await submission.wait(ctx);
