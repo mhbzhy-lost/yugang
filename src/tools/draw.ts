@@ -12,7 +12,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
-import { renderTemplate, type PromptSet } from "../prompts.ts";
+import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
 
 export interface DrawDeps {
   mediaRoot: string;
@@ -24,11 +24,11 @@ export function createDrawTool(deps: DrawDeps) {
 
   return defineTool({
     name: "draw",
-    description: deps.prompts.tools["draw"]?.description ?? "",
+    description: requireTool(deps.prompts, "draw").description,
     callers: ["model"],
     parameters: Type.Object({
-      description: Type.String({ description: deps.prompts.tools["draw"]?.params["description"] ?? "" }),
-      color: Type.Optional(Type.String({ description: deps.prompts.tools["draw"]?.params["color"] ?? "" })),
+      description: Type.String({ description: requireTool(deps.prompts, "draw").params["description"] ?? "" }),
+      color: Type.Optional(Type.String({ description: requireTool(deps.prompts, "draw").params["color"] ?? "" })),
     }),
     execute: async (args) => {
       if (!args.description.trim()) throw new Error(deps.prompts.messages["draw_empty"] ?? "empty");

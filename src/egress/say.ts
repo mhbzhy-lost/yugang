@@ -9,7 +9,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineEntry, defineTool, type ConversationId } from "@earendil-works/pi-durable";
 import { validateOutbound, type EgressLimits } from "./policy.ts";
 import { ledgerOf, recordSent } from "./ledger.ts";
-import { renderTemplate, type PromptSet } from "../prompts.ts";
+import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
 
 export interface OutboundPayload {
   text: string;
@@ -33,11 +33,11 @@ export function createSayTool(deps: SayDeps) {
 
   return defineTool({
     name: "say",
-    description: deps.prompts.tools.say.description,
+    description: requireTool(deps.prompts, "say").description,
     callers: ["model"], // 脚本 / 嵌套调用不能绕过校验
     parameters: Type.Object({
-      text: Type.String({ description: deps.prompts.tools.say.params["text"] ?? "" }),
-      media: Type.Optional(Type.String({ description: deps.prompts.tools.say.params["media"] ?? "" })),
+      text: Type.String({ description: requireTool(deps.prompts, "say").params["text"] ?? "" }),
+      media: Type.Optional(Type.String({ description: requireTool(deps.prompts, "say").params["media"] ?? "" })),
     }),
     execute: async (args, api, context) => {
       const ts = now();

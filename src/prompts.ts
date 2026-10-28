@@ -96,6 +96,13 @@ export function renderTemplate(template: string, vars: Record<string, string>): 
   });
 }
 
+/** 取一个工具的说明；缺文件直接抛错，不允许空描述上线。 */
+export function requireTool(prompts: PromptSet, name: string): ToolPrompt {
+  const tool = prompts.tools[name];
+  if (!tool) throw new Error(`缺少 prompt/tools/${name}.md`);
+  return tool;
+}
+
 /** 审查用：列出所有 prompt 文件、大小与 sha256。 */
 export function auditPrompts(root: string): { file: string; bytes: number; sha256: string }[] {
   const files = ["persona.md", "handoff.md", "messages.md"];

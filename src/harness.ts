@@ -82,6 +82,13 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   const say = createSayTool({ limits, prompts, emit: options.emit, now });
   const tools = createTools({ mediaRoot, prompts });
 
+  // 启动即校验：每个工具都必须有一份 prompt/tools/<name>.md，缺了就起不来
+  for (const tool of [say, ...tools]) {
+    if (!prompts.tools[tool.name]) {
+      throw new Error(`缺少 prompt/tools/${tool.name}.md`);
+    }
+  }
+
   const Fish = defineExtension({
     name: "fish",
     tools: [say, ...tools],
