@@ -49,6 +49,25 @@ test("仓库里的 config/models.json 能直接解析", () => {
   assert.deepEqual(config.models.map((m) => m.id), ["DeepSeek-Flash"]);
 });
 
+test("glm-5.3-flash：reasoning 保持 true，thinkingLevelMap 六档全 null（思考永久关闭）", () => {
+  const config = JSON.parse(readFileSync(REPO_MODELS, "utf8")) as {
+    providers: Record<string, { models: { id: string; reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> }[] }>;
+  };
+  const entry = config.providers["zai-coding-cn"].models.find((m) => m.id === "glm-5.3-flash");
+  assert.ok(entry, "仓库配置里必须有 glm-5.3-flash");
+  assert.equal(entry.reasoning, true, "reasoning 不能改 false：不发 thinking 参数，GLM 服务端会默认开思考");
+  assert.deepEqual(
+    Object.keys(entry.thinkingLevelMap ?? {}).sort(),
+    ["high", "low", "max", "medium", "minimal", "off", "xhigh"],
+    "thinkingLevelMap 必须六档齐全",
+  );
+  assert.deepEqual(
+    Object.values(entry.thinkingLevelMap ?? {}).filter((v) => v !== null),
+    [],
+    "六档必须全 null：可用档位只剩 off，pi-ai 永远钳到 off，zai 发 thinking.type=disabled",
+  );
+});
+
 test("config/auth.json 必须在 gitignore 里", () => {
   const ignore = readFileSync(fileURLToPath(new URL("../.gitignore", import.meta.url)), "utf8");
   assert.match(ignore, /^config\/auth\.json$/m, "凭据文件没被忽略，一次 git add 就进仓库了");
