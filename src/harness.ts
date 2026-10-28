@@ -101,7 +101,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   const limits: EgressLimits = { ...DEFAULT_LIMITS, ...options.limits, mediaRoot };
 
   const prompts = loadPrompts(resolve(options.promptRoot));
-  for (const code of [...REJECTION_CODES, "say_sent", "say_once"]) {
+  for (const code of [...REJECTION_CODES, "say_sent", "say_once", "busy_reply"]) {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
 

@@ -214,7 +214,7 @@ onebot.onMessage((raw) => {
     if (compacting.has(String(conv.id))) {
       if (msg.mentionsBot && msg.messageId !== undefined) {
         await fish.enqueue(conv.id, {
-          items: [fish.prompts.messages["busy_reply"] ?? "缸里正在归档记忆，稍等一下再叫我"],
+          items: [String(fish.prompts.messages["busy_reply"] ?? "[busy]")],
           quote: true,
           quoteId: msg.messageId,
           quoteForce: true,
