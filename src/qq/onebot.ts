@@ -186,9 +186,13 @@ export class OneBot {
   }
 
   async sendImageGroup(groupId: number, filePath: string): Promise<void> {
+    // QQ 是沙盒应用，读不了容器外的本地文件（EPERM）；自己读好后以 base64 传入，
+    // NapCat 直接用数据发图，不经文件系统。局域网 WS 内传几 MB 无压力。
+    const { readFileSync } = await import("node:fs");
+    const data = readFileSync(filePath).toString("base64");
     await this.call("send_group_msg", {
       group_id: groupId,
-      message: [{ type: "image", data: { file: `file://${filePath}` } }],
+      message: [{ type: "image", data: { file: `base64://${data}` } }],
     });
   }
 
