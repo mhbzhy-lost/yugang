@@ -106,7 +106,8 @@ const fish = await openFish({
   },
   // outbox 里的消息由 fish.drain() 逐条交给这里；幂等表再加一层保险
   emit: async (conversationId, payload) => {
-    if (!markSent(payload.key)) return;
+    // 恢复轮强发：有意重启时还没真正发出的消息不走幂等去重（去重表可能已在崩溃前提前记了账）
+    if (!markSent(payload.key) && !recoveringDrain) return;
     const chatKey = chatKeys.get(conversationId);
     if (!chatKey) return;
 
@@ -359,12 +360,17 @@ for (const [chatKey, conversationId] of Object.entries(known?.chats ?? {})) {
 }
 // 有意重启的标记：把卡在 sending 的消息翻回 queued 一起补发（真崩溃不重发，语义不变）
 const marker = join(process.cwd(), "var", "restart.marker");
+let recoveringDrain = false;
 if (existsSync(marker)) {
   const recovered = await fish.recoverStaleSends();
   rmSync(marker);
-  if (recovered > 0) console.log(`[鱼缸] 有意重启恢复：${recovered} 条 sending → queued`);
+  if (recovered > 0) {
+    console.log(`[鱼缸] 有意重启恢复：${recovered} 条 sending → queued`);
+    recoveringDrain = true;
+  }
 }
 await drainLoop();
+recoveringDrain = false;
 const shown = describeModel(config.modelConfig);
 console.log(`[鱼缸] 已连接，模型 ${shown.provider}/${shown.model}，工具 ${fish.toolNames.join("、")}`);
 console.log(`[鱼缸] 凭据 ${shown.key}（${shown.keySource}）`);
