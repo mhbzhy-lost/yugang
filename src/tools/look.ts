@@ -47,8 +47,23 @@ export function createLookTool(deps: LookDeps) {
       if (!mime) throw new Error(renderTemplate(deps.prompts.messages["look_type"] ?? "{{ref}}", { ref }));
 
       let data: string;
+      let outMime = mime;
       try {
-        data = readFileSync(full).toString("base64");
+        const bytes = readFileSync(full);
+        // 大图压缩后再进上下文：进会话的内容一旦定下就不能变（动它会破坏前缀缓存），
+        // 所以在读取时就压——GIF 取首帧、超尺寸缩到 1280px、一律 JPEG，单张控制在几十 KB。
+        // 压缩件只用于观看，不回写原文件。
+        if (bytes.length > 150_000) {
+          const shrunk = shrink(full);
+          if (shrunk) {
+            data = shrunk.toString("base64");
+            outMime = "image/jpeg";
+          } else {
+            data = bytes.toString("base64");
+          }
+        } else {
+          data = bytes.toString("base64");
+        }
       } catch {
         throw new Error(renderTemplate(deps.prompts.messages["look_missing"] ?? "{{ref}}", { ref }));
       }
@@ -58,7 +73,23 @@ export function createLookTool(deps: LookDeps) {
       }
       recordLook(api.conversationId);
 
-      return { output: [{ type: "image", data, mimeType: mime }] };
+      return { output: [{ type: "image", data, mimeType: outMime }] };
     },
   });
+}
+
+/** macOS sips 压缩：GIF 取首帧、超尺寸缩到 1280px，输出 JPEG；失败返回 null。 */
+function shrink(file: string): Buffer | null {
+  try {
+    const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+    const { tmpdir } = require("node:os") as typeof import("node:os");
+    const out = `${tmpdir()}/look-shrink-${Date.now()}-${Math.random().toString(16).slice(2, 6)}.jpg`;
+    const res = spawnSync("sips", ["-s", "format", "jpeg", "-Z", "1280", file, "--out", out], { timeout: 20_000 });
+    if (res.status !== 0) return null;
+    const buf = require("node:fs").readFileSync(out) as Buffer;
+    require("node:fs").unlinkSync(out);
+    return buf.length > 0 ? buf : null;
+  } catch {
+    return null;
+  }
 }
