@@ -47,7 +47,7 @@ test("摘要只收群友的话和鱼发出去的话", async () => {
     });
 
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("draw", { description: "一只鱼" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("react", { emoji: "124" })], { stopReason: "toolUse" }),
       fauxAssistantMessage([fauxToolCall("say", { messages: ["画好了"] })], { stopReason: "toolUse" }),
       fauxAssistantMessage("内部独白，不该进摘要"),
     ]);
@@ -57,8 +57,8 @@ test("摘要只收群友的话和鱼发出去的话", async () => {
     assert.match(rendered.transcript, /群友: 画个鱼/);
     assert.match(rendered.transcript, /鱼: 画好了/);
     assert.ok(!rendered.transcript.includes("内部独白"), "模型正文进了摘要");
-    assert.ok(!rendered.transcript.includes("draw"), "tool 调用进了摘要");
-    assert.ok(!rendered.transcript.includes("画好了，路径"), "tool 结果进了摘要");
+    assert.ok(!rendered.transcript.includes("react"), "tool 调用进了摘要");
+    assert.ok(!rendered.transcript.includes("贴上了"), "tool 结果进了摘要");
   } finally {
     await open.close();
   }

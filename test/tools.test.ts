@@ -1,7 +1,6 @@
 /**
  * 工具即扩展：
- *  - 鱼身上只有 say / react / draw / look，没有 bash、没有 read、没有技能脚本
- *  - draw 产出真实文件，路径能通过 say 的白名单校验
+ *  - 鱼身上只有 say / react / look，没有 bash、没有 read、没有技能脚本
  *  - 每个工具的说明逐字来自 prompt/tools/*.md
  */
 import test from "node:test";
@@ -41,60 +40,15 @@ function boot() {
   return { faux, mediaRoot, outbox, fish };
 }
 
-test("工具面只有 say / react / draw / look，没有 bash", async () => {
+test("工具面只有 say / react / look，没有 bash", async () => {
   const { fish } = boot();
   const open = await fish;
   try {
     const root = await open.harness.root(ctx);
     const names = (await root.agent(ctx)).tools.map((t) => t.name);
-    assert.deepEqual(names, ["say", "react", "draw", "look"]);
+    assert.deepEqual(names, ["say", "react", "look"]);
     assert.ok(!names.includes("bash"), "bash 必须不存在");
     assert.ok(!names.includes("read"), "read 也必须不存在");
-  } finally {
-    await open.close();
-  }
-});
-
-test("draw 产出文件 → 路径进 say.media，正文保持干净", async () => {
-  const { faux, mediaRoot, outbox, fish } = boot();
-  const open = await fish;
-
-  try {
-    const root = await open.harness.root(ctx, {
-      agent: { model: { provider: faux.provider.id, modelId: faux.models[0].id } },
-    });
-
-    // 第一轮：画图，拿到路径
-    faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("draw", { description: "一只在群里说话的鱼", color: "#22c55e" })], {
-        stopReason: "toolUse",
-      }),
-      fauxAssistantMessage("好了"),
-    ]);
-    await (await root.submit({ type: "input", content: "画只鱼" }, ctx)).wait(ctx);
-
-    const view = await root.viewState(ctx);
-    const drawResult = view.value.entries
-      .filter((e) => e.kind === "pi.tool-result")
-      .map((e) => JSON.stringify(e.model ?? ""))
-      .join("\n");
-    const match = /draw-\d+\.png/.exec(drawResult);
-    assert.ok(match, "draw 没有返回文件路径");
-    const produced = join(mediaRoot, match[0]);
-    assert.ok(existsSync(produced), "draw 声称的路径上并没有文件");
-    view.dispose();
-
-    // 第二轮：把路径交给 say.media
-    faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("say", { messages: ["画好了"], media: produced })], { stopReason: "toolUse" }),
-      fauxAssistantMessage("完成"),
-    ]);
-    await (await root.submit({ type: "input", content: "发出来" }, ctx)).wait(ctx);
-
-    assert.equal(outbox.length, 1);
-    assert.equal(outbox[0].text, "画好了");
-    assert.equal(outbox[0].media, produced);
-    assert.ok(!outbox[0].text.includes("png"), "路径不该混进正文");
   } finally {
     await open.close();
   }

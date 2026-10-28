@@ -3,7 +3,7 @@
  *
  *   群消息 → 规则闸/打分闸 → conversation.submit() → agent loop
  *                                                      ├── thinking/正文/tool  ✗ 不出境
- *                                                      └── say / react / draw / look
+ *                                                      └── say / react / look
  *                                                            → 硬校验 → QQ
  *
  * 模型的正文、思考、tool 调用文本都不在这条链上。

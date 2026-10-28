@@ -13,7 +13,7 @@
 | `handoff.md` | 上下文压缩时让模型写备忘的提示词，`{{transcript}}` 处填入对话 | 换页时 |
 | `messages.md` | 工具回给模型的文案：拒绝理由 + 发送回执 | 被拒/成功时 |
 
-现在实际在用的文件：`persona.md`、`people.md`、`group-profile.md`、`gate.md`、`handoff.md`、`messages.md`、`tools/{say,react,draw,look}.md`。
+现在实际在用的文件：`persona.md`、`people.md`、`group-profile.md`、`gate.md`、`handoff.md`、`messages.md`、`tools/{say,react,look}.md`。
 `npm test` 会检查两件事，防止这里变成垃圾堆：
 
 - `messages.md` 里每一条都必须被代码引用（错误码集合 ∪ `messages["x"]` 字面量）

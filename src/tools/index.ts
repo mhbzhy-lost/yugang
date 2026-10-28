@@ -6,7 +6,6 @@
  */
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { PromptSet } from "../prompts.ts";
-import { createDrawTool } from "./draw.ts";
 import { createLookTool } from "./look.ts";
 
 export interface ToolDeps {
@@ -15,5 +14,5 @@ export interface ToolDeps {
 }
 
 export function createTools(deps: ToolDeps): ToolRegistration[] {
-  return [createDrawTool(deps), createLookTool(deps)];
+  return [createLookTool(deps)];
 }

@@ -13,10 +13,9 @@
                                 ├── 正文              ✗ 不出境
                                 └── say(text, media)  ✓ 硬校验 → fish.outbound → QQ
 
-鱼身上只有四个工具：
+鱼身上只有三个工具：
   say     出口：可拆条、可引用、可带图，硬校验
   react   只贴表情，不说话
-  draw    画图
   look    看群里的图（唯一能读文件的东西，只能读媒体目录的图片）
 ```
 
@@ -47,9 +46,9 @@
   得有人显式写一行危险的代码，而不是模型自己拼一条命令。
 - **prompt 仍然全在 `prompt/tools/<name>.md`**：加一个工具 = 一个 `.ts` + 一个 `.md`，没有第三种位置。
 
-**现在没有任何工具能读宿主文件。**`draw` 只往 `MEDIA_ROOT` 写它自己生成的那张图，
-路径由代码决定，不由模型决定。要加一个读文件的能力，正确做法是写一个「读某个确定目录下的
-某个确定文件」的工具，而不是把通用的 read 放回来。
+**唯一能读文件的是 `look`**，而它只能读 `MEDIA_ROOT` 里的图片，一轮最多两次。
+要加别读文件的能力，正确做法是写一个「读某个确定目录下的某个确定文件」的工具，
+而不是把通用的 read 放回来。
 
 代价：加能力要写 TypeScript、要重新部署。换来的是**能力面是可枚举的**——你把
 `src/tools/index.ts` 看一遍，就知道这条鱼最坏能干什么，而且这个清单会出现在 `npm run prompts` 里。
@@ -59,11 +58,11 @@
 ```ts
 // src/tools/index.ts
 export function createTools(deps) {
-  return [createDrawTool(deps), createLookTool(deps)];   // 加一项能力就是往这里加一行
+  return [createLookTool(deps)];   // 加一项能力就是往这里加一行
 }
 ```
 
-`say` 和 `react` 属于出口，注册在 `src/egress/`；`draw` / `look` 是普通能力，在 `src/tools/`。
+`say` 和 `react` 属于出口，注册在 `src/egress/`；`look` 是普通能力，在 `src/tools/`。
 
 ## 什么时候开口
 
@@ -134,7 +133,7 @@ src/
   chatlog.ts        原话簿：按群按天写流水（只给运维 skill 看，鱼看不到）
   tools/
     index.ts        注册表：加一项能力就是往这里加一行
-    draw.ts         画图（占位后端，换真模型只改 renderImage）
+    look.ts         看群里的图（唯一能读文件的工具，只读媒体目录）
   qq/
     onebot.ts       零依赖 OneBot v11 客户端（Node 内置 WebSocket）
     gate.ts         门外规则闸 + 群消息结构化包装
@@ -167,9 +166,8 @@ npm start
 
 1. **正文不出境**：脚本化的模型先 `say("在的")` 再输出长段正文，断言群里只收到前者。
 2. **抄写被拦**：`say` 里塞入本轮 thinking 的片段，断言被拒、原因为 tool 错误、重说的那句才放行。
-3. **工具面固定**：agent 的工具恰好是 `["say", "react", "draw", "look"]`，且断言 `bash`、`read` 都不存在。
-4. **工具全链路**：模型调 `draw` 拿到真实文件，再 `say({text, media})`，断言路径进了 media、
-   正文里没有混进文件名。
+3. **工具面固定**：agent 的工具恰好是 `["say", "react", "look"]`，且断言 `bash`、`read` 都不存在。
+4. **看图全链路**：模型调 `look` 拿到 image block，越界路径（`/etc/passwd`）被拦。
 
 ## 运维
 

@@ -50,7 +50,7 @@ test("工具说明逐字来自 prompt/tools/*.md", async () => {
   try {
     const root = await fish.harness.root(ctx);
     const tools = (await root.agent(ctx)).tools;
-    for (const name of ["say", "draw"] as const) {
+    for (const name of ["say", "look", "react"] as const) {
       const tool = tools.find((t) => t.name === name);
       assert.ok(tool, `缺少工具 ${name}`);
       assert.equal(tool.description, readFileSync(join(PROMPTS, "tools", `${name}.md`), "utf8")
