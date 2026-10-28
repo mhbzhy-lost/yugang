@@ -37,6 +37,8 @@ export type IncomingMessage = {
   images: IncomingImage[];
   /** 收消息时临时用来下载的原始段，处理完就清空。 */
   imageSegments: OneBotSegment[];
+  /** reply 段引用的消息 id；宿主取回被引消息里的图后替换占位符。 */
+  replyIds: string[];
 };
 
 export interface SendOptions {
@@ -121,6 +123,31 @@ export class OneBot {
       }
     }
     parsed.imageSegments = [];
+
+    // 回复引用：取回被引消息，里面的图落盘后替换占位符，否则看不见被讨论的图
+    for (const [index, replyId] of (parsed.replyIds ?? []).entries()) {
+      if (!replyId || !this.#mediaRoot) continue;
+      let shown = "[回复的图 读不到]";
+      try {
+        const quoted = await this.call("get_msg", { message_id: replyId });
+        const quotedMessage = quoted?.data?.message ?? quoted?.message;
+        const imageSegs = Array.isArray(quotedMessage)
+          ? quotedMessage.filter((s: OneBotSegment) => s?.type === "image").slice(0, 2)
+          : [];
+        const savedList: string[] = [];
+        for (const seg of imageSegs) {
+          const saved = await this.downloadImage(seg, this.#mediaRoot);
+          if (saved) savedList.push(saved.ref);
+        }
+        if (savedList.length > 0) shown = savedList.map((r) => `[回复的图 ${r}]`).join(" ");
+        else if (imageSegs.length === 0) shown = "[回复的消息没有图]";
+      } catch {
+        // 保留默认占位符
+      }
+      parsed.text = parsed.text.replace(`[回复某条消息#${index}]`, shown);
+    }
+    parsed.replyIds = [];
+
     if (!parsed.text.trim()) return;
     for (const h of this.#handlers) h(parsed);
   }
@@ -291,6 +318,7 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
   let mentionsBot = false;
   const images: IncomingImage[] = [];
   const segments: OneBotSegment[] = [];
+  const replyIds: string[] = [];
   const message = frame.message;
 
   if (typeof message === "string") {
@@ -305,7 +333,8 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
         segments.push(seg);
         images.push({ ref: "" });
       } else if (seg.type === "reply") {
-        text += " [回复某条消息] ";
+        text += ` [回复某条消息#${replyIds.length}] `;
+        replyIds.push(String(seg.data?.["id"] ?? ""));
       }
     }
   }
@@ -316,7 +345,7 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
   if (!text) return null;
 
   const nickname = frame.sender?.card || frame.sender?.nickname || String(userId);
-  const base = { userId, nickname, text, mentionsBot, messageId: frame.message_id, images, imageSegments: segments };
+  const base = { userId, nickname, text, mentionsBot, messageId: frame.message_id, images, imageSegments: segments, replyIds };
 
   if (frame.message_type === "group" && frame.group_id) {
     return { ...base, chatKey: `qq:group:${frame.group_id}`, groupId: frame.group_id };
