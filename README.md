@@ -141,6 +141,30 @@ prompt/             模型能看到的一切文字（见 prompt/README.md）
 test/               node --test，不需要网络和 API key
 ```
 
+## 模型与凭据
+
+不把网关地址和 key 抄进仓库，直接从 pi 的配置读：
+
+```
+~/pi-config/pi/models.json   providers["qoder-pool"]   → baseUrl / api / 模型清单
+~/pi-config/pi/auth.json     ["qoder-pool"].key        → 凭据
+```
+
+`src/model-config.ts` 负责加载，`src/models.ts` 用 `createProvider` 拼出一个只属于这条鱼的
+provider。**key 只在内存里**：不写 env、不进 prompt、不进 transcript，`describeModel()` 只报
+"已加载 / N 字符"和来源路径。
+
+```bash
+npm run ping        # 验一次：读凭据 → 最小补全 → 打印模型、耗时、用量
+```
+
+换模型：`MODEL_PROVIDER=qoder-pool MODEL_ID=DeepSeek-V4-Pro`；要用别的网关，放一个
+`var/credentials.json`（已 gitignore）：
+
+```json
+{ "providerId": "my-gw", "modelId": "my-model", "baseUrl": "https://...", "key": "..." }
+```
+
 ## 跑起来
 
 ```bash

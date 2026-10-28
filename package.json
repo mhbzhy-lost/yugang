@@ -12,7 +12,8 @@
     "start": "node src/index.ts",
     "probe": "node scripts/probe.ts",
     "prompts": "node scripts/prompts.ts",
-    "ops": "node scripts/ops.ts"
+    "ops": "node scripts/ops.ts",
+    "ping": "node scripts/ping.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",

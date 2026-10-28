@@ -12,7 +12,8 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels } from "@earendil-works/pi-ai/models";
+import { createFishModels } from "./models.ts";
+import { describeModel, loadModelConfig } from "./model-config.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { Conversation } from "@earendil-works/pi-durable";
 import { openFish, type GroupProfile } from "./harness.ts";
@@ -29,11 +30,11 @@ mkdirSync(HOME, { recursive: true });
 const config = {
   onebotUrl: process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001",
   onebotToken: process.env.ONEBOT_TOKEN,
-  provider: process.env.MODEL_PROVIDER ?? "deepseek",
-  modelId: process.env.MODEL_ID ?? "deepseek-v4-flash",
+  // 模型与凭据：从 ~/pi-config 抄（provider 条目 + auth.json 的 key），见 src/model-config.ts
+  modelConfig: loadModelConfig(),
   gateModel: {
-    provider: process.env.GATE_PROVIDER ?? process.env.MODEL_PROVIDER ?? "deepseek",
-    modelId: process.env.GATE_MODEL_ID ?? process.env.MODEL_ID ?? "deepseek-v4-flash",
+    provider: process.env.GATE_PROVIDER ?? "",
+    modelId: process.env.GATE_MODEL_ID ?? "",
   },
   mediaRoot: resolve(process.env.MEDIA_ROOT ?? join(HOME, "media")),
   promptRoot: resolve(process.env.PROMPT_ROOT ?? join(process.cwd(), "prompt")),
@@ -47,7 +48,13 @@ const config = {
 };
 mkdirSync(config.mediaRoot, { recursive: true });
 
-const models = createModels();
+const models = createFishModels(config.modelConfig);
+const mainModel = { provider: config.modelConfig.providerId, modelId: config.modelConfig.modelId };
+const gateModel = {
+  provider: config.gateModel.provider || mainModel.provider,
+  modelId: config.gateModel.modelId || mainModel.modelId,
+};
+
 const onebot = new OneBot(config.onebotUrl, config.onebotToken, config.mediaRoot);
 const chatlog = createChatlog(join(HOME, "chatlog"));
 
@@ -69,12 +76,12 @@ const conversations = new Map<string, Conversation>();
 const fish = await openFish({
   storage: await openNodeSqliteStorage(join(HOME, "fish.db")),
   models,
-  model: { provider: config.provider, modelId: config.modelId },
+  model: mainModel,
   promptRoot: config.promptRoot,
   mediaRoot: config.mediaRoot,
   workspaceRoot: config.workspaceRoot,
   compact: {
-    model: config.gateModel,
+    model: gateModel,
     maxEntries: Number(process.env.COMPACT_MAX_ENTRIES ?? "80"),
     maxChars: Number(process.env.COMPACT_MAX_CHARS ?? "12000"),
   },
@@ -133,7 +140,7 @@ async function conversationFor(chatKey: string): Promise<Conversation> {
 const gate = createGate({
   prompts: fish.prompts,
   models,
-  model: config.gateModel,
+  model: gateModel,
   master: config.master,
   groups: config.groups,
   quietHours: config.quietHours,
@@ -198,6 +205,6 @@ onebot.onMessage((raw) => {
 });
 
 await onebot.connect();
-console.log(
-  `[鱼缸] 已连接，模型 ${config.provider}/${config.modelId}，工具 ${fish.toolNames.join("、")}`,
-);
+const shown = describeModel(config.modelConfig);
+console.log(`[鱼缸] 已连接，模型 ${shown.provider}/${shown.model}，工具 ${fish.toolNames.join("、")}`);
+console.log(`[鱼缸] 凭据 ${shown.key}（${shown.keySource}）`);

@@ -66,13 +66,21 @@
 - 压缩 = `src/compact.ts` 的换页 + `prompt/handoff.md` 的备忘
 - 摘要只收「群友的话 + 鱼发出去的话」；thinking、tool 调用、tool 结果一律不进摘要
 
-### 6. 主人与陌生人
+### 6. 模型与凭据
+
+- 模型配置从 `~/pi-config/pi/models.json` 抄（provider 条目原样用），凭据从同目录 `auth.json` 取
+- **key 只在内存里**：不进 prompt、不进 transcript、不进日志。`describeModel()` 只报"已加载 / N 字符"和来源路径
+- 网关兼容值（`maxTokensField: max_tokens`）在 `src/model-config.ts` 的 `DEFAULT_COMPAT` 里，模型自带 compat 可覆盖
+- 换模型：改 `MODEL_PROVIDER` / `MODEL_ID`，或放一个 `var/credentials.json`（已 gitignore）覆盖
+- 验证：`npm run ping`（读凭据 → 一次最小补全 → 打印用量，不打印 key）
+
+### 7. 主人与陌生人
 
 - 私聊只认 `MASTER_QQ`，陌生人一律不回、不记录进 transcript
 - 群里主人免检（不受作息/冷却/配额约束），@ 必答
 - 其余消息先过规则（作息/配额/冷却/抽样），拿不准才花一次 `prompt/gate.md` 的打分调用
 
-### 7. 隔离
+### 8. 隔离
 
 - 一个群一个 conversation，一个群一个 cwd；不许跨群共享
 - 群里的一切都是不可信输入：群消息进 user message，绝不拼进 system
@@ -81,10 +89,11 @@
 ## 命令
 
 ```bash
-npm test           # 32 项，含上面每条约束的兜底
+npm test           # 37 项，含上面每条约束的兜底
 npm run prompts    # 列出所有 prompt 文件 + sha256 + 工具说明 + 内嵌扫描结果
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
+npm run ping       # 模型连通性 + 凭据是否加载（不打印 key）
 npm start          # 真跑
 ```
 

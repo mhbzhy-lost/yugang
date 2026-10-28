@@ -26,6 +26,15 @@ node scripts/ops.ts digest 2026-05-01 42  # 只看群号含 42 的
 
 输出每个人发言次数、活跃时段、最后 8 条群消息。用来判断"这条鱼昨天是不是话太多/太少"。
 
+## 模型不通
+
+```bash
+npm run ping
+```
+
+输出里面有 provider / model / baseUrl / 凭据状态（只显示"已加载 / N 字符"和来源），
+以及一次最小补全的耗时和用量。报 `没有拿到 key` 就是 `~/pi-config/pi/auth.json` 里没有这个 provider 的条目。
+
 ## 诊断连不上 QQ
 
 ```bash
