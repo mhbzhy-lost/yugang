@@ -21,7 +21,7 @@ export interface FsDeps {
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
 }
 
-const READ_CAP = 200_000;
+const READ_CAP = 32_000;
 const WRITE_CAP = 1_000_000;
 const BIN_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".db", ".db-wal", ".db-shm", ".zip", ".node", ".asar"]);
 

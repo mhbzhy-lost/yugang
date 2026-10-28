@@ -84,7 +84,7 @@ function shrink(file: string): Buffer | null {
     const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
     const { tmpdir } = require("node:os") as typeof import("node:os");
     const out = `${tmpdir()}/look-shrink-${Date.now()}-${Math.random().toString(16).slice(2, 6)}.jpg`;
-    const res = spawnSync("sips", ["-s", "format", "jpeg", "-Z", "1280", file, "--out", out], { timeout: 20_000 });
+    const res = spawnSync("sips", ["-s", "format", "jpeg", "-s", "formatOptions", "70", "-Z", "1280", file, "--out", out], { timeout: 20_000 });
     if (res.status !== 0) return null;
     const buf = require("node:fs").readFileSync(out) as Buffer;
     require("node:fs").unlinkSync(out);
