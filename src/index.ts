@@ -112,7 +112,7 @@ const fish = await openFish({
         ? (payload.quoteId ?? lastMessageId.get(conversationId))
         : undefined;
       await onebot.sendGroup(groupId, payload.items, { quote });
-      if (payload.media) await onebot.sendImageGroup(groupId, payload.media);
+      if (payload.media) await onebot.sendImageGroup(groupId, resolve(config.mediaRoot, payload.media));
     } else if (chatKey.startsWith("qq:private:")) {
       await onebot.sendPrivate(Number(chatKey.slice("qq:private:".length)), payload.items);
     }
