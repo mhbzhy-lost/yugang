@@ -332,6 +332,9 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
         text += ` [图片#${images.length}] `;
         segments.push(seg);
         images.push({ ref: "" });
+      } else if (seg.type === "video") {
+        const u = String(seg.data?.["url"] ?? seg.data?.["file"] ?? "");
+        if (u) text += ` [视频 ${u.slice(0, 200)}] `;
       } else if (seg.type === "reply") {
         text += ` [回复某条消息#${replyIds.length}] `;
         replyIds.push(String(seg.data?.["id"] ?? ""));

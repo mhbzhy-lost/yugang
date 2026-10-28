@@ -8,6 +8,7 @@ import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { PromptSet } from "../prompts.ts";
 import { createLookTool } from "./look.ts";
 import { createSearchTool } from "./search.ts";
+import { createVideoTool } from "./video.ts";
 
 export interface ToolDeps {
   mediaRoot: string;
@@ -17,5 +18,5 @@ export interface ToolDeps {
 }
 
 export function createTools(deps: ToolDeps): ToolRegistration[] {
-  return [createLookTool(deps), createSearchTool({ prompts: deps.prompts, key: deps.searchKey })];
+  return [createLookTool(deps), createSearchTool({ prompts: deps.prompts, key: deps.searchKey }), createVideoTool({ prompts: deps.prompts })];
 }
