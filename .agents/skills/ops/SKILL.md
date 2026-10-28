@@ -11,7 +11,7 @@ description: 维护「鱼缸」这个 QQ 群机器人时使用：查状态、看
 ## 配置在哪
 
 `.env`（gitignore，模板 `.env.example`）。四样必填：`ONEBOT_WS_URL` / `ONEBOT_TOKEN` /
-`MASTER_QQ` / `GROUPS`。`npm start`、`probe`、`ops`、`ping` 都会自动加载它。
+`MASTER_QQ` / `GROUPS`。token 用 `npm run token` 生成（会同步写好 NapCat 的 `onebot.json`）。`npm start`、`probe`、`ops`、`ping` 都会自动加载它。
 模块 key 不在 `.env` 里，在 `config/auth.json`。
 
 ## 拉起 / 收掉

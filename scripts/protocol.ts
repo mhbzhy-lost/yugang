@@ -8,7 +8,8 @@
  * 需要挂进已安装的 QQ。这一步是 GUI 操作 + 扫码，脚本只能把包准备好。
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { writeOneBotConfig as writeConfig } from "./lib/onebot-config.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -67,30 +68,7 @@ function download(url: string, dest: string): void {
 }
 
 function writeOneBotConfig(): void {
-  const file = join(PROTOCOL_DIR, "config", "onebot.json");
-  mkdirSync(join(PROTOCOL_DIR, "config"), { recursive: true });
-  const config = {
-    network: {
-      websocketServers: [
-        {
-          name: "yugang",
-          enable: true,
-          host: "127.0.0.1",
-          port,
-          messagePostFormat: "array",
-          token,
-          reportSelfMessage: false,
-          heartInterval: 30000,
-          debug: false,
-          enableForcePushEvent: false,
-        },
-      ],
-    },
-    musicSignUrl: "",
-    enableLocalFile2Url: false,
-    parseMultMsg: true,
-  };
-  writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+  const file = writeConfig({ dir: PROTOCOL_DIR, port, token });
   console.log(`✓ 已写 ${file}`);
   console.log(`  host 127.0.0.1:${port} · token ${token ? "已设置" : "空"} · reportSelfMessage false`);
 }

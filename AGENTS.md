@@ -95,7 +95,9 @@
 - 所有运行时配置走 `.env`（gitignore），模板是 `.env.example`（进仓库）
 - `npm start` / `probe` / `ops` / `ping` 都带 `--env-file-if-exists=.env`
 - 新增环境变量时**必须**同时更新 `.env.example`，并说明哪几个是必填
-- 密钥类的东西不放 `.env`（`config/auth.json` 已经是那条路），`.env` 只放地址、QQ 号、频率这类
+- 模型 key 不放 `.env`（走 `config/auth.json`）；`ONEBOT_TOKEN` 放 `.env`，由 `npm run token` 生成，
+  同一条命令会写进 NapCat 的 `onebot.json`，两边必须一致
+- 生成类凭据一律用脚本 + `randomBytes`，不要手写、不要打印内容；`.env` 权限 600
 
 ### 10. 记账
 

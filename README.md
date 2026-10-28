@@ -189,6 +189,7 @@ npm run ping             # 读凭据 → 最小补全 → 打印模型/耗时/�
 
 ```bash
 cp .env.example .env      # 已经在仓库里给你放好一份了
+npm run token             # 生成 OneBot token，同步到 .env 和 NapCat 配置
 ```
 
 `.env` 里**只有四样必填**：
@@ -196,7 +197,7 @@ cp .env.example .env      # 已经在仓库里给你放好一份了
 | 变量 | 是什么 |
 |---|---|
 | `ONEBOT_WS_URL` | 协议端 OneBot v11 正向 WS 地址，例如 `ws://127.0.0.1:3001` |
-| `ONEBOT_TOKEN` | 协议端里设的那个 token，没设就留空 |
+| `ONEBOT_TOKEN` | `npm run token` 生成（32 字节 base64url），别手写 |
 | `MASTER_QQ` | 你的 QQ 号。私聊只认它，群里它免检 |
 | `GROUPS` | 允许说话的群号，逗号分隔 |
 
