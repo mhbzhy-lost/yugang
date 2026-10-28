@@ -32,5 +32,6 @@ search_failed: 搜索没成功，换个说法或直接说不知道
 video_invalid: 那不是 B 站视频链接
 video_used: 这一轮看过了，先用看到的说
 video_failed: 视频没打开：{{url}}
+busy_reply: 缸里正在归档记忆，稍等一下再叫我
 meme_empty: 表情包库是空的，先用文字回
 meme_used: 这一轮挑过了，先用挑到的

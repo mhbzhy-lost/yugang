@@ -88,6 +88,8 @@ export interface Fish {
   group(groupKey: string, profile?: GroupProfile): Promise<Conversation>;
   /** 把 outbox 里排队的消息发出去；返回实际发了几条。 */
   drain(extra?: readonly ConversationId[]): Promise<number>;
+  /** 不经模型直接往 outbox 里排队一条（宿主侧机械回复专用，同样走唯一出口）。 */
+  enqueue(conversationId: ConversationId, payload: OutboundPayload): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -218,6 +220,12 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     async compact(conversation) {
       if (!compactor) return { compacted: false, reason: "below_threshold" };
       return compactor.maybeCompact(conversation);
+    },
+    async enqueue(conversationId, payload) {
+      await harness.commit(async (tx) => {
+        const doc = await tx.doc(OutboxDoc, conversationId);
+        doc.queue.push({ ...payload, status: "queued", attempts: 0 });
+      }, ctx);
     },
     async drain(extra = []) {
       const snapshot = await harness.snapshot(ChatsDoc, ctx);

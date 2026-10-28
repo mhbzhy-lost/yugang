@@ -74,6 +74,8 @@ function markSent(key: string): boolean {
 // conversationId → 最近一条触发消息 + 所在会话，用来做引用和贴表情
 const chatKeys = new Map<string, string>();
 const lastMessageId = new Map<string, number | string>();
+// 压缩进行中的会话：期间不受理新提交，被@只回机械忙碌语
+const compacting = new Set<string>();
 const lastMention = new Map<string, boolean>(); // 最近一次触发是否@了鱼：被@必回引用，让群里看得出鱼在回谁
 // submissionId → 本轮触发消息：把引用目标绑在轮上，不被后续消息顶掉
 const triggerOf = new Map<string, { messageId?: number | string; mentionsBot: boolean }>();
@@ -206,6 +208,24 @@ onebot.onMessage((raw) => {
     if (!decision.enter) return;
 
     const conv = await conversationFor(msg.chatKey);
+
+    // 压缩进行中：不再受理新提交（根治换页竞态把活跃轮吃掉的问题）。
+    // 被 @ 的给一句机械回复（同样走 outbox 唯一出口），其余直接等下一轮。
+    if (compacting.has(String(conv.id))) {
+      if (msg.mentionsBot && msg.messageId !== undefined) {
+        await fish.enqueue(conv.id, {
+          items: [fish.prompts.messages["busy_reply"] ?? "缸里正在归档记忆，稍等一下再叫我"],
+          quote: true,
+          quoteId: msg.messageId,
+          quoteForce: true,
+          at: Date.now(),
+          key: `busy:${msg.messageId}`,
+        });
+        await drainLoop();
+      }
+      return;
+    }
+
     await absorbSecrets(conv);
     resetRun(conv.id);
     resetLook(conv.id);
@@ -243,7 +263,14 @@ onebot.onMessage((raw) => {
       console.log(`[鱼缸] ${msg.chatKey} +${delta.total} tokens / ${delta.cost}`);
     }
 
-    const compacted = await fish.compact(conv);
+    const compacted = await (async () => {
+      compacting.add(String(conv.id));
+      try {
+        return await fish.compact(conv);
+      } finally {
+        compacting.delete(String(conv.id));
+      }
+    })();
     if (compacted.compacted) {
       console.log(`[鱼缸] ${msg.chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
     }

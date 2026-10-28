@@ -113,3 +113,13 @@ async function askGate(options: GateOptions, msg: IncomingMessage, recent: reado
     return null;
   }
 }
+
+/** 进闸消息渲染成模型的 user 文本：带群/人/是否@/是否主人的标注。 */
+export function renderForModel(msg: IncomingMessage, master: string): string {
+  const where = msg.groupId ? `群${msg.groupId}` : `私聊`;
+  const reply = msg.messageId ? ` 回复msg:${msg.messageId}` : "";
+  const tags = [msg.mentionsBot ? "对你说话" : "", String(msg.userId) === master ? "你主人" : ""]
+    .filter(Boolean)
+    .join(" ");
+  return `[${where} | ${msg.nickname}(${msg.userId})${reply}${tags ? ` ${tags}` : ""}] ${msg.text}`;
+}
