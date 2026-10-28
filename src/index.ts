@@ -85,6 +85,7 @@ const fish = await openFish({
     maxEntries: Number(process.env.COMPACT_MAX_ENTRIES ?? "80"),
     maxChars: Number(process.env.COMPACT_MAX_CHARS ?? "12000"),
   },
+  // outbox 里的消息由 fish.drain() 逐条交给这里；幂等表再加一层保险
   emit: async (conversationId, payload) => {
     if (!markSent(payload.key)) return;
     const chatKey = chatKeys.get(conversationId);
@@ -135,6 +136,16 @@ async function conversationFor(chatKey: string): Promise<Conversation> {
     chatKeys.set(conv.id, chatKey);
   }
   return conv;
+}
+
+// 启动先把上次没发出去的消息补发掉
+async function drainLoop(): Promise<void> {
+  try {
+    const sent = await fish.drain();
+    if (sent > 0) console.log(`[鱼缸] 补发 ${sent} 条`);
+  } catch (error) {
+    console.error("[鱼缸] 补发失败", error instanceof Error ? error.message : error);
+  }
 }
 
 const gate = createGate({
@@ -195,6 +206,7 @@ onebot.onMessage((raw) => {
       return;
     }
 
+    await drainLoop();
     const compacted = await fish.compact(conv);
     if (compacted.compacted) {
       console.log(`[鱼缸] ${msg.chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
@@ -205,6 +217,13 @@ onebot.onMessage((raw) => {
 });
 
 await onebot.connect();
+
+// 先把持久化的群映射读出来，这样 drain 知道该往哪个群发
+const known = await fish.harness.snapshot((await import("./store.ts")).ChatsDoc, ctx);
+for (const [chatKey, conversationId] of Object.entries(known?.chats ?? {})) {
+  chatKeys.set(String(conversationId), chatKey);
+}
+await drainLoop();
 const shown = describeModel(config.modelConfig);
 console.log(`[鱼缸] 已连接，模型 ${shown.provider}/${shown.model}，工具 ${fish.toolNames.join("、")}`);
 console.log(`[鱼缸] 凭据 ${shown.key}（${shown.keySource}）`);

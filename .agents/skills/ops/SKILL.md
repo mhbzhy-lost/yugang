@@ -55,6 +55,12 @@ node scripts/ops.ts probe
 4. 都正常但话少 —— 是闸挡的：`AMBIENT_CHANCE`、`DAILY_QUOTA`、`COOLDOWN_MS`、`QUIET_HOURS`。把 `AMBIENT_CHANCE` 临时调到 1 先确认链路通。
 5. 私聊没反应 —— 只认 `MASTER_QQ`，陌生人一律不回。这是设计，不是 bug。
 
+## 重启 / 补发
+
+启动时会自动 `drain()` 一次，把上次没发出去的消息补上，日志里会有一行 `补发 N 条`。
+如果是 0 但群里确实少了消息，看 `var/fish.db` 里 `fish.outbox` 的队列——状态停在 `sending`
+的消息是"崩在发送中途"的，按设计不重发。
+
 ## 改东西的规矩
 
 - 改 prompt：只动 `prompt/` 下的 md；改完 `npm run prompts` 确认清单，再 `npm test`。

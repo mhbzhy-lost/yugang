@@ -53,6 +53,7 @@ test("模型正文不出境，只有 say 的 text 会", async () => {
     const root = await fish.harness.root(ctx, { agent: { model: { provider: faux.provider.id, modelId: faux.models[0].id } } });
     const submission = await root.submit({ type: "input", content: "在吗" }, ctx);
     const settled = await submission.wait(ctx);
+    await fish.drain([root.id]);
 
     assert.equal(settled.status, "done");
     assert.deepEqual(outbox, ["在的"], "群里只应该收到 say 的参数");
@@ -97,6 +98,7 @@ test("从思考里抄来的话被拒，且以 tool 错误返回", async () => {
     const submission = await root.submit({ type: "input", content: "说话啊" }, ctx);
     const settled = await submission.wait(ctx);
     assert.equal(settled.status, "done");
+    await fish.drain([root.id]);
 
     assert.deepEqual(outbox, ["刚在听你们聊"], "抄袭的那条必须被拦下，重说的那条要放行");
 

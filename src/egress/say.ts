@@ -12,6 +12,7 @@ import { defineEntry, defineTool, type ConversationId } from "@earendil-works/pi
 import { validateOutbound, type EgressLimits } from "./policy.ts";
 import { ledgerOf, recordSent } from "./ledger.ts";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
+import { OutboxDoc } from "../store.ts";
 
 export interface OutboundPayload {
   /** 按顺序发出的几条文本。 */
@@ -29,7 +30,6 @@ export const OutboundEntry = defineEntry<OutboundPayload>("fish.outbound");
 export interface SayDeps {
   limits: EgressLimits;
   prompts: PromptSet;
-  emit: (conversationId: ConversationId, payload: OutboundPayload) => void | Promise<void>;
   now?: () => number;
 }
 
@@ -81,11 +81,14 @@ export function createSayTool(deps: SayDeps) {
         key: `${api.conversationId}:${api.callId}`,
       };
 
-      // 先落盘再发送：崩在中间时，重启后能从 fish.outbound 条目里找回这几句话
-      await api.commit((tx) => tx.appendEntry(OutboundEntry, api.conversationId, { data: payload }), context);
+      // 落进 outbox（和 transcript entry 同一次提交）：宿主崩了也不会丢，重启后接着发
+      await api.commit(async (tx) => {
+        await tx.appendEntry(OutboundEntry, api.conversationId, { data: payload });
+        const box = await tx.doc(OutboxDoc, api.conversationId);
+        box.queue.push({ ...payload, status: "queued", attempts: 0 });
+      }, context);
 
       recordSent(api.conversationId, payload.items, ts);
-      await deps.emit(api.conversationId, payload);
 
       return { output: [{ type: "text", text: deps.prompts.messages["say_sent"] ?? "ok" }] };
     },

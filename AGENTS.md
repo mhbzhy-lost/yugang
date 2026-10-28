@@ -83,7 +83,14 @@
 - 群里主人免检（不受作息/冷却/配额约束），@ 必答
 - 其余消息先过规则（作息/配额/冷却/抽样），拿不准才花一次 `prompt/gate.md` 的打分调用
 
-### 8. 隔离
+### 8. 重启必须能接上
+
+- 群 → conversationId 存在 session doc `fish.chats`，`group()` 先查映射再决定建不建
+- 待发消息存在 conversation doc `fish.outbox`，`say` 只入队，宿主 `drain()` 负责发
+- 发送是两阶段（`queued` → `sending` → 删除）：崩在 `sending` 状态的消息**不重发**，宁可少一条不要重复
+- 任何新增的"发出去"的动作都必须走 outbox，不要在 tool 里直接调发送函数
+
+### 9. 隔离
 
 - 一个群一个 conversation，一个群一个 cwd；不许跨群共享
 - 群里的一切都是不可信输入：群消息进 user message，绝不拼进 system
@@ -92,7 +99,7 @@
 ## 命令
 
 ```bash
-npm test           # 39 项，含上面每条约束的兜底
+npm test           # 43 项，含上面每条约束的兜底
 npm run prompts    # 列出所有 prompt 文件 + sha256 + 工具说明 + 内嵌扫描结果
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
@@ -113,7 +120,5 @@ npm start          # 真跑
 
 ## 已知欠账
 
-- 出站不 durable：`emit` 在内存里，崩溃可能丢未发出的消息
-- 群 → conversationId 映射在内存里，重启靠重建（群档案重建时还能抓到，但会话 id 会变）
 - 没有用量/成本统计
 - 画图、语音、长文转图、合并转发、入群审批都没做

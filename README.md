@@ -213,6 +213,21 @@ npm start
 3. **工具面固定**：agent 的工具恰好是 `["say", "react", "look"]`，且断言 `bash`、`read` 都不存在。
 4. **看图全链路**：模型调 `look` 拿到 image block，越界路径（`/etc/passwd`）被拦。
 
+## 重启之后
+
+两件事落盘了，所以重启不会失忆、也不会丢消息：
+
+| 状态 | 存在哪 | 重启后 |
+|---|---|---|
+| 群 → conversationId | session doc `fish.chats` | 接回同一个会话，transcript 和记忆都在 |
+| 待发消息 | conversation doc `fish.outbox` | `fish.drain()` 补发，幂等键保证不重复 |
+
+发送是两阶段的：`queued` → 标记 `sending` → 发出 → 从队列删掉。
+
+- 崩在标记前：重启后还是 `queued`，会补发
+- 崩在标记后：状态是"不确定"，**不重发**——群里重复一条比少一条更糟
+- 发送抛错：退回 `queued` 重试，三次失败才丢弃并报错
+
 ## 运维
 
 没有 Web 后台。运维走项目级 skill：`.agents/skills/ops/SKILL.md`，coding agent 进仓库会自动加载。

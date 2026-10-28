@@ -27,6 +27,7 @@ import { createReactTool } from "./egress/react.ts";
 import { loadPrompts, renderTemplate, type PromptSet } from "./prompts.ts";
 import { createTools } from "./tools/index.ts";
 import { createCompactor, type CompactResult, type Compactor } from "./compact.ts";
+import { ChatsDoc, OutboxDoc } from "./store.ts";
 
 /** 群档案作为一条 system 消息放进 transcript，只在建会话时写一次。 */
 export const GroupProfileEntry = defineEntry("fish.group-profile");
@@ -79,8 +80,10 @@ export interface Fish {
   toolNames: string[];
   /** 压缩一次上下文；没到阈值就什么都不做。 */
   compact(conversation: Conversation): Promise<CompactResult>;
-  /** 取（或创建）某个群的会话；profile 只在首次创建时写入。 */
+  /** 取（或创建）某个群的会话；映射持久化，重启后还是同一个会话。 */
   group(groupKey: string, profile?: GroupProfile): Promise<Conversation>;
+  /** 把 outbox 里排队的消息发出去；返回实际发了几条。 */
+  drain(extra?: readonly ConversationId[]): Promise<number>;
   close(): Promise<void>;
 }
 
@@ -96,7 +99,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
 
-  const say = createSayTool({ limits, prompts, emit: options.emit, now });
+  const say = createSayTool({ limits, prompts, now });
   const react = createReactTool({ prompts, react: options.react, now });
   const tools = createTools({ mediaRoot, prompts });
 
@@ -150,6 +153,57 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     : undefined;
 
   const groups = new Map<string, Promise<Conversation>>();
+  const sending = new Set<string>();
+
+  async function drainConversation(conversationId: ConversationId): Promise<number> {
+    let sent = 0;
+    for (;;) {
+      const box = await harness.snapshot(OutboxDoc, conversationId, ctx);
+      const next = box?.queue.find((record) => record.status === "queued");
+      if (!next) return sent;
+
+      // 先标 sending 再发：崩在这中间的消息状态是"不确定"，重启时不重发（宁可少发不重复）
+      await harness.commit(async (tx) => {
+        const doc = await tx.doc(OutboxDoc, conversationId);
+        const record = doc.queue.find((item) => item.key === next.key);
+        if (record) record.status = "sending";
+      }, ctx);
+
+      try {
+        await options.emit(conversationId, {
+          items: next.items,
+          ...(next.media === undefined ? {} : { media: next.media }),
+          quote: next.quote,
+          at: next.at,
+          key: next.key,
+        });
+      } catch (error) {
+        // 发送失败：放回队列重试，超过三次就丢弃并报错
+        await harness.commit(async (tx) => {
+          const doc = await tx.doc(OutboxDoc, conversationId);
+          const index = doc.queue.findIndex((item) => item.key === next.key);
+          if (index < 0) return;
+          if (next.attempts + 1 >= 3) doc.queue.splice(index, 1);
+          else {
+            doc.queue[index].status = "queued";
+            doc.queue[index].attempts += 1;
+          }
+        }, ctx);
+        if (next.attempts + 1 >= 3) {
+          throw new Error(`发送失败三次，已丢弃：${error instanceof Error ? error.message : error}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1500).unref?.());
+        continue;
+      }
+
+      await harness.commit(async (tx) => {
+        const doc = await tx.doc(OutboxDoc, conversationId);
+        const index = doc.queue.findIndex((item) => item.key === next.key);
+        if (index >= 0) doc.queue.splice(index, 1);
+      }, ctx);
+      sent++;
+    }
+  }
 
   return {
     harness,
@@ -161,34 +215,64 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       if (!compactor) return { compacted: false, reason: "below_threshold" };
       return compactor.maybeCompact(conversation);
     },
+    async drain(extra = []) {
+      const snapshot = await harness.snapshot(ChatsDoc, ctx);
+      const ids = new Set<ConversationId>([...Object.values(snapshot?.chats ?? {}), ...extra]);
+      let total = 0;
+      for (const conversationId of ids) {
+        if (sending.has(String(conversationId))) continue;
+        sending.add(String(conversationId));
+        try {
+          total += await drainConversation(conversationId);
+        } finally {
+          sending.delete(String(conversationId));
+        }
+      }
+      return total;
+    },
     group(groupKey, profile) {
       let existing = groups.get(groupKey);
       if (!existing) {
-        const cwd = join(workspaceRoot, safeName(groupKey));
-        mkdirSync(cwd, { recursive: true });
-        existing = harness.createConversation(
-          {
-            ownership: { kind: "ownerless" },
-            agent: { model: options.model, cwd },
-            init: profile
-              ? async (tx, conversationId) => {
-                  const text = renderTemplate(prompts.groupProfile, {
-                    name: profile.name,
-                    groupId: profile.groupId,
-                    count: String(profile.count),
-                    owner: profile.owner,
-                    master: profile.master,
-                    members:
-                      profile.members.map((m) => `${m.nickname} / ${m.userId}`).join("\n") || "（拿不到名单）",
-                  });
-                  await tx.appendEntry(GroupProfileEntry, conversationId, {
-                    model: [{ role: "system", content: text, timestamp: now() }],
-                  });
-                }
-              : undefined,
-          },
-          ctx,
-        );
+        existing = (async () => {
+          // 先按持久化的映射找回来；找不到才建新的
+          const snapshot = await harness.snapshot(ChatsDoc, ctx);
+          const known = snapshot?.chats?.[groupKey];
+          if (typeof known === "number") {
+            const reused = await harness.conversation(known, ctx);
+            if (reused) return reused;
+          }
+
+          const cwd = join(workspaceRoot, safeName(groupKey));
+          mkdirSync(cwd, { recursive: true });
+          const created = await harness.createConversation(
+            {
+              ownership: { kind: "ownerless" },
+              agent: { model: options.model, cwd },
+              init: profile
+                ? async (tx, conversationId) => {
+                    const text = renderTemplate(prompts.groupProfile, {
+                      name: profile.name,
+                      groupId: profile.groupId,
+                      count: String(profile.count),
+                      owner: profile.owner,
+                      master: profile.master,
+                      members:
+                        profile.members.map((m) => `${m.nickname} / ${m.userId}`).join("\n") || "（拿不到名单）",
+                    });
+                    await tx.appendEntry(GroupProfileEntry, conversationId, {
+                      model: [{ role: "system", content: text, timestamp: now() }],
+                    });
+                  }
+                : undefined,
+            },
+            ctx,
+          );
+          await harness.commit(async (tx) => {
+            const chats = await tx.doc(ChatsDoc);
+            chats.chats[groupKey] = created.id;
+          }, ctx);
+          return created;
+        })();
         groups.set(groupKey, existing);
       }
       return existing;
