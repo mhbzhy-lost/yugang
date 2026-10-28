@@ -219,7 +219,7 @@ onebot.onMessage((raw) => {
       { type: "input", content: renderForModel(msg, config.master) },
       ctx,
     );
-    triggerOf.set(submission.id, {
+    triggerOf.set(String(submission.id), {
       messageId: msg.messageId,
       mentionsBot: msg.mentionsBot,
     });
