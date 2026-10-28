@@ -9,6 +9,7 @@ import type { PromptSet } from "../prompts.ts";
 import { createLookTool } from "./look.ts";
 import { createSearchTool } from "./search.ts";
 import { createVideoTool } from "./video.ts";
+import { createMemeTool } from "./meme.ts";
 
 export interface ToolDeps {
   mediaRoot: string;
@@ -18,5 +19,10 @@ export interface ToolDeps {
 }
 
 export function createTools(deps: ToolDeps): ToolRegistration[] {
-  return [createLookTool(deps), createSearchTool({ prompts: deps.prompts, key: deps.searchKey }), createVideoTool({ prompts: deps.prompts })];
+  return [
+    createLookTool(deps),
+    createSearchTool({ prompts: deps.prompts, key: deps.searchKey }),
+    createVideoTool({ prompts: deps.prompts }),
+    createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
+  ];
 }

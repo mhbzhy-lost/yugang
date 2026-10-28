@@ -47,7 +47,7 @@ test("工具面只有 say / react / look，没有 bash", async () => {
   try {
     const root = await open.harness.root(ctx);
     const names = (await root.agent(ctx)).tools.map((t) => t.name);
-    assert.deepEqual(names, ["say", "react", "look", "search", "video"]);
+    assert.deepEqual(names, ["say", "react", "look", "search", "video", "meme"]);
     assert.ok(!names.includes("bash"), "bash 必须不存在");
     assert.ok(!names.includes("read"), "read 也必须不存在");
   } finally {
