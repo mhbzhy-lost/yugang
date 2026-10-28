@@ -143,27 +143,41 @@ test/               node --test，不需要网络和 API key
 
 ## 模型与凭据
 
-不把网关地址和 key 抄进仓库，直接从 pi 的配置读：
+**配置在仓库里，凭据在仓库外。**
 
 ```
-~/pi-config/pi/models.json   providers["qoder-pool"]   → baseUrl / api / 模型清单
-~/pi-config/pi/auth.json     ["qoder-pool"].key        → 凭据
+config/models.json       provider 地址、模型清单、网关兼容值   ← 跟着代码走，可 diff 可 review
+var/credentials.json     只有 key                              ← gitignore，权限 600
 ```
 
-`src/model-config.ts` 负责加载，`src/models.ts` 用 `createProvider` 拼出一个只属于这条鱼的
-provider。**key 只在内存里**：不写 env、不进 prompt、不进 transcript，`describeModel()` 只报
-"已加载 / N 字符"和来源路径。
-
-```bash
-npm run ping        # 验一次：读凭据 → 最小补全 → 打印模型、耗时、用量
-```
-
-换模型：`MODEL_PROVIDER=qoder-pool MODEL_ID=DeepSeek-V4-Pro`；要用别的网关，放一个
-`var/credentials.json`（已 gitignore）：
+`config/models.json` 是自己的一份配置，不依赖 `~/pi-config` 是否存在：
 
 ```json
-{ "providerId": "my-gw", "modelId": "my-model", "baseUrl": "https://...", "key": "..." }
+{
+  "default": { "provider": "qoder-pool", "model": "DeepSeek-Flash" },
+  "providers": {
+    "qoder-pool": {
+      "api": "openai-completions",
+      "baseUrl": "http://classi.jini.zeroling.com:8080/qoder/v1",
+      "compat": { "maxTokensField": "max_tokens" },
+      "models": [ { "id": "DeepSeek-Flash", "contextWindow": 1000000, "maxTokens": 32000, "input": ["text", "image"] } ]
+    }
+  }
+}
 ```
+
+凭据只导一次，之后运行时不碰任何外部配置：
+
+```bash
+npm run creds import     # 从 ~/pi-config/pi/auth.json 导一次，写 var/credentials.json（600）
+npm run creds show       # 每个 provider 有没有 key、多少字符
+npm run creds clear      # 删掉
+npm run ping             # 读凭据 → 最小补全 → 打印模型/耗时/用量
+```
+
+换机器只要重新导一次凭据；换模型改 `MODEL_PROVIDER` / `MODEL_ID`，换网关直接改 `config/models.json`。
+
+`key` 只在内存里：不写 env、不进 prompt、不进 transcript，`describeModel()` 只报「已加载 / N 字符」和来源路径。
 
 ## 跑起来
 

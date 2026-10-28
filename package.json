@@ -13,7 +13,8 @@
     "probe": "node scripts/probe.ts",
     "prompts": "node scripts/prompts.ts",
     "ops": "node scripts/ops.ts",
-    "ping": "node scripts/ping.ts"
+    "ping": "node scripts/ping.ts",
+    "creds": "node scripts/creds.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",

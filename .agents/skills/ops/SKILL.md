@@ -32,8 +32,12 @@ node scripts/ops.ts digest 2026-05-01 42  # 只看群号含 42 的
 npm run ping
 ```
 
-输出里面有 provider / model / baseUrl / 凭据状态（只显示"已加载 / N 字符"和来源），
-以及一次最小补全的耗时和用量。报 `没有拿到 key` 就是 `~/pi-config/pi/auth.json` 里没有这个 provider 的条目。
+输出包括 provider / model / baseUrl / 凭据状态（只有"已加载 / N 字符"和来源路径），
+以及一次最小补全的耗时和用量。
+
+- 报 `没有拿到 key` → 跑 `npm run creds show`；没有就 `npm run creds import`
+- 报 `400 ... unsupported field "max_completion_tokens"` → `config/models.json` 里这个 provider 缺 `compat.maxTokensField: "max_tokens"`
+- 换模型不改代码：`MODEL_PROVIDER` / `MODEL_ID`，或改 `config/models.json` 的 `default`
 
 ## 诊断连不上 QQ
 

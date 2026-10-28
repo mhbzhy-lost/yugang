@@ -1,11 +1,11 @@
 /**
- * 模型与凭据。
+ * 模型配置（仓库里，可审查）+ 凭据（仓库外，不进记录）。
  *
- * 配置直接从 ~/pi-config 抄：models.json 里的 provider 条目 + auth.json 里的 key。
- * 这样鱼和 pi 用同一份模型配置，不用把这个网关的地址抄进仓库。
+ * 两件事分开：
+ *   config/models.json      provider 地址、模型清单、兼容值 —— 跟着代码走，能 diff 能 review
+ *   var/credentials.json    只有 key —— gitignore，由 `npm run creds` 写，权限 0600
  *
- * 凭据只在内存里，进不了 prompt、进不了 transcript、也不打印。
- * 想知道用的是哪个 key，看 keySource 和长度，看不到内容。
+ * 这样仓库自洽：不依赖 ~/pi-config 存在，换机器也能跑（重新导一次凭据即可）。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -20,13 +20,21 @@ export interface ProviderModelConfig {
   contextWindow?: number;
   maxTokens?: number;
   compat?: Record<string, unknown>;
+  samplingParams?: Record<string, unknown>;
+  thinkingLevelMap?: Record<string, unknown>;
 }
 
-/**
- * 网关兼容性默认值。qoder 网关不接受 max_completion_tokens，只认 max_tokens。
- * 每个模型自己的 compat 会覆盖这里。
- */
-const DEFAULT_COMPAT: Record<string, unknown> = { maxTokensField: "max_tokens" };
+export interface ProviderConfig {
+  api?: string;
+  baseUrl?: string;
+  compat?: Record<string, unknown>;
+  models: ProviderModelConfig[];
+}
+
+export interface ModelsFile {
+  default?: { provider?: string; model?: string };
+  providers: Record<string, ProviderConfig>;
+}
 
 export interface FishModelConfig {
   providerId: string;
@@ -36,64 +44,61 @@ export interface FishModelConfig {
   /** 只在内存里用；不要打印、不要写文件、不要进 prompt。 */
   key: string;
   keySource: string;
+  /** 配置文件本身的位置，方便排查。 */
+  configSource: string;
 }
 
 export interface LoadOptions {
-  /** pi 的配置目录，默认 ~/pi-config/pi。 */
-  piConfigDir?: string;
-  /** 覆盖用：{ provider, modelId, baseUrl, key }。 */
-  override?: string;
+  /** 默认 ./config/models.json。 */
+  modelsPath?: string;
+  /** 默认 $YUGANG_HOME/credentials.json。 */
+  credentialsPath?: string;
   providerId?: string;
   modelId?: string;
 }
 
+function varDir(): string {
+  return process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
+}
+
 export function loadModelConfig(options: LoadOptions = {}): FishModelConfig {
-  const overridePath = options.override ?? process.env.YUGANG_CREDENTIALS;
+  const configSource = resolve(options.modelsPath ?? process.env.YUGANG_MODELS ?? join(process.cwd(), "config", "models.json"));
+  if (!existsSync(configSource)) throw new Error(`找不到模型配置：${configSource}`);
 
-  // 1. 显式覆盖文件优先（lib 里可以放自建网关）
-  if (overridePath && existsSync(overridePath)) {
-    const raw = JSON.parse(readFileSync(resolve(overridePath), "utf8")) as Partial<FishModelConfig>;
-    if (!raw.key) throw new Error("credentials 文件缺少 key");
-    return {
-      providerId: raw.providerId ?? options.providerId ?? "fish",
-      modelId: raw.modelId ?? options.modelId ?? "default",
-      baseUrl: raw.baseUrl ?? "",
-      models: withCompat(raw.models ?? [{ id: raw.modelId ?? "default" }]),
-      key: raw.key,
-      keySource: overridePath,
-    };
-  }
+  const file = JSON.parse(readFileSync(configSource, "utf8")) as ModelsFile;
+  const providerId = options.providerId ?? process.env.MODEL_PROVIDER ?? file.default?.provider;
+  const modelId = options.modelId ?? process.env.MODEL_ID ?? file.default?.model;
+  if (!providerId || !modelId) throw new Error("models.json 里没写 default.provider / default.model");
 
-  const dir = resolve(options.piConfigDir ?? process.env.PI_CONFIG_DIR ?? join(homedir(), "pi-config", "pi"));
-  const providerId = options.providerId ?? process.env.MODEL_PROVIDER ?? "qoder-pool";
-  const modelId = options.modelId ?? process.env.MODEL_ID ?? "DeepSeek-Flash";
-
-  const modelsFile = join(dir, "models.json");
-  const authFile = join(dir, "auth.json");
-  if (!existsSync(modelsFile)) throw new Error(`找不到 ${modelsFile}`);
-  if (!existsSync(authFile)) throw new Error(`找不到 ${authFile}`);
-
-  const models = JSON.parse(readFileSync(modelsFile, "utf8")) as {
-    providers?: Record<string, { baseUrl?: string; models?: ProviderModelConfig[] }>;
-  };
-  const provider = models.providers?.[providerId];
+  const provider = file.providers[providerId];
   if (!provider) throw new Error(`models.json 里没有 provider：${providerId}`);
 
-  const auth = JSON.parse(readFileSync(authFile, "utf8")) as Record<string, { key?: string }>;
-  const key = process.env.MODEL_API_KEY ?? auth[providerId]?.key;
+  const credentialsPath = options.credentialsPath ?? join(varDir(), "credentials.json");
+  const override = process.env.MODEL_API_KEY;
+  const key = override ?? readKeyFile(credentialsPath, providerId);
 
   return {
     providerId,
     modelId,
     baseUrl: provider.baseUrl ?? "",
-    models: withCompat(provider.models ?? [{ id: modelId }]),
+    models: withCompat(provider.models, provider.compat),
     key: key ?? "",
-    keySource: process.env.MODEL_API_KEY ? "MODEL_API_KEY" : authFile,
+    keySource: override ? "MODEL_API_KEY" : credentialsPath,
+    configSource,
   };
 }
 
-function withCompat(models: ProviderModelConfig[]): ProviderModelConfig[] {
-  return models.map((model) => ({ ...model, compat: { ...DEFAULT_COMPAT, ...model.compat } }));
+function readKeyFile(path: string, providerId: string): string | undefined {
+  if (!existsSync(path)) return undefined;
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, { key?: string } | string>;
+  const entry = parsed[providerId];
+  return typeof entry === "string" ? entry : entry?.key;
+}
+
+/** provider 级 compat 兜底，模型自带的覆盖它。 */
+function withCompat(models: ProviderModelConfig[], providerCompat: Record<string, unknown> = {}): ProviderModelConfig[] {
+  const base = { maxTokensField: "max_tokens", ...providerCompat };
+  return models.map((model) => ({ ...model, compat: { ...base, ...model.compat } }));
 }
 
 /** 打印用：不含任何 key 内容。 */
@@ -105,5 +110,6 @@ export function describeModel(config: FishModelConfig): Record<string, string | 
     key: config.key ? `已加载 / ${config.key.length} 字符` : "缺失",
     keySource: config.keySource,
     models: config.models.map((m) => m.id).join(", "),
+    config: config.configSource,
   };
 }
