@@ -74,6 +74,7 @@ function markSent(key: string): boolean {
 // conversationId → 最近一条触发消息 + 所在会话，用来做引用和贴表情
 const chatKeys = new Map<string, string>();
 const lastMessageId = new Map<string, number | string>();
+const lastMention = new Map<string, boolean>(); // 最近一次触发是否@了鱼：被@必回引用，让群里看得出鱼在回谁
 const conversations = new Map<string, Conversation>();
 
 const fish = await openFish({
@@ -96,7 +97,7 @@ const fish = await openFish({
 
     if (chatKey.startsWith("qq:group:")) {
       const groupId = Number(chatKey.slice("qq:group:".length));
-      const quote = payload.quote ? lastMessageId.get(conversationId) : undefined;
+      const quote = (payload.quote || lastMention.get(conversationId) === true) ? lastMessageId.get(conversationId) : undefined;
       await onebot.sendGroup(groupId, payload.items, { quote });
       if (payload.media) await onebot.sendImageGroup(groupId, payload.media);
     } else if (chatKey.startsWith("qq:private:")) {
@@ -196,6 +197,7 @@ onebot.onMessage((raw) => {
     resetRun(conv.id);
     resetLook(conv.id);
     if (msg.messageId !== undefined) lastMessageId.set(conv.id, msg.messageId);
+    lastMention.set(conv.id, msg.mentionsBot);
 
     // 群员插话走 follow-up：不打断正在跑的那一轮
     const submission = await conv.submit(
