@@ -1,9 +1,9 @@
 /**
  * 把 pi-durable 组装成「鱼」。
  *
- * 一只鱼身上只有三样东西：
- *   两只手  bash + read        （能力全靠 skills 里的脚本，用 bash 调）
- *   一张嘴  say                （唯一出口，硬校验）
+ * 一只鱼身上只有：
+ *   一张嘴  say               唯一出口，硬校验
+ *   手写的工具（src/tools/）  能力扩展的唯一方式——没有 shell、没有脚本、没有 MCP
  *
  * 一个 Conversation = 一个 QQ 群，自带 cwd 与 env，互不串。
  */
@@ -23,9 +23,8 @@ import {
 } from "@earendil-works/pi-durable";
 import { DEFAULT_LIMITS, REJECTION_CODES, type EgressLimits } from "./egress/policy.ts";
 import { createSayTool, type OutboundPayload } from "./egress/say.ts";
-import { createHands } from "./sandbox.ts";
-import { discoverSkills, renderSkillsPrompt } from "./skills.ts";
-import { loadPrompts, renderTemplate, type PromptSet } from "./prompts.ts";
+import { loadPrompts, type PromptSet } from "./prompts.ts";
+import { createTools } from "./tools/index.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -38,10 +37,8 @@ export interface FishOptions {
   storage: Storage;
   models?: Models;
   model: ModelRef;
-  /** prompt 目录：人格、手艺模板、工具说明、工具文案。 */
+  /** prompt 目录：人格、工具说明、工具文案。 */
   promptRoot: string;
-  /** skills 根目录；每个子目录一个 SKILL.md。 */
-  skillsRoot: string;
   /** 媒体白名单根目录（发图只能发这里面的）。 */
   mediaRoot: string;
   /** 每个群的工作目录根；实际 cwd 是 <workspaceRoot>/<groupKey>。 */
@@ -55,9 +52,9 @@ export interface Fish {
   harness: Harness;
   models: Models;
   prompts: PromptSet;
-  skills: ReturnType<typeof discoverSkills>;
   /** 实际的 harness settings，便于审查（compaction 必须为 false）。 */
   settings: { compaction: { enabled: boolean } };
+  toolNames: string[];
   group(groupKey: string): Promise<Conversation>;
   close(): Promise<void>;
 }
@@ -65,44 +62,32 @@ export interface Fish {
 export async function openFish(options: FishOptions): Promise<Fish> {
   const models = options.models ?? createModels();
   const now = options.now ?? Date.now;
-  const limits: EgressLimits = { ...DEFAULT_LIMITS, ...options.limits, mediaRoot: options.mediaRoot };
-
-  // 脚本要在任意 cwd 下都能跑，所以这两个根必须是绝对路径
-  const skillsRoot = resolve(options.skillsRoot);
   const mediaRoot = resolve(options.mediaRoot);
   const workspaceRoot = resolve(options.workspaceRoot);
-  limits.mediaRoot = mediaRoot;
+  const limits: EgressLimits = { ...DEFAULT_LIMITS, ...options.limits, mediaRoot };
 
   const prompts = loadPrompts(resolve(options.promptRoot));
   for (const code of [...REJECTION_CODES, "say_sent"]) {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
 
-  const skills = discoverSkills(skillsRoot);
   const say = createSayTool({ limits, prompts, emit: options.emit, now });
-  const hands = createHands({ mediaRoot, skillsRoot, prompts });
+  const tools = createTools({ mediaRoot, workspaceRoot, prompts });
 
-  // 手：bash + read，就这两样
-  const Hands = defineExtension({ name: "hands", tools: [hands.bash, hands.read] });
-
-  // 嘴 + 身份 + 手艺清单
   const Fish = defineExtension({
     name: "fish",
-    tools: [say],
-    sections: [
-      section("persona", () => prompts.persona, { tag: false }),
-      section("skills", () => renderSkillsPrompt(skills, prompts.skillsTemplate), { tag: true }),
-    ],
+    tools: [say, ...tools],
+    sections: [section("persona", () => prompts.persona, { tag: false })],
   });
 
   const registry = createRegistry();
-  registry.install(Hands);
   registry.install(Fish);
 
   mkdirSync(workspaceRoot, { recursive: true });
+  mkdirSync(mediaRoot, { recursive: true });
 
   // pi-durable 默认的 compaction 会在中途注入一段库自带的总结提示词（不可审查），
-  // 所以显式关掉：上下文靠 reset / 分群隔离控制，而不是靠一个我们看不到的 prompt。
+  // 所以显式关掉：上下文靠分群隔离与 reset 控制，而不是靠一个我们看不到的 prompt。
   const settings = { compaction: { enabled: false } };
 
   const harness = await Harness.open(
@@ -112,7 +97,6 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       registry,
       now,
       settings,
-      // 每个群一个 cwd：文件、临时产物、skill 生成的东西都落在这里
       env: (target) => {
         const cwd = target.cwd ?? join(workspaceRoot, String(target.conversationId));
         mkdirSync(cwd, { recursive: true });
@@ -128,8 +112,8 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     harness,
     models,
     prompts,
-    skills,
     settings,
+    toolNames: [say.name, ...tools.map((t) => t.name)],
     group(groupKey) {
       let existing = groups.get(groupKey);
       if (!existing) {

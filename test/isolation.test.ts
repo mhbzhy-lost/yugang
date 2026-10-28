@@ -41,7 +41,6 @@ test("模型正文不出境，只有 say 的 text 会", async () => {
     models,
     model: { provider: faux.provider.id, modelId: faux.models[0].id },
     promptRoot: PROMPTS,
-    skillsRoot: fileURLToPath(new URL("../skills", import.meta.url)),
     workspaceRoot: mediaRoot(),
     mediaRoot: mediaRoot(),
     emit: (_id, payload) => {
@@ -82,7 +81,6 @@ test("从思考里抄来的话被拒，且以 tool 错误返回", async () => {
     models,
     model: { provider: faux.provider.id, modelId: faux.models[0].id },
     promptRoot: PROMPTS,
-    skillsRoot: fileURLToPath(new URL("../skills", import.meta.url)),
     workspaceRoot: mediaRoot(),
     mediaRoot: mediaRoot(),
     emit: (_id, payload) => {

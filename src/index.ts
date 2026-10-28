@@ -31,7 +31,6 @@ const config = {
   modelId: process.env.MODEL_ID ?? "deepseek-v4-flash",
   mediaRoot: resolve(process.env.MEDIA_ROOT ?? join(HOME, "media")),
   promptRoot: resolve(process.env.PROMPT_ROOT ?? join(process.cwd(), "prompt")),
-  skillsRoot: resolve(process.env.SKILLS_ROOT ?? join(process.cwd(), "skills")),
   workspaceRoot: resolve(process.env.WORKSPACE_ROOT ?? join(HOME, "workspace")),
   ambientChance: Number(process.env.AMBIENT_CHANCE ?? "0.06"),
   cooldownMs: Number(process.env.COOLDOWN_MS ?? "90000"),
@@ -59,7 +58,6 @@ const fish = await openFish({
   models,
   model: { provider: config.provider, modelId: config.modelId },
   promptRoot: config.promptRoot,
-  skillsRoot: config.skillsRoot,
   workspaceRoot: config.workspaceRoot,
   mediaRoot: config.mediaRoot,
   emit: async (conversationId, payload) => {
@@ -113,4 +111,4 @@ onebot.onMessage((msg) => {
 });
 
 await onebot.connect();
-console.log(`[鱼缸] 已连接 OneBot，模型 ${config.provider}/${config.modelId}，手艺 ${fish.skills.map((s) => s.name).join("、") || "（无）"}`);
+console.log(`[鱼缸] 已连接 OneBot，模型 ${config.provider}/${config.modelId}，工具 ${fish.toolNames.join("、")}`);

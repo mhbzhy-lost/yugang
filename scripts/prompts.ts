@@ -32,7 +32,7 @@ console.log(`${prompts.persona.split("\n").slice(0, 3).join("\n")}\n…`);
 
 console.log("\n== pi-durable 注入的 prompt\n");
 console.log("  compaction: 已禁用（默认会注入一段库自带的总结提示词）");
-console.log("  system prompt: 只有上面的 persona + skills 两个 section，库不添加其它 section");
+console.log("  system prompt: 只有 persona 一个 section，库不添加其它 section");
 
 // 顺手扫一遍源码，确认没有内嵌的 prompt 字面量
 const violations = scanDir(join(process.cwd(), "src"));

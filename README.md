@@ -13,9 +13,9 @@
                                 ├── 正文              ✗ 不出境
                                 └── say(text, media)  ✓ 硬校验 → fish.outbound → QQ
 
-鱼身上只有三样东西：
-  两只手  bash + read   能力扩展全部是 skills/<name>/SKILL.md + 脚本，用 bash 跑
-  一张嘴  say           唯一出口
+鱼身上只有：
+  一张嘴  say            唯一出口，硬校验
+  手写的工具 src/tools/   能力扩展的唯一方式
 ```
 
 ## 为什么出口是一个 tool
@@ -27,61 +27,39 @@
 - **`callers: ["model"]`**：脚本、嵌套工具调用（`api.executeTool`）都碰不到 `say`，绕不过校验。
 - **拒绝不静默丢弃**：静默丢弃 = 群里一片死寂，而且模型永远学不会。
 
-## 为什么只有 bash + read
+## 没有 bash，没有 skills，没有 MCP
 
-**能力扩展不该长在宿主上。** 每加一个能力就改一次宿主代码、装一次依赖、重启一次进程，
-最后你会得到一个 90 个工具的怪物，prompt 里塞满它这辈子用不上的工具说明。
+一开始的设计是「两只手 bash + read，能力全靠 skills 脚本」。这个方案被推翻了，理由是
+**bash 是一条通往一切的边**：能给模型 bash，等于给它整台机器；skills 把脚本挂在这条边上，
+于是每加一项手艺都在扩大那条边。而群里坐着的是可以被 prompt 注入的陌生人。
 
-skills 的做法是把能力放回磁盘：
+现在的规则：
 
-```
-skills/draw/
-  SKILL.md            name + description + 步骤（模型按需 read，不占常驻上下文）
-  scripts/make.mjs    纯标准库脚本，用 bash 跑
-```
+- **工具面 = 代码里的 `defineTool`**。`src/tools/` 下每个文件一个能力，注册在
+  `src/tools/index.ts`。没有 shell，没有脚本解释器，没有 MCP server。
+- **每个工具是一个狭窄的函数**：确定的入参、确定的路径、确定的副作用。想让它危险，
+  得有人显式写一行危险的代码，而不是模型自己拼一条命令。
+- **prompt 仍然全在 `prompt/tools/<name>.md`**：加一个工具 = 一个 `.ts` + 一个 `.md`，没有第三种位置。
 
-常驻上下文里每个 skill 只占一行：名字 + 什么时候用 + 路径。要做什么事，模型自己
-`read` 那个 SKILL.md，再 `bash` 跑脚本。加一项能力 = 扔一个目录进去，不重启、不改代码。
+**`read` 是现在唯一能碰到宿主文件的工具**，所以它被包了一层：路径必须落在本群工作目录或媒体目录里，
+`/etc/passwd`、`~/.ssh/id_rsa` 一律拒绝（`src/tools/read.ts`）。拿掉 bash 之后 read 就成了那条
+「通往一切的边」，不关它等于白关 bash。
 
-`say` 是例外，而且必须是工具：如果"说话"是一个 skill 脚本，那脚本就得知道群号，
-而且任何 bash 命令都能写那个出口文件——校验就形同虚设。**说必须是能力，不能是副作用。**
+代价：加能力要写 TypeScript、要重新部署。换来的是**能力面是可枚举的**——你把
+`src/tools/index.ts` 看一遍，就知道这条鱼最坏能干什么，而且这个清单会出现在 `npm run prompts` 里。
 
-## 三条命令之外没有别的
+## 工具注册表
 
-- `bash` 的 `prepare` 钩子会：不继承宿主环境变量（key 不进 shell）、cwd 锁在本群 workspace、
-  拦掉 `rm -rf /` / `sudo` / `mkfs` / `ssh` / 写 `/etc` 这类自杀命令
-- 脚本能拿到 `$YUGANG_SKILL_DIR`、`$YUGANG_MEDIA_ROOT`、`$YUGANG_WORKSPACE`
-- ⚠️ 这不是沙箱。真隔离请上容器或 seatbelt/bwrap；这份代码里的 bash 依然是一个全权限 shell
-
-## prompt 全是文件，代码里一个字不内嵌
-
-模型看到的所有文字都在 `prompt/` 下：人格、手艺清单模板、三个工具的说明、以及工具回给模型的
-全部文案（拒绝理由 + 发送回执）。
-
-```
-prompt/
-  persona.md          身份与说话方式
-  skills.md           手艺清单模板（{{skills}} 处填目录）
-  tools/say.md        say 的说明 + 参数说明（frontmatter 的 params）
-  tools/bash.md       覆盖 pi-durable 内置说明
-  tools/read.md       覆盖 pi-durable 内置说明
-  messages.md         23 条工具文案，一行一条 key: text
+```ts
+// src/tools/index.ts
+export function createTools(deps) {
+  return [read, createDrawTool(deps)];   // 加一项能力就是往这里加一行
+}
 ```
 
-配套的三道护栏：
-
-1. **`{{name}}` 严格替换**——缺变量直接抛错，不允许半渲染的 prompt 上线
-2. **`npm test` 扫描 `src/`**——任何一条字面量里出现 ≥12 个汉字就失败（正常错误信息远低于此）
-3. **`npm run prompts`**——列出所有 prompt 文件、sha256、工具说明、文案条数，并报告内嵌扫描结果
-
-**pi-durable 自带的注入怎么处理：**
-
-| 注入 | 处理 |
-|---|---|
-| compaction 的总结提示词 | **已关闭**（`settings.compaction.enabled = false`），上下文靠分群与 reset 控制 |
-| system prompt 的内置 section | 不存在——库不加任何 section，transcript 里只有 `persona` 和 `skills` |
-| `tools/bash|read` 的默认说明 | 用 `prompt/tools/*.md` **覆盖** |
-| `Tool result unavailable…` 占位、`<harness>[error]…</harness>` 包裹 | 库内固定，无法覆盖，已在 `prompt/README.md` 记录 |
+仓库里现在有三个工具：`say`（出口）、`read`（**只能在群工作目录与媒体目录内读**）、`draw`（占位画图）。
+`draw` 的后端是本地生成的渐变图；换成 ComfyUI / 通义万相 / SiliconFlow 只改
+`renderImage` 一个函数，工具契约和文案都不用动。
 
 ## 校验分两类
 
@@ -106,14 +84,13 @@ src/
     absorb.ts       把 transcript 里的 thinking / tool 结果喂给溯源校验
   prompt-lint.ts    扫描 src/ 里有没有内嵌 prompt（给审查用的护栏）
   prompts.ts        加载 prompt/ 下的 md，严格模板替换
-  skills.ts         扫描 SKILL.md，渲染成 prompt 里的一行一项
-  sandbox.ts        bash 的 prepare：环境、cwd、自杀命令拦截
+  tools/
+    index.ts        注册表：加一项能力就是往这里加一行
+    read.ts         被收口的 read（只能读群工作目录 + 媒体目录）
+    draw.ts         画图（占位后端，换真模型只改 renderImage）
   qq/
     onebot.ts       零依赖 OneBot v11 客户端（Node 内置 WebSocket）
     gate.ts         门外规则闸 + 群消息结构化包装
-skills/
-  draw/             画图（纯标准库生成 PNG，走 $YUGANG_MEDIA_ROOT）
-  meme/             本地表情包挑选
 prompt/             模型能看到的一切文字（见 prompt/README.md）
 test/               node --test，不需要网络和 API key
 ```
@@ -139,16 +116,17 @@ npm start
 
 ## 已验证
 
-`npm test` 12 项，其中三条是设计约束：
+`npm test` 19 项，其中四条是设计约束：
 
 1. **正文不出境**：脚本化的模型先 `say("在的")` 再输出长段正文，断言群里只收到前者。
 2. **抄写被拦**：`say` 里塞入本轮 thinking 的片段，断言被拒、原因为 tool 错误、重说的那句才放行。
-3. **技能全链路**：模型按 SKILL.md 用 bash 跑 `skills/draw` 的脚本，再 `say({text, media})`，
-   断言产出的图片路径进了 media、正文里没有混进 `[IMAGE:...]`，并且 agent 的工具恰好是
-   `["bash", "read", "say"]`。
+3. **工具面固定**：agent 的工具恰好是 `["say", "read", "draw"]`，且断言 `bash` 不存在。
+4. **工具全链路**：模型调 `draw` 拿到真实文件，再 `say({text, media})`，断言路径进了 media、
+   正文里没有混进文件名。
 
 ## 还没做（按优先级）
 
+- **上下文不会自己收敛**：compaction 关着，群聊会一直长。需要按群 reset + handoff（摘要模板放 `prompt/`）。
 - **durable 化出站**：`ledger` 现在在内存里，`sentThisRun` / `recent` 崩溃即丢。应改为 conversation doc，
   并让适配器从 `fish.outbound` 条目补齐未发送的消息（现在只在进程内存里 emit 一次）。
 - **改写成话**：`say` 之前加一次无工具、无 transcript 的 speaker 调用，把工具结果压成一句人话。

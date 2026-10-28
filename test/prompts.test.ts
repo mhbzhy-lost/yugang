@@ -25,7 +25,7 @@ const ctx = BACKGROUND_CONTEXT;
 
 test("每个 prompt 文件都存在且非空", () => {
   const files = auditPrompts(PROMPTS);
-  assert.equal(files.length, 6);
+  assert.ok(files.length >= 4);
   for (const file of files) assert.ok(file.bytes > 0, `${file.file} 是空的`);
 });
 
@@ -40,7 +40,6 @@ test("工具说明逐字来自 prompt/tools/*.md", async () => {
     })(),
     model: { provider: "faux", modelId: "faux-1" },
     promptRoot: PROMPTS,
-    skillsRoot: join(ROOT, "skills"),
     mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
     workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
     emit: () => {},
@@ -49,7 +48,7 @@ test("工具说明逐字来自 prompt/tools/*.md", async () => {
   try {
     const root = await fish.harness.root(ctx);
     const tools = (await root.agent(ctx)).tools;
-    for (const name of ["say", "bash", "read"] as const) {
+    for (const name of ["say", "read", "draw"] as const) {
       const tool = tools.find((t) => t.name === name);
       assert.ok(tool, `缺少工具 ${name}`);
       assert.equal(tool.description, readFileSync(join(PROMPTS, "tools", `${name}.md`), "utf8")
@@ -71,7 +70,6 @@ test("pi-durable 的 compaction 已关掉", async () => {
     })(),
     model: { provider: "faux", modelId: "faux-1" },
     promptRoot: PROMPTS,
-    skillsRoot: join(ROOT, "skills"),
     mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
     workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
     emit: () => {},

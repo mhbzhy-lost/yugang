@@ -4,7 +4,7 @@
  * 这样做的代价是多一层加载和一堆「文件不存在就报错」的分支，
  * 换来的是：改一句话不需要读代码，审查时 diff 一眼能看出来。
  */
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -17,23 +17,29 @@ export interface ToolPrompt {
 export interface PromptSet {
   root: string;
   persona: string;
-  skillsTemplate: string;
   messages: Record<string, string>;
-  tools: Record<"say" | "bash" | "read", ToolPrompt>;
+  /** key 是工具名，来自 prompt/tools/<name>.md 的文件名。 */
+  tools: Record<string, ToolPrompt>;
 }
-
-const TOOL_NAMES = ["say", "bash", "read"] as const;
 
 export function loadPrompts(root: string): PromptSet {
   return {
     root,
     persona: read(join(root, "persona.md")),
-    skillsTemplate: read(join(root, "skills.md")),
     messages: parseMessageTable(read(join(root, "messages.md")), join(root, "messages.md")),
-    tools: Object.fromEntries(
-      TOOL_NAMES.map((name) => [name, parseToolPrompt(read(join(root, "tools", `${name}.md`)))]),
-    ) as PromptSet["tools"],
+    tools: loadTools(join(root, "tools")),
   };
+}
+
+function loadTools(dir: string): Record<string, ToolPrompt> {
+  if (!existsSync(dir)) throw new Error(`缺少 prompt 目录：${dir}`);
+  const tools: Record<string, ToolPrompt> = {};
+  for (const entry of readdirSync(dir)) {
+    if (!entry.endsWith(".md")) continue;
+    tools[entry.slice(0, -3)] = parseToolPrompt(read(join(dir, entry)));
+  }
+  if (Object.keys(tools).length === 0) throw new Error(`prompt/tools 里一个工具说明都没有：${dir}`);
+  return tools;
 }
 
 function read(path: string): string {
@@ -89,7 +95,10 @@ export function renderTemplate(template: string, vars: Record<string, string>): 
 
 /** 审查用：列出所有 prompt 文件、大小与 sha256。 */
 export function auditPrompts(root: string): { file: string; bytes: number; sha256: string }[] {
-  const files = ["persona.md", "skills.md", "messages.md", ...TOOL_NAMES.map((n) => join("tools", `${n}.md`))];
+  const files = ["persona.md", "messages.md"];
+  for (const entry of readdirSync(join(root, "tools")).sort()) {
+    if (entry.endsWith(".md")) files.push(join("tools", entry));
+  }
   return files.map((file) => {
     const path = join(root, file);
     const content = read(path);

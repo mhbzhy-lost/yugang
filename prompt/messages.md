@@ -16,11 +16,8 @@ media_missing: 找不到这个图片文件
 media_type: 不支持的图片格式：{{ext}}
 media_big: 图片太大了（{{size}}MB）
 media_magic: 文件头不是图片，拒绝发送
-bash_denied: 这条命令被拦下：{{reason}}
-deny_root: 不准删根目录
-deny_privilege: 这里不需要也不能提权
-deny_disk: 不要动磁盘
-deny_power: 不要关机
-deny_ssh: 不要往外连 ssh
-deny_persist: 不要装常驻任务
-deny_etc: 不要写 /etc
+read_outside: 这个路径不在你能读的范围内（只限本群工作目录和媒体目录）：{{path}}
+read_missing: 读不到这个文件：{{path}}
+draw_done: 画好了，路径：{{path}}
+draw_empty: 没说要画什么
+draw_too_long: 描述太长了，压成一句话
