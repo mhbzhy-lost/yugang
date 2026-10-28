@@ -92,6 +92,8 @@ export interface Fish {
   drain(extra?: readonly ConversationId[]): Promise<number>;
   /** 不经模型直接往 outbox 里排队一条（宿主侧机械回复专用，同样走唯一出口）。 */
   enqueue(conversationId: ConversationId, payload: OutboundPayload): Promise<void>;
+  /** 有意重启后的恢复：把卡在 sending 的消息翻回 queued（配合 restart.marker 使用）。 */
+  recoverStaleSends(): Promise<number>;
   close(): Promise<void>;
 }
 
@@ -228,6 +230,22 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         const doc = await tx.doc(OutboxDoc, conversationId);
         doc.queue.push({ ...payload, status: "queued", attempts: 0 });
       }, ctx);
+    },
+    async recoverStaleSends() {
+      const snapshot = await harness.snapshot(ChatsDoc, ctx);
+      let recovered = 0;
+      for (const conversationId of Object.values(snapshot?.chats ?? {})) {
+        await harness.commit(async (tx) => {
+          const doc = await tx.doc(OutboxDoc, conversationId);
+          for (const item of doc.queue) {
+            if (item.status === "sending") {
+              item.status = "queued";
+              recovered++;
+            }
+          }
+        }, ctx);
+      }
+      return recovered;
     },
     async drain(extra = []) {
       const snapshot = await harness.snapshot(ChatsDoc, ctx);

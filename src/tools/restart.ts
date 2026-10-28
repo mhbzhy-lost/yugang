@@ -6,7 +6,8 @@
  * 协议端（QQ）不受影响。
  */
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
 import type { PromptSet } from "../prompts.ts";
@@ -37,6 +38,11 @@ export function createRestartTool(deps: RestartDeps) {
         throw new Error(deps.prompts.messages["fs_locked"] ?? "fs_locked");
       }
       console.log("[fish] restart scheduled by master, respawning in 3s");
+      // 有意重启标记：启动时据此把卡在 sending 的消息翻回 queued 补发（真崩溃仍不重发）
+      try {
+        mkdirSync(join(root, "var"), { recursive: true });
+        writeFileSync(join(root, "var", "restart.marker"), String(Date.now()));
+      } catch {}
       const child = spawn("/bin/sh", ["-c", "sleep 3 && npm run up >> var/fish-console.log 2>&1"], {
         cwd: root,
         detached: true,

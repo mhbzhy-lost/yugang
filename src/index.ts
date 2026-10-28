@@ -8,7 +8,7 @@
  *
  * 模型的正文、思考、tool 调用文本都不在这条链上。
  */
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -356,6 +356,13 @@ if (!config.master) {
 const known = await fish.harness.snapshot((await import("./store.ts")).ChatsDoc, ctx);
 for (const [chatKey, conversationId] of Object.entries(known?.chats ?? {})) {
   chatKeys.set(String(conversationId), chatKey);
+}
+// 有意重启的标记：把卡在 sending 的消息翻回 queued 一起补发（真崩溃不重发，语义不变）
+const marker = join(process.cwd(), "var", "restart.marker");
+if (existsSync(marker)) {
+  const recovered = await fish.recoverStaleSends();
+  rmSync(marker);
+  if (recovered > 0) console.log(`[鱼缸] 有意重启恢复：${recovered} 条 sending → queued`);
 }
 await drainLoop();
 const shown = describeModel(config.modelConfig);
