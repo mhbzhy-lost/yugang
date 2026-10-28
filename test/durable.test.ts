@@ -5,6 +5,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { resetRun } from "../src/egress/ledger.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -98,6 +99,7 @@ test("发送失败会重试，不丢消息", async () => {
   const open = await built.fish;
   try {
     const conv = await open.group("qq:group:9");
+    resetRun(conv.id); // 生产行为对齐：index.ts 每条消息前 resetRun；轮内计数是模块级状态，跨测试会残留
     faux.setResponses([
       fauxAssistantMessage([fauxToolCall("say", { messages: ["喂"] })], { stopReason: "toolUse" }),
       fauxAssistantMessage("好了"),

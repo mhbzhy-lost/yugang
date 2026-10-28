@@ -6,6 +6,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { resetRun } from "../src/egress/ledger.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,7 +84,8 @@ test("到阈值才压，压完写到 pi.reset 里", async () => {
     assert.equal(below.compacted, false, "没到阈值不该压");
     assert.equal(below.reason, "below_threshold");
 
-    // 第二轮：再到 2 条，累计 4 条，过阈值
+    // 第二轮：再到 2 条，累计 4 条，过阈值（生产行为对齐：index.ts 每条消息前 resetRun）
+    resetRun(root.id);
     faux.setResponses([
       fauxAssistantMessage([fauxToolCall("say", { messages: ["刚在刷手机"] })], { stopReason: "toolUse" }),
       fauxAssistantMessage("好了"),

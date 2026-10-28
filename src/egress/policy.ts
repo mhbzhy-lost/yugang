@@ -23,9 +23,9 @@ export interface EgressLimits {
 export const DEFAULT_LIMITS: Omit<EgressLimits, "mediaRoot"> = {
   maxChars: 120,
   maxNewlines: 2,
-  maxMessages: 3,
-  maxPerRun: 4,
-  maxPerMinute: 8,
+  maxMessages: 1,
+  maxPerRun: 1,
+  maxPerMinute: 3,
   maxMediaBytes: 8 * 1024 * 1024,
 };
 

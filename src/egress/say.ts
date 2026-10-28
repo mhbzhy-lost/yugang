@@ -2,13 +2,15 @@
  * say —— 唯一的出口。
  *
  * 出口是「一条消息序列」：模型一次可以连说几句，每句单独过检，
- * 宿主按顺序发出、中间加抖动延迟。被拒绝时以 tool 错误返回（文案来自 prompt/messages.md），
- * 模型在同一轮里改口重说。
+ * 宿主按顺序发出、中间加抖动延迟。被拒绝时以 tool 错误返回（文案来自 prompt/messages.md）。
+ *
+ * 每轮硬上限：一轮 = 一次 submit 触发的 agent loop（pi-durable 用 pi.live.run.taskId 标识它），
+ * 轮内第二次及之后的 say 调用直接以 tool 错误拒绝，不 emit、不静默。
  *
  * 模型的正文、思考、tool 调用文本，永远不进入 QQ。
  */
 import { Type } from "@earendil-works/pi-ai";
-import { defineEntry, defineTool, type ConversationId } from "@earendil-works/pi-durable";
+import { LiveDoc, defineEntry, defineTool, type ConversationId } from "@earendil-works/pi-durable";
 import { validateOutbound, type EgressLimits } from "./policy.ts";
 import { ledgerOf, recordSent } from "./ledger.ts";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
@@ -36,6 +38,10 @@ export interface SayDeps {
 export function createSayTool(deps: SayDeps) {
   const now = deps.now ?? Date.now;
   const prompt = requireTool(deps.prompts, "say");
+
+  // 轮计数：会话 → 最近说过话的那一轮（pi.live.run.taskId，一次 agent loop 一个）。
+  // 轮标识由 pi-durable 自己维护，say 执行时现读，不需要外部重置信号；只在内存，重启丢一次不致命。
+  const saidIn = new Map<ConversationId, number>();
 
   return defineTool({
     name: "say",
@@ -71,6 +77,19 @@ export function createSayTool(deps: SayDeps) {
         const text = renderTemplate(template, rejection.vars ?? {});
         const which = rejection.index === undefined ? "" : `（第 ${rejection.index + 1} 条）`;
         throw new Error(`${which}${text}`);
+      }
+
+      // 每轮硬上限：校验通过、真要开口前才计数——被拒绝的尝试不消耗机会，
+      // 模型在同一轮里改口重说的设计得以保留。判定与记录同步，并发第二个也拦得住。
+      // 轮标识用 run.inputs[0]（本轮要 settle 的输入任务）：整轮跨 generation 不变；
+      // run.taskId 每代都会换，不能用。轮结束后 run 整个移除，下一轮自然换新标识。
+      const live = await api.snapshot(LiveDoc, api.conversationId, context);
+      const round = live?.run?.inputs?.[0];
+      if (round !== undefined) {
+        if (saidIn.get(api.conversationId) === round) {
+          throw new Error(deps.prompts.messages["say_once"] ?? "already said this round");
+        }
+        saidIn.set(api.conversationId, round);
       }
 
       const payload: OutboundPayload = {

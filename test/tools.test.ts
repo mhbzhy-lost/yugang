@@ -5,6 +5,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { resetRun } from "../src/egress/ledger.ts";
 import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,6 +50,49 @@ test("工具面只有 say / react / look，没有 bash", async () => {
     assert.deepEqual(names, ["say", "react", "look"]);
     assert.ok(!names.includes("bash"), "bash 必须不存在");
     assert.ok(!names.includes("read"), "read 也必须不存在");
+  } finally {
+    await open.close();
+  }
+});
+
+test("say 每轮硬上限 1 次：同轮第二次报 tool 错，下一轮恢复", async () => {
+  const { faux, outbox, fish } = boot();
+  const open = await fish;
+  try {
+    const root = await open.harness.root(ctx, {
+      agent: { model: { provider: faux.provider.id, modelId: faux.models[0].id } },
+    });
+
+    // 同一轮 say 两次：第一次放行，第二次以 tool 错误拒绝，不 emit
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("say", { messages: ["头一句"] })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("say", { messages: ["再来一句"] })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("说完了"),
+    ]);
+    const settled = await (await root.submit({ type: "input", content: "说两句" }, ctx)).wait(ctx);
+    assert.equal(settled.status, "done");
+    await open.drain([root.id]);
+    assert.deepEqual(outbox.map((o) => o.text), ["头一句"], "一轮内只有第一次 say 落进 outbox");
+
+    const view = await root.viewState(ctx);
+    const results = view.value.entries.filter((e) => e.kind === "pi.tool-result");
+    assert.ok(
+      results.some((e) => JSON.stringify(e.model ?? "").includes("已经说过") ||
+        JSON.stringify(e.model ?? "").includes("够了")),
+      "第二次 say 的拒绝没有以 tool 错误回给模型（quota_run 或 say_once 任一文案）",
+    );
+    view.dispose();
+
+    // 下一轮（新的一轮）恢复：上限按轮计，不株连。
+    // 生产行为对齐：index.ts 在每条消息前 resetRun，这里同样重置轮内记账
+    resetRun(root.id);
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("say", { messages: ["新一轮"] })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("嗯"),
+    ]);
+    await (await root.submit({ type: "input", content: "再说" }, ctx)).wait(ctx);
+    await open.drain([root.id]);
+    assert.deepEqual(outbox.map((o) => o.text), ["头一句", "新一轮"]);
   } finally {
     await open.close();
   }

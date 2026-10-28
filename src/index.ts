@@ -205,7 +205,10 @@ onebot.onMessage((raw) => {
 
     const settled = await submission.wait(ctx);
     if (settled.status !== "done") {
-      console.error(`[鱼缸] ${msg.chatKey} 这一轮没答上来：${settled.status}`);
+      const why = [settled.status, (settled as { reason?: string }).reason, (settled as { detail?: string }).detail]
+        .filter(Boolean)
+        .join(" · ");
+      console.error(`[鱼缸] ${msg.chatKey} 这一轮没答上来：${why}`);
       return;
     }
 
