@@ -1,6 +1,6 @@
 /**
  * 工具即扩展：
- *  - 鱼身上只有 say / read / draw，没有 bash、没有技能脚本
+ *  - 鱼身上只有 say / draw，没有 bash、没有 read、没有技能脚本
  *  - draw 产出真实文件，路径能通过 say 的白名单校验
  *  - 每个工具的说明逐字来自 prompt/tools/*.md
  */
@@ -47,8 +47,9 @@ test("工具面只有 say / read / draw，没有 bash", async () => {
   try {
     const root = await open.harness.root(ctx);
     const names = (await root.agent(ctx)).tools.map((t) => t.name);
-    assert.deepEqual(names, ["say", "read", "draw"]);
+    assert.deepEqual(names, ["say", "draw"]);
     assert.ok(!names.includes("bash"), "bash 必须不存在");
+    assert.ok(!names.includes("read"), "read 也必须不存在");
   } finally {
     await open.close();
   }
@@ -110,34 +111,6 @@ test("工具说明逐字来自 prompt/tools/<name>.md，缺文件就报错", asy
       assert.ok(prompt, `prompt/tools/${tool.name}.md 不存在`);
       assert.equal(tool.description, prompt.description, `${tool.name} 的说明不是文件原文`);
     }
-  } finally {
-    await open.close();
-  }
-});
-
-test("read 被限制在群工作目录与媒体目录内", async () => {
-  const { faux, fish } = boot();
-  const open = await fish;
-  try {
-    const root = await open.harness.root(ctx, {
-      agent: { model: { provider: faux.provider.id, modelId: faux.models[0].id } },
-    });
-
-    faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("read", { path: "/etc/passwd" })], { stopReason: "toolUse" }),
-      fauxAssistantMessage("读不到"),
-    ]);
-    await (await root.submit({ type: "input", content: "读个文件" }, ctx)).wait(ctx);
-
-    const view = await root.viewState(ctx);
-    const results = view.value.entries
-      .filter((e) => e.kind === "pi.tool-result")
-      .map((e) => JSON.stringify(e.model ?? ""))
-      .join("\n");
-    view.dispose();
-
-    assert.match(results, /不在你能读的范围内/, "越界的 read 必须被拦住");
-    assert.ok(!results.includes("root:"), "敏感文件内容漏进了 transcript");
   } finally {
     await open.close();
   }

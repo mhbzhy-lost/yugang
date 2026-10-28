@@ -3,15 +3,14 @@
  *
  * 一只鱼身上只有：
  *   一张嘴  say               唯一出口，硬校验
- *   手写的工具（src/tools/）  能力扩展的唯一方式——没有 shell、没有脚本、没有 MCP
+ *   手写的工具（src/tools/）  能力扩展的唯一方式——没有 shell、没有文件读取、没有 MCP
  *
- * 一个 Conversation = 一个 QQ 群，自带 cwd 与 env，互不串。
+ * 一个 Conversation = 一个 QQ 群，自带 cwd，互不串。
  */
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, type Models } from "@earendil-works/pi-ai/models";
-import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import {
   Harness,
   createRegistry,
@@ -72,7 +71,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   }
 
   const say = createSayTool({ limits, prompts, emit: options.emit, now });
-  const tools = createTools({ mediaRoot, workspaceRoot, prompts });
+  const tools = createTools({ mediaRoot, prompts });
 
   const Fish = defineExtension({
     name: "fish",
@@ -97,11 +96,6 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       registry,
       now,
       settings,
-      env: (target) => {
-        const cwd = target.cwd ?? join(workspaceRoot, String(target.conversationId));
-        mkdirSync(cwd, { recursive: true });
-        return new NodeExecutionEnv({ cwd });
-      },
     },
     ctx,
   );
