@@ -83,6 +83,14 @@ const fish = await openFish({
   model: mainModel,
   promptRoot: config.promptRoot,
   mediaRoot: config.mediaRoot,
+  // 搜索凭据：与模型凭据同源（config/auth.json 的 deepseek 条目），缺了工具会以可读错误回应
+  searchKey: (() => {
+    try {
+      return (JSON.parse(readFileSync("config/auth.json", "utf8") as { deepseek?: { key?: string } }).deepseek?.key) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  })(),
   workspaceRoot: config.workspaceRoot,
   compact: {
     model: gateModel,

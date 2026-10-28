@@ -25,3 +25,7 @@ look_outside: 只能看群里的图：{{ref}}
 look_missing: 找不到这张图：{{ref}}
 look_type: 不是图片：{{ref}}
 look_used: 这一轮看过了，先说话
+search_query: 关键词得在 1 到 128 字之间
+search_nokey: 还没配置搜索凭据，搜不了
+search_used: 这一轮搜过了，先用搜到的说话
+search_failed: 搜索没成功，换个说法或直接说不知道

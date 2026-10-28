@@ -56,6 +56,8 @@ export interface FishOptions {
   promptRoot: string;
   /** 媒体白名单根目录（发图只能发这里面的）。 */
   mediaRoot: string;
+  /** DeepSeek Search API 的 key；给了才有联网搜索能力。 */
+  searchKey?: string;
   /** 每个群的工作目录根；实际 cwd 是 <workspaceRoot>/<groupKey>。 */
   workspaceRoot: string;
   limits?: Partial<Omit<EgressLimits, "mediaRoot">>;
@@ -101,7 +103,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
 
   const say = createSayTool({ limits, prompts, now });
   const react = createReactTool({ prompts, react: options.react, now });
-  const tools = createTools({ mediaRoot, prompts });
+  const tools = createTools({ mediaRoot, prompts, searchKey: options.searchKey });
 
   // 启动即校验：每个工具都必须有一份 prompt/tools/<name>.md，缺了就起不来
   for (const tool of [say, react, ...tools]) {

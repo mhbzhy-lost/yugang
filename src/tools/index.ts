@@ -7,12 +7,15 @@
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { PromptSet } from "../prompts.ts";
 import { createLookTool } from "./look.ts";
+import { createSearchTool } from "./search.ts";
 
 export interface ToolDeps {
   mediaRoot: string;
   prompts: PromptSet;
+  /** DeepSeek Search API 的 key；有才具备联网搜索能力。 */
+  searchKey?: string;
 }
 
 export function createTools(deps: ToolDeps): ToolRegistration[] {
-  return [createLookTool(deps)];
+  return [createLookTool(deps), createSearchTool({ prompts: deps.prompts, key: deps.searchKey })];
 }
