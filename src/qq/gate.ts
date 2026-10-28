@@ -1,25 +1,26 @@
 /**
  * 门外的闸：决定这条消息要不要进 agent loop。
  *
- * 当前策略——只响应艾特：
- *   主人 → 必答；任何人 @（含陌生群友）→ 必答；其余群消息 → 一律沉默。
- * 判定顺序一行版：主人 → @ → drop。私聊只认主人，不受本策略影响。
+ * 当前策略——@ 必答 + 随机粗筛 + 打分闸：
+ *   私聊只认主人；群里任何人 @ → 必答；其余消息（含主人的）先过一道随机粗筛
+ *   （AMBIENT_CHANCE，绝大多数到这就结束、零成本），筛过的再花一次便宜模型打分
+ *   （prompt/gate.md），值得开口才进。回复这件事上不分主人。
  *
- * 旧版的作息/配额/冷却/抽样/打分（prompt/gate.md）已不参与判定，
- * 相关参数仅兼容保留；门内模型仍可以选择不调用 say，那才是沉默的终态。
+ * 旧的作息/配额/冷却/抽样不再参与判定，字段仅兼容保留；
+ * 门内模型仍可以选择不调用 say，那才是沉默的终态。
  */
 import type { Models } from "@earendil-works/pi-ai/models";
-import type { PromptSet } from "../prompts.ts";
+import { renderTemplate, type PromptSet } from "../prompts.ts";
 import type { IncomingMessage } from "./onebot.ts";
 
 export interface GateOptions {
   prompts: PromptSet;
   models: Models;
-  /** 已不参与判定，仅兼容保留（宿主启动时仍会传入）。 */
+  /** 用来打分的模型（默认与主模型同源，可经 GATE_PROVIDER/GATE_MODEL_ID 换便宜的）。 */
   model: { provider: string; modelId: string };
-  /** 主人 QQ；私聊只认他，群里他不需要过闸。 */
+  /** 主人 QQ；私聊只认他。群里他与所有人同权：@ 必答，非 @ 过打分。 */
   master: string;
-  /** 只在白名单群里说话；空数组 = 所有群。白名单对谁都生效，主人和 @ 也不例外。 */
+  /** 只在白名单群里说话；空数组 = 所有群。 */
   groups: readonly string[];
   /** 【仅兼容保留，当前策略下无效】旧安静时段。 */
   quietHours?: readonly [number, number];
@@ -27,20 +28,22 @@ export interface GateOptions {
   dailyQuota: number;
   /** 【仅兼容保留，当前策略下无效】旧开口冷却。 */
   cooldownMs: number;
-  /** 【仅兼容保留，当前策略下无效】旧冷场抽样概率。 */
+  /** 非 @ 消息进入打分的概率（随机粗筛，零成本挡掉大多数）。 */
   ambientChance: number;
+  now?: () => number;
+  random?: () => number;
 }
 
 export interface GateInput {
   msg: IncomingMessage;
-  /** 已不参与判定，仅兼容保留（宿主仍会传入）。 */
+  /** 最近的群聊流水，喂给打分模型。 */
   recent: readonly { nickname: string; text: string }[];
   lastSpokeAt: number;
   spokenToday: number;
 }
 
 export type GateDecision =
-  | { enter: true; reason: "private" | "mentioned" | "master" }
+  | { enter: true; reason: "private" | "mentioned" | "scored"; score?: number }
   | { enter: false; reason: string };
 
 export interface Gate {
@@ -48,8 +51,9 @@ export interface Gate {
 }
 
 export function createGate(options: GateOptions): Gate {
+  const random = options.random ?? Math.random;
   return {
-    async decide({ msg }) {
+    async decide({ msg, recent }) {
       // 私聊：只认主人
       if (msg.chatKey.startsWith("qq:private:")) {
         if (String(msg.userId) === options.master) return { enter: true, reason: "private" };
@@ -61,24 +65,51 @@ export function createGate(options: GateOptions): Gate {
         return { enter: false, reason: "group_not_allowed" };
       }
 
-      // 1. 主人最先：群里免检，带不带 @ 都必答
-      if (String(msg.userId) === options.master) return { enter: true, reason: "master" };
-
-      // 2. 任何人 @ 都硬通行：作息/配额/冷却/抽样/打分一律不拦
+      // 任何人 @（含裸 @）必答，零模型调用
       if (msg.mentionsBot) return { enter: true, reason: "mentioned" };
 
-      // 3. 其余一律沉默：不抽样、不打分、不花模型调用
-      return { enter: false, reason: "not_mentioned" };
+      // 随机粗筛：绝大多数非 @ 消息到这就结束，不花模型调用
+      if (random() > options.ambientChance) return { enter: false, reason: "sampled_out" };
+
+      // 粗筛过的再打分，值得开口才进
+      const verdict = await askGate(options, msg, recent);
+      if (verdict === null) return { enter: false, reason: "gate_failed" };
+      if (!verdict.speak || verdict.score < 0.5) return { enter: false, reason: "gate_said_no" };
+      return { enter: true, reason: "scored", score: verdict.score };
     },
   };
 }
 
-/** 群消息的结构化包装：身份与内容分开，避免群员把指令混进 system。 */
-export function renderForModel(msg: IncomingMessage, master: string): string {
-  const where = msg.groupId ? `群${msg.groupId}` : "私聊";
-  const reply = msg.messageId ? ` 回复msg:${msg.messageId}` : "";
-  const tags = [msg.mentionsBot ? "对你说话" : "", String(msg.userId) === master ? "你主人" : ""]
-    .filter(Boolean)
-    .join(" ");
-  return `[${where} | ${msg.nickname}(${msg.userId})${reply}${tags ? ` ${tags}` : ""}] ${msg.text}`;
+interface Score {
+  speak: boolean;
+  score: number;
+  why: string;
+}
+
+async function askGate(options: GateOptions, msg: IncomingMessage, recent: readonly { nickname: string; text: string }[]): Promise<Score | null> {
+  const model = options.models.getModel(options.model.provider, options.model.modelId);
+  if (!model) return null;
+
+  const context = recent.map((m) => `${m.nickname}: ${m.text}`).join("\n") || "（群里还没人说话）";
+  const prompt = renderTemplate(options.prompts.gate, {
+    context,
+    incoming: `${msg.nickname}: ${msg.text}`,
+    master: options.master,
+  });
+
+  try {
+    const stream = options.models.streamSimple(model, { messages: [{ role: "user", content: prompt }] });
+    const message = await stream.result();
+    const text = message.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+
+    const json = /\{[\s\S]*\}/.exec(text);
+    if (!json) return null;
+    const parsed = JSON.parse(json[0]) as Partial<Score>;
+    return { speak: parsed.speak === true, score: Number(parsed.score ?? 0), why: String(parsed.why ?? "") };
+  } catch {
+    return null;
+  }
 }

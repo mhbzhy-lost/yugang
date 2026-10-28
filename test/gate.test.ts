@@ -1,15 +1,14 @@
 /**
- * 门：只响应艾特。
+ * 门：@ 必答 + 打分闸。
  *  - 私聊只认主人，陌生人一律不进
- *  - 群里主人免检；任何人 @ 都硬通行，作息/配额/冷却/抽样一律不拦
- *  - 其余群消息一律不进，也不花模型调用
+ *  - 群里任何人 @ 硬通行，零模型调用
+ *  - 其余消息（含主人的非 @）一律过打分：模型说过才进，说不过/打分失败就不进
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { createGate, type GateOptions } from "../src/qq/gate.ts";
 import { loadPrompts } from "../src/prompts.ts";
 import type { IncomingMessage } from "../src/qq/onebot.ts";
@@ -27,14 +26,16 @@ function msg(over: Partial<IncomingMessage> = {}): IncomingMessage {
     mentionsBot: false,
     images: [],
     imageSegments: [],
+    replyIds: [],
     ...over,
   };
 }
 
-function build(over: Partial<GateOptions> = {}) {
+function build(gateResponse?: string, over: Partial<GateOptions> = {}) {
   const faux = fauxProvider();
   const models = createModels();
   models.setProvider(faux.provider);
+  if (gateResponse !== undefined) faux.setResponses([fauxAssistantMessage(gateResponse)]);
   const gate = createGate({
     prompts: loadPrompts(PROMPTS),
     models,
@@ -50,6 +51,8 @@ function build(over: Partial<GateOptions> = {}) {
 }
 
 const idle = { recent: [], lastSpokeAt: 0, spokenToday: 0 };
+const yes = JSON.stringify({ speak: true, score: 0.9, why: "在问鱼" });
+const no = JSON.stringify({ speak: false, score: 0.1, why: "闲聊无关" });
 
 test("陌生人私聊不进，主人的私聊直接进", async () => {
   const { gate } = build();
@@ -66,32 +69,39 @@ test("任何群友 @ 都硬通行，不花模型调用", async () => {
   const mentioned = await gate.decide({ msg: msg({ mentionsBot: true }), ...idle });
   assert.equal(mentioned.enter, true);
   assert.equal(denyReason(mentioned), "mentioned");
+  assert.equal(faux.state.callCount, 0, "@ 通行不该调用模型");
+});
 
+test("主人的非 @ 过随机粗筛+打分：说过才进，说不过就沉默", async () => {
+  const { gate } = build(yes, { random: () => 0 });
+  const master = await gate.decide({ msg: msg({ userId: 1000, text: "不带 @ 说话" }), ...idle });
+  assert.equal(master.enter, true);
+  assert.equal(denyReason(master), "scored");
+
+  const { gate: noGate } = build(no, { random: () => 0 });
+  const rejected = await noGate.decide({ msg: msg({ userId: 1000, text: "随便唠嗑" }), ...idle });
+  assert.equal(rejected.enter, false);
+  assert.equal(denyReason(rejected), "gate_said_no");
+});
+
+test("随机粗筛挡掉绝大多数非 @ 消息，零模型调用", async () => {
+  const { gate, faux } = build(undefined, { random: () => 1, ambientChance: 0.1 });
   const master = await gate.decide({ msg: msg({ userId: 1000 }), ...idle });
-  assert.equal(denyReason(master), "master");
-  assert.equal(faux.state.callCount, 0, "免检路径不该调用模型");
+  assert.equal(master.enter, false);
+  assert.equal(denyReason(master), "sampled_out");
+  assert.equal(faux.state.callCount, 0, "粗筛拦下的不该花模型调用");
 });
 
-test("作息、配额、冷却不再拦 @ 和主人", async () => {
-  // 极端参数：安静时段 + 配额用光 + 冷却刚开口，@ 和主人照样进
-  const { gate } = build({ quietHours: [0, 24], dailyQuota: 0, cooldownMs: 3_600_000 });
-  const busy = { recent: [], lastSpokeAt: Date.now(), spokenToday: 999 };
+test("群友非 @ 粗筛过后同样打分；打分输出不成 JSON 按失败处理不进", async () => {
+  const { gate } = build(yes, { random: () => 0 });
+  const enter = await gate.decide({ msg: msg(), ...idle });
+  assert.equal(enter.enter, true);
+  assert.equal(denyReason(enter), "scored");
 
-  const master = await gate.decide({ msg: msg({ userId: 1000, text: "不带 @ 说话" }), ...busy });
-  assert.equal(denyReason(master), "master");
-
-  const mentioned = await gate.decide({ msg: msg({ mentionsBot: true }), ...busy });
-  assert.equal(mentioned.enter, true);
-  assert.equal(denyReason(mentioned), "mentioned");
-});
-
-test("非 @ 非主人一律沉默，不抽样也不打分", async () => {
-  // ambientChance = 1（抽样必中）也无效：非 @ 非主人直接 drop，一个模型调用都不花
-  const { gate, faux } = build({ ambientChance: 1 });
-  const decision = await gate.decide({ msg: msg(), ...idle });
-  assert.equal(decision.enter, false);
-  assert.equal(denyReason(decision), "not_mentioned");
-  assert.equal(faux.state.callCount, 0, "不该为非 @ 消息花模型调用");
+  const { gate: brokenGate } = build("今天天气不错", { random: () => 0 });
+  const failed = await brokenGate.decide({ msg: msg(), ...idle });
+  assert.equal(failed.enter, false);
+  assert.equal(denyReason(failed), "gate_failed");
 });
 
 function denyReason(decision: { enter: boolean; reason: string }): string {
