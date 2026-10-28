@@ -60,6 +60,13 @@ const fish = await openFish({
   promptRoot: config.promptRoot,
   workspaceRoot: config.workspaceRoot,
   mediaRoot: config.mediaRoot,
+  compact: {
+    model: process.env.COMPACT_PROVIDER
+      ? { provider: process.env.COMPACT_PROVIDER, modelId: process.env.COMPACT_MODEL_ID ?? config.modelId }
+      : undefined,
+    maxEntries: Number(process.env.COMPACT_MAX_ENTRIES ?? "80"),
+    maxChars: Number(process.env.COMPACT_MAX_CHARS ?? "12000"),
+  },
   emit: async (conversationId, payload) => {
     if (!markSent(payload.key)) return;
     const chatKey = chatKeyOf(conversationId);
@@ -104,6 +111,12 @@ onebot.onMessage((msg) => {
     const settled = await submission.wait(ctx);
     if (settled.status !== "done") {
       console.error(`[鱼缸] ${msg.chatKey} 这一轮没答上来：${settled.status}`);
+      return;
+    }
+    // 只有这一轮正常结束时才考虑换页：压缩读数要在一个稳定的边界上
+    const compacted = await fish.compact(conv);
+    if (compacted.compacted) {
+      console.log(`[鱼缸] ${msg.chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
     }
   })().catch((error: unknown) => {
     console.error("[鱼缸] 处理消息失败", error instanceof Error ? error.message : error);

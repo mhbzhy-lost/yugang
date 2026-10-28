@@ -7,9 +7,10 @@
 | `persona.md` | system prompt 的 `persona` section | 每次请求 |
 | `tools/say.md` | `say` 工具的 description + 参数说明 | 每次请求（工具定义） |
 | `tools/<name>.md` | 每个工具的 description + 参数说明（文件名 = 工具名） | 每次请求（工具定义） |
+| `handoff.md` | 上下文压缩时让模型写备忘的提示词，`{{transcript}}` 处填入对话 | 换页时 |
 | `messages.md` | 工具回给模型的文案：拒绝理由 + 发送回执 | 被拒/成功时 |
 
-现在实际在用的文件只有 4 个：`persona.md`、`messages.md`、`tools/{say,draw}.md`。
+现在实际在用的文件只有 5 个：`persona.md`、`handoff.md`、`messages.md`、`tools/{say,draw}.md`。
 `npm test` 会检查两件事，防止这里变成垃圾堆：
 
 - `messages.md` 里每一条都必须被代码引用（错误码集合 ∪ `messages["x"]` 字面量）

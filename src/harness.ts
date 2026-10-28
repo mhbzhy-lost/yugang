@@ -24,6 +24,7 @@ import { DEFAULT_LIMITS, REJECTION_CODES, type EgressLimits } from "./egress/pol
 import { createSayTool, type OutboundPayload } from "./egress/say.ts";
 import { loadPrompts, type PromptSet } from "./prompts.ts";
 import { createTools } from "./tools/index.ts";
+import { createCompactor, type CompactResult, type Compactor } from "./compact.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -43,6 +44,12 @@ export interface FishOptions {
   /** 每个群的工作目录根；实际 cwd 是 <workspaceRoot>/<groupKey>。 */
   workspaceRoot: string;
   limits?: Partial<Omit<EgressLimits, "mediaRoot">>;
+  /** 上下文压缩：攒到阈值就 reset + handoff。不给就不压。 */
+  compact?: {
+    model?: ModelRef;
+    maxEntries?: number;
+    maxChars?: number;
+  };
   emit: (conversationId: ConversationId, payload: OutboundPayload) => void | Promise<void>;
   now?: () => number;
 }
@@ -54,6 +61,8 @@ export interface Fish {
   /** 实际的 harness settings，便于审查（compaction 必须为 false）。 */
   settings: { compaction: { enabled: boolean } };
   toolNames: string[];
+  /** 压缩一次上下文；没到阈值就什么都不做。 */
+  compact(conversation: Conversation): Promise<CompactResult>;
   group(groupKey: string): Promise<Conversation>;
   close(): Promise<void>;
 }
@@ -100,6 +109,17 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     ctx,
   );
 
+  const compactor: Compactor | undefined = options.compact
+    ? createCompactor({
+        models,
+        model: options.compact.model ?? options.model,
+        prompts,
+        maxEntries: options.compact.maxEntries ?? 80,
+        maxChars: options.compact.maxChars ?? 12_000,
+        onError: (error) => console.error("[鱼缸] 压缩失败", error instanceof Error ? error.message : error),
+      })
+    : undefined;
+
   const groups = new Map<string, Promise<Conversation>>();
 
   return {
@@ -108,6 +128,10 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     prompts,
     settings,
     toolNames: [say.name, ...tools.map((t) => t.name)],
+    async compact(conversation) {
+      if (!compactor) return { compacted: false, reason: "below_threshold" };
+      return compactor.maybeCompact(conversation);
+    },
     group(groupKey) {
       let existing = groups.get(groupKey);
       if (!existing) {

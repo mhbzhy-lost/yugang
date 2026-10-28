@@ -65,6 +65,27 @@ export function createTools(deps) {
 `draw` 的后端是本地生成的渐变图；换成 ComfyUI / 通义万相 / SiliconFlow 只改
 `renderImage` 一个函数，工具契约和文案都不用动。
 
+## 上下文压缩：换页 + 备忘
+
+群聊会一直长，而 pi-durable 自带的 compaction 会在中途注入一段它自己的提示词——看不到也改不了，所以关掉了。
+换页是自己实现的：
+
+```
+攒到阈值（默认 80 条 或 12000 字）
+  → 把「群友说的话 + 鱼发出去的话」摊平（thinking / tool 调用 / tool 结果一律不进）
+  → 用一个便宜模型读 prompt/handoff.md，写一段备忘
+  → conversation.reset(handoff)   # 换一页，旧对话退出活跃上下文
+```
+
+几个刻意的选择：
+
+- **摘要只收对话本身**。tool 结果里有路径、命令输出、外部返回，进摘要就是下一次泄漏的来源。
+- **换页发生在这一轮正常结束之后**，不在模型跑到一半时动上下文。
+- **摘要失败就不换页**，宁可继续攒着——半截的换页比不换页危险。
+- 备忘会被当成鱼自己的记忆（第一行固定「（前情）」），不是别人对它说的话。
+
+配置：`COMPACT_PROVIDER` / `COMPACT_MODEL_ID`（默认用主模型）、`COMPACT_MAX_ENTRIES`、`COMPACT_MAX_CHARS`。
+
 ## 校验分两类
 
 **结构性**（`src/egress/policy.ts`）：字数上限、换行上限、禁 markdown/列表/代码块/表格、禁绝对路径与
@@ -88,6 +109,7 @@ src/
     absorb.ts       把 transcript 里的 thinking / tool 结果喂给溯源校验
   prompt-lint.ts    扫描 src/ 里有没有内嵌 prompt（给审查用的护栏）
   prompts.ts        加载 prompt/ 下的 md，严格模板替换
+  compact.ts        换页：摊平对话 → 写备忘 → conversation.reset()
   tools/
     index.ts        注册表：加一项能力就是往这里加一行
     draw.ts         画图（占位后端，换真模型只改 renderImage）
@@ -129,7 +151,6 @@ npm start
 
 ## 还没做（按优先级）
 
-- **上下文不会自己收敛**：compaction 关着，群聊会一直长。需要按群 reset + handoff（摘要模板放 `prompt/`）。
 - **durable 化出站**：`ledger` 现在在内存里，`sentThisRun` / `recent` 崩溃即丢。应改为 conversation doc，
   并让适配器从 `fish.outbound` 条目补齐未发送的消息（现在只在进程内存里 emit 一次）。
 - **改写成话**：`say` 之前加一次无工具、无 transcript 的 speaker 调用，把工具结果压成一句人话。

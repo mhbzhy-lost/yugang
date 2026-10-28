@@ -17,6 +17,8 @@ export interface ToolPrompt {
 export interface PromptSet {
   root: string;
   persona: string;
+  /** 上下文压缩用的备忘提示词，含 {{transcript}}。 */
+  handoff: string;
   messages: Record<string, string>;
   /** key 是工具名，来自 prompt/tools/<name>.md 的文件名。 */
   tools: Record<string, ToolPrompt>;
@@ -26,6 +28,7 @@ export function loadPrompts(root: string): PromptSet {
   return {
     root,
     persona: read(join(root, "persona.md")),
+    handoff: read(join(root, "handoff.md")),
     messages: parseMessageTable(read(join(root, "messages.md")), join(root, "messages.md")),
     tools: loadTools(join(root, "tools")),
   };
@@ -95,7 +98,7 @@ export function renderTemplate(template: string, vars: Record<string, string>): 
 
 /** 审查用：列出所有 prompt 文件、大小与 sha256。 */
 export function auditPrompts(root: string): { file: string; bytes: number; sha256: string }[] {
-  const files = ["persona.md", "messages.md"];
+  const files = ["persona.md", "handoff.md", "messages.md"];
   for (const entry of readdirSync(join(root, "tools")).sort()) {
     if (entry.endsWith(".md")) files.push(join("tools", entry));
   }
