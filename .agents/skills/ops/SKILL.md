@@ -8,6 +8,12 @@ description: 维护「鱼缸」这个 QQ 群机器人时使用：查状态、看
 这个仓库是 `/Users/user/鱼缸`（本 skill 在 `.agents/skills/ops/`，仓库根就是 `../..`）。
 所有数据在 `var/`（可用 `YUGANG_HOME` 覆盖）。**先读 `AGENTS.md`**，那里是硬约束。
 
+## 配置在哪
+
+`.env`（gitignore，模板 `.env.example`）。四样必填：`ONEBOT_WS_URL` / `ONEBOT_TOKEN` /
+`MASTER_QQ` / `GROUPS`。`npm start`、`probe`、`ops`、`ping` 都会自动加载它。
+模块 key 不在 `.env` 里，在 `config/auth.json`。
+
 ## 查状态
 
 ```bash

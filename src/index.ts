@@ -227,7 +227,20 @@ onebot.onMessage((raw) => {
   });
 });
 
-await onebot.connect();
+try {
+  await onebot.connect();
+} catch {
+  console.error(`[鱼缸] 连不上 ${config.onebotUrl}`);
+  console.error("  1. 协议端启动了吗");
+  console.error("  2. 地址和 token 对吗");
+  console.error("  3. 跑 npm run probe 看详情");
+  process.exit(1);
+}
+
+if (!config.master) {
+  console.error("[鱼缸] 没设 MASTER_QQ");
+  console.error("  私聊会被当成陌生人");
+}
 
 // 先把持久化的群映射读出来，这样 drain 知道该往哪个群发
 const known = await fish.harness.snapshot((await import("./store.ts")).ChatsDoc, ctx);

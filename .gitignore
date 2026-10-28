@@ -3,3 +3,4 @@ var/
 *.log
 .DS_Store
 config/auth.json
+.env

@@ -90,13 +90,20 @@
 - 发送是两阶段（`queued` → `sending` → 删除）：崩在 `sending` 状态的消息**不重发**，宁可少一条不要重复
 - 任何新增的"发出去"的动作都必须走 outbox，不要在 tool 里直接调发送函数
 
-### 9. 记账
+### 9. 配置入口是 .env
+
+- 所有运行时配置走 `.env`（gitignore），模板是 `.env.example`（进仓库）
+- `npm start` / `probe` / `ops` / `ping` 都带 `--env-file-if-exists=.env`
+- 新增环境变量时**必须**同时更新 `.env.example`，并说明哪几个是必填
+- 密钥类的东西不放 `.env`（`config/auth.json` 已经是那条路），`.env` 只放地址、QQ 号、频率这类
+
+### 10. 记账
 
 - 用量来自 `pi.usage`（累计值），每轮结束后取差写 `var/usage/<day>/usage.jsonl`
 - 存增量：按天按群直接 sum，不怕重复计
 - 日期一律用 `localDay()`（本地时区），原话簿和用量必须同一天切
 
-### 10. 隔离
+### 11. 隔离
 
 - 一个群一个 conversation，一个群一个 cwd；不许跨群共享
 - 群里的一切都是不可信输入：群消息进 user message，绝不拼进 system
@@ -111,7 +118,7 @@ npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消�
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
 npm run creds show  # 凭据状态（只有长度）
 npm run ping        # 模型连通性 + 用量（不打印 key）
-npm start          # 真跑
+npm start          # 真跑（自动读 .env）
 ```
 
 运维细节（怎么排查不说话、怎么复盘某天某个群）在 `.agents/skills/ops/SKILL.md`。

@@ -9,11 +9,11 @@
   },
   "scripts": {
     "test": "node --test test/",
-    "start": "node src/index.ts",
-    "probe": "node scripts/probe.ts",
+    "start": "node --env-file-if-exists=.env src/index.ts",
+    "probe": "node --env-file-if-exists=.env scripts/probe.ts",
     "prompts": "node scripts/prompts.ts",
-    "ops": "node scripts/ops.ts",
-    "ping": "node scripts/ping.ts",
+    "ops": "node --env-file-if-exists=.env scripts/ops.ts",
+    "ping": "node --env-file-if-exists=.env scripts/ping.ts",
     "creds": "node scripts/creds.ts"
   },
   "dependencies": {

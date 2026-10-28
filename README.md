@@ -185,6 +185,26 @@ npm run ping             # 读凭据 → 最小补全 → 打印模型/耗时/�
 
 `key` 只在内存里：不写 env、不进 prompt、不进 transcript，`describeModel()` 只报「已加载 / N 字符」和来源路径。
 
+## 配置
+
+```bash
+cp .env.example .env      # 已经在仓库里给你放好一份了
+```
+
+`.env` 里**只有四样必填**：
+
+| 变量 | 是什么 |
+|---|---|
+| `ONEBOT_WS_URL` | 协议端 OneBot v11 正向 WS 地址，例如 `ws://127.0.0.1:3001` |
+| `ONEBOT_TOKEN` | 协议端里设的那个 token，没设就留空 |
+| `MASTER_QQ` | 你的 QQ 号。私聊只认它，群里它免检 |
+| `GROUPS` | 允许说话的群号，逗号分隔 |
+
+其余都有默认值：`AMBIENT_CHANCE=0.08`（多嘴概率）、`COOLDOWN_MS=120000`、`DAILY_QUOTA=40`、
+`QUIET_HOURS=1-8`（安静时段）。**建议第一次先设 `GROUPS` 只放一个测试群。**
+
+`npm start` / `probe` / `ops` / `ping` 都会自动读 `.env`（`--env-file-if-exists`），不用手动 export。
+
 ## 跑起来
 
 ```bash
