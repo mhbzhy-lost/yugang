@@ -12,6 +12,7 @@ import { createVideoTool } from "./video.ts";
 import { createMemeTool } from "./meme.ts";
 import { createFsTools } from "./fs.ts";
 import { createRestartTool } from "./restart.ts";
+import { createTreeTool } from "./tree.ts";
 
 export interface ToolDeps {
   mediaRoot: string;
@@ -31,6 +32,7 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
         return [read, edit, write, del];
       })()
     : [];
+  const treeTool = deps.master ? [createTreeTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf })] : [];
   const restartTool = deps.master
     ? [createRestartTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf })]
     : [];
@@ -40,6 +42,7 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     createVideoTool({ prompts: deps.prompts }),
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
     ...fsTools,
+    ...treeTool,
     ...restartTool,
   ];
 }

@@ -45,7 +45,7 @@
 
 ### 3. 能力面必须是可枚举的窄接口（2026-10 修订：主人解锁下有限自改）
 
-禁止 shell / 脚本执行 / MCP server。文件读写另设五个语义工具（read/edit/write/delete/restart）：
+禁止 shell / 脚本执行 / MCP server。文件读写另设六个语义工具（read/edit/write/delete/tree/restart）：
 - 范围硬围栏：仅仓库工作区；.env、config/auth.json、.git、node_modules、.trash 硬封禁
 - 身份闸（机械判定）：仅主人（MASTER_QQ）触发的轮里可用，execute 内核对 triggerOf 的 userId
 - delete 只移入 .trash/ 可恢复；全部操作打审计日志；自改大事故靠 git 回滚
