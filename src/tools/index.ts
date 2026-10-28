@@ -13,6 +13,7 @@ import { createMemeTool } from "./meme.ts";
 import { createFsTools } from "./fs.ts";
 import { createRestartTool } from "./restart.ts";
 import { createTreeTool } from "./tree.ts";
+import { createTestTool } from "./test.ts";
 
 export interface ToolDeps {
   mediaRoot: string;
@@ -33,6 +34,7 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
       })()
     : [];
   const treeTool = deps.master ? [createTreeTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf })] : [];
+  const testTool = deps.master ? [createTestTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf })] : [];
   const restartTool = deps.master
     ? [createRestartTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf })]
     : [];
@@ -43,6 +45,7 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
     ...fsTools,
     ...treeTool,
+    ...testTool,
     ...restartTool,
   ];
 }
