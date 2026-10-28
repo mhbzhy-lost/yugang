@@ -20,7 +20,8 @@ import { openFish, type GroupProfile } from "./harness.ts";
 import { OneBot } from "./qq/onebot.ts";
 import { createGate, renderForModel } from "./qq/gate.ts";
 import { absorbSecrets } from "./egress/absorb.ts";
-import { resetRun, resetLook } from "./egress/ledger.ts";
+import { resetRun, resetLook, ledgerOf } from "./egress/ledger.ts";
+import { validateOutbound, DEFAULT_LIMITS } from "./egress/policy.ts";
 import { createChatlog } from "./chatlog.ts";
 import { createUsageLedger, sumUsage } from "./usage.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
@@ -146,6 +147,58 @@ async function profileFor(groupId: number): Promise<GroupProfile | undefined> {
   };
 }
 
+/** 兕底补发：轮内一次 say 都没调但正文非空时，把正文过完出口校验后补发。 */
+async function salvagePlainReply(conv: Conversation, msg: IncomingMessage): Promise<void> {
+  try {
+    const view = await conv.viewState(ctx);
+    const entries = view.value.entries as unknown[];
+    view.dispose();
+    let lastUser = -1;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if ((entries[i] as { kind?: string }).kind === "pi.user") { lastUser = i; break; }
+    }
+    if (lastUser < 0) return;
+    let said = false;
+    let text = "";
+    for (let i = lastUser + 1; i < entries.length; i++) {
+      const e = entries[i] as { kind?: string; model?: { role?: string; content?: { type?: string; text?: string }[] }[] };
+      if (e.kind === "fish.outbound") { said = true; break; }
+      if (e.kind === "pi.tool-result") {
+        const c = JSON.stringify(e.model?.[0]?.content ?? "");
+        if (c.includes("已发到群里")) { said = true; break; }
+      }
+      if (Array.isArray(e.model) && e.model[0]?.role === "assistant") {
+        const blocks = e.model[0].content ?? [];
+        if (blocks.some((b) => b.type === "toolCall")) { said = true; break; }
+        text = blocks.filter((b) => b.type === "text").map((b) => b.text ?? "").join(" ").trim();
+      }
+    }
+    if (said) return;
+    const line = text.split("\n").map((s) => s.trim()).find(Boolean) ?? "";
+    if (!line) return;
+    const clipped = line.slice(0, 120);
+    const rejection = validateOutbound({ messages: [clipped] }, {
+      limits: { ...DEFAULT_LIMITS, mediaRoot: config.mediaRoot },
+      now: Date.now(),
+      recent: ledgerOf(String(conv.id)).recent,
+      sentThisRun: 0,
+      secrets: ledgerOf(String(conv.id)).secrets,
+    });
+    if (rejection) return;
+    await fish.enqueue(conv.id, {
+      items: [clipped],
+      quote: msg.mentionsBot,
+      quoteId: msg.messageId,
+      quoteForce: msg.mentionsBot,
+      at: Date.now(),
+      key: `salvage:${msg.messageId ?? Date.now()}`,
+    });
+    console.log(`[fish] ${msg.chatKey} salvage: plain reply sent (model skipped say)`);
+  } catch {
+    // 兕底本身不能排倒主流程
+  }
+}
+
 async function conversationFor(chatKey: string): Promise<Conversation> {
   let conv = conversations.get(chatKey);
   if (!conv) {
@@ -255,6 +308,9 @@ onebot.onMessage((raw) => {
       console.error(`[鱼缸] ${msg.chatKey} 这一轮没答上来：${why}`);
       return;
     }
+
+    // salvage：整轮没调 say 但正文非空——glm 偶发把回话写成普通正文，过完出口校验后补发
+    await salvagePlainReply(conv, msg);
 
     await drainLoop();
 
