@@ -1,16 +1,16 @@
 /**
- * 门：先规则后打分。
+ * 门：只响应艾特。
  *  - 私聊只认主人，陌生人一律不进
- *  - 群里 @ 和主人免检；作息 / 配额 / 冷却挡在前面
- *  - 只有"拿不准"时才花一次模型调用
+ *  - 群里主人免检；任何人 @ 都硬通行，作息/配额/冷却/抽样一律不拦
+ *  - 其余群消息一律不进，也不花模型调用
  */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
-import { createGate } from "../src/qq/gate.ts";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import { createGate, type GateOptions } from "../src/qq/gate.ts";
 import { loadPrompts } from "../src/prompts.ts";
 import type { IncomingMessage } from "../src/qq/onebot.ts";
 
@@ -31,11 +31,10 @@ function msg(over: Partial<IncomingMessage> = {}): IncomingMessage {
   };
 }
 
-function build(gateResponse?: string) {
+function build(over: Partial<GateOptions> = {}) {
   const faux = fauxProvider();
   const models = createModels();
   models.setProvider(faux.provider);
-  if (gateResponse) faux.setResponses([fauxAssistantMessage(gateResponse)]);
   const gate = createGate({
     prompts: loadPrompts(PROMPTS),
     models,
@@ -45,8 +44,7 @@ function build(gateResponse?: string) {
     dailyQuota: 10,
     cooldownMs: 60_000,
     ambientChance: 1,
-    now: () => new Date("2026-05-01T12:00:00").getTime(),
-    random: () => 0,
+    ...over,
   });
   return { gate, faux };
 }
@@ -63,7 +61,7 @@ test("陌生人私聊不进，主人的私聊直接进", async () => {
   assert.equal(master.enter, true);
 });
 
-test("@ 和主人免检，不花模型调用", async () => {
+test("任何群友 @ 都硬通行，不花模型调用", async () => {
   const { gate, faux } = build();
   const mentioned = await gate.decide({ msg: msg({ mentionsBot: true }), ...idle });
   assert.equal(mentioned.enter, true);
@@ -74,62 +72,26 @@ test("@ 和主人免检，不花模型调用", async () => {
   assert.equal(faux.state.callCount, 0, "免检路径不该调用模型");
 });
 
-test("作息、配额、冷却挡在前面", async () => {
-  const quietModels = createModels();
-  quietModels.setProvider(fauxProvider().provider);
-  const quietGate = createGate({
-    prompts: loadPrompts(PROMPTS),
-    models: quietModels,
-    model: { provider: "faux", modelId: "faux-1" },
-    master: MASTER,
-    groups: [],
-    quietHours: [11, 13],
-    dailyQuota: 10,
-    cooldownMs: 1000,
-    ambientChance: 1,
-    now: () => new Date("2026-05-01T12:00:00").getTime(),
-    random: () => 0,
-  });
-  assert.equal(denyReason(await quietGate.decide({ msg: msg(), ...idle })), "quiet_hours");
+test("作息、配额、冷却不再拦 @ 和主人", async () => {
+  // 极端参数：安静时段 + 配额用光 + 冷却刚开口，@ 和主人照样进
+  const { gate } = build({ quietHours: [0, 24], dailyQuota: 0, cooldownMs: 3_600_000 });
+  const busy = { recent: [], lastSpokeAt: Date.now(), spokenToday: 999 };
 
-  const { gate } = build();
-  assert.equal(denyReason(await gate.decide({ msg: msg(), ...idle, spokenToday: 10 })), "quota");
-  assert.equal(denyReason(await gate.decide({ msg: msg(), ...idle, lastSpokeAt: Date.now() })), "cooldown");
+  const master = await gate.decide({ msg: msg({ userId: 1000, text: "不带 @ 说话" }), ...busy });
+  assert.equal(denyReason(master), "master");
+
+  const mentioned = await gate.decide({ msg: msg({ mentionsBot: true }), ...busy });
+  assert.equal(mentioned.enter, true);
+  assert.equal(denyReason(mentioned), "mentioned");
 });
 
-test("打分说不要就不进，说要就进", async () => {
-  const no = build('{"speak": false, "score": 0.1, "why": "插不进去"}');
-  assert.equal(denyReason(await no.gate.decide({ msg: msg(), ...idle })), "gate_said_no");
-
-  const yes = build('{"speak": true, "score": 0.8, "why": "可以接"}');
-  const decision = await yes.gate.decide({ msg: msg(), ...idle });
-  assert.equal(decision.enter, true);
-  assert.equal(denyReason(decision), "scored");
-});
-
-test("模型答歪了就保守放弃，不放行", async () => {
-  const broken = build("我觉得可以聊");
-  assert.equal(denyReason(await broken.gate.decide({ msg: msg(), ...idle })), "gate_failed");
-});
-
-test("抽样没中就不花模型调用", async () => {
-  const faux = fauxProvider();
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const gate = createGate({
-    prompts: loadPrompts(PROMPTS),
-    models,
-    model: { provider: faux.provider.id, modelId: faux.models[0].id },
-    master: MASTER,
-    groups: [],
-    dailyQuota: 10,
-    cooldownMs: 0,
-    ambientChance: 0.1,
-    now: () => 0,
-    random: () => 0.9,
-  });
-  assert.equal(denyReason(await gate.decide({ msg: msg(), ...idle })), "sampled_out");
-  assert.equal(faux.state.callCount, 0);
+test("非 @ 非主人一律沉默，不抽样也不打分", async () => {
+  // ambientChance = 1（抽样必中）也无效：非 @ 非主人直接 drop，一个模型调用都不花
+  const { gate, faux } = build({ ambientChance: 1 });
+  const decision = await gate.decide({ msg: msg(), ...idle });
+  assert.equal(decision.enter, false);
+  assert.equal(denyReason(decision), "not_mentioned");
+  assert.equal(faux.state.callCount, 0, "不该为非 @ 消息花模型调用");
 });
 
 function denyReason(decision: { enter: boolean; reason: string }): string {
