@@ -3,11 +3,13 @@
  *
  *   node scripts/ops.ts status
  *   node scripts/ops.ts digest [YYYY-MM-DD] [chatKey]
+ *   node scripts/ops.ts usage [YYYY-MM-DD]
  *   node scripts/ops.ts probe
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { localDay } from "../src/usage.ts";
 
 const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
 const CHATLOG = join(HOME, "chatlog");
@@ -24,13 +26,17 @@ if (command === "status") {
 
   const days = existsSync(CHATLOG) ? readdirSync(CHATLOG).sort() : [];
   console.log(`原话簿     ${days.length} 天${days.length ? `，最近 ${days.at(-1)}` : ""}`);
+
+  const usageDir = join(HOME, "usage");
+  const usageDays = existsSync(usageDir) ? readdirSync(usageDir).sort() : [];
+  console.log(`用量       ${usageDays.length} 天${usageDays.length ? `，最近 ${usageDays.at(-1)}` : ""}`);
   for (const day of days.slice(-3)) {
     const files = readdirSync(join(CHATLOG, day));
     const lines = files.reduce((n, f) => n + readFileSync(join(CHATLOG, day, f), "utf8").split("\n").filter(Boolean).length, 0);
     console.log(`  ${day}  ${files.length} 个会话 / ${lines} 条`);
   }
 } else if (command === "digest") {
-  const day = args[0] ?? new Date().toISOString().slice(0, 10);
+  const day = args[0] ?? localDay(Date.now());
   const chat = args[1];
   const dir = join(CHATLOG, day);
   if (!existsSync(dir)) {
@@ -62,6 +68,38 @@ if (command === "status") {
     const sample = entries.filter((e) => e.kind === "in").slice(-8);
     for (const e of sample) console.log(`   ${e.from}: ${e.text.slice(0, 60)}`);
   }
+} else if (command === "usage") {
+  const day = args[0] ?? localDay(Date.now());
+  const file = join(HOME, "usage", day, "usage.jsonl");
+  if (!existsSync(file)) {
+    console.log(`${day} 没有用量记录`);
+    process.exit(0);
+  }
+  const rows = readFileSync(file, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { chat: string; total: number; input: number; output: number; cacheRead: number; cost: number });
+
+  const byChat = new Map<string, { total: number; input: number; output: number; cacheRead: number; cost: number }>();
+  for (const row of rows) {
+    const acc = byChat.get(row.chat) ?? { total: 0, input: 0, output: 0, cacheRead: 0, cost: 0 };
+    acc.total += row.total;
+    acc.input += row.input;
+    acc.output += row.output;
+    acc.cacheRead += row.cacheRead;
+    acc.cost += row.cost;
+    byChat.set(row.chat, acc);
+  }
+
+  console.log(`\n== ${day} 用量`);
+  for (const [chat, acc] of [...byChat.entries()].sort((a, b) => b[1].total - a[1].total)) {
+    console.log(
+      `  ${chat.padEnd(22)} ${String(acc.total).padStart(8)} tokens  (in ${acc.input} / out ${acc.output} / cache ${acc.cacheRead})  计费 ${acc.cost.toFixed(4)}`,
+    );
+  }
+  const sum = [...byChat.values()].reduce((n, a) => n + a.total, 0);
+  const cost = [...byChat.values()].reduce((n, a) => n + a.cost, 0);
+  console.log(`  合计 ${sum} tokens / 计费 ${cost.toFixed(4)}`);
 } else if (command === "probe") {
   const url = process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001";
   const token = process.env.ONEBOT_TOKEN;

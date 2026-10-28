@@ -22,6 +22,8 @@ import { createGate, renderForModel } from "./qq/gate.ts";
 import { absorbSecrets } from "./egress/absorb.ts";
 import { resetRun, resetLook } from "./egress/ledger.ts";
 import { createChatlog } from "./chatlog.ts";
+import { createUsageLedger, sumUsage } from "./usage.ts";
+import { UsageDoc } from "@earendil-works/pi-durable";
 
 const ctx = BACKGROUND_CONTEXT;
 const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
@@ -57,6 +59,7 @@ const gateModel = {
 
 const onebot = new OneBot(config.onebotUrl, config.onebotToken, config.mediaRoot);
 const chatlog = createChatlog(join(HOME, "chatlog"));
+const usage = createUsageLedger(join(HOME, "usage"));
 
 // 幂等表：崩溃重放时不重复发同一句
 const sentPath = join(HOME, "sent.json");
@@ -207,6 +210,14 @@ onebot.onMessage((raw) => {
     }
 
     await drainLoop();
+
+    // 记账：pi-durable 的 pi.usage 是累计值，这里取差落盘
+    const spent = await fish.harness.snapshot(UsageDoc, conv.id, ctx);
+    const delta = usage.append(msg.chatKey, sumUsage(spent), Date.now());
+    if (delta) {
+      console.log(`[鱼缸] ${msg.chatKey} +${delta.total} tokens / ${delta.cost}`);
+    }
+
     const compacted = await fish.compact(conv);
     if (compacted.compacted) {
       console.log(`[鱼缸] ${msg.chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);

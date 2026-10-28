@@ -228,6 +228,24 @@ npm start
 - 崩在标记后：状态是"不确定"，**不重发**——群里重复一条比少一条更糟
 - 发送抛错：退回 `queued` 重试，三次失败才丢弃并报错
 
+## 用量
+
+`pi.usage` 是每个会话的累计值。每轮结束后读出来、和上次求差、按天落到 `var/usage/<day>/usage.jsonl`：
+
+```bash
+npm run ops usage              # 今天，按群排
+npm run ops usage 2026-05-01
+```
+
+```
+== 2026-05-01 用量
+  qq:group:42                4700 tokens  (in 4000 / out 700 / cache 2800)  计费 0.0085
+  qq:private:1000             580 tokens  (in 500 / out 80 / cache 100)  计费 0.0009
+  合计 5280 tokens / 计费 0.0094
+```
+
+存增量不存累计：按天按群直接 sum 就行，重启也不会重复计。日期按本地时区切，和原话簿一致。
+
 ## 运维
 
 没有 Web 后台。运维走项目级 skill：`.agents/skills/ops/SKILL.md`，coding agent 进仓库会自动加载。

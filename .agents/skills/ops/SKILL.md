@@ -16,6 +16,16 @@ node scripts/ops.ts status
 
 给出：数据目录、幂等表条数、数据库大小、原话簿有多少天、最近三天每个会话的条数。
 
+## 看某天花在哪
+
+```bash
+node scripts/ops.ts usage              # 今天
+node scripts/ops.ts usage 2026-05-01
+```
+
+按群排序列出 tokens（in/out/cache）和计费。数据来自 `var/usage/<day>/usage.jsonl`，
+是每轮结束后从 `pi.usage` 取的**增量**——直接 sum 就能得到当天总额，重启不会重复计。
+
 ## 复盘某个群某天聊了什么
 
 ```bash

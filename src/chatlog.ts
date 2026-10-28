@@ -6,6 +6,7 @@
  */
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { localDay } from "./usage.ts";
 
 export interface ChatlogEntry {
   at: number;
@@ -19,7 +20,7 @@ export function createChatlog(root: string) {
   return {
     append(entry: ChatlogEntry): void {
       try {
-        const day = new Date(entry.at).toISOString().slice(0, 10);
+        const day = localDay(entry.at);
         const dir = join(root, day);
         mkdirSync(dir, { recursive: true });
         appendFileSync(
