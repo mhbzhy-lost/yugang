@@ -56,12 +56,9 @@ export function createMemeTool(deps: MemeDeps) {
 
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
-      if (round !== undefined) {
-        if (USED.get(api.conversationId) === round) {
-          throw new Error(deps.prompts.messages["meme_used"] ?? "这一轮挑过了");
-        }
-        USED.set(api.conversationId, round);
-      }
+      const markUsed = () => {
+        if (round !== undefined) USED.set(api.conversationId, round);
+      };
 
       const kw = args.keyword.trim().toLowerCase();
       const scored = entries
@@ -78,6 +75,11 @@ export function createMemeTool(deps: MemeDeps) {
         const vocab = [...new Set(entries.flatMap((e) => e.tags))].slice(0, 24).join("、");
         return { output: [{ type: "text", text: `没贴题的。库里现有主题：${vocab}` }] };
       }
+      // 拿到真候选才算数：没贴题的尝试不消耗本轮机会，模型可以换词重试
+      if (round !== undefined && USED.get(api.conversationId) === round) {
+        throw new Error(deps.prompts.messages["meme_used"] ?? "这一轮挑过了");
+      }
+      markUsed();
       const text = scored
         .map((x) => `memes/${x.e.file} — ${x.e.caption}（${x.e.tags.join(" ")}）`)
         .join("\n");

@@ -44,15 +44,10 @@ export function createSearchTool(deps: SearchDeps) {
         throw new Error(deps.prompts.messages["search_nokey"] ?? "没有配置搜索凭据");
       }
 
-      // 每轮限两次：轮标识与 say 的每轮一次同源（run.inputs[0]，跨 generation 不变）
+      // 每轮限一次：轮标识与 say 的每轮一次同源；只有真正返回结果才计数，
+      // 空结果/失败不消耗机会，模型可以换词重试
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
-      if (round !== undefined) {
-        if (SEARCHED.get(api.conversationId) === round) {
-          throw new Error(deps.prompts.messages["search_used"] ?? "这一轮搜过了");
-        }
-        SEARCHED.set(api.conversationId, round);
-      }
 
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -68,6 +63,12 @@ export function createSearchTool(deps: SearchDeps) {
         const list = (j.results ?? []).slice(0, count);
         if (list.length === 0) {
           return { output: [{ type: "text", text: "没搜到相关结果" }] };
+        }
+        if (round !== undefined) {
+          if (SEARCHED.get(api.conversationId) === round) {
+            throw new Error(deps.prompts.messages["search_used"] ?? "这一轮搜过了");
+          }
+          SEARCHED.set(api.conversationId, round);
         }
         const text = list
           .map((r, i) => {
