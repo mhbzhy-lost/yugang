@@ -224,8 +224,18 @@ npm run protocol install    # 下载 NapCat 到 var/protocol/napcat，按 .env �
 npm run protocol status     # 装了没、QQ 在不在、WS 通不通
 ```
 
-macOS 上 NapCat 只有框架包、没有启动脚本：需要先 `brew install --cask qq`，再用
-LiteLoaderQQNT 挂进去，然后扫码。这条链路的最后两步是 GUI 操作，脚本只能把包准备好。
+macOS 走官方的 **NapCat-Mac-Installer**（GUI）：
+
+```bash
+# 已下载到 ~/Downloads/NapCatInstaller/NapCatInstaller.app
+npm run protocol install   # 只写配置，指向 QQ 容器目录
+```
+
+然后打开安装器：选版本 → 安装 → 切换程序入口 NapCat → 启动 QQ → 扫码。
+被系统拒绝时去「系统设置 → 隐私与安全性 → App 管理」放行。
+
+配置位置随平台不同：macOS 是 `~/Library/Containers/com.tencent.qq/Data/Documents/napcat`，
+其它平台是 `var/protocol/napcat`，`npm run protocol install` 会自己判断。
 
 ## 跑起来
 

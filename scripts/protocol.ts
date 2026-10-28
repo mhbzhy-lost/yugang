@@ -14,7 +14,16 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
-const PROTOCOL_DIR = join(HOME, "protocol", "napcat");
+
+/**
+ * NapCat 实际读配置的位置随平台不同：
+ *  macOS 走 NapCat-Mac-Installer，数据在 QQ 容器目录里
+ *  其它平台用我们解压出来的 Shell 包
+ */
+const PROTOCOL_DIR =
+  process.platform === "darwin"
+    ? join(homedir(), "Library", "Containers", "com.tencent.qq", "Data", "Documents", "napcat")
+    : join(HOME, "protocol", "napcat");
 const [command = "status"] = process.argv.slice(2);
 
 const wsUrl = process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001";
@@ -23,6 +32,12 @@ const port = Number(new URL(wsUrl).port || 3001);
 
 if (command === "install") {
   mkdirSync(PROTOCOL_DIR, { recursive: true });
+
+  if (process.platform === "darwin") {
+    writeOneBotConfig();
+    printNextSteps();
+    process.exit(0);
+  }
 
   if (!existsSync(join(PROTOCOL_DIR, "napcat.mjs"))) {
     const tag = latestTag();
@@ -39,7 +54,8 @@ if (command === "install") {
   writeOneBotConfig();
   printNextSteps();
 } else if (command === "status") {
-  const installed = existsSync(join(PROTOCOL_DIR, "napcat.mjs"));
+  const installed =
+    process.platform === "darwin" ? existsSync(PROTOCOL_DIR) : existsSync(join(PROTOCOL_DIR, "napcat.mjs"));
   console.log(`协议端目录   ${installed ? PROTOCOL_DIR : "（未安装，跑 npm run protocol install）"}`);
   if (process.platform === "darwin") {
     console.log(`QQ.app       ${existsSync("/Applications/QQ.app") ? "已安装" : "没装（brew install --cask qq）"}`);
@@ -76,15 +92,16 @@ function writeOneBotConfig(): void {
 function printNextSteps(): void {
   console.log("\n下一步：");
   if (process.platform === "darwin") {
-    console.log("  1. 安装 Mac 版 QQ：brew install --cask qq");
-    console.log("  2. 装 LiteLoaderQQNT：");
-    console.log('     curl -L "https://github.com/Mzdyl/LiteLoaderQQNT_Install/releases/latest/download/install_mac.sh" -o /tmp/ll.sh && bash /tmp/ll.sh');
-    console.log(`  3. 把 ${PROTOCOL_DIR} 作为插件目录放进 LiteLoader 的 plugins/`);
-    console.log("  4. 启动 QQ，扫码登录鱼号，NapCat 会在 5099 起 WebUI");
+    console.log("  1. 打开 ~/Downloads/NapCatInstaller/NapCatInstaller.app");
+    console.log("  2. 选版本 → 安装 → 切换程序入口 NapCat");
+    console.log("     （被系统拒绝时，去 系统设置 → 隐私与安全性 → App 管理 里放行）");
+    console.log("  3. 它会启动 QQ，用鱼号扫码登录");
+    console.log(`  配置就位：${join(PROTOCOL_DIR, "config", "onebot.json")}`);
+    console.log("  4. 回来跑 npm run probe，通了再 npm run up");
   } else {
     console.log("  启动 NapCat 后用鱼号扫码登录");
+    console.log("  回来跑 npm run probe，通了再 npm run up");
   }
-  console.log(`  5. 回来跑 npm run probe，通了再 npm start`);
 }
 
 async function reachable(url: string): Promise<boolean> {
