@@ -25,6 +25,10 @@ export interface OutboundPayload {
   at: number;
   /** 幂等键：重放时用同一个，发送侧据此去重。 */
   key: string;
+  /** 本轮触发消息的 id（由宿主在 submit 时绑定），引用不再串到别人的消息。 */
+  quoteId?: number | string;
+  /** 本轮触发是否@了鱼：被@必引用，出口层兑底。 */
+  quoteForce?: boolean;
 }
 
 export const OutboundEntry = defineEntry<OutboundPayload>("fish.outbound");
@@ -33,6 +37,8 @@ export interface SayDeps {
   limits: EgressLimits;
   prompts: PromptSet;
   now?: () => number;
+  /** submissionId → 本轮触发消息；宿主注入，能把引用目标绑在轮上。 */
+  triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean } | undefined;
 }
 
 export function createSayTool(deps: SayDeps) {
@@ -91,11 +97,15 @@ export function createSayTool(deps: SayDeps) {
         }
         saidIn.set(api.conversationId, round);
       }
+      // 把本轮触发消息钉进 payload：出口层引用/强制引用都用它，不会被后续消息顶掉
+      const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
 
       const payload: OutboundPayload = {
         items: args.messages.map((m) => m.trim()),
         ...(args.media === undefined ? {} : { media: args.media }),
         quote: args.quote === true,
+        ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
+        ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
         at: ts,
         key: `${api.conversationId}:${api.callId}`,
       };

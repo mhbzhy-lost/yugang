@@ -58,6 +58,8 @@ export interface FishOptions {
   mediaRoot: string;
   /** DeepSeek Search API 的 key；给了才有联网搜索能力。 */
   searchKey?: string;
+  /** submissionId → 本轮触发消息；把回复引用绑在轮上，防串线。 */
+  triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean } | undefined;
   /** 每个群的工作目录根；实际 cwd 是 <workspaceRoot>/<groupKey>。 */
   workspaceRoot: string;
   limits?: Partial<Omit<EgressLimits, "mediaRoot">>;
@@ -101,7 +103,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
 
-  const say = createSayTool({ limits, prompts, now });
+  const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf });
   const react = createReactTool({ prompts, react: options.react, now });
   const tools = createTools({ mediaRoot, prompts, searchKey: options.searchKey });
 

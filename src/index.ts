@@ -75,6 +75,8 @@ function markSent(key: string): boolean {
 const chatKeys = new Map<string, string>();
 const lastMessageId = new Map<string, number | string>();
 const lastMention = new Map<string, boolean>(); // 最近一次触发是否@了鱼：被@必回引用，让群里看得出鱼在回谁
+// submissionId → 本轮触发消息：把引用目标绑在轮上，不被后续消息顶掉
+const triggerOf = new Map<string, { messageId?: number | string; mentionsBot: boolean }>();
 const conversations = new Map<string, Conversation>();
 
 const fish = await openFish({
@@ -91,6 +93,7 @@ const fish = await openFish({
       return undefined;
     }
   })(),
+  triggerOf: (roundId) => triggerOf.get(String(roundId)),
   workspaceRoot: config.workspaceRoot,
   compact: {
     model: gateModel,
@@ -105,7 +108,9 @@ const fish = await openFish({
 
     if (chatKey.startsWith("qq:group:")) {
       const groupId = Number(chatKey.slice("qq:group:".length));
-      const quote = (payload.quote || lastMention.get(conversationId) === true) ? lastMessageId.get(conversationId) : undefined;
+      const quote = (payload.quote || payload.quoteForce === true || lastMention.get(conversationId) === true)
+        ? (payload.quoteId ?? lastMessageId.get(conversationId))
+        : undefined;
       await onebot.sendGroup(groupId, payload.items, { quote });
       if (payload.media) await onebot.sendImageGroup(groupId, payload.media);
     } else if (chatKey.startsWith("qq:private:")) {
@@ -207,13 +212,20 @@ onebot.onMessage((raw) => {
     if (msg.messageId !== undefined) lastMessageId.set(conv.id, msg.messageId);
     lastMention.set(conv.id, msg.mentionsBot);
 
-    // 群员插话走 follow-up：不打断正在跑的那一轮
+    // 群员插话走 follow-up：不打断正在跑的那一轮。
+    // 把触发消息绑到 submission 上：鱼的回复引用本轮自己的触发消息，
+    // 轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）
     const submission = await conv.submit(
       { type: "input", content: renderForModel(msg, config.master) },
       ctx,
     );
+    triggerOf.set(submission.id, {
+      messageId: msg.messageId,
+      mentionsBot: msg.mentionsBot,
+    });
 
     const settled = await submission.wait(ctx);
+    triggerOf.delete(submission.id);
     if (settled.status !== "done") {
       const why = [settled.status, (settled as { reason?: string }).reason, (settled as { detail?: string }).detail]
         .filter(Boolean)
