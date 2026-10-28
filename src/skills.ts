@@ -12,6 +12,7 @@
  * 真要做事时模型自己 read SKILL.md，再 bash 跑脚本。
  */
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
+import { renderTemplate } from "./prompts.ts";
 import { join } from "node:path";
 
 export interface Skill {
@@ -65,17 +66,14 @@ export function parseSkillFile(text: string): { name: string; description: strin
 
 /**
  * 渲染成 system prompt 的一个 section。
- * 只给「名字 + 什么时候用 + 去哪读」，不给正文——正文由模型按需 read。
+ * 模板本身在 prompt/skills.md 里，这里只负责填 {{skills}} 那一块。
  */
-export function renderSkillsPrompt(skills: readonly Skill[]): string {
-  if (skills.length === 0) return "";
-  const lines = [
-    "你会的手艺都在下面的目录里。要用某项手艺之前，先用 read 读它的 SKILL.md，再按里面的步骤做。",
-    "不要凭印象猜步骤；SKILL.md 里说用哪个脚本就跑哪个脚本。",
-    "",
-    ...skills.map((s) => `- ${s.name}: ${s.description}\n  读这里：${s.skillFile}`),
-  ];
-  return lines.join("\n");
+export function renderSkillsPrompt(skills: readonly Skill[], template: string): string {
+  const list =
+    skills.length === 0
+      ? "（现在还没有任何手艺）"
+      : skills.map((s) => `- ${s.name}: ${s.description}\n  读这里：${s.skillFile}`).join("\n");
+  return renderTemplate(template, { skills: list });
 }
 
 export function isDirectory(path: string): boolean {

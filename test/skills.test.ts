@@ -15,8 +15,10 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
 import { discoverSkills, parseSkillFile, renderSkillsPrompt } from "../src/skills.ts";
+import { loadPrompts } from "../src/prompts.ts";
 
 const ctx = BACKGROUND_CONTEXT;
+const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
 const SKILLS = fileURLToPath(new URL("../skills", import.meta.url));
 
 test("发现 skills，且 prompt 里只有摘要不给正文", () => {
@@ -25,7 +27,7 @@ test("发现 skills，且 prompt 里只有摘要不给正文", () => {
   const names = skills.map((s) => s.name);
   assert.ok(names.includes("draw") && names.includes("meme"));
 
-  const prompt = renderSkillsPrompt(skills);
+  const prompt = renderSkillsPrompt(skills, loadPrompts(PROMPTS).skillsTemplate);
   assert.match(prompt, /- draw: /);
   assert.match(prompt, /SKILL\.md/);
   // 正文里的"步骤"不该出现在常驻 prompt 里
@@ -63,7 +65,7 @@ test("bash 跑 skill 脚本 → say 发图，路径与文本各自归位", async
     storage: new MemoryStorage(),
     models,
     model: { provider: faux.provider.id, modelId: faux.models[0].id },
-    persona: "你是鱼",
+    promptRoot: PROMPTS,
     skillsRoot: SKILLS,
     mediaRoot,
     workspaceRoot,

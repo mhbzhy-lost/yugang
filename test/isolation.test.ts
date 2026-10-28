@@ -17,7 +17,8 @@ import { openFish } from "../src/harness.ts";
 import { rememberSecrets } from "../src/egress/ledger.ts";
 
 const ctx = BACKGROUND_CONTEXT;
-const persona = "你是群里的一条鱼。你只说群里的话，不解释自己。";
+const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
+
 
 function mediaRoot(): string {
   return mkdtempSync(join(tmpdir(), "yugang-"));
@@ -39,7 +40,7 @@ test("模型正文不出境，只有 say 的 text 会", async () => {
     storage: new MemoryStorage(),
     models,
     model: { provider: faux.provider.id, modelId: faux.models[0].id },
-    persona,
+    promptRoot: PROMPTS,
     skillsRoot: fileURLToPath(new URL("../skills", import.meta.url)),
     workspaceRoot: mediaRoot(),
     mediaRoot: mediaRoot(),
@@ -80,7 +81,7 @@ test("从思考里抄来的话被拒，且以 tool 错误返回", async () => {
     storage: new MemoryStorage(),
     models,
     model: { provider: faux.provider.id, modelId: faux.models[0].id },
-    persona,
+    promptRoot: PROMPTS,
     skillsRoot: fileURLToPath(new URL("../skills", import.meta.url)),
     workspaceRoot: mediaRoot(),
     mediaRoot: mediaRoot(),
@@ -101,7 +102,7 @@ test("从思考里抄来的话被拒，且以 tool 错误返回", async () => {
 
     const view = await root.viewState(ctx);
     const results = view.value.entries.filter((e) => e.kind === "pi.tool-result");
-    const rejected = results.find((e) => JSON.stringify(e.model ?? "").includes("未发送"));
+    const rejected = results.find((e) => JSON.stringify(e.model ?? "").includes("抄"));
     assert.ok(rejected, "拒绝原因没有以 tool 错误回给模型");
   } finally {
     await fish.close();

@@ -10,7 +10,8 @@
   "scripts": {
     "test": "node --test test/",
     "start": "node src/index.ts",
-    "probe": "node scripts/probe.ts"
+    "probe": "node scripts/probe.ts",
+    "prompts": "node scripts/prompts.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",

@@ -8,15 +8,17 @@
  */
 import { createBashTool, createReadTool } from "@earendil-works/pi-durable/tools";
 import type { BashExecution } from "@earendil-works/pi-durable/tools";
+import { renderTemplate, type PromptSet } from "./prompts.ts";
 
+/** 左边是判据，右边是 prompt/messages.md 里的文案 key。 */
 const DENY: readonly [RegExp, string][] = [
-  [/\brm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rf][a-zA-Z]*\s+\/(\s|$)/, "不准 rm -rf /"],
-  [/\bsudo\b|\bdoas\b/, "这里不需要也不能提权"],
-  [/\bmkfs(\.|\b)|\bdd\s+if=/, "不要动磁盘"],
-  [/\b(shutdown|reboot|halt)\b/, "不要关机"],
-  [/\bssh(-agent|d)?\s/, "不要往外连 ssh"],
-  [/\bcrond?\b.*install|systemctl\s+enable/, "不要装常驻任务"],
-  [/>\s*\/etc\//, "不要写 /etc"],
+  [/\brm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rf][a-zA-Z]*\s+\/(\s|$)/, "deny_root"],
+  [/\bsudo\b|\bdoas\b/, "deny_privilege"],
+  [/\bmkfs(\.|\b)|\bdd\s+if=/, "deny_disk"],
+  [/\b(shutdown|reboot|halt)\b/, "deny_power"],
+  [/\bssh(-agent|d)?\s/, "deny_ssh"],
+  [/\bcrond?\b.*install|systemctl\s+enable/, "deny_persist"],
+  [/>\s*\/etc\//, "deny_etc"],
 ];
 
 export interface SandboxOptions {
@@ -24,13 +26,17 @@ export interface SandboxOptions {
   mediaRoot: string;
   /** skills 根目录，脚本里用 $YUGANG_SKILL_DIR 引用。 */
   skillsRoot: string;
+  /** 工具的 description 也从 prompt/ 里读，覆盖库自带的说明。 */
+  prompts: PromptSet;
 }
 
 export function createHands(options: SandboxOptions) {
   const bash = createBashTool({
     prepare: (execution: BashExecution) => {
-      for (const [re, reason] of DENY) {
-        if (re.test(execution.command)) throw new Error(`这条命令被拦下：${reason}`);
+      for (const [re, key] of DENY) {
+        if (!re.test(execution.command)) continue;
+        const reason = options.prompts.messages[key] ?? key;
+        throw new Error(renderTemplate(options.prompts.messages["bash_denied"] ?? "{{reason}}", { reason }));
       }
       execution.inheritEnv = false;
       execution.env = {
@@ -45,5 +51,9 @@ export function createHands(options: SandboxOptions) {
     },
   });
 
-  return { bash, read: createReadTool() };
+  // 覆盖库自带的工具说明：模型看到的所有文字都必须来自 prompt/
+  return {
+    bash: { ...bash, description: options.prompts.tools.bash.description },
+    read: { ...createReadTool(), description: options.prompts.tools.read.description },
+  };
 }

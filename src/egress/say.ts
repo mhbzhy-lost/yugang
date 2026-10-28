@@ -1,14 +1,15 @@
 /**
  * say —— 唯一的出口。
  *
- * 这是整个项目的形状：模型能说的每一句话都要经过一次显式的 say() 调用，
- * 调用参数被硬校验；被拒绝时以 tool 错误返回，模型可以在同一轮里重说。
- * 模型的正文（assistant text）、思考、tool 调用文本，永远不进入 QQ。
+ * 模型能说的每一句话都要经过一次显式的 say() 调用，参数被硬校验；
+ * 被拒绝时以 tool 错误返回（文案来自 prompt/errors.md），模型在同一轮里改口重说。
+ * 模型的正文、思考、tool 调用文本，永远不进入 QQ。
  */
 import { Type } from "@earendil-works/pi-ai";
 import { defineEntry, defineTool, type ConversationId } from "@earendil-works/pi-durable";
 import { validateOutbound, type EgressLimits } from "./policy.ts";
 import { ledgerOf, recordSent } from "./ledger.ts";
+import { renderTemplate, type PromptSet } from "../prompts.ts";
 
 export interface OutboundPayload {
   text: string;
@@ -22,7 +23,7 @@ export const OutboundEntry = defineEntry<OutboundPayload>("fish.outbound");
 
 export interface SayDeps {
   limits: EgressLimits;
-  /** 宿主侧真正把消息发出去。第一个参数是会话（= 一个群），据此路由到 QQ。 */
+  prompts: PromptSet;
   emit: (conversationId: ConversationId, payload: OutboundPayload) => void | Promise<void>;
   now?: () => number;
 }
@@ -32,18 +33,11 @@ export function createSayTool(deps: SayDeps) {
 
   return defineTool({
     name: "say",
-    description: [
-      "往当前 QQ 群说一句话。除了这个工具之外，你产生的任何文字都不会发到群里。",
-      "text 是群里那句话说出口的样子本身：口语、短、不超过 120 字、最多 2 个换行。",
-      "不要写 markdown、标题、列表、代码块，不要解释你做了什么、不要复述思考过程。",
-      "要发图时把图片绝对路径放进 media（必须在允许的媒体目录内）。",
-      "不想说话就不要调用这个工具——沉默是合法的。",
-    ].join(" "),
-    // 只允许模型调用：脚本 / 嵌套调用不能绕过校验
-    callers: ["model"],
+    description: deps.prompts.tools.say.description,
+    callers: ["model"], // 脚本 / 嵌套调用不能绕过校验
     parameters: Type.Object({
-      text: Type.String({ description: "要对群里说的话，直接说，不要包裹任何格式" }),
-      media: Type.Optional(Type.String({ description: "可选：一起发出的图片绝对路径" })),
+      text: Type.String({ description: deps.prompts.tools.say.params["text"] ?? "" }),
+      media: Type.Optional(Type.String({ description: deps.prompts.tools.say.params["media"] ?? "" })),
     }),
     execute: async (args, api, context) => {
       const ts = now();
@@ -57,8 +51,11 @@ export function createSayTool(deps: SayDeps) {
         secrets: ledger.secrets,
       });
 
-      // 硬拒绝：抛出去 → 模型收到 tool 错误结果，可在同一轮里改口重说
-      if (rejection) throw new Error(`未发送：${rejection}`);
+      if (rejection) {
+        const template = deps.prompts.messages[rejection.code];
+        if (!template) throw new Error(`prompt/messages.md 缺少文案：${rejection.code}`);
+        throw new Error(renderTemplate(template, rejection.vars ?? {}));
+      }
 
       const payload: OutboundPayload = {
         text: args.text.trim(),
@@ -68,15 +65,12 @@ export function createSayTool(deps: SayDeps) {
       };
 
       // 先落盘再发送：崩在中间时，重启后能从 fish.outbound 条目里找回这句话
-      await api.commit(
-        (tx) => tx.appendEntry(OutboundEntry, api.conversationId, { data: payload }),
-        context,
-      );
+      await api.commit((tx) => tx.appendEntry(OutboundEntry, api.conversationId, { data: payload }), context);
 
       recordSent(api.conversationId, payload.text, ts);
       await deps.emit(api.conversationId, payload);
 
-      return { output: [{ type: "text", text: "已发到群里" }] };
+      return { output: [{ type: "text", text: deps.prompts.messages["say_sent"] }] };
     },
   });
 }

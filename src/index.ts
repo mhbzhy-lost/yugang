@@ -30,7 +30,7 @@ const config = {
   provider: process.env.MODEL_PROVIDER ?? "deepseek",
   modelId: process.env.MODEL_ID ?? "deepseek-v4-flash",
   mediaRoot: resolve(process.env.MEDIA_ROOT ?? join(HOME, "media")),
-  personaPath: process.env.PERSONA ?? join(process.cwd(), "persona", "fish.md"),
+  promptRoot: resolve(process.env.PROMPT_ROOT ?? join(process.cwd(), "prompt")),
   skillsRoot: resolve(process.env.SKILLS_ROOT ?? join(process.cwd(), "skills")),
   workspaceRoot: resolve(process.env.WORKSPACE_ROOT ?? join(HOME, "workspace")),
   ambientChance: Number(process.env.AMBIENT_CHANCE ?? "0.06"),
@@ -39,10 +39,6 @@ const config = {
   groups: (process.env.GROUPS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
 };
 mkdirSync(config.mediaRoot, { recursive: true });
-
-const persona = existsSync(config.personaPath)
-  ? readFileSync(config.personaPath, "utf8")
-  : "你是群里的一条鱼。";
 
 const models = createModels(); // provider 由 pi-ai 的凭据/配置决定，见 README
 
@@ -62,7 +58,7 @@ const fish = await openFish({
   storage: await openNodeSqliteStorage(join(HOME, "fish.db")),
   models,
   model: { provider: config.provider, modelId: config.modelId },
-  persona,
+  promptRoot: config.promptRoot,
   skillsRoot: config.skillsRoot,
   workspaceRoot: config.workspaceRoot,
   mediaRoot: config.mediaRoot,

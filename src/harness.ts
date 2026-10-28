@@ -21,10 +21,11 @@ import {
   type ConversationId,
   type Storage,
 } from "@earendil-works/pi-durable";
-import { DEFAULT_LIMITS, type EgressLimits } from "./egress/policy.ts";
+import { DEFAULT_LIMITS, REJECTION_CODES, type EgressLimits } from "./egress/policy.ts";
 import { createSayTool, type OutboundPayload } from "./egress/say.ts";
 import { createHands } from "./sandbox.ts";
 import { discoverSkills, renderSkillsPrompt } from "./skills.ts";
+import { loadPrompts, renderTemplate, type PromptSet } from "./prompts.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -37,8 +38,8 @@ export interface FishOptions {
   storage: Storage;
   models?: Models;
   model: ModelRef;
-  /** 人格书全文。 */
-  persona: string;
+  /** prompt 目录：人格、手艺模板、工具说明、工具文案。 */
+  promptRoot: string;
   /** skills 根目录；每个子目录一个 SKILL.md。 */
   skillsRoot: string;
   /** 媒体白名单根目录（发图只能发这里面的）。 */
@@ -53,7 +54,10 @@ export interface FishOptions {
 export interface Fish {
   harness: Harness;
   models: Models;
+  prompts: PromptSet;
   skills: ReturnType<typeof discoverSkills>;
+  /** 实际的 harness settings，便于审查（compaction 必须为 false）。 */
+  settings: { compaction: { enabled: boolean } };
   group(groupKey: string): Promise<Conversation>;
   close(): Promise<void>;
 }
@@ -69,9 +73,14 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   const workspaceRoot = resolve(options.workspaceRoot);
   limits.mediaRoot = mediaRoot;
 
+  const prompts = loadPrompts(resolve(options.promptRoot));
+  for (const code of [...REJECTION_CODES, "say_sent"]) {
+    if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
+  }
+
   const skills = discoverSkills(skillsRoot);
-  const say = createSayTool({ limits, emit: options.emit, now });
-  const hands = createHands({ mediaRoot, skillsRoot });
+  const say = createSayTool({ limits, prompts, emit: options.emit, now });
+  const hands = createHands({ mediaRoot, skillsRoot, prompts });
 
   // 手：bash + read，就这两样
   const Hands = defineExtension({ name: "hands", tools: [hands.bash, hands.read] });
@@ -81,8 +90,8 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     name: "fish",
     tools: [say],
     sections: [
-      section("persona", () => options.persona, { tag: false }),
-      section("skills", () => renderSkillsPrompt(skills), { tag: true }),
+      section("persona", () => prompts.persona, { tag: false }),
+      section("skills", () => renderSkillsPrompt(skills, prompts.skillsTemplate), { tag: true }),
     ],
   });
 
@@ -92,12 +101,17 @@ export async function openFish(options: FishOptions): Promise<Fish> {
 
   mkdirSync(workspaceRoot, { recursive: true });
 
+  // pi-durable 默认的 compaction 会在中途注入一段库自带的总结提示词（不可审查），
+  // 所以显式关掉：上下文靠 reset / 分群隔离控制，而不是靠一个我们看不到的 prompt。
+  const settings = { compaction: { enabled: false } };
+
   const harness = await Harness.open(
     options.storage,
     {
       models,
       registry,
       now,
+      settings,
       // 每个群一个 cwd：文件、临时产物、skill 生成的东西都落在这里
       env: (target) => {
         const cwd = target.cwd ?? join(workspaceRoot, String(target.conversationId));
@@ -113,7 +127,9 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   return {
     harness,
     models,
+    prompts,
     skills,
+    settings,
     group(groupKey) {
       let existing = groups.get(groupKey);
       if (!existing) {

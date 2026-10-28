@@ -53,6 +53,36 @@ skills/draw/
 - 脚本能拿到 `$YUGANG_SKILL_DIR`、`$YUGANG_MEDIA_ROOT`、`$YUGANG_WORKSPACE`
 - ⚠️ 这不是沙箱。真隔离请上容器或 seatbelt/bwrap；这份代码里的 bash 依然是一个全权限 shell
 
+## prompt 全是文件，代码里一个字不内嵌
+
+模型看到的所有文字都在 `prompt/` 下：人格、手艺清单模板、三个工具的说明、以及工具回给模型的
+全部文案（拒绝理由 + 发送回执）。
+
+```
+prompt/
+  persona.md          身份与说话方式
+  skills.md           手艺清单模板（{{skills}} 处填目录）
+  tools/say.md        say 的说明 + 参数说明（frontmatter 的 params）
+  tools/bash.md       覆盖 pi-durable 内置说明
+  tools/read.md       覆盖 pi-durable 内置说明
+  messages.md         23 条工具文案，一行一条 key: text
+```
+
+配套的三道护栏：
+
+1. **`{{name}}` 严格替换**——缺变量直接抛错，不允许半渲染的 prompt 上线
+2. **`npm test` 扫描 `src/`**——任何一条字面量里出现 ≥12 个汉字就失败（正常错误信息远低于此）
+3. **`npm run prompts`**——列出所有 prompt 文件、sha256、工具说明、文案条数，并报告内嵌扫描结果
+
+**pi-durable 自带的注入怎么处理：**
+
+| 注入 | 处理 |
+|---|---|
+| compaction 的总结提示词 | **已关闭**（`settings.compaction.enabled = false`），上下文靠分群与 reset 控制 |
+| system prompt 的内置 section | 不存在——库不加任何 section，transcript 里只有 `persona` 和 `skills` |
+| `tools/bash|read` 的默认说明 | 用 `prompt/tools/*.md` **覆盖** |
+| `Tool result unavailable…` 占位、`<harness>[error]…</harness>` 包裹 | 库内固定，无法覆盖，已在 `prompt/README.md` 记录 |
+
 ## 校验分两类
 
 **结构性**（`src/egress/policy.ts`）：字数上限、换行上限、禁 markdown/列表/代码块/表格、禁绝对路径与
@@ -74,6 +104,8 @@ src/
     policy.ts       结构校验 + 溯源校验（纯函数，好测）
     ledger.ts       每群的出口账本：最近说了什么、本轮几条、secret 缓冲
     absorb.ts       把 transcript 里的 thinking / tool 结果喂给溯源校验
+  prompt-lint.ts    扫描 src/ 里有没有内嵌 prompt（给审查用的护栏）
+  prompts.ts        加载 prompt/ 下的 md，严格模板替换
   skills.ts         扫描 SKILL.md，渲染成 prompt 里的一行一项
   sandbox.ts        bash 的 prepare：环境、cwd、自杀命令拦截
   qq/
@@ -82,7 +114,7 @@ src/
 skills/
   draw/             画图（纯标准库生成 PNG，走 $YUGANG_MEDIA_ROOT）
   meme/             本地表情包挑选
-persona/fish.md     人格书
+prompt/             模型能看到的一切文字（见 prompt/README.md）
 test/               node --test，不需要网络和 API key
 ```
 
