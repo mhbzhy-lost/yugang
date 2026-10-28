@@ -9,6 +9,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { withAccessToken } from "../src/qq/onebot.ts";
 import { localDay } from "../src/usage.ts";
 
 const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
@@ -103,7 +104,7 @@ if (command === "status") {
 } else if (command === "probe") {
   const url = process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001";
   const token = process.env.ONEBOT_TOKEN;
-  const ws = new WebSocket(url, token ? ({ headers: { Authorization: `Bearer ${token}` } } as never) : undefined);
+  const ws = new WebSocket(token ? withAccessToken(url, token) : url);
   ws.addEventListener("open", () => {
     ws.send(JSON.stringify({ action: "get_login_info", params: {}, echo: "1" }));
     ws.send(JSON.stringify({ action: "get_group_list", params: {}, echo: "2" }));

@@ -5,11 +5,12 @@
  *   ONEBOT_WS_URL=ws://127.0.0.1:3001 ONEBOT_TOKEN=xxx npm run probe
  *   TEST_GROUP=123456 npm run probe          # 额外发一条测试消息
  */
+import { withAccessToken } from "../src/qq/onebot.ts";
 const url = process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001";
 const token = process.env.ONEBOT_TOKEN;
 const testGroup = process.env.TEST_GROUP;
 
-const ws = new WebSocket(url, token ? ({ headers: { Authorization: `Bearer ${token}` } } as never) : undefined);
+const ws = new WebSocket(token ? withAccessToken(url, token) : url);
 let seq = 0;
 const pending = new Map<string, (value: unknown) => void>();
 
@@ -47,6 +48,15 @@ ws.addEventListener("open", async () => {
 
   ws.close();
   process.exit(0);
+});
+
+ws.addEventListener("message", (event) => {
+  const frame = JSON.parse(String(event.data)) as { echo?: string };
+  const resolve = frame.echo ? pending.get(frame.echo) : undefined;
+  if (resolve) {
+    pending.delete(frame.echo);
+    resolve(frame);
+  }
 });
 
 ws.addEventListener("error", () => {

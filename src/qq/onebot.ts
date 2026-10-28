@@ -76,10 +76,7 @@ export class OneBot {
   }
 
   async connect(): Promise<void> {
-    const ws = new WebSocket(
-      this.#url,
-      this.#token ? ({ headers: { Authorization: `Bearer ${this.#token}` } } as never) : undefined,
-    );
+    const ws = new WebSocket(this.#token ? withAccessToken(this.#url, this.#token) : this.#url);
     this.#ws = ws;
     await new Promise<void>((resolve, reject) => {
       ws.addEventListener("open", () => resolve(), { once: true });
@@ -203,25 +200,52 @@ export class OneBot {
   /** 把图片落盘到 mediaRoot/inbound，返回相对引用。 */
   async downloadImage(segment: OneBotSegment, mediaRoot: string): Promise<IncomingImage | null> {
     const data = segment.data ?? {};
-    const source = String(data["file"] ?? data["url"] ?? "");
-    if (!source) return null;
+    // 直链优先：NapCat 的 file 字段常是内部名（xxx.image）而不是可读路径；
+    // 只有剥掉 file:// 后确实是存在的本地路径才走本地读。
+    const url = String(data["url"] ?? "");
+    let source = /^https?:\/\//.test(url) ? url : "";
+    let localPath = "";
+    if (!source) {
+      const { existsSync } = await import("node:fs");
+      const raw = String(data["file"] ?? "");
+      const p = raw.startsWith("file://") ? raw.slice("file://".length) : raw;
+      if (p.startsWith("/") && existsSync(p)) localPath = p;
+    }
+    if (!source && !localPath) return null;
     try {
-      const { mkdirSync, writeFileSync } = await import("node:fs");
+      const { mkdirSync, writeFileSync, existsSync, unlinkSync } = await import("node:fs");
       const { join } = await import("node:path");
       const dir = join(mediaRoot, "inbound");
       mkdirSync(dir, { recursive: true });
 
       let bytes: Uint8Array;
-      if (/^https?:\/\//.test(source)) {
+      if (source) {
         const res = await fetch(source);
         if (!res.ok) return null;
         bytes = new Uint8Array(await res.arrayBuffer());
       } else {
         const { readFile } = await import("node:fs/promises");
-        bytes = new Uint8Array(await readFile(source));
+        bytes = new Uint8Array(await readFile(localPath));
       }
 
-      const name = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}.png`;
+      // 按魔数认真实格式，按真实扩展名落盘；伪装扩展名会让 look 按 MIME 表发错标数据。
+      const kind = sniffImage(bytes);
+      if (!kind) return null;
+      const stem = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+      if (kind.convert) {
+        // HEIC/HEIF/BMP/TIFF：模型不认，用 macOS 自带 sips 归一化成 JPEG。
+        const raw = join(dir, `${stem}.${kind.ext}`);
+        const jpg = join(dir, `${stem}.jpg`);
+        writeFileSync(raw, bytes);
+        const { spawnSync } = await import("node:child_process");
+        const sips = spawnSync("sips", ["-s", "format", "jpeg", raw, "--out", jpg], { timeout: 20000 });
+        unlinkSync(raw);
+        if (sips.status !== 0 || !existsSync(jpg)) return null;
+        return { ref: `inbound/${stem}.jpg` };
+      }
+
+      const name = `${stem}.${kind.ext}`;
       writeFileSync(join(dir, name), bytes);
       return { ref: `inbound/${name}` };
     } catch {
@@ -230,8 +254,33 @@ export class OneBot {
   }
 }
 
+// 魔数嗅探：返回真实扩展名；convert 标记需要 sips 归一化为 JPEG 的格式。
+// png/jpg/gif/webp 模型直收（已实测），其余一律转 JPEG。
+function sniffImage(b: Uint8Array): { ext: string; convert?: "jpeg" } | null {
+  const at = (off: number, ascii: string) =>
+    ascii.length <= b.length - off &&
+    [...ascii].every((ch, i) => b[off + i] === ch.charCodeAt(0));
+  if (at(0, "\x89PNG")) return { ext: "png" };
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { ext: "jpg" };
+  if (at(0, "GIF8")) return { ext: "gif" };
+  if (at(0, "RIFF") && at(8, "WEBP")) return { ext: "webp" };
+  if (at(0, "BM")) return { ext: "bmp", convert: "jpeg" };
+  if (at(0, "II\x2a\x00") || at(0, "MM\x00\x2a")) return { ext: "tiff", convert: "jpeg" };
+  if (at(4, "ftyp")) {
+    const brand = String.fromCharCode(...b.slice(8, 12)).toLowerCase();
+    if (["heic", "heix", "hevc", "heif", "mif1", "msf1"].includes(brand)) return { ext: "heic", convert: "jpeg" };
+  }
+  return null;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
+}
+
+/** 把 token 追加成 WS URL 的 ?access_token= 查询参数。Node 原生 WebSocket 会静默丢弃自定义 headers，鉴权只能走 query。 */
+export function withAccessToken(url: string, token: string): string {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}access_token=${encodeURIComponent(token)}`;
 }
 
 export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage | null {
@@ -261,6 +310,9 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
     }
   }
   text = text.replace(/\s+/g, " ").trim();
+  // 裸 @（只 @ 不带字）不丢弃：以最小占位文本继续走闸和链路，
+  // 否则 chatlog 无痕，用户观感是鱼不理人。非 @ 的空文本维持丢弃。
+  if (!text && mentionsBot) text = "（被 @ 了一下，没说话）";
   if (!text) return null;
 
   const nickname = frame.sender?.card || frame.sender?.nickname || String(userId);
