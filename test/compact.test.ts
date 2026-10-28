@@ -33,6 +33,7 @@ function boot(compact: { maxEntries: number; maxChars: number }) {
     workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
     compact,
     emit: () => {},
+    react: () => {},
   });
   return { faux, fish };
 }
@@ -47,7 +48,7 @@ test("摘要只收群友的话和鱼发出去的话", async () => {
 
     faux.setResponses([
       fauxAssistantMessage([fauxToolCall("draw", { description: "一只鱼" })], { stopReason: "toolUse" }),
-      fauxAssistantMessage([fauxToolCall("say", { text: "画好了" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("say", { messages: ["画好了"] })], { stopReason: "toolUse" }),
       fauxAssistantMessage("内部独白，不该进摘要"),
     ]);
     await (await root.submit({ type: "input", content: "画个鱼" }, ctx)).wait(ctx);
@@ -73,7 +74,7 @@ test("到阈值才压，压完写到 pi.reset 里", async () => {
 
     // 第一轮：2 条（1 条群友 + 1 条鱼），还没有到 3 条阈值
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("say", { text: "在的" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("say", { messages: ["在的"] })], { stopReason: "toolUse" }),
       fauxAssistantMessage("好了"),
     ]);
     await (await root.submit({ type: "input", content: "在吗" }, ctx)).wait(ctx);
@@ -84,7 +85,7 @@ test("到阈值才压，压完写到 pi.reset 里", async () => {
 
     // 第二轮：再到 2 条，累计 4 条，过阈值
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("say", { text: "刚在刷手机" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("say", { messages: ["刚在刷手机"] })], { stopReason: "toolUse" }),
       fauxAssistantMessage("好了"),
     ]);
     await (await root.submit({ type: "input", content: "干嘛呢" }, ctx)).wait(ctx);
@@ -120,6 +121,7 @@ test("没配 compact 就永不压缩", async () => {
     mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
     workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
     emit: () => {},
+    react: () => {},
   });
   try {
     const root = await fish.harness.root(ctx);

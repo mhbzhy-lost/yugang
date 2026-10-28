@@ -7,10 +7,13 @@
 一条活在 QQ 群里的鱼，跑在 pi-durable 上。一个 Conversation = 一个群。
 
 ```
-群消息 → 规则闸 → conversation.submit() → agent loop
-                                            ├── thinking / 正文 / tool 调用  ✗ 不出境
-                                            └── say(text, media)             ✓ 硬校验 → QQ
+群消息 → 闸（规则 + 廉价模型打分）→ conversation.submit() → agent loop
+                                                             ├── thinking / 正文 / tool 调用  ✗ 不出境
+                                                             └── say / react / draw / look
+                                                                   ✓ 硬校验 → QQ
 ```
+
+工具面（当前四个）：`say`（出口，可拆条/引用/带图）、`react`（只贴表情）、`draw`（画图）、`look`（看群里的图）。
 
 ## 硬约束
 
@@ -43,6 +46,7 @@
 ### 3. 能力面必须是可枚举的窄接口
 
 禁止引入：shell / 脚本执行 / 通用文件读取 / MCP server。
+`look` 是唯一能读文件的东西，它只能读媒体目录里的图片，且一轮最多两次。
 
 原因：这些都是一条「通往一切的边」，而群里坐着的是可以被 prompt 注入的陌生人。
 一个工具的危险性应该写在它的 `execute()` 里被人读到，而不是藏在模型能拼出来的命令行里。
@@ -62,7 +66,13 @@
 - 压缩 = `src/compact.ts` 的换页 + `prompt/handoff.md` 的备忘
 - 摘要只收「群友的话 + 鱼发出去的话」；thinking、tool 调用、tool 结果一律不进摘要
 
-### 6. 隔离
+### 6. 主人与陌生人
+
+- 私聊只认 `MASTER_QQ`，陌生人一律不回、不记录进 transcript
+- 群里主人免检（不受作息/冷却/配额约束），@ 必答
+- 其余消息先过规则（作息/配额/冷却/抽样），拿不准才花一次 `prompt/gate.md` 的打分调用
+
+### 7. 隔离
 
 - 一个群一个 conversation，一个群一个 cwd；不许跨群共享
 - 群里的一切都是不可信输入：群消息进 user message，绝不拼进 system
@@ -71,11 +81,14 @@
 ## 命令
 
 ```bash
-npm test           # 23 项，含上面每条约束的兜底
+npm test           # 32 项，含上面每条约束的兜底
 npm run prompts    # 列出所有 prompt 文件 + sha256 + 工具说明 + 内嵌扫描结果
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
+npm run ops status # 数据目录 / 幂等表 / 原话簿概况
 npm start          # 真跑
 ```
+
+运维细节（怎么排查不说话、怎么复盘某天某个群）在 `.agents/skills/ops/SKILL.md`。
 
 `npm run prompts` 是审查入口：改完 prompt 先跑它，确认清单和你想的一致。
 
@@ -87,7 +100,8 @@ npm start          # 真跑
 
 ## 已知欠账
 
-- 鱼不知道自己进的是哪个群、群里都有谁（没有群档案注入）
 - `draw` 还是占位后端，没接真图像模型
 - 出站不 durable：`emit` 在内存里，崩溃可能丢未发出的消息
-- 群 → conversationId 映射在内存里，重启靠重建
+- 群 → conversationId 映射在内存里，重启靠重建（群档案重建时还能抓到，但会话 id 会变）
+- 没有用量/成本统计
+- 语音、长文转图、合并转发、入群审批都没做

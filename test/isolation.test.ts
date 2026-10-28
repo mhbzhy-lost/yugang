@@ -30,7 +30,7 @@ test("模型正文不出境，只有 say 的 text 会", async () => {
   models.setProvider(faux.provider);
 
   faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("say", { text: "在的" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("say", { messages: ["在的"] })], { stopReason: "toolUse" }),
     // 这一句是「模型的真实输出」，绝对不许进群
     fauxAssistantMessage("我已经调用 say 工具，把「在的」发送到群里了。"),
   ]);
@@ -43,8 +43,9 @@ test("模型正文不出境，只有 say 的 text 会", async () => {
     promptRoot: PROMPTS,
     workspaceRoot: mediaRoot(),
     mediaRoot: mediaRoot(),
+    react: () => {},
     emit: (_id, payload) => {
-      outbox.push(payload.text);
+      outbox.push(...payload.items);
     },
   });
 
@@ -70,8 +71,8 @@ test("从思考里抄来的话被拒，且以 tool 错误返回", async () => {
   const leaky = secret.slice(0, 40); // 40 字连续重合 > 24 阈值
 
   faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("say", { text: leaky })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("say", { text: "刚在听你们聊" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("say", { messages: [leaky] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("say", { messages: ["刚在听你们聊"] })], { stopReason: "toolUse" }),
     fauxAssistantMessage("好了。"),
   ]);
 
@@ -83,8 +84,9 @@ test("从思考里抄来的话被拒，且以 tool 错误返回", async () => {
     promptRoot: PROMPTS,
     workspaceRoot: mediaRoot(),
     mediaRoot: mediaRoot(),
+    react: () => {},
     emit: (_id, payload) => {
-      outbox.push(payload.text);
+      outbox.push(...payload.items);
     },
   });
 

@@ -102,8 +102,8 @@ export async function renderTranscript(conversation: Conversation): Promise<Rend
         if (text) lines.push(`群友: ${text}`);
         entries++;
       } else if (entry.kind === "fish.outbound") {
-        const data = entry.data as { text?: string } | undefined;
-        if (data?.text) lines.push(`鱼: ${data.text}`);
+        const data = entry.data as { items?: string[] } | undefined;
+        for (const text of data?.items ?? []) lines.push(`鱼: ${text}`);
         entries++;
       }
     }

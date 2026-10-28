@@ -13,9 +13,11 @@
                                 ├── 正文              ✗ 不出境
                                 └── say(text, media)  ✓ 硬校验 → fish.outbound → QQ
 
-鱼身上只有：
-  一张嘴  say            唯一出口，硬校验
-  手写的工具 src/tools/   能力扩展的唯一方式（现在只有一个 draw）
+鱼身上只有四个工具：
+  say     出口：可拆条、可引用、可带图，硬校验
+  react   只贴表情，不说话
+  draw    画图
+  look    看群里的图（唯一能读文件的东西，只能读媒体目录的图片）
 ```
 
 ## 为什么出口是一个 tool
@@ -57,13 +59,32 @@
 ```ts
 // src/tools/index.ts
 export function createTools(deps) {
-  return [createDrawTool(deps)];   // 加一项能力就是往这里加一行
+  return [createDrawTool(deps), createLookTool(deps)];   // 加一项能力就是往这里加一行
 }
 ```
 
-仓库里现在只有两个工具：`say`（出口）和 `draw`（占位画图）。
-`draw` 的后端是本地生成的渐变图；换成 ComfyUI / 通义万相 / SiliconFlow 只改
-`renderImage` 一个函数，工具契约和文案都不用动。
+`say` 和 `react` 属于出口，注册在 `src/egress/`；`draw` / `look` 是普通能力，在 `src/tools/`。
+
+## 什么时候开口
+
+三层，从便宜到贵：
+
+```
+1. 规则（零成本）  私聊只认主人；@ 必答；作息；每群日配额；冷却
+2. 抽样（零成本）  AMBIENT_CHANCE，绝大多数消息到这就被丢掉了
+3. 打分（一次便宜模型调用） prompt/gate.md：该不该接这句，score ≥ 0.5 才进
+```
+
+门内还有第四层：模型可以选择不调用 `say`——沉默是合法终态。
+
+## 记性
+
+| 层 | 载体 | 寿命 |
+|---|---|---|
+| 群档案 | transcript 里一条 `fish.group-profile` system 消息 | 整个会话 |
+| 人物档 | `prompt/people.md` → system section `people` | 永久（手工维护） |
+| 对话 | transcript | 到下一次换页 |
+| 换页备忘 | `prompt/handoff.md` 生成的 handoff | 跨换页 |
 
 ## 上下文压缩：换页 + 备忘
 
@@ -110,6 +131,7 @@ src/
   prompt-lint.ts    扫描 src/ 里有没有内嵌 prompt（给审查用的护栏）
   prompts.ts        加载 prompt/ 下的 md，严格模板替换
   compact.ts        换页：摊平对话 → 写备忘 → conversation.reset()
+  chatlog.ts        原话簿：按群按天写流水（只给运维 skill 看，鱼看不到）
   tools/
     index.ts        注册表：加一项能力就是往这里加一行
     draw.ts         画图（占位后端，换真模型只改 renderImage）
@@ -141,13 +163,23 @@ npm start
 
 ## 已验证
 
-`npm test` 20 项，其中四条是设计约束：
+`npm test` 33 项，其中四条是设计约束：
 
 1. **正文不出境**：脚本化的模型先 `say("在的")` 再输出长段正文，断言群里只收到前者。
 2. **抄写被拦**：`say` 里塞入本轮 thinking 的片段，断言被拒、原因为 tool 错误、重说的那句才放行。
-3. **工具面固定**：agent 的工具恰好是 `["say", "draw"]`，且断言 `bash`、`read` 都不存在。
+3. **工具面固定**：agent 的工具恰好是 `["say", "react", "draw", "look"]`，且断言 `bash`、`read` 都不存在。
 4. **工具全链路**：模型调 `draw` 拿到真实文件，再 `say({text, media})`，断言路径进了 media、
    正文里没有混进文件名。
+
+## 运维
+
+没有 Web 后台。运维走项目级 skill：`.agents/skills/ops/SKILL.md`，coding agent 进仓库会自动加载。
+
+```bash
+node scripts/ops.ts status     # 数据目录 / 幂等表 / 原话簿概况
+node scripts/ops.ts digest     # 复盘某天某个群聊了什么
+node scripts/ops.ts probe      # QQ 侧连通性
+```
 
 ## 还没做（按优先级）
 

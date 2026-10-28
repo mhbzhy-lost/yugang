@@ -1,6 +1,6 @@
 /**
  * 工具即扩展：
- *  - 鱼身上只有 say / draw，没有 bash、没有 read、没有技能脚本
+ *  - 鱼身上只有 say / react / draw / look，没有 bash、没有 read、没有技能脚本
  *  - draw 产出真实文件，路径能通过 say 的白名单校验
  *  - 每个工具的说明逐字来自 prompt/tools/*.md
  */
@@ -35,19 +35,19 @@ function boot() {
     mediaRoot,
     workspaceRoot,
     emit: (_id, payload) => {
-      outbox.push({ text: payload.text, media: payload.media });
+      outbox.push({ text: payload.items.join("|"), media: payload.media });
     },
   });
   return { faux, mediaRoot, outbox, fish };
 }
 
-test("工具面只有 say / read / draw，没有 bash", async () => {
+test("工具面只有 say / react / draw / look，没有 bash", async () => {
   const { fish } = boot();
   const open = await fish;
   try {
     const root = await open.harness.root(ctx);
     const names = (await root.agent(ctx)).tools.map((t) => t.name);
-    assert.deepEqual(names, ["say", "draw"]);
+    assert.deepEqual(names, ["say", "react", "draw", "look"]);
     assert.ok(!names.includes("bash"), "bash 必须不存在");
     assert.ok(!names.includes("read"), "read 也必须不存在");
   } finally {
@@ -86,7 +86,7 @@ test("draw 产出文件 → 路径进 say.media，正文保持干净", async () 
 
     // 第二轮：把路径交给 say.media
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("say", { text: "画好了", media: produced })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("say", { messages: ["画好了"], media: produced })], { stopReason: "toolUse" }),
       fauxAssistantMessage("完成"),
     ]);
     await (await root.submit({ type: "input", content: "发出来" }, ctx)).wait(ctx);

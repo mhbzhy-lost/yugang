@@ -44,6 +44,7 @@ test("工具说明逐字来自 prompt/tools/*.md", async () => {
     mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
     workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
     emit: () => {},
+    react: () => {},
   });
 
   try {
@@ -56,6 +57,31 @@ test("工具说明逐字来自 prompt/tools/*.md", async () => {
         .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
         .trim(), `${name} 的说明不是文件里的原文`);
     }
+  } finally {
+    await fish.close();
+  }
+});
+
+test("人物档作为常驻 section 出现", async () => {
+  const fish = await openFish({
+    storage: new MemoryStorage(),
+    models: (() => {
+      const m = createModels();
+      m.setProvider(fauxProvider().provider);
+      return m;
+    })(),
+    model: { provider: "faux", modelId: "faux-1" },
+    promptRoot: PROMPTS,
+    mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
+    workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
+    emit: () => {},
+    react: () => {},
+  });
+  try {
+    const root = await fish.harness.root(ctx);
+    const sections = (await root.agent(ctx)).sections.map((s) => s.key);
+    assert.ok(sections.includes("people"), "人物档没进 system prompt");
+    assert.ok(sections.includes("persona"));
   } finally {
     await fish.close();
   }
@@ -74,6 +100,7 @@ test("pi-durable 的 compaction 已关掉", async () => {
     mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
     workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
     emit: () => {},
+    react: () => {},
   });
   try {
     assert.equal(fish.settings.compaction.enabled, false);
@@ -120,6 +147,7 @@ test("messages.md 里没有死文案，tools/ 里没有死文件", async () => {
     mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
     workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
     emit: () => {},
+    react: () => {},
   });
 
   try {

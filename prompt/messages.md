@@ -19,3 +19,11 @@ media_magic: 文件头不是图片，拒绝发送
 draw_done: 画好了，路径：{{path}}
 draw_empty: 没说要画什么
 draw_too_long: 描述太长了，压成一句话
+too_many_messages: 一次最多说 3 条，拆成几次
+react_ok: 贴上了
+react_bad: 那不是一个表情编号
+react_cooling: 刚贴过，别连着贴
+look_outside: 只能看群里的图：{{ref}}
+look_missing: 找不到这张图：{{ref}}
+look_type: 不是图片：{{ref}}
+look_used: 这一轮看过了，先说话

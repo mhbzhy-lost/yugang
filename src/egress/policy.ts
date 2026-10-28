@@ -1,8 +1,8 @@
 /**
  * 出口策略：结构校验 + 溯源校验。
  *
- * 这里只做机械判定，返回一个错误码；给模型看的文案在 prompt/errors.md 里。
- * 分开的理由：判定逻辑要能被单测穷举，文案要能被审查和改写。
+ * 出口是「一条消息序列」而不是一段文本：模型一次可以连说几句，每句都要单独过检。
+ * 这里只做机械判定，返回错误码；给模型看的文案在 prompt/messages.md 里。
  */
 import { statSync, readFileSync } from "node:fs";
 import { resolve, sep, extname } from "node:path";
@@ -10,7 +10,11 @@ import { resolve, sep, extname } from "node:path";
 export interface EgressLimits {
   maxChars: number;
   maxNewlines: number;
+  /** 一次调用最多几条。 */
+  maxMessages: number;
+  /** 一轮里最多几条。 */
   maxPerRun: number;
+  /** 一个群每分钟最多几条。 */
   maxPerMinute: number;
   mediaRoot: string;
   maxMediaBytes: number;
@@ -19,13 +23,14 @@ export interface EgressLimits {
 export const DEFAULT_LIMITS: Omit<EgressLimits, "mediaRoot"> = {
   maxChars: 120,
   maxNewlines: 2,
-  maxPerRun: 3,
-  maxPerMinute: 6,
+  maxMessages: 3,
+  maxPerRun: 4,
+  maxPerMinute: 8,
   maxMediaBytes: 8 * 1024 * 1024,
 };
 
-export interface EgressMessage {
-  text: string;
+export interface EgressIntent {
+  messages: readonly string[];
   media?: string;
 }
 
@@ -45,10 +50,13 @@ export interface EgressContext {
 export interface Rejection {
   code: RejectionCode;
   vars?: Record<string, string>;
+  /** 第几条出的问题，从 0 开始。 */
+  index?: number;
 }
 
 export const REJECTION_CODES = [
   "empty",
+  "too_many_messages",
   "too_long",
   "too_many_lines",
   "markdown",
@@ -67,35 +75,49 @@ export const REJECTION_CODES = [
 export type RejectionCode = (typeof REJECTION_CODES)[number];
 
 /** null 表示放行。 */
-export function validateOutbound(msg: EgressMessage, ctx: EgressContext): Rejection | null {
-  const trimmed = (msg.text ?? "").trim();
+export function validateOutbound(intent: EgressIntent, ctx: EgressContext): Rejection | null {
+  const messages = (intent.messages ?? []).map((m) => (m ?? "").trim());
 
-  if (trimmed.length === 0) return { code: "empty" };
-  if (trimmed.length > ctx.limits.maxChars) {
-    return { code: "too_long", vars: { length: String(trimmed.length), limit: String(ctx.limits.maxChars) } };
-  }
-  if (countNewlines(trimmed) > ctx.limits.maxNewlines) return { code: "too_many_lines" };
+  if (messages.length === 0) return { code: "empty" };
+  if (messages.length > ctx.limits.maxMessages) return { code: "too_many_messages" };
 
-  const markup = findMarkup(trimmed);
-  if (markup) return { code: "markdown", vars: { what: markup } };
-
-  const secret = findSecret(trimmed);
-  if (secret) return { code: "secret", vars: { what: secret } };
-
-  if (msg.media !== undefined) {
-    const media = validateMedia(msg.media, ctx.limits);
-    if (media) return media;
-  }
-
-  if (ctx.sentThisRun >= ctx.limits.maxPerRun) {
+  if (ctx.sentThisRun + messages.length > ctx.limits.maxPerRun) {
     return { code: "quota_run", vars: { count: String(ctx.sentThisRun) } };
   }
   const minuteAgo = ctx.now - 60_000;
   const recentMinute = ctx.recent.filter((m) => m.at >= minuteAgo);
-  if (recentMinute.length >= ctx.limits.maxPerMinute) return { code: "quota_minute" };
-  if (recentMinute.some((m) => sameText(m.text, trimmed))) return { code: "duplicate" };
+  if (recentMinute.length + messages.length > ctx.limits.maxPerMinute) {
+    return { code: "quota_minute" };
+  }
 
-  const overlap = findProvenanceLeak(trimmed, ctx.secrets);
+  for (const [index, text] of messages.entries()) {
+    const single = validateOne(text, ctx);
+    if (single) return { ...single, index };
+    if (recentMinute.some((m) => sameText(m.text, text))) return { code: "duplicate", index };
+  }
+
+  if (intent.media !== undefined) {
+    const media = validateMedia(intent.media, ctx.limits);
+    if (media) return media;
+  }
+
+  return null;
+}
+
+function validateOne(text: string, ctx: EgressContext): Rejection | null {
+  if (text.length === 0) return { code: "empty" };
+  if (text.length > ctx.limits.maxChars) {
+    return { code: "too_long", vars: { length: String(text.length), limit: String(ctx.limits.maxChars) } };
+  }
+  if (countNewlines(text) > ctx.limits.maxNewlines) return { code: "too_many_lines" };
+
+  const markup = findMarkup(text);
+  if (markup) return { code: "markdown", vars: { what: markup } };
+
+  const secret = findSecret(text);
+  if (secret) return { code: "secret", vars: { what: secret } };
+
+  const overlap = findProvenanceLeak(text, ctx.secrets);
   if (overlap) return { code: "provenance", vars: { overlap: String(overlap) } };
 
   return null;
@@ -141,7 +163,8 @@ const MAGIC: readonly Buffer[] = [
   Buffer.from("GIF8"),
 ];
 
-function validateMedia(rawPath: string, limits: EgressLimits): Rejection | null {
+/** 判断一个媒体路径能否发出去；look 工具也复用它。 */
+export function validateMedia(rawPath: string, limits: EgressLimits): Rejection | null {
   const root = resolve(limits.mediaRoot);
   const full = resolve(root, rawPath);
   if (full !== root && !full.startsWith(root + sep)) return { code: "media_outside" };

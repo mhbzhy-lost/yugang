@@ -14,6 +14,7 @@ import { createModels, type Models } from "@earendil-works/pi-ai/models";
 import {
   Harness,
   createRegistry,
+  defineEntry,
   defineExtension,
   section,
   type Conversation,
@@ -21,12 +22,25 @@ import {
   type Storage,
 } from "@earendil-works/pi-durable";
 import { DEFAULT_LIMITS, REJECTION_CODES, type EgressLimits } from "./egress/policy.ts";
-import { createSayTool, type OutboundPayload } from "./egress/say.ts";
-import { loadPrompts, type PromptSet } from "./prompts.ts";
+import { createSayTool, OutboundEntry, type OutboundPayload } from "./egress/say.ts";
+import { createReactTool } from "./egress/react.ts";
+import { loadPrompts, renderTemplate, type PromptSet } from "./prompts.ts";
 import { createTools } from "./tools/index.ts";
 import { createCompactor, type CompactResult, type Compactor } from "./compact.ts";
 
+/** 群档案作为一条 system 消息放进 transcript，只在建会话时写一次。 */
+export const GroupProfileEntry = defineEntry("fish.group-profile");
+
 const ctx = BACKGROUND_CONTEXT;
+
+export interface GroupProfile {
+  name: string;
+  groupId: string;
+  count: number;
+  owner: string;
+  master: string;
+  members: { nickname: string; userId: string }[];
+}
 
 export interface ModelRef {
   provider: string;
@@ -51,6 +65,8 @@ export interface FishOptions {
     maxChars?: number;
   };
   emit: (conversationId: ConversationId, payload: OutboundPayload) => void | Promise<void>;
+  /** 贴表情回应，只带表情编号；目标消息由宿主自己记。 */
+  react: (conversationId: ConversationId, emoji: string) => void | Promise<void>;
   now?: () => number;
 }
 
@@ -63,7 +79,8 @@ export interface Fish {
   toolNames: string[];
   /** 压缩一次上下文；没到阈值就什么都不做。 */
   compact(conversation: Conversation): Promise<CompactResult>;
-  group(groupKey: string): Promise<Conversation>;
+  /** 取（或创建）某个群的会话；profile 只在首次创建时写入。 */
+  group(groupKey: string, profile?: GroupProfile): Promise<Conversation>;
   close(): Promise<void>;
 }
 
@@ -80,10 +97,11 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   }
 
   const say = createSayTool({ limits, prompts, emit: options.emit, now });
+  const react = createReactTool({ prompts, react: options.react, now });
   const tools = createTools({ mediaRoot, prompts });
 
   // 启动即校验：每个工具都必须有一份 prompt/tools/<name>.md，缺了就起不来
-  for (const tool of [say, ...tools]) {
+  for (const tool of [say, react, ...tools]) {
     if (!prompts.tools[tool.name]) {
       throw new Error(`缺少 prompt/tools/${tool.name}.md`);
     }
@@ -91,8 +109,12 @@ export async function openFish(options: FishOptions): Promise<Fish> {
 
   const Fish = defineExtension({
     name: "fish",
-    tools: [say, ...tools],
-    sections: [section("persona", () => prompts.persona, { tag: false })],
+    tools: [say, react, ...tools],
+    sections: [
+      section("persona", () => prompts.persona, { tag: false }),
+      // 手工维护的人物档：比对话记忆更牢，和 handoff 互补
+      section("people", () => prompts.people, { tag: true }),
+    ],
   });
 
   const registry = createRegistry();
@@ -134,18 +156,37 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     models,
     prompts,
     settings,
-    toolNames: [say.name, ...tools.map((t) => t.name)],
+    toolNames: [say.name, react.name, ...tools.map((t) => t.name)],
     async compact(conversation) {
       if (!compactor) return { compacted: false, reason: "below_threshold" };
       return compactor.maybeCompact(conversation);
     },
-    group(groupKey) {
+    group(groupKey, profile) {
       let existing = groups.get(groupKey);
       if (!existing) {
         const cwd = join(workspaceRoot, safeName(groupKey));
         mkdirSync(cwd, { recursive: true });
         existing = harness.createConversation(
-          { ownership: { kind: "ownerless" }, agent: { model: options.model, cwd } },
+          {
+            ownership: { kind: "ownerless" },
+            agent: { model: options.model, cwd },
+            init: profile
+              ? async (tx, conversationId) => {
+                  const text = renderTemplate(prompts.groupProfile, {
+                    name: profile.name,
+                    groupId: profile.groupId,
+                    count: String(profile.count),
+                    owner: profile.owner,
+                    master: profile.master,
+                    members:
+                      profile.members.map((m) => `${m.nickname} / ${m.userId}`).join("\n") || "（拿不到名单）",
+                  });
+                  await tx.appendEntry(GroupProfileEntry, conversationId, {
+                    model: [{ role: "system", content: text, timestamp: now() }],
+                  });
+                }
+              : undefined,
+          },
           ctx,
         );
         groups.set(groupKey, existing);
