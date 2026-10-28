@@ -1,6 +1,8 @@
 /**
  * 凭据管理。key 只在本地文件里，命令行只报「有没有、多长、从哪来」。
  *
+ * 凭据落在 config/auth.json（和 models.json 同目录，已被 gitignore，权限 600）。
+ *
  *   npm run creds import            # 从 ~/pi-config/pi/auth.json 导一次（之后不再依赖它）
  *   npm run creds import -- --from /path/to/auth.json --force
  *   npm run creds show              # 看看每个 provider 有没有 key
@@ -10,9 +12,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, w
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-const VAR = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
-const TARGET = join(VAR, "credentials.json");
 const MODELS = resolve(process.env.YUGANG_MODELS ?? join(process.cwd(), "config", "models.json"));
+const TARGET = join(dirname(MODELS), "auth.json");
 
 const [command = "show", ...rest] = process.argv.slice(2);
 const flags = parseFlags(rest);

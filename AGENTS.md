@@ -69,7 +69,8 @@
 ### 6. 模型与凭据
 
 - **配置在仓库里**：`config/models.json` 写 provider 地址、模型清单、网关兼容值，可以 diff、可以 review
-- **凭据在仓库外**：`var/credentials.json`（gitignore，权限 600），只由 `npm run creds import` 写入；运行时**不读** `~/pi-config`
+- **凭据在仓库外**：`config/auth.json`（gitignore，权限 600），只由 `npm run creds import` 写入；运行时**不读** `~/pi-config`
+- `var/` 只放运行时产物（`fish.db` / `chatlog` / `media` / `sent.json`），不放凭据、不放配置
 - 不要在 `config/models.json` 里写 key，`npm test` 会扫
 - **key 只在内存里**：不进 prompt、不进 transcript、不进日志。`describeModel()` 只报"已加载 / N 字符"和来源路径
 - 网关兼容值（`maxTokensField: max_tokens`）在 `src/model-config.ts` 的 `DEFAULT_COMPAT` 里，模型自带 compat 可覆盖

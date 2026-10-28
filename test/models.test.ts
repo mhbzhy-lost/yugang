@@ -6,7 +6,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,12 +49,17 @@ test("仓库里的 config/models.json 能直接解析", () => {
   assert.deepEqual(config.models.map((m) => m.id), ["DeepSeek-Flash"]);
 });
 
+test("config/auth.json 必须在 gitignore 里", () => {
+  const ignore = readFileSync(fileURLToPath(new URL("../.gitignore", import.meta.url)), "utf8");
+  assert.match(ignore, /^config\/auth\.json$/m, "凭据文件没被忽略，一次 git add 就进仓库了");
+});
+
 test("仓库配置里不能有 key", () => {
   const raw = JSON.stringify(loadModelConfig({ modelsPath: REPO_MODELS, credentialsPath: "/nonexistent" }));
   assert.ok(!/sk-|api_key|"key":\s*"[^"]{20,}/.test(raw), "config/models.json 里疑似写了凭据");
 });
 
-test("凭据从 var/credentials.json 读，缺了就报缺失而不是崩", () => {
+test("凭据默认和 models.json 同目录（config/auth.json），缺了就报缺失而不是崩", () => {
   const { modelsPath, credentialsPath } = scratch();
   assert.equal(loadModelConfig({ modelsPath, credentialsPath }).key, FAKE_KEY);
   assert.equal(loadModelConfig({ modelsPath, credentialsPath: "/nonexistent" }).key, "");

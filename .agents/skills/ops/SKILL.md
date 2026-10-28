@@ -35,7 +35,7 @@ npm run ping
 输出包括 provider / model / baseUrl / 凭据状态（只有"已加载 / N 字符"和来源路径），
 以及一次最小补全的耗时和用量。
 
-- 报 `没有拿到 key` → 跑 `npm run creds show`；没有就 `npm run creds import`
+- 报 `没有拿到 key` → 跑 `npm run creds show`；没有就 `npm run creds import`（写 `config/auth.json`，已被 gitignore）
 - 报 `400 ... unsupported field "max_completion_tokens"` → `config/models.json` 里这个 provider 缺 `compat.maxTokensField: "max_tokens"`
 - 换模型不改代码：`MODEL_PROVIDER` / `MODEL_ID`，或改 `config/models.json` 的 `default`
 
@@ -66,3 +66,4 @@ node scripts/ops.ts probe
 - 不要为了省事把 `bash` / 通用 `read` / MCP 加回来（见 `AGENTS.md` 第 3 条）。
 - 不要手工改 `var/` 里的 `fish.db`：transcript 和 pi-durable 的状态是一体的。
 - 不要直接删 `var/sent.json`：那是幂等表，删了会导致崩溃恢复时重复发消息。
+- 提交前看一眼 `git status`：`config/auth.json` 不该出现在列表里（它在 `.gitignore`，但别手滑 `git add -f`）。

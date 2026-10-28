@@ -3,13 +3,12 @@
  *
  * 两件事分开：
  *   config/models.json      provider 地址、模型清单、兼容值 —— 跟着代码走，能 diff 能 review
- *   var/credentials.json    只有 key —— gitignore，由 `npm run creds` 写，权限 0600
+ *   config/auth.json        只有 key —— gitignore，由 `npm run creds` 写，权限 0600
  *
  * 这样仓库自洽：不依赖 ~/pi-config 存在，换机器也能跑（重新导一次凭据即可）。
  */
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export interface ProviderModelConfig {
   id: string;
@@ -51,14 +50,14 @@ export interface FishModelConfig {
 export interface LoadOptions {
   /** 默认 ./config/models.json。 */
   modelsPath?: string;
-  /** 默认 $YUGANG_HOME/credentials.json。 */
+  /** 默认和 models.json 同目录的 auth.json。 */
   credentialsPath?: string;
   providerId?: string;
   modelId?: string;
 }
 
-function varDir(): string {
-  return process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
+function defaultAuthPath(configSource: string): string {
+  return join(dirname(configSource), "auth.json");
 }
 
 export function loadModelConfig(options: LoadOptions = {}): FishModelConfig {
@@ -73,7 +72,7 @@ export function loadModelConfig(options: LoadOptions = {}): FishModelConfig {
   const provider = file.providers[providerId];
   if (!provider) throw new Error(`models.json 里没有 provider：${providerId}`);
 
-  const credentialsPath = options.credentialsPath ?? join(varDir(), "credentials.json");
+  const credentialsPath = options.credentialsPath ?? defaultAuthPath(configSource);
   const override = process.env.MODEL_API_KEY;
   const key = override ?? readKeyFile(credentialsPath, providerId);
 

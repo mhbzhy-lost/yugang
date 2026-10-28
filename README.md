@@ -146,9 +146,12 @@ test/               node --test，不需要网络和 API key
 **配置在仓库里，凭据在仓库外。**
 
 ```
-config/models.json       provider 地址、模型清单、网关兼容值   ← 跟着代码走，可 diff 可 review
-var/credentials.json     只有 key                              ← gitignore，权限 600
+config/models.json       provider 地址、模型清单、网关兼容值   ← 进仓库，可 diff 可 review
+config/auth.json         只有 key                              ← gitignore，权限 600
+config/auth.example.json 模板，说明格式                         ← 进仓库
 ```
+
+`var/` 只放运行时生成的东西（数据库、原话簿、媒体、幂等表），不放凭据。
 
 `config/models.json` 是自己的一份配置，不依赖 `~/pi-config` 是否存在：
 
@@ -169,7 +172,7 @@ var/credentials.json     只有 key                              ← gitignore�
 凭据只导一次，之后运行时不碰任何外部配置：
 
 ```bash
-npm run creds import     # 从 ~/pi-config/pi/auth.json 导一次，写 var/credentials.json（600）
+npm run creds import     # 从 ~/pi-config/pi/auth.json 导一次，写 config/auth.json（600）
 npm run creds show       # 每个 provider 有没有 key、多少字符
 npm run creds clear      # 删掉
 npm run ping             # 读凭据 → 最小补全 → 打印模型/耗时/用量
