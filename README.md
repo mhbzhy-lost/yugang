@@ -160,7 +160,7 @@ var/credentials.json     只有 key                              ← gitignore�
       "api": "openai-completions",
       "baseUrl": "http://classi.jini.zeroling.com:8080/qoder/v1",
       "compat": { "maxTokensField": "max_tokens" },
-      "models": [ { "id": "DeepSeek-Flash", "contextWindow": 1000000, "maxTokens": 32000, "input": ["text", "image"] } ]
+      "models": [ { "id": "DeepSeek-Flash", "contextWindow": 1000000, "maxTokens": 32000 } ]
     }
   }
 }
@@ -175,7 +175,10 @@ npm run creds clear      # 删掉
 npm run ping             # 读凭据 → 最小补全 → 打印模型/耗时/用量
 ```
 
-换机器只要重新导一次凭据；换模型改 `MODEL_PROVIDER` / `MODEL_ID`，换网关直接改 `config/models.json`。
+只抄了 `DeepSeek-Flash` 一个模型。要加别的，往 `models[].` 里加一条即可——同网关下的
+`DeepSeek-V4-Pro`、`Kimi-K3.1-Pro` 都在 `~/pi-config` 里能查到参数。
+
+换机器只要重新导一次凭据；换模型改 `MODEL_PROVIDER` / `MODEL_ID`。
 
 `key` 只在内存里：不写 env、不进 prompt、不进 transcript，`describeModel()` 只报「已加载 / N 字符」和来源路径。
 

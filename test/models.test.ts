@@ -46,7 +46,7 @@ test("仓库里的 config/models.json 能直接解析", () => {
   assert.equal(config.providerId, "qoder-pool");
   assert.equal(config.modelId, "DeepSeek-Flash");
   assert.match(config.baseUrl, /^http/);
-  assert.ok(config.models.length > 1);
+  assert.deepEqual(config.models.map((m) => m.id), ["DeepSeek-Flash"]);
 });
 
 test("仓库配置里不能有 key", () => {
