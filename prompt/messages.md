@@ -17,7 +17,6 @@ media_type: 不支持的图片格式：{{ext}}
 media_big: 图片太大了（{{size}}MB）
 media_magic: 文件头不是图片，拒绝发送
 read_outside: 这个路径不在你能读的范围内（只限本群工作目录和媒体目录）：{{path}}
-read_missing: 读不到这个文件：{{path}}
 draw_done: 画好了，路径：{{path}}
 draw_empty: 没说要画什么
 draw_too_long: 描述太长了，压成一句话

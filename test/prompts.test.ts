@@ -6,7 +6,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -16,6 +16,7 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
 import { auditPrompts, loadPrompts, parseMessageTable, renderTemplate } from "../src/prompts.ts";
 import { scanDir, scanSource } from "../src/prompt-lint.ts";
+import { REJECTION_CODES } from "../src/egress/policy.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -104,3 +105,49 @@ test("模板缺变量直接报错，不留半渲染的 prompt", () => {
 test("messages.md 格式错误会报出行号", () => {
   assert.throws(() => parseMessageTable("ok: fine\n这不是 key value", "m.md"), /m\.md:2/);
 });
+
+test("messages.md 里没有死文案，tools/ 里没有死文件", async () => {
+  const prompts = loadPrompts(PROMPTS);
+  const fish = await openFish({
+    storage: new MemoryStorage(),
+    models: (() => {
+      const m = createModels();
+      m.setProvider(fauxProvider().provider);
+      return m;
+    })(),
+    model: { provider: "faux", modelId: "faux-1" },
+    promptRoot: PROMPTS,
+    mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
+    workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
+    emit: () => {},
+  });
+
+  try {
+    // 文案 key：= 出口策略会返回的错误码 ∪ 工具代码里显式引用的 key
+    const referenced = new Set<string>([...REJECTION_CODES, "say_sent"]);
+    for (const source of sourceLiterals(join(ROOT, "src"))) {
+      for (const match of source.matchAll(/messages\["([a-z0-9_]+)"\]/g)) referenced.add(match[1]);
+    }
+    const defined = new Set(Object.keys(prompts.messages));
+    assert.deepEqual([...defined].filter((k) => !referenced.has(k)), [], "messages.md 里有没人用的文案");
+
+    // 工具 prompt：每个文件都要对应一个真实注册的工具
+    assert.deepEqual(
+      Object.keys(prompts.tools).filter((name) => !fish.toolNames.includes(name)),
+      [],
+      "prompt/tools/ 里有不对应任何工具的文件",
+    );
+  } finally {
+    await fish.close();
+  }
+});
+
+function sourceLiterals(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...sourceLiterals(path));
+    else if (entry.name.endsWith(".ts")) out.push(readFileSync(path, "utf8"));
+  }
+  return out;
+}

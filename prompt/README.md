@@ -9,6 +9,12 @@
 | `tools/<name>.md` | 每个工具的 description + 参数说明（文件名 = 工具名） | 每次请求（工具定义） |
 | `messages.md` | 工具回给模型的文案：拒绝理由 + 发送回执 | 被拒/成功时 |
 
+现在实际在用的文件只有 5 个：`persona.md`、`messages.md`、`tools/{say,read,draw}.md`。
+`npm test` 会检查两件事，防止这里变成垃圾堆：
+
+- `messages.md` 里每一条都必须被代码引用（错误码集合 ∪ `messages["x"]` 字面量）
+- `prompt/tools/*.md` 每一个都必须对应一个真实注册的工具
+
 规则：
 
 - `{{name}}` 是严格替换，缺变量直接抛错——不允许半渲染的 prompt 上线
