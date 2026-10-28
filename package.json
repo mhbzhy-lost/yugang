@@ -1,0 +1,16 @@
+{
+  "name": "yugang",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "鱼缸：基于 pi-durable 的 QQ 群「群员」，出口即能力",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test test/",
+    "start": "node src/index.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-durable": "1.4.0"
+  }
+}
