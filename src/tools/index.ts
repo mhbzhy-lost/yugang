@@ -14,7 +14,6 @@ import { createFsTools } from "./fs.ts";
 import { createRestartTool } from "./restart.ts";
 import { createTreeTool } from "./tree.ts";
 import { createTestTool } from "./test.ts";
-import { createImggenTool } from "./imggen.ts";
 import { createDrawTool } from "./draw.ts";
 import { createTagsTool } from "./tags.ts";
 
@@ -29,8 +28,8 @@ export interface ToolDeps {
   searchKey?: string;
   /** 主人 QQ：fs/restart 自改工具的身份闸。缺省则这些工具不可用（永远拒绝）。 */
   master?: string;
-  /** ModelScope API-KEY：生图凭据。缺省则 imggen 调用会以可读错误回应。 */
-  imggenKey?: string;
+  /** ModelScope API-KEY：本地 SD 画不出来时 draw 的兜底凭据。缺省则只剩本地画图。 */
+  modelscopeKey?: string;
   /** SD WebUI（Windows 宿主机）的 baseUrl；给了才有本地画图。 */
   sdUrl?: string;
   /** danbooru.csv 路径；给了才能查 tag 词表。 */
@@ -59,8 +58,7 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     createVideoTool({ prompts: deps.prompts }),
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
     ...fsTools,
-    createImggenTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, key: deps.imggenKey }),
-    createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl, bypassOf: deps.bypassOf }),
+    createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl, bypassOf: deps.bypassOf, modelscopeKey: deps.modelscopeKey }),
     createTagsTool({ prompts: deps.prompts, csvPath: deps.tagsCsv }),
     ...treeTool,
     ...testTool,

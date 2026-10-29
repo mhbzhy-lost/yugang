@@ -16,6 +16,7 @@ import { connect } from "node:net";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
+import { generateWithModelScope } from "../media/modelscope.ts";
 
 export interface DrawDeps {
   prompts: PromptSet;
@@ -26,6 +27,10 @@ export interface DrawDeps {
   fetchImpl?: typeof fetch;
   /** submissionId → 本轮触发消息自带的 bypass 段；拼在最终 positive prompt 末尾。 */
   bypassOf?: (roundId: unknown) => string | undefined;
+  /** ModelScope 生图凭据：本地 SD 画不出来时自动兜底用。 */
+  modelscopeKey?: string;
+  /** 兜底用的模型 id；缺省 Qwen/Qwen-Image。 */
+  modelscopeModel?: string;
 }
 
 const DRAWN = new Map<string, unknown>();
@@ -109,7 +114,7 @@ export function createDrawTool(deps: DrawDeps) {
       if (!positive || positive.length > 1000) {
         throw new Error(deps.prompts.messages["draw_prompt"] ?? "draw_prompt");
       }
-      if (!deps.baseUrl) {
+      if (!deps.baseUrl && !deps.modelscopeKey) {
         throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
       }
 
@@ -120,39 +125,41 @@ export function createDrawTool(deps: DrawDeps) {
       }
       const stash = round !== undefined ? deps.bypassOf?.(round) : undefined;
 
-      // 私网真实地址走环回隧道；公网地址直连
-      const realUrl = new URL(deps.baseUrl);
-      const realHost = realUrl.hostname;
-      const realPort = Number(realUrl.port || 80);
-      const localPort = Number(process.env.SD_TUNNEL_PORT ?? 7861);
-      const useTunnel = PRIVATE_RE.test(realHost) && realHost !== "127.0.0.1";
-      if (useTunnel) await ensureTunnel(realHost, realPort, localPort);
-      const target = useTunnel ? `http://127.0.0.1:${localPort}/sdapi/v1/txt2img` : `${deps.baseUrl}/sdapi/v1/txt2img`;
+      // 本地 SD 出图；没配地址、隧道不通、HTTP 非 2xx、无图都算失败，交给外层兜底
+      const drawLocal = async (): Promise<string> => {
+        if (!deps.baseUrl) throw new Error("no local sd url");
+        // 私网真实地址走环回隧道；公网地址直连
+        const realUrl = new URL(deps.baseUrl);
+        const realHost = realUrl.hostname;
+        const realPort = Number(realUrl.port || 80);
+        const localPort = Number(process.env.SD_TUNNEL_PORT ?? 7861);
+        const useTunnel = PRIVATE_RE.test(realHost) && realHost !== "127.0.0.1";
+        if (useTunnel) await ensureTunnel(realHost, realPort, localPort);
+        const target = useTunnel ? `http://127.0.0.1:${localPort}/sdapi/v1/txt2img` : `${deps.baseUrl}/sdapi/v1/txt2img`;
 
-      const body = JSON.stringify({
-        prompt: PRESET_POSITIVE + positive + (PRESETS[args.preset ?? "default"] ?? "") + (stash ? `, ${stash}` : ""),
-        negative_prompt: PRESET_NEGATIVE + (args.negative ?? "").trim(),
-        ...PRESET,
-        ...(args.highres ? HIRES : {}),
-      });
-      const post = async (): Promise<string> => {
-        let last: unknown;
-        for (let i = 0; i < 3; i++) {
-          try {
-            const res = await doFetch(target, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body,
-              signal: AbortSignal.timeout(timeoutMs),
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return await res.text();
-          } catch (e) { last = e; await new Promise((r) => setTimeout(r, 2000)); }
-        }
-        throw last;
-      };
+        const body = JSON.stringify({
+          prompt: PRESET_POSITIVE + positive + (PRESETS[args.preset ?? "default"] ?? "") + (stash ? `, ${stash}` : ""),
+          negative_prompt: PRESET_NEGATIVE + (args.negative ?? "").trim(),
+          ...PRESET,
+          ...(args.highres ? HIRES : {}),
+        });
+        const post = async (): Promise<string> => {
+          let last: unknown;
+          for (let i = 0; i < 3; i++) {
+            try {
+              const res = await doFetch(target, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body,
+                signal: AbortSignal.timeout(timeoutMs),
+              });
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              return await res.text();
+            } catch (e) { last = e; await new Promise((r) => setTimeout(r, 2000)); }
+          }
+          throw last;
+        };
 
-      try {
         let raw: string;
         try {
           raw = await post();
@@ -172,14 +179,41 @@ export function createDrawTool(deps: DrawDeps) {
         mkdirSync(outDir, { recursive: true });
         const file = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}.png`;
         writeFileSync(join(outDir, file), Buffer.from(b64, "base64"));
+        return file;
+      };
+
+      try {
+        const file = await drawLocal();
         if (round !== undefined) DRAWN.set(api.conversationId, round);
         console.log(`[fish] draw ok: ${positive.slice(0, 40)}${stash ? " (+bypass)" : ""}`);
         return {
           output: [{ type: "text", text: renderTemplate(deps.prompts.messages["draw_done"] ?? "gen/{{file}}", { file }) }],
         };
       } catch (error) {
-        console.error(`[fish] draw error: ${error instanceof Error ? error.message : "unknown"}`);
-        throw new Error((deps.prompts.messages["draw_failed"] ?? "draw_failed") + `: ${error instanceof Error ? error.message : "unknown"}`);
+        const detail = error instanceof Error ? error.message : "unknown";
+        console.error(`[fish] draw local failed: ${detail}`);
+        // 本地画不出来（Windows 关机、隧道未就绪、显存排队超时）→ 自动走模型服务，
+        // 用**原始用户描述**：质量词注入、negative/preset/highres 都是本地 SD 的东西。
+        if (!deps.modelscopeKey) {
+          throw new Error((deps.prompts.messages["draw_failed"] ?? "draw_failed") + `: ${detail}`);
+        }
+        try {
+          const file = await generateWithModelScope({
+            key: deps.modelscopeKey,
+            ...(deps.modelscopeModel ? { model: deps.modelscopeModel } : {}),
+            prompt: positive,
+            mediaRoot: deps.mediaRoot,
+          });
+          if (round !== undefined) DRAWN.set(api.conversationId, round);
+          console.log(`[fish] draw fallback modelscope ok: ${positive.slice(0, 40)}`);
+          return {
+            output: [{ type: "text", text: renderTemplate(deps.prompts.messages["draw_done"] ?? "gen/{{file}}", { file }) }],
+          };
+        } catch (fallbackError) {
+          const why = fallbackError instanceof Error ? fallbackError.message : "unknown";
+          console.error(`[fish] draw fallback failed: ${why}`);
+          throw new Error((deps.prompts.messages["draw_failed"] ?? "draw_failed") + `: ${detail} / ${why}`);
+        }
       }
     },
   });

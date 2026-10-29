@@ -123,7 +123,7 @@ const fish = await openFish({
       return undefined;
     }
   })(),
-  imggenKey: process.env.MODELSCOPE_KEY,
+  modelscopeKey: process.env.MODELSCOPE_KEY,
   sdUrl: process.env.SD_WEBUI_URL,
   // （sdUrl 存在时见启动处的邻居保温定时器）
   tagsCsv: join(HOME, "danbooru.csv"),
