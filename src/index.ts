@@ -109,6 +109,9 @@ const fish = await openFish({
   storage: await openNodeSqliteStorage(join(HOME, "fish.db")),
   models,
   model: mainModel,
+  // 思考档位：off|minimal|low|medium|high|xhigh|max。最低可用思考档是 low
+  // （deepseek 的 minimal 映射为 null，等于不支持），缺省 off
+  thinkingLevel: (process.env.THINKING_LEVEL ?? "off") as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max",
   // look 的视觉描述模型：缺省用主模型自身；可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型
   visionModel: process.env.VISION_MODEL_ID
     ? { provider: process.env.VISION_PROVIDER ?? config.modelConfig.providerId, modelId: process.env.VISION_MODEL_ID }

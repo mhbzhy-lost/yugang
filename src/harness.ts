@@ -78,6 +78,8 @@ export interface FishOptions {
   storage: Storage;
   models?: Models;
   model: ModelRef;
+  /** 思考档位；缺省 off。最低可用思考档是 low（deepseek 的 minimal 不支持）。 */
+  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   /** prompt 目录：人格、工具说明、工具文案。 */
   promptRoot: string;
   /** 媒体白名单根目录（发图只能发这里面的）。 */
@@ -225,7 +227,10 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       const conversation = await harness.conversation(id as ConversationId, ctx);
       if (!conversation) continue;
       await harness.commit(async (tx) => {
-        await configure(tx, id as ConversationId, { model: options.model });
+        await configure(tx, id as ConversationId, {
+          model: options.model,
+          ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
+        });
       }, ctx);
     }
   }
@@ -388,6 +393,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
               // 默认人格不传 extensions：跟 host 钉住的默认选择，存量会话行为不变
               agent: {
                 model: options.model,
+                ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
                 cwd,
                 ...(extension ? { extensions: [extension] } : {}),
               },
