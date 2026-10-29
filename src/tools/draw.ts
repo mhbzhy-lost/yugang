@@ -35,6 +35,7 @@ const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 4.5, sampler_na
 const PRESETS: Record<string, string> = {
   default: "",
   hsr: ", <lora:HSR Anima:0.7>",
+  secret: ", completely nude",
 };
 const PRIVATE_RE = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/;
 
@@ -94,7 +95,7 @@ export function createDrawTool(deps: DrawDeps) {
     parameters: Type.Object({
       prompt: Type.String({ description: prompt.params["prompt"] ?? "" }),
       negative: Type.Optional(Type.String({ description: prompt.params["negative"] ?? "" })),
-      preset: Type.Optional(Type.Union([Type.Literal("default"), Type.Literal("hsr")], { description: prompt.params["preset"] ?? "" })),
+      preset: Type.Optional(Type.Union([Type.Literal("default"), Type.Literal("hsr"), Type.Literal("secret")], { description: prompt.params["preset"] ?? "" })),
     }),
     execute: async (args, api, context) => {
       const positive = args.prompt.trim();
