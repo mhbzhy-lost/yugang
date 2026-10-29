@@ -54,6 +54,16 @@ const config = {
   dailyQuota: Number(process.env.DAILY_QUOTA ?? "40"),
   cooldownMs: Number(process.env.COOLDOWN_MS ?? "90000"),
   ambientChance: Number(process.env.AMBIENT_CHANCE ?? "0.1"),
+  // 按群覆盖随机门："群号:值,群号:值"；未列出的群用上面的全局值
+  ambientChanceByGroup: Object.fromEntries(
+    (process.env.AMBIENT_CHANCE_BY_GROUP ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => s.split(":"))
+      .filter((p) => p.length === 2 && Number.isFinite(Number(p[1])))
+      .map(([g, v]) => [g, Number(v)]),
+  ),
   // 周报群：每周日 21 点把这一周的群画像发到这个群（留空 = 不发）
   weeklyGroupId: process.env.WEEKLY_GROUP_ID ?? "",
 };
@@ -323,6 +333,7 @@ const gate = createGate({
   dailyQuota: config.dailyQuota,
   cooldownMs: config.cooldownMs,
   ambientChance: config.ambientChance,
+  ambientChanceByGroup: Object.keys(config.ambientChanceByGroup).length > 0 ? config.ambientChanceByGroup : undefined,
 });
 
 /** 群周报：周日 21 点整点档私聊发给主人一次，var/weekly.json 记住发过的周防止重发。 */

@@ -30,6 +30,8 @@ export interface GateOptions {
   cooldownMs: number;
   /** 非 @ 消息进入打分的概率（随机粗筛，零成本挡掉大多数）。 */
   ambientChance: number;
+  /** 按群覆盖的随机门概率（群号 → 值）；未列出的群用 ambientChance。值为 0 = 该群只应答 @，不回闲聊。 */
+  ambientChanceByGroup?: Record<string, number>;
   now?: () => number;
   random?: () => number;
 }
@@ -72,8 +74,9 @@ export function createGate(options: GateOptions): Gate {
       // 要让鱼看合集：回复合集并 @，或发合集时直接 @。
       if ((msg.forwardIds?.length ?? 0) > 0) return { enter: false, reason: "forward_ignored" };
 
-      // 随机粗筛：绝大多数非 @ 消息到这就结束，不花模型调用
-      if (random() > options.ambientChance) return { enter: false, reason: "sampled_out" };
+      // 随机粗筛：绝大多数非 @ 消息到这就结束，不花模型调用；可按群覆盖（0=该群不回闲聊）
+      const chance = options.ambientChanceByGroup?.[String(msg.groupId)] ?? options.ambientChance;
+      if (random() > chance) return { enter: false, reason: "sampled_out" };
 
       // 粗筛过的再打分，值得开口才进
       const verdict = await askGate(options, msg, recent);
