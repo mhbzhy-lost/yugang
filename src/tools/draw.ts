@@ -7,6 +7,8 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
+import { spawn } from "node:child_process";
+import { connect } from "node:net";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
@@ -27,6 +29,36 @@ const PRESET_POSITIVE = "masterpiece, best quality, score_7, score_8, score_9, (
 const PRESET_NEGATIVE = "low quality, worst quality, score_1, score_2, score_3, early, old, shiny skin, ";
 const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 4.5 };
 
+
+/** 懒加载环回隧道：macOS 本地网络权限不认裸 node（孤儿进程无责任 App），
+ *  Apple 签名的 /usr/bin/ssh 豁免——draw 时拉起 ssh -L 常驻，鱼只连 127.0.0.1。
+ *  隧道进程孤儿化也豁免，崩了下一次 draw 会重建。 */
+let tunnelChild: ReturnType<typeof spawn> | null = null;
+function ensureTunnel(realHost: string, realPort: number, localPort: number): Promise<void> {
+  const tryPort = (): Promise<boolean> =>
+    new Promise((resolve) => {
+      const probe = connect({ host: "127.0.0.1", port: localPort, timeout: 800 });
+      probe.on("connect", () => { probe.destroy(); resolve(true); });
+      probe.on("error", () => resolve(false));
+      probe.on("timeout", () => { probe.destroy(); resolve(false); });
+    });
+  return (async (): Promise<void> => {
+    if (await tryPort()) return;
+    if (tunnelChild && tunnelChild.exitCode === null) tunnelChild.kill();
+    tunnelChild = spawn(
+      "/usr/bin/ssh",
+      ["-N", "-L", `127.0.0.1:${localPort}:${realHost}:${realPort}`, "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", `${process.env.USER ?? "macmini-user"}@127.0.0.1`],
+      { detached: true, stdio: "ignore" },
+    );
+    tunnelChild.unref();
+    for (let i = 0; i < 16; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (await tryPort()) return;
+    }
+    throw new Error("tunnel not ready");
+  })();
+}
+
 export function createDrawTool(deps: DrawDeps) {
   const prompt = requireTool(deps.prompts, "draw");
   const timeoutMs = deps.timeoutMs ?? 180_000;
@@ -45,6 +77,14 @@ export function createDrawTool(deps: DrawDeps) {
       if (!deps.baseUrl) {
         throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
       }
+      // 真实地址走环回隧道（懒加载），WebUI 地址仅用来取 host/port
+      const realUrl = new URL(deps.baseUrl);
+      const realHost = realUrl.hostname;
+      const realPort = Number(realUrl.port || 80);
+      const localPort = Number(process.env.SD_TUNNEL_PORT ?? 7861);
+      if (/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(realHost) && realHost !== "127.0.0.1") {
+        await ensureTunnel(realHost, realPort, localPort);
+      }
       const positive = args.prompt.trim();
       if (!positive || positive.length > 1000) {
         throw new Error(deps.prompts.messages["draw_prompt"] ?? "draw_prompt");
@@ -60,7 +100,8 @@ export function createDrawTool(deps: DrawDeps) {
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       // 裸 http 绕开 undici：活体进程里 fetch 对局域网稳定 EHOSTUNREACH，裸 socket 全通
       const post = async (): Promise<string> => {
-        const u = new URL(`${deps.baseUrl}/sdapi/v1/txt2img`);
+        const useTunnel = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(realHost) && realHost !== "127.0.0.1";
+        const u = useTunnel ? new URL(`http://127.0.0.1:${localPort}/sdapi/v1/txt2img`) : new URL(`${deps.baseUrl}/sdapi/v1/txt2img`);
         const body = JSON.stringify({
           prompt: PRESET_POSITIVE + positive,
           negative_prompt: PRESET_NEGATIVE + (args.negative ?? "").trim(),
