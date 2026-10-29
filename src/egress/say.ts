@@ -47,9 +47,10 @@ export function createSayTool(deps: SayDeps) {
   const now = deps.now ?? Date.now;
   const prompt = requireTool(deps.prompts, "say");
 
-  // 轮计数：会话 → 最近说过话的那一轮（pi.live.run.taskId，一次 agent loop 一个）。
+  // 轮计数：会话 → { 轮标识, 已开口次数 }（pi.live.run.taskId，一次 agent loop 一个）。
+  // 上限 3 次只是闸门：不鼓励多说，一句能说完的事别拆三条（人格书仍这么引导）。
   // 轮标识由 pi-durable 自己维护，say 执行时现读，不需要外部重置信号；只在内存，重启丢一次不致命。
-  const saidIn = new Map<ConversationId, number>();
+  const saidIn = new Map<ConversationId, { round: number; count: number }>();
 
   return defineTool({
     name: "say",
@@ -95,10 +96,11 @@ export function createSayTool(deps: SayDeps) {
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
       if (round !== undefined && args.media === undefined) {
-        if (saidIn.get(api.conversationId) === round) {
+        const said = saidIn.get(api.conversationId);
+        if (said?.round === round && said.count >= 3) {
           throw new Error(deps.prompts.messages["say_once"] ?? "already said this round");
         }
-        saidIn.set(api.conversationId, round);
+        saidIn.set(api.conversationId, { round, count: said?.round === round ? said.count + 1 : 1 });
       }
       // 把本轮触发消息钉进 payload：出口层引用/强制引用都用它，不会被后续消息顶掉
       const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;

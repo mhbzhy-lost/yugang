@@ -24,7 +24,7 @@ export const DEFAULT_LIMITS: Omit<EgressLimits, "mediaRoot"> = {
   maxChars: 120,
   maxNewlines: 2,
   maxMessages: 1,
-  maxPerRun: 1,
+  maxPerRun: 3,
   maxPerMinute: 6,
   // media 只转发文件不进模型上下文，QQ 端容量大：媒体大小限制放宽到 32MB
   maxMediaBytes: 32 * 1024 * 1024,
