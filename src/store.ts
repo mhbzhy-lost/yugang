@@ -10,8 +10,10 @@ import { defineDoc } from "@earendil-works/pi-durable";
 import type { OutboundPayload } from "./egress/say.ts";
 
 export interface ChatsState {
-  /** chatKey（qq:group:123）→ conversationId */
+  /** chatKey（qq:group:123）→ conversationId；人格会话的键是 `chatKey#人格名` */
   chats: Record<string, number>;
+  /** chatKey → 当前人格名；旧档没有这个字段，读取侧一律 `doc?.personas?.[chatKey] ?? "默认"`，写侧先 `??= {}`。 */
+  personas?: Record<string, string>;
 }
 
 export interface OutboxRecord extends OutboundPayload {
@@ -27,7 +29,7 @@ export const ChatsDoc = defineDoc<ChatsState>({
   kind: "fish.chats",
   version: 1,
   scope: "session",
-  initial: () => ({ chats: {} }),
+  initial: () => ({ chats: {}, personas: {} }),
   checkpointWhen: () => true,
 });
 

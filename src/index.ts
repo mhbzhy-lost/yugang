@@ -27,6 +27,8 @@ import { localDay } from "./usage.ts";
 import { weeklyStats, renderWeekly } from "./stats.ts";
 import { createUsageLedger, sumUsage } from "./usage.ts";
 import { bypassAllowed, splitBypass } from "./bypass.ts";
+import { ChatsDoc } from "./store.ts";
+import { renderTemplate } from "./prompts.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -215,16 +217,75 @@ async function salvagePlainReply(conv: Conversation, msg: IncomingMessage): Prom
   }
 }
 
+/** 映射键（chatKey#人格）→ 原始 chatKey：emit 按 Number() 解析群号/QQ 号，带后缀会 NaN。 */
+function baseChatKey(key: string): string {
+  const at = key.lastIndexOf("#");
+  return at > 0 ? key.slice(0, at) : key;
+}
+
 async function conversationFor(chatKey: string): Promise<Conversation> {
-  let conv = conversations.get(chatKey);
+  // 当前人格：非变更式读取（严禁对 snapshot() 结果赋值）
+  const snapshot = await fish.harness.snapshot(ChatsDoc, ctx);
+  const persona = snapshot?.personas?.[chatKey] ?? "默认";
+  // 悬空人格名与 group() 同规则回退默认，内存缓存键才能对上持久化映射键
+  const effective = persona !== "默认" && !fish.personas.includes(persona) ? "默认" : persona;
+  const mapKey = effective === "默认" ? chatKey : `${chatKey}#${effective}`;
+  let conv = conversations.get(mapKey);
   if (!conv) {
     const groupId = chatKey.startsWith("qq:group:") ? Number(chatKey.slice("qq:group:".length)) : undefined;
     const profile = groupId ? await profileFor(groupId) : undefined;
-    conv = await fish.group(chatKey, profile);
-    conversations.set(chatKey, conv);
+    conv = await fish.group(chatKey, profile, persona);
+    conversations.set(mapKey, conv);
+    // 路由永远用原始 chatKey（剥离 #人格 后缀），否则 emit 解析不出数字 id
     chatKeys.set(conv.id, chatKey);
   }
   return conv;
+}
+
+/**
+ * 主人 / 指令通道：机械执行并经 outbox 回执，不进 gate、不进模型上下文。
+ * 返回机械回复文本；null = 非指令（非主人或非 / 前缀），调用方走原链路。
+ * 回执固定落「切换前」的当前人格会话（conversationFor 惰性获取，群没说过话则
+ * 惰性建默认会话，属可接受副作用）；切换动作本身绝不预建目标人格会话。
+ */
+async function handleCommand(msg: IncomingMessage): Promise<string | null> {
+  if (!msg.text.startsWith("/") || String(msg.userId) !== config.master) return null;
+  const conv = await conversationFor(msg.chatKey); // 切换前先定回执落点
+  const list = fish.personas.join("、");
+  const target = /^\/切换人格\s+(\S+)/.exec(msg.text);
+  let text: string;
+  let media: string | undefined;
+  if (msg.text === "/查询可用人格") {
+    text = renderTemplate(fish.prompts.messages["cmd_personas"] ?? "", { list });
+  } else if (target) {
+    const persona = target[1];
+    if (fish.personas.includes(persona)) {
+      // 切换只写状态：后续 conversationFor 按映射键换会话，不新建/不删除会话
+      await fish.harness.commit(async (tx) => {
+        const doc = await tx.doc(ChatsDoc);
+        doc.personas ??= {};
+        doc.personas[msg.chatKey] = persona;
+      }, ctx);
+      text = renderTemplate(fish.prompts.messages["cmd_switched"] ?? "", { persona });
+      // 人设图存在才带（相对 mediaRoot 引用，无 media/ 层）；默认人格不配图
+      media = existsSync(join(config.mediaRoot, "personas", `${persona}.png`)) ? `personas/${persona}.png` : undefined;
+    } else {
+      text = renderTemplate(fish.prompts.messages["cmd_bad_persona"] ?? "", { persona, list });
+    }
+  } else {
+    text = renderTemplate(fish.prompts.messages["cmd_unknown"] ?? "", { cmd: msg.text.split(/\s+/)[0] });
+  }
+  await fish.enqueue(conv.id, {
+    items: [text],
+    ...(media ? { media } : {}),
+    quote: true,
+    quoteId: msg.messageId,
+    quoteForce: true,
+    at: Date.now(),
+    key: `cmd:${msg.messageId}`, // 幂等键：崩溃重放不重复发
+  });
+  await drainLoop();
+  return text;
 }
 
 // 启动先把上次没发出去的消息补发掉
@@ -305,6 +366,9 @@ onebot.onMessage((raw) => {
       ? splitBypass(msg.text)
       : null;
     if (bypass) msg.text = bypass.clean || (fish.prompts.messages["bypass_placeholder"] ?? "(draw)");
+
+    // 主人 / 指令：bypass 剥离后、闸前拦截——机械秒回，不进 gate、不进 conversation
+    if ((await handleCommand(msg)) !== null) return;
 
     const stat = spokenToday.get(msg.chatKey);
     const count = stat && stat.day === today() ? stat.count : 0;
@@ -411,9 +475,11 @@ if (!config.master) {
 }
 
 // 先把持久化的群映射读出来，这样 drain 知道该往哪个群发
-const known = await fish.harness.snapshot((await import("./store.ts")).ChatsDoc, ctx);
+const known = await fish.harness.snapshot(ChatsDoc, ctx);
 for (const [chatKey, conversationId] of Object.entries(known?.chats ?? {})) {
-  chatKeys.set(String(conversationId), chatKey);
+  // 存键可能是映射键（chatKey#人格）：剥离后缀再灌 chatKeys，
+  // 否则重启后补发 Number("qq:group:123#鲸鱼娘")=NaN，丢消息且打断后续会话补发
+  chatKeys.set(String(conversationId), baseChatKey(chatKey));
 }
 // 重启遗言：restart 工具写下的 restart.pending.json，起来后补发那句，发完即删
 const pendingPath = join(process.cwd(), "var", "restart.pending.json");

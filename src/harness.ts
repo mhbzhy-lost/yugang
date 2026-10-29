@@ -19,7 +19,9 @@ import {
   section,
   type Conversation,
   type ConversationId,
+  type Extension,
   type Storage,
+  type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { DEFAULT_LIMITS, REJECTION_CODES, type EgressLimits } from "./egress/policy.ts";
 import { createSayTool, OutboundEntry, type OutboundPayload } from "./egress/say.ts";
@@ -31,6 +33,29 @@ import { ChatsDoc, OutboxDoc } from "./store.ts";
 
 /** 群档案作为一条 system 消息放进 transcript，只在建会话时写一次。 */
 export const GroupProfileEntry = defineEntry("fish.group-profile");
+
+/** 人格名的「默认」哨兵：默认人格的会话键不带后缀，也不另外选扩展。 */
+export const DEFAULT_PERSONA = "默认";
+
+/**
+ * 人格 = 一个 Fish 扩展实例：默认人格叫 `fish`（人格来自 prompt/persona.md），
+ * 其余叫 `fish:<名>`（人格 = 人格书全文）。工具实例共享，会话只选其中一个。
+ */
+function makeFishExtension(
+  name: string,
+  persona: string,
+  parts: { tools: readonly ToolRegistration[]; prompts: PromptSet },
+): Extension {
+  return defineExtension({
+    name,
+    tools: parts.tools,
+    sections: [
+      section("persona", () => persona, { tag: false }),
+      // 手工维护的人物档：比对话记忆更牢，和 handoff 互补
+      section("people", () => parts.prompts.people, { tag: true }),
+    ],
+  });
+}
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -89,13 +114,15 @@ export interface Fish {
   harness: Harness;
   models: Models;
   prompts: PromptSet;
-  /** 实际的 harness settings，便于审查（compaction 必须为 false）。 */
-  settings: { compaction: { enabled: boolean } };
+  /** 实际的 harness settings，便于审查（compaction 必须为 false；extensions 钉住默认人格）。 */
+  settings: { compaction: { enabled: boolean }; extensions: readonly Extension[] };
+  /** 注册的人格名单：["默认", ...人格书文件名]。 */
+  personas: string[];
   toolNames: string[];
   /** 压缩一次上下文；没到阈值就什么都不做。 */
   compact(conversation: Conversation): Promise<CompactResult>;
-  /** 取（或创建）某个群的会话；映射持久化，重启后还是同一个会话。 */
-  group(groupKey: string, profile?: GroupProfile): Promise<Conversation>;
+  /** 取（或创建）某个群在指定人格下的会话；映射持久化，重启后还是同一个会话。未注册人格回退默认。 */
+  group(groupKey: string, profile?: GroupProfile, persona?: string): Promise<Conversation>;
   /** 把 outbox 里排队的消息发出去；返回实际发了几条。 */
   drain(extra?: readonly ConversationId[]): Promise<number>;
   /** 不经模型直接往 outbox 里排队一条（宿主侧机械回复专用，同样走唯一出口）。 */
@@ -128,25 +155,26 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     }
   }
 
-  const Fish = defineExtension({
-    name: "fish",
-    tools: [say, react, ...tools],
-    sections: [
-      section("persona", () => prompts.persona, { tag: false }),
-      // 手工维护的人物档：比对话记忆更牢，和 handoff 互补
-      section("people", () => prompts.people, { tag: true }),
-    ],
-  });
+  // 人格扩展：默认 fish + 每本人格书一个 fish:<名>；同一套工具实例，会话按名只选其一
+  const fishTools: readonly ToolRegistration[] = [say, react, ...tools];
+  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts });
+  const personaExtensions = new Map<string, Extension>();
+  for (const [name, book] of Object.entries(prompts.personas)) {
+    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book, { tools: fishTools, prompts }));
+  }
 
   const registry = createRegistry();
-  registry.install(Fish);
+  registry.install(fishExtension);
+  for (const extension of personaExtensions.values()) registry.install(extension);
 
   mkdirSync(workspaceRoot, { recursive: true });
   mkdirSync(mediaRoot, { recursive: true });
 
   // pi-durable 默认的 compaction 会在中途注入一段库自带的总结提示词（不可审查），
   // 所以显式关掉：上下文靠分群隔离与 reset 控制，而不是靠一个我们看不到的 prompt。
-  const settings = { compaction: { enabled: false } };
+  // extensions 必须钉住默认实例：缺省语义是「全部已装、后装者胜」——不钉住的话，
+  // 没写 selection 的存量会话会被后装的 fish:<名> 顶替 persona section。
+  const settings = { compaction: { enabled: false }, extensions: [fishExtension] };
 
   const harness = await Harness.open(
     options.storage,
@@ -158,6 +186,21 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     },
     ctx,
   );
+
+  // 启动告警：映射键里的人格名已不在注册名单（人格书被删后 ChatsDoc 残留）。
+  // 那个会话存的是按名绑定，名字没了就选不到任何扩展，只剩 salvage 兕底。
+  {
+    const registered = new Set([DEFAULT_PERSONA, ...personaExtensions.keys()]);
+    const snapshot = await harness.snapshot(ChatsDoc, ctx);
+    for (const key of Object.keys(snapshot?.chats ?? {})) {
+      const mark = key.lastIndexOf("#");
+      if (mark < 0) continue;
+      const name = key.slice(mark + 1);
+      if (registered.has(name)) continue;
+      console.warn(`[鱼缸] 会话键 ${key} 的人格 ${name} 未注册`);
+      console.warn(`  该会话失去全部 section 与工具（含 say）`);
+    }
+  }
 
   const compactor: Compactor | undefined = options.compact
     ? createCompactor({
@@ -228,6 +271,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     models,
     prompts,
     settings,
+    personas: [DEFAULT_PERSONA, ...Object.keys(prompts.personas)],
     toolNames: [say.name, react.name, ...tools.map((t) => t.name)],
     async compact(conversation) {
       if (!compactor) return { compacted: false, reason: "below_threshold" };
@@ -270,24 +314,38 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       }
       return total;
     },
-    group(groupKey, profile) {
-      let existing = groups.get(groupKey);
+    group(groupKey, profile, persona = DEFAULT_PERSONA) {
+      let effective = persona;
+      if (effective !== DEFAULT_PERSONA && !personaExtensions.has(effective)) {
+        // 人格书被删后的悬空名：回退默认人格键，不建空人格会话
+        console.warn(`[鱼缸] group(${groupKey}) 人格 ${effective} 未注册，回退默认`);
+        effective = DEFAULT_PERSONA;
+      }
+      // 映射键：默认人格 = 原键（存量零迁移）；人格 X = 原键#X
+      const key = effective === DEFAULT_PERSONA ? groupKey : `${groupKey}#${effective}`;
+      let existing = groups.get(key);
       if (!existing) {
         existing = (async () => {
           // 先按持久化的映射找回来；找不到才建新的
           const snapshot = await harness.snapshot(ChatsDoc, ctx);
-          const known = snapshot?.chats?.[groupKey];
+          const known = snapshot?.chats?.[key];
           if (typeof known === "number") {
             const reused = await harness.conversation(known, ctx);
             if (reused) return reused;
           }
 
-          const cwd = join(workspaceRoot, safeName(groupKey));
+          const extension = effective === DEFAULT_PERSONA ? undefined : personaExtensions.get(effective);
+          const cwd = join(workspaceRoot, safeName(groupKey) + (extension ? `#${effective}` : ""));
           mkdirSync(cwd, { recursive: true });
           const created = await harness.createConversation(
             {
               ownership: { kind: "ownerless" },
-              agent: { model: options.model, cwd },
+              // 默认人格不传 extensions：跟 host 钉住的默认选择，存量会话行为不变
+              agent: {
+                model: options.model,
+                cwd,
+                ...(extension ? { extensions: [extension] } : {}),
+              },
               init: profile
                 ? async (tx, conversationId) => {
                     const text = renderTemplate(prompts.groupProfile, {
@@ -309,11 +367,11 @@ export async function openFish(options: FishOptions): Promise<Fish> {
           );
           await harness.commit(async (tx) => {
             const chats = await tx.doc(ChatsDoc);
-            chats.chats[groupKey] = created.id;
+            chats.chats[key] = created.id;
           }, ctx);
           return created;
         })();
-        groups.set(groupKey, existing);
+        groups.set(key, existing);
       }
       return existing;
     },

@@ -30,6 +30,11 @@ console.log("  …（其余见 prompt/messages.md）");
 console.log(`\n== 人格 ${prompts.persona.length} 字，来自 prompt/persona.md\n`);
 console.log(`${prompts.persona.split("\n").slice(0, 3).join("\n")}\n…`);
 
+console.log(`\n== 人格书 ${Object.keys(prompts.personas).length} 本（prompt/personas/*.md）\n`);
+for (const [name, book] of Object.entries(prompts.personas)) {
+  console.log(`  ${name}: ${book.length} 字，首行「${book.split("\n")[0]}」`);
+}
+
 console.log("\n== pi-durable 注入的 prompt\n");
 console.log("  compaction: 已禁用（默认会注入一段库自带的总结提示词）");
 console.log("  system prompt: 只有 persona 一个 section，库不添加其它 section");

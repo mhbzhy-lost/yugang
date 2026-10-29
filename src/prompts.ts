@@ -28,6 +28,8 @@ export interface PromptSet {
   messages: Record<string, string>;
   /** key 是工具名，来自 prompt/tools/<name>.md 的文件名。 */
   tools: Record<string, ToolPrompt>;
+  /** 人格书：key 是人格名（prompt/personas/<名>.md 的文件名），value 是全文。目录缺失/为空 → 空。 */
+  personas: Record<string, string>;
 }
 
 export function loadPrompts(root: string): PromptSet {
@@ -40,7 +42,25 @@ export function loadPrompts(root: string): PromptSet {
     gate: read(join(root, "gate.md")),
     messages: parseMessageTable(read(join(root, "messages.md")), join(root, "messages.md")),
     tools: loadTools(join(root, "tools")),
+    personas: loadPersonas(join(root, "personas")),
   };
+}
+
+/**
+ * 人格书目录：文件名 = 人格名（中文名合法）。目录缺失或为空 = 只有默认人格，不报错。
+ * 名字不能含 `#`（会话映射键的分隔符），也不能叫「默认」（默认人格没有后缀键）。
+ */
+function loadPersonas(dir: string): Record<string, string> {
+  if (!existsSync(dir)) return {};
+  const personas: Record<string, string> = {};
+  for (const entry of readdirSync(dir).sort()) {
+    if (!entry.endsWith(".md")) continue;
+    const name = entry.slice(0, -3);
+    if (name.includes("#")) throw new Error(`人格名不能含 #：${entry}`);
+    if (name === "默认") throw new Error(`人格名不能叫 默认：${entry}`);
+    personas[name] = read(join(dir, entry));
+  }
+  return personas;
 }
 
 function loadTools(dir: string): Record<string, ToolPrompt> {
@@ -117,6 +137,12 @@ export function auditPrompts(root: string): { file: string; bytes: number; sha25
   const files = ["persona.md", "handoff.md", "group-profile.md", "people.md", "gate.md", "messages.md"];
   for (const entry of readdirSync(join(root, "tools")).sort()) {
     if (entry.endsWith(".md")) files.push(join("tools", entry));
+  }
+  const personasDir = join(root, "personas");
+  if (existsSync(personasDir)) {
+    for (const entry of readdirSync(personasDir).sort()) {
+      if (entry.endsWith(".md")) files.push(join("personas", entry));
+    }
   }
   return files.map((file) => {
     const path = join(root, file);
