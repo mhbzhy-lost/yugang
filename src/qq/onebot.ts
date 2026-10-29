@@ -316,6 +316,15 @@ export class OneBot {
         } else if (seg.type === "forward") {
           // 嵌套转发不递归；同步阶段拿不到子消息数，占位不写 N。
           body += " [嵌套转发] ";
+        } else if (seg.type === "json") {
+          // 分享卡片（图文/链接，com.tencent.tuwen 等）：粗提 title，提不到给通用占位
+          const raw = String(seg.data?.["data"] ?? "");
+          const title = raw.match(/"title"\s*:\s*"([^"]{1,60})"/)?.[1] ?? "";
+          body += title ? ` [分享卡片：${title}] ` : " [分享卡片] ";
+        } else if (seg.type === "face") {
+          body += " [表情] ";
+        } else if (seg.type !== "reply" && seg.type !== "at") {
+          body += " [不支持的消息] ";
         }
       }
       const num = String.fromCharCode(0x2460 + index); // ①..⑩
