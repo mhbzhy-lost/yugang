@@ -96,7 +96,9 @@ const chatKeys = new Map<string, string>();
 const lastMessageId = new Map<string, number | string>();
 // 压缩进行中的会话：期间不受理新提交，被@只回机械忙碌语
 const compacting = new Set<string>();
-const lastMention = new Map<string, boolean>(); // 最近一次触发是否@了鱼：被@必回引用，让群里看得出鱼在回谁
+const lastMention = new Map<string, boolean>();
+// 本轮触发是否是回复某条消息：是则鱼的回应强制引用（回复链可读性）
+const lastReply = new Map<string, boolean>(); // 最近一次触发是否@了鱼：被@必回引用，让群里看得出鱼在回谁
 // submissionId → 本轮触发消息：把引用目标绑在轮上，不被后续消息顶掉
 const triggerOf = new Map<string, { messageId?: number | string; mentionsBot: boolean }>();
 // submissionId → 本轮触发消息自带的 bypass 段；仅该轮 draw 可见，轮 settle 即删
@@ -145,7 +147,7 @@ const fish = await openFish({
       const groupId = Number(chatKey.slice("qq:group:".length));
       // 引用只认本轮绑定的 quoteId：缺失就裸发，绝不回退 lastMessageId——
       // 那会拿后续消息当引用目标，正文与引用错位、整轮答非所问
-      const quote = (payload.quote || payload.quoteForce === true || lastMention.get(conversationId) === true)
+      const quote = (payload.quote || payload.quoteForce === true || lastMention.get(conversationId) === true || lastReply.get(conversationId) === true)
         ? payload.quoteId
         : undefined;
       await onebot.sendGroup(groupId, payload.items, { quote });
@@ -448,6 +450,8 @@ onebot.onMessage((raw) => {
     resetLook(conv.id);
     if (msg.messageId !== undefined) lastMessageId.set(conv.id, msg.messageId);
     lastMention.set(conv.id, msg.mentionsBot);
+    // 回复链：本轮触发本身是在回复某条消息，鱼的回应应引用触发那条（对方能看到在回谁）
+    lastReply.set(conv.id, (msg.replyIds?.length ?? 0) > 0);
 
     // 群员插话走 follow-up：不打断正在跑的那一轮。
     // 把触发消息绑到 submission 上：鱼的回复引用本轮自己的触发消息，
