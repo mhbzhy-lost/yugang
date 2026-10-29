@@ -258,6 +258,10 @@ export async function openFish(options: FishOptions): Promise<Fish> {
           items: next.items,
           ...(next.media === undefined ? {} : { media: next.media }),
           quote: next.quote,
+          // 引用绑定全链路贯通：早期漏传这两个字段，靠 lastMessageId 回退掩盖（会错位）；
+          // 回退删除后 @ 场景全部裸发——不传，引用的真实修复在这里
+          ...(next.quoteId !== undefined ? { quoteId: next.quoteId } : {}),
+          ...(next.quoteForce !== undefined ? { quoteForce: next.quoteForce } : {}),
           at: next.at,
           key: next.key,
         });
