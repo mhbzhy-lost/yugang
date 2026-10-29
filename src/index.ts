@@ -101,6 +101,8 @@ const fish = await openFish({
     }
   })(),
   imggenKey: process.env.MODELSCOPE_KEY,
+  sdUrl: process.env.SD_WEBUI_URL,
+  tagsCsv: join(HOME, "danbooru.csv"),
   master: config.master,
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
   workspaceRoot: config.workspaceRoot,

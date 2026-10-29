@@ -47,3 +47,10 @@ imggen_nokey: 还没配置生图凭据，生不了
 imggen_used: 这一轮生过图了，先把图发出去
 imggen_failed: 生图没成功：{{detail}}
 imggen_done: gen/{{file}} — 生好了，用 say 的 media 参数（gen/ 开头的引用）发出去
+draw_prompt: 画面描述得有内容，1000 字以内
+draw_used: 这轮画过了，先把画发出去
+draw_failed: 画图没成功（Windows 关机或超时？改用别的办法）
+draw_done: gen/{{file}} — 画好了，用 say 的 media 参数发出去
+tags_empty: 词表还没就绪或关键词为空
+tags_none: 词表里没有「{{keyword}}」，换英文关键词试试
+draw_off: 本地画图没配置地址，用不了

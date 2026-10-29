@@ -60,6 +60,10 @@ export interface FishOptions {
   searchKey?: string;
   /** ModelScope API-KEY：生图凭据；给了才有生图能力。 */
   imggenKey?: string;
+  /** SD WebUI（Windows 宿主机）的 baseUrl；给了才有本地画图。 */
+  sdUrl?: string;
+  /** danbooru.csv 路径；给了才能查 tag 词表。 */
+  tagsCsv?: string;
   /** 主人 QQ：fs/restart 自改工具的身份闸，给了才注册这些工具。 */
   master?: string;
   /** submissionId → 本轮触发消息；把回复引用绑在轮上，防串线。 */
@@ -113,7 +117,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
 
   const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf });
   const react = createReactTool({ prompts, react: options.react, now });
-  const tools = createTools({ mediaRoot, prompts, searchKey: options.searchKey, imggenKey: options.imggenKey, master: options.master, triggerOf: options.triggerOf });
+  const tools = createTools({ mediaRoot, prompts, searchKey: options.searchKey, imggenKey: options.imggenKey, sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf });
 
   // 启动即校验：每个工具都必须有一份 prompt/tools/<name>.md，缺了就起不来
   for (const tool of [say, react, ...tools]) {

@@ -15,6 +15,8 @@ import { createRestartTool } from "./restart.ts";
 import { createTreeTool } from "./tree.ts";
 import { createTestTool } from "./test.ts";
 import { createImggenTool } from "./imggen.ts";
+import { createDrawTool } from "./draw.ts";
+import { createTagsTool } from "./tags.ts";
 
 export interface ToolDeps {
   mediaRoot: string;
@@ -25,6 +27,10 @@ export interface ToolDeps {
   master?: string;
   /** ModelScope API-KEY：生图凭据。缺省则 imggen 调用会以可读错误回应。 */
   imggenKey?: string;
+  /** SD WebUI（Windows 宿主机）的 baseUrl；给了才有本地画图。 */
+  sdUrl?: string;
+  /** danbooru.csv 路径；给了才能查 tag 词表。 */
+  tagsCsv?: string;
   /** submissionId → 本轮触发消息；与 say 的引用绑定同源。 */
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
 }
@@ -48,6 +54,8 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
     ...fsTools,
     createImggenTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, key: deps.imggenKey }),
+    createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl }),
+    createTagsTool({ prompts: deps.prompts, csvPath: deps.tagsCsv }),
     ...treeTool,
     ...testTool,
     ...restartTool,
