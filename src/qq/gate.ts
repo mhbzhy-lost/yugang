@@ -68,8 +68,9 @@ export function createGate(options: GateOptions): Gate {
       // 任何人 @（含裸 @）必答，零模型调用
       if (msg.mentionsBot) return { enter: true, reason: "mentioned" };
 
-      // 合并转发合集直接放行：特意发合集基本就是要给鱼看的，不该赌 10% 粗筛
-      if ((msg.forwardIds?.length ?? 0) > 0) return { enter: true, reason: "forward" };
+      // 无 @ 的合并转发合集：零成本丢弃，连粗筛打分都不进（展开也不发生）。
+      // 要让鱼看合集：回复合集并 @，或发合集时直接 @。
+      if ((msg.forwardIds?.length ?? 0) > 0) return { enter: false, reason: "forward_ignored" };
 
       // 随机粗筛：绝大多数非 @ 消息到这就结束，不花模型调用
       if (random() > options.ambientChance) return { enter: false, reason: "sampled_out" };

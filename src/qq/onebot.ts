@@ -118,18 +118,22 @@ export class OneBot {
     if (!parsed) return;
 
     // 合并转发：parseEvent 是同步纯函数、拿不到 OneBot 实例，异步拉取放在这里（同 replyIds 先例）。
-    // 展开先于图片落盘：子图占位这时并入 imageSegments，随下面的既有循环一起下载。
-    // 拉取失败只把占位换成失败标记，不抛错，不阻断整条消息进闸。
+    // 展开规则（主人定案）：无 @ 的合集零成本丢弃（gate 连打分都不进，不浪费 token）；
+    // 自带合集且被 @ = 明确指令，展开；回复合集且被 @ 在下面 reply 路径展开被回复的那条。
     for (const forwardId of parsed.forwardIds ?? []) {
       if (!forwardId) {
-        // 段缺失 id：占位直接落失败标记，不留「展开中」悬在文本里误导
         parsed.text = parsed.text.replace("[转发合集，展开中]", "[转发合集，展开失败]");
+        continue;
+      }
+      if (!parsed.mentionsBot) {
+        // 没 @：不展开、不调 API，静态占位（这条消息会被闸直接拒，不进上下文）
+        parsed.text = parsed.text.replace("[转发合集，展开中]", "[转发合集，未展开]");
         continue;
       }
       const shown = await this.#expandForward(forwardId, parsed);
       parsed.text = parsed.text.replace("[转发合集，展开中]", shown);
     }
-    parsed.forwardIds = [];
+    // forwardIds 不清空：gate 要用它把无 @ 的合集零成本拒掉
 
     // 图片落盘，把占位替换成真实引用
     if (parsed.imageSegments.length > 0 && this.#mediaRoot) {
@@ -141,13 +145,22 @@ export class OneBot {
     }
     parsed.imageSegments = [];
 
-    // 回复引用：取回被引消息，里面的图落盘后替换占位符，否则看不见被讨论的图
+    // 回复引用：取回被引消息，里面的图落盘后替换占位符，否则看不见被讨论的图；
+    // 被引消息若是合并转发且这条消息被 @：展开那个合集（主人定案的触发路径：回复合集并艾特）
     for (const [index, replyId] of (parsed.replyIds ?? []).entries()) {
       if (!replyId || !this.#mediaRoot) continue;
       let shown = "[回复的图 读不到]";
       try {
         const quoted = await this.call("get_msg", { message_id: replyId });
         const quotedMessage = quoted?.data?.message ?? quoted?.message;
+        if (parsed.mentionsBot && Array.isArray(quotedMessage)) {
+          const fwd = quotedMessage.find((s: OneBotSegment) => s?.type === "forward");
+          const fwdId = String((fwd?.data as Record<string, unknown> | undefined)?.["id"] ?? "");
+          if (fwd && fwdId) {
+            const expanded = await this.#expandForward(fwdId, parsed);
+            shown = expanded;
+          }
+        }
         const imageSegs = Array.isArray(quotedMessage)
           ? quotedMessage.filter((s: OneBotSegment) => s?.type === "image").slice(0, 2)
           : [];
