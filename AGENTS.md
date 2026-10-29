@@ -117,14 +117,25 @@
 ## 命令
 
 ```bash
-npm test           # 48 项，含上面每条约束的兜底
+npm test           # 52 项，含上面每条约束的兜底
 npm run prompts    # 列出所有 prompt 文件 + sha256 + 工具说明 + 内嵌扫描结果
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
 npm run creds show  # 凭据状态（只有长度）
 npm run ping        # 模型连通性 + 用量（不打印 key）
-npm start          # 真跑（自动读 .env）
+npm start          # 真跑（自动读 .env）——只在 macmini 上
+npm run deploy     # 部署：git pull + 平滑重启鱼（只在 macmini 上跑）
 ```
+
+## 部署（2026-10 起）
+
+生产现场在 **macmini**（macmini，仓库在 `~/yugang`）；本地开发机的 `var/` 是迁移前旧副本，**不要在本地起鱼**。变更一律：
+
+1. 本地开发 + `npm test` 全绿
+2. commit / push 到 GitHub main
+3. 连上 macmini 执行 `cd ~/yugang && npm run deploy`（pull → 平滑重启 → 验证横幅；运维侧等价入口是 ops skill 的 `fish.sh deploy`）
+
+`scripts/deploy.ts` 用 `process.execPath` 拿全路径 node：非交互 shell（ssh/nohup）的 PATH 里没有 brew 的 node，直接 `spawn("node")` 会报 No such file or directory。pull 失败时不动线上；新鱼 8 秒内没打出「已连接」横幅则报错退出。
 
 运维细节（怎么排查不说话、怎么复盘某天某个群）在 `.agents/skills/ops/SKILL.md`。
 

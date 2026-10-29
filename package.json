@@ -17,6 +17,7 @@
     "creds": "node scripts/creds.ts",
     "protocol": "node --env-file-if-exists=.env scripts/protocol.ts",
     "up": "node --env-file-if-exists=.env scripts/up.ts",
+    "deploy": "node --env-file-if-exists=.env scripts/deploy.ts",
     "down": "node --env-file-if-exists=.env scripts/down.ts",
     "doctor": "node --env-file-if-exists=.env scripts/doctor.ts",
     "token": "node --env-file-if-exists=.env scripts/token.ts",
