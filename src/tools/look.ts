@@ -118,8 +118,12 @@ async function describeImage(
   mimeType: string,
 ): Promise<string | null> {
   if (!deps.models || !deps.visionModel) return null;
+  // streamSimple 只接受完整 model 对象：传 {provider, modelId} 引用会让
+  // pi-ai 内部 model.input 取不到而抛错（describe 永远失败 → 退回原图 → 卡死）
+  const model = deps.models.getModel(deps.visionModel.provider, deps.visionModel.modelId);
+  if (!model) return null;
   try {
-    const stream = deps.models.streamSimple(deps.visionModel, {
+    const stream = deps.models.streamSimple(model, {
       messages: [
         {
           role: "user",
@@ -137,7 +141,9 @@ async function describeImage(
       .join("")
       .trim();
     return text || null;
-  } catch {
+  } catch (error) {
+    // 不静默：描述失败的原因要能在日志里看到（不含图片内容与凭据）
+    console.warn("[鱼缸] 看图描述失败:", error instanceof Error ? error.message : String(error));
     return null;
   }
 }
