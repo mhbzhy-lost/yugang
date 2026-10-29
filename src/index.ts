@@ -346,9 +346,6 @@ async function drainLoop(): Promise<void> {
 }
 
 const gate = createGate({
-  prompts: fish.prompts,
-  models,
-  model: gateModel,
   master: config.master,
   groups: config.groups,
   quietHours: config.quietHours,

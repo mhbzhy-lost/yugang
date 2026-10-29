@@ -1,24 +1,20 @@
 /**
  * 门外的闸：决定这条消息要不要进 agent loop。
  *
- * 当前策略——@ 必答 + 随机粗筛 + 打分闸：
- *   私聊只认主人；群里任何人 @ → 必答；其余消息（含主人的）先过一道随机粗筛
- *   （AMBIENT_CHANCE，绝大多数到这就结束、零成本），筛过的再花一次便宜模型打分
- *   （prompt/gate.md），值得开口才进。回复这件事上不分主人。
+ * 当前策略——@ 必答 + 随机粗筛：
+ *   私聊只认主人；群里任何人 @ → 必答；其余消息（含主人的）按 AMBIENT_CHANCE
+ *   随机放行，绝大多数到这就结束、零成本，不花任何模型调用。
  *
- * 旧的作息/配额/冷却/抽样不再参与判定，字段仅兼容保留；
- * 门内模型仍可以选择不调用 say，那才是沉默的终态。
+ * 曾经有第二道「便宜模型打分」闸，2026-10 被主人砍掉：它用的是主模型，
+ * 主模型一挂，主动接话就整晚全灭（gate_failed 静默丢弃），而且完全不可复盘。
+ * 现在只留随机，是否开口的最终决定权交回门内的鱼自己（它也可以不调 say）。
+ *
+ * 旧的作息/配额/冷却/抽样不再参与判定，字段仅兼容保留。
  */
-import type { Models } from "@earendil-works/pi-ai/models";
-import { renderTemplate, type PromptSet } from "../prompts.ts";
 import type { IncomingMessage } from "./onebot.ts";
 
 export interface GateOptions {
-  prompts: PromptSet;
-  models: Models;
-  /** 用来打分的模型（默认与主模型同源，可经 GATE_PROVIDER/GATE_MODEL_ID 换便宜的）。 */
-  model: { provider: string; modelId: string };
-  /** 主人 QQ；私聊只认他。群里他与所有人同权：@ 必答，非 @ 过打分。 */
+  /** 主人 QQ；私聊只认他。 */
   master: string;
   /** 只在白名单群里说话；空数组 = 所有群。 */
   groups: readonly string[];
@@ -28,7 +24,7 @@ export interface GateOptions {
   dailyQuota: number;
   /** 【仅兼容保留，当前策略下无效】旧开口冷却。 */
   cooldownMs: number;
-  /** 非 @ 消息进入打分的概率（随机粗筛，零成本挡掉大多数）。 */
+  /** 非 @ 消息进入 loop 的概率（随机粗筛，零成本挡掉大多数）。 */
   ambientChance: number;
   /** 按群覆盖的随机门概率（群号 → 值）；未列出的群用 ambientChance。值为 0 = 该群只应答 @，不回闲聊。 */
   ambientChanceByGroup?: Record<string, number>;
@@ -38,14 +34,14 @@ export interface GateOptions {
 
 export interface GateInput {
   msg: IncomingMessage;
-  /** 最近的群聊流水，喂给打分模型。 */
-  recent: readonly { nickname: string; text: string }[];
-  lastSpokeAt: number;
-  spokenToday: number;
+  /** 【仅兼容保留】最近的群聊流水。 */
+  recent?: readonly { nickname: string; text: string }[];
+  lastSpokeAt?: number;
+  spokenToday?: number;
 }
 
 export type GateDecision =
-  | { enter: true; reason: "private" | "mentioned" | "scored"; score?: number }
+  | { enter: true; reason: "private" | "mentioned" | "sampled" }
   | { enter: false; reason: string };
 
 export interface Gate {
@@ -55,7 +51,7 @@ export interface Gate {
 export function createGate(options: GateOptions): Gate {
   const random = options.random ?? Math.random;
   return {
-    async decide({ msg, recent }) {
+    async decide({ msg }) {
       // 私聊：只认主人
       if (msg.chatKey.startsWith("qq:private:")) {
         if (String(msg.userId) === options.master) return { enter: true, reason: "private" };
@@ -70,55 +66,16 @@ export function createGate(options: GateOptions): Gate {
       // 任何人 @（含裸 @）必答，零模型调用
       if (msg.mentionsBot) return { enter: true, reason: "mentioned" };
 
-      // 无 @ 的合并转发合集：零成本丢弃，连粗筛打分都不进（展开也不发生）。
+      // 无 @ 的合并转发合集：零成本丢弃（展开也不发生）。
       // 要让鱼看合集：回复合集并 @，或发合集时直接 @。
       if ((msg.forwardIds?.length ?? 0) > 0) return { enter: false, reason: "forward_ignored" };
 
-      // 随机粗筛：绝大多数非 @ 消息到这就结束，不花模型调用；可按群覆盖（0=该群不回闲聊）
+      // 随机粗筛：绝大多数非 @ 消息到这就结束；可按群覆盖（0 = 该群不回闲聊）
       const chance = options.ambientChanceByGroup?.[String(msg.groupId)] ?? options.ambientChance;
       if (random() > chance) return { enter: false, reason: "sampled_out" };
-
-      // 粗筛过的再打分，值得开口才进
-      const verdict = await askGate(options, msg, recent);
-      if (verdict === null) return { enter: false, reason: "gate_failed" };
-      if (!verdict.speak || verdict.score < 0.5) return { enter: false, reason: "gate_said_no" };
-      return { enter: true, reason: "scored", score: verdict.score };
+      return { enter: true, reason: "sampled" };
     },
   };
-}
-
-interface Score {
-  speak: boolean;
-  score: number;
-  why: string;
-}
-
-async function askGate(options: GateOptions, msg: IncomingMessage, recent: readonly { nickname: string; text: string }[]): Promise<Score | null> {
-  const model = options.models.getModel(options.model.provider, options.model.modelId);
-  if (!model) return null;
-
-  const context = recent.map((m) => `${m.nickname}: ${m.text}`).join("\n") || "（群里还没人说话）";
-  const prompt = renderTemplate(options.prompts.gate, {
-    context,
-    incoming: `${msg.nickname}: ${msg.text}`,
-    master: options.master,
-  });
-
-  try {
-    const stream = options.models.streamSimple(model, { messages: [{ role: "user", content: prompt }] });
-    const message = await stream.result();
-    const text = message.content
-      .filter((block): block is { type: "text"; text: string } => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
-
-    const json = /\{[\s\S]*\}/.exec(text);
-    if (!json) return null;
-    const parsed = JSON.parse(json[0]) as Partial<Score>;
-    return { speak: parsed.speak === true, score: Number(parsed.score ?? 0), why: String(parsed.why ?? "") };
-  } catch {
-    return null;
-  }
 }
 
 /** 进闸消息渲染成模型的 user 文本：带群/人/是否@/是否主人的标注。 */
