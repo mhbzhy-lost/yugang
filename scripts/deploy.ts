@@ -23,8 +23,13 @@ if (pull.status !== 0) {
   process.exit(1);
 }
 
-// 2. 收旧鱼（本来就没在跑也无妨）
+// 2. 收旧鱼：先 SIGTERM 让它优雅退出（drain 完 outbox 再关），最多等 16s，超时强杀
 spawnSync("pkill", ["-f", "src/index.ts"]);
+for (let i = 0; i < 32; i++) {
+  if (spawnSync("pgrep", ["-f", "src/index.ts"]).status !== 0) break;
+  await new Promise((r) => setTimeout(r, 500));
+}
+spawnSync("pkill", ["-9", "-f", "src/index.ts"]);
 await new Promise((r) => setTimeout(r, 3000));
 
 // 3. 起新鱼：日志追加到 var/fish-console.log，脱离本进程生命周期

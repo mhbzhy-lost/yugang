@@ -548,3 +548,18 @@ recoveringDrain = false;
 const shown = describeModel(config.modelConfig);
 console.log(`[鱼缸] 已连接，模型 ${shown.provider}/${shown.model}，工具 ${fish.toolNames.join("、")}`);
 console.log(`[鱼缸] 凭据 ${shown.key}（${shown.keySource}）`);
+
+// 优雅退出：deploy 发 SIGTERM 后先把 outbox 里已入队的消息发完再关——
+// 在途生成轮会被中断（丢当轮），但绝不丢已承诺发送的消息（两阶段 sending 不重发）。
+let closing = false;
+process.on("SIGTERM", () => {
+  if (closing) return;
+  closing = true;
+  console.log("[鱼缸] SIGTERM，冲刷后退出");
+  void (async () => {
+    try { const n = await fish.drain(); if (n > 0) console.log(`[鱼缸] 退出前补发 ${n} 条`); } catch { /* 尽力而为 */ }
+    try { await fish.close(); } catch { /* 尽力而为 */ }
+    process.exit(0);
+  })();
+  setTimeout(() => process.exit(0), 15_000).unref?.();
+});
