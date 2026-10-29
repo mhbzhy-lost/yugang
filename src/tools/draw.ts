@@ -30,6 +30,11 @@ const DRAWN = new Map<string, unknown>();
 const PRESET_POSITIVE = "masterpiece, best quality, score_7, score_8, score_9, (anime:1.2), ";
 const PRESET_NEGATIVE = "low quality, worst quality, score_1, score_2, score_3, early, old, shiny skin, ";
 const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 4.5 };
+/** 画风预设：追加在 positive 末尾的额外注入。 */
+const PRESETS: Record<string, string> = {
+  default: "",
+  hsr: ", <lora:HSR Anima:0.5>",
+};
 const PRIVATE_RE = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/;
 
 let tunnelChild: ReturnType<typeof spawn> | null = null;
@@ -88,6 +93,7 @@ export function createDrawTool(deps: DrawDeps) {
     parameters: Type.Object({
       prompt: Type.String({ description: prompt.params["prompt"] ?? "" }),
       negative: Type.Optional(Type.String({ description: prompt.params["negative"] ?? "" })),
+      preset: Type.Optional(Type.Union([Type.Literal("default"), Type.Literal("hsr")], { description: prompt.params["preset"] ?? "" })),
     }),
     execute: async (args, api, context) => {
       const positive = args.prompt.trim();
@@ -114,7 +120,7 @@ export function createDrawTool(deps: DrawDeps) {
       const target = useTunnel ? `http://127.0.0.1:${localPort}/sdapi/v1/txt2img` : `${deps.baseUrl}/sdapi/v1/txt2img`;
 
       const body = JSON.stringify({
-        prompt: PRESET_POSITIVE + positive,
+        prompt: PRESET_POSITIVE + positive + (PRESETS[args.preset ?? "default"] ?? ""),
         negative_prompt: PRESET_NEGATIVE + (args.negative ?? "").trim(),
         ...PRESET,
       });
