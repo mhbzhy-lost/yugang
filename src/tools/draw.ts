@@ -24,6 +24,8 @@ export interface DrawDeps {
   baseUrl: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /** submissionId → 本轮触发消息自带的 bypass 段；拼在最终 positive prompt 末尾。 */
+  bypassOf?: (roundId: unknown) => string | undefined;
 }
 
 const DRAWN = new Map<string, unknown>();
@@ -111,6 +113,7 @@ export function createDrawTool(deps: DrawDeps) {
       if (round !== undefined && DRAWN.get(api.conversationId) === round) {
         throw new Error(deps.prompts.messages["draw_used"] ?? "draw_used");
       }
+      const stash = round !== undefined ? deps.bypassOf?.(round) : undefined;
 
       // 私网真实地址走环回隧道；公网地址直连
       const realUrl = new URL(deps.baseUrl);
@@ -122,7 +125,7 @@ export function createDrawTool(deps: DrawDeps) {
       const target = useTunnel ? `http://127.0.0.1:${localPort}/sdapi/v1/txt2img` : `${deps.baseUrl}/sdapi/v1/txt2img`;
 
       const body = JSON.stringify({
-        prompt: PRESET_POSITIVE + positive + (PRESETS[args.preset ?? "default"] ?? ""),
+        prompt: PRESET_POSITIVE + positive + (PRESETS[args.preset ?? "default"] ?? "") + (stash ? `, ${stash}` : ""),
         negative_prompt: PRESET_NEGATIVE + (args.negative ?? "").trim(),
         ...PRESET,
       });
@@ -164,7 +167,7 @@ export function createDrawTool(deps: DrawDeps) {
         const file = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}.png`;
         writeFileSync(join(outDir, file), Buffer.from(b64, "base64"));
         if (round !== undefined) DRAWN.set(api.conversationId, round);
-        console.log(`[fish] draw ok: ${positive.slice(0, 40)}`);
+        console.log(`[fish] draw ok: ${positive.slice(0, 40)}${stash ? " (+bypass)" : ""}`);
         return {
           output: [{ type: "text", text: renderTemplate(deps.prompts.messages["draw_done"] ?? "gen/{{file}}", { file }) }],
         };

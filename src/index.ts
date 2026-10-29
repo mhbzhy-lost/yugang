@@ -26,6 +26,7 @@ import { createChatlog } from "./chatlog.ts";
 import { localDay } from "./usage.ts";
 import { weeklyStats, renderWeekly } from "./stats.ts";
 import { createUsageLedger, sumUsage } from "./usage.ts";
+import { bypassAllowed, splitBypass } from "./bypass.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -46,6 +47,7 @@ const config = {
   workspaceRoot: resolve(process.env.WORKSPACE_ROOT ?? join(HOME, "workspace")),
   master: process.env.MASTER_QQ ?? "",
   groups: (process.env.GROUPS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+  bypassGroups: (process.env.BYPASS_GROUPS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
   quietHours: process.env.QUIET_HOURS?.split("-").map(Number) as [number, number] | undefined,
   dailyQuota: Number(process.env.DAILY_QUOTA ?? "40"),
   cooldownMs: Number(process.env.COOLDOWN_MS ?? "90000"),
@@ -84,6 +86,8 @@ const compacting = new Set<string>();
 const lastMention = new Map<string, boolean>(); // 最近一次触发是否@了鱼：被@必回引用，让群里看得出鱼在回谁
 // submissionId → 本轮触发消息：把引用目标绑在轮上，不被后续消息顶掉
 const triggerOf = new Map<string, { messageId?: number | string; mentionsBot: boolean }>();
+// submissionId → 本轮触发消息自带的 bypass 段；仅该轮 draw 可见，轮 settle 即删
+const bypassOf = new Map<string, string>();
 const conversations = new Map<string, Conversation>();
 
 const fish = await openFish({
@@ -106,6 +110,7 @@ const fish = await openFish({
   tagsCsv: join(HOME, "danbooru.csv"),
   master: config.master,
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
+  bypassOf: (roundId) => bypassOf.get(String(roundId)),
   workspaceRoot: config.workspaceRoot,
   compact: {
     model: gateModel,
@@ -295,6 +300,12 @@ onebot.onMessage((raw) => {
 
     chatlog.append({ at: Date.now(), chat: msg.chatKey, from: msg.nickname, text: msg.text, kind: "in" });
 
+    // bypass 段剥离：chatlog 已记原文；之后 gate 打分与模型上下文只见干净文本。
+    const bypass = bypassAllowed(msg.userId, msg.groupId, config.master, config.bypassGroups)
+      ? splitBypass(msg.text)
+      : null;
+    if (bypass) msg.text = bypass.clean || (fish.prompts.messages["bypass_placeholder"] ?? "(draw)");
+
     const stat = spokenToday.get(msg.chatKey);
     const count = stat && stat.day === today() ? stat.count : 0;
 
@@ -343,9 +354,11 @@ onebot.onMessage((raw) => {
       mentionsBot: msg.mentionsBot,
       userId: msg.userId,
     });
+    if (bypass) bypassOf.set(String(submission.id), bypass.stash);
 
     const settled = await submission.wait(ctx);
-    triggerOf.delete(submission.id);
+    triggerOf.delete(String(submission.id));
+    bypassOf.delete(String(submission.id));
     if (settled.status !== "done") {
       const why = [settled.status, (settled as { reason?: string }).reason, (settled as { detail?: string }).detail]
         .filter(Boolean)

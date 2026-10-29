@@ -68,6 +68,8 @@ export interface FishOptions {
   master?: string;
   /** submissionId → 本轮触发消息；把回复引用绑在轮上，防串线。 */
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
+  /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费，轮结束失效。 */
+  bypassOf?: (roundId: unknown) => string | undefined;
   /** 每个群的工作目录根；实际 cwd 是 <workspaceRoot>/<groupKey>。 */
   workspaceRoot: string;
   limits?: Partial<Omit<EgressLimits, "mediaRoot">>;
@@ -117,7 +119,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
 
   const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf });
   const react = createReactTool({ prompts, react: options.react, now });
-  const tools = createTools({ mediaRoot, prompts, searchKey: options.searchKey, imggenKey: options.imggenKey, sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf });
+  const tools = createTools({ mediaRoot, prompts, searchKey: options.searchKey, imggenKey: options.imggenKey, sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, bypassOf: options.bypassOf });
 
   // 启动即校验：每个工具都必须有一份 prompt/tools/<name>.md，缺了就起不来
   for (const tool of [say, react, ...tools]) {

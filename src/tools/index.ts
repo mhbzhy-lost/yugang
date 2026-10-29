@@ -33,6 +33,8 @@ export interface ToolDeps {
   tagsCsv?: string;
   /** submissionId → 本轮触发消息；与 say 的引用绑定同源。 */
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
+  /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费。 */
+  bypassOf?: (roundId: unknown) => string | undefined;
 }
 
 export function createTools(deps: ToolDeps): ToolRegistration[] {
@@ -54,7 +56,7 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
     ...fsTools,
     createImggenTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, key: deps.imggenKey }),
-    createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl }),
+    createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl, bypassOf: deps.bypassOf }),
     createTagsTool({ prompts: deps.prompts, csvPath: deps.tagsCsv }),
     ...treeTool,
     ...testTool,
