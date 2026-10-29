@@ -5,7 +5,7 @@ description: 维护「鱼缸」这个 QQ 群机器人时使用：查状态、看
 
 # 鱼缸运维
 
-**生产现场在 macmini**（macmini，仓库 `/Users/macmini-user/yugang`）；本地开发机的 `var/` 是迁移前旧副本，**不要在本地起鱼**。日常运维一律用本 skill 的 `scripts/fish.sh`（内部经 home-mac-connect 的 connect.sh 在 macmini 上执行）：
+**生产现场在 macmini**（macmini，仓库 `~/yugang`）；本地开发机的 `var/` 是迁移前旧副本，**不要在本地起鱼**。日常运维一律用本 skill 的 `scripts/fish.sh`（内部经 home-mac-connect 的 connect.sh 在 macmini 上执行）：
 
 ```bash
 scripts/fish.sh status               # 数据目录 / 幂等表 / 原话簿概况
@@ -19,7 +19,7 @@ scripts/fish.sh help                 # 全部子命令（其它命令原样透�
 
 部署流程（见仓库 AGENTS.md「部署」）：本地开发 + `npm test` → commit/push → `fish.sh deploy`。
 
-下文命令仅在 macmini 上直接操作或排查离线副本时使用。本地仓库 `/Users/user/yugang`；
+下文命令仅在 macmini 上直接操作或排查离线副本时使用。本地仓库 `~/yugang（本地开发机）`；
 所有数据在 `var/`（可用 `YUGANG_HOME` 覆盖）。**先读 `AGENTS.md`**，那里是硬约束。
 
 ## 配置在哪

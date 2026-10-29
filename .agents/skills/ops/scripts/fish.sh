@@ -2,7 +2,7 @@
 # 远程操作 macmini（macmini）上的鱼 —— 鱼的唯一生产现场。
 # 本地 var/ 是迁移前旧副本，不要在本地起鱼；一切运维走本脚本。
 set -euo pipefail
-CONNECT=/Users/user/.agents/skills/home-mac-connect/scripts/connect.sh
+CONNECT="${HOME_MAC_CONNECT:-$HOME/.agents/skills/home-mac-connect/scripts/connect.sh}"
 [ -x "$CONNECT" ] || { echo "找不到 home-mac-connect 的 connect.sh：$CONNECT"; exit 1; }
 PREFIX='export PATH=/opt/homebrew/bin:$PATH; cd ~/yugang &&'
 CMD="${1:-status}"

@@ -325,7 +325,7 @@ draw ok 日志行改为（运维可快速确认注入是否生效；chatlog 有�
 - [ ] **步骤 3：追加 .env 配置（不读取文件内容）**
 
 ```bash
-cd /Users/user/yugang && grep -q '^BYPASS_GROUPS=' .env || printf '\nBYPASS_GROUPS=10001\n' >> .env
+cd ~/yugang && grep -q '^BYPASS_GROUPS=' .env || printf '\nBYPASS_GROUPS=10001\n' >> .env
 grep -c '^BYPASS_GROUPS=' .env   # 期望输出 1
 ```
 
