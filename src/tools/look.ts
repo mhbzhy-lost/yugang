@@ -7,8 +7,8 @@
  * 图不进主会话：look 内部用独立请求让视觉模型把图描述成文字，只把描述返回给主会话，
  * 主会话 transcript 从头到尾都是纯文本（缓存前缀稳定，也不反复撞网关的视觉管线）。
  */
-import { readFileSync } from "node:fs";
-import { resolve, sep, extname } from "node:path";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve, sep, extname } from "node:path";
 import { Type, type Models } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
@@ -22,6 +22,22 @@ export interface LookDeps {
   /** 视觉描述用的模型；缺省用主模型自身（可看图），可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型。 */
   visionModel?: { provider: string; modelId: string };
   maxPerRun?: number;
+}
+
+/** 看图快捷开关：主人 /关看图 后置位（var/look-off.marker），重启保持；网关视觉管线不稳时止损用。 */
+const LOOK_OFF_MARKER = join(process.cwd(), "var", "look-off.marker");
+let lookDisabled = existsSync(LOOK_OFF_MARKER);
+export function isLookDisabled(): boolean {
+  return lookDisabled;
+}
+export function setLookDisabled(off: boolean): void {
+  lookDisabled = off;
+  try {
+    if (off) writeFileSync(LOOK_OFF_MARKER, String(Date.now()));
+    else rmSync(LOOK_OFF_MARKER, { force: true });
+  } catch {
+    /* 标记写不进去也不影响内存开关 */
+  }
 }
 
 const MIME: Record<string, string> = {
@@ -45,6 +61,9 @@ export function createLookTool(deps: LookDeps) {
       ref: Type.String({ description: prompt.params["ref"] ?? "" }),
     }),
     execute: async (args, api) => {
+      if (lookDisabled) {
+        return { output: [{ type: "text", text: deps.prompts.messages["look_cmd_off"] ?? "看图已关" }] };
+      }
       const ref = args.ref.trim().replace(/^\[|\]$/g, "");
       const full = resolve(root, ref);
       const outside = full !== root && !full.startsWith(root + sep);
@@ -81,12 +100,13 @@ export function createLookTool(deps: LookDeps) {
       recordLook(api.conversationId);
 
       // 图不进主会话：独立请求让模型把图描述成文字，只返回描述。
-      // 描述失败时退回原图块（当轮可见，下轮起不再重发——但正常路径不应到这里）。
+      // 描述失败（网关视觉管线间歇不稳）也不退回原图块——那会让图永久留在 transcript，
+      // 拖垮之后每一轮；宁可这次看不了，让模型告诉用户稍后再看。
       const described = await describeImage(deps, data, outMime);
       if (described) {
         return { output: [{ type: "text", text: described }] };
       }
-      return { output: [{ type: "image", data, mimeType: outMime }] };
+      return { output: [{ type: "text", text: deps.prompts.messages["look_unstable"] ?? "看不了" }] };
     },
   });
 }

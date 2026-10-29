@@ -19,6 +19,7 @@ import type { Conversation } from "@earendil-works/pi-durable";
 import { openFish, type GroupProfile } from "./harness.ts";
 import { OneBot } from "./qq/onebot.ts";
 import { createGate, renderForModel } from "./qq/gate.ts";
+import { setLookDisabled } from "./tools/look.ts";
 import { absorbSecrets } from "./egress/absorb.ts";
 import { resetRun, resetLook, ledgerOf } from "./egress/ledger.ts";
 import { validateOutbound, DEFAULT_LIMITS } from "./egress/policy.ts";
@@ -274,6 +275,12 @@ async function handleCommand(msg: IncomingMessage): Promise<string | null> {
   let opener: string | undefined;
   if (msg.text === "/查询可用人格") {
     text = renderTemplate(fish.prompts.messages["cmd_personas"] ?? "", { list });
+  } else if (msg.text === "/关看图") {
+    setLookDisabled(true);
+    text = fish.prompts.messages["cmd_look_off"] ?? "";
+  } else if (msg.text === "/开看图") {
+    setLookDisabled(false);
+    text = fish.prompts.messages["cmd_look_on"] ?? "";
   } else if (target) {
     const persona = target[1];
     if (fish.personas.includes(persona)) {

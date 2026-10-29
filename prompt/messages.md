@@ -53,6 +53,10 @@ tags_empty: 词表还没就绪或关键词为空
 tags_none: 词表里没有「{{keyword}}」，换英文关键词试试
 draw_off: 本地画图没配置地址，用不了
 look_describe: 看一眼这张图，用两三句话告诉我图里有什么：主体、动作、画风、图上的文字。简洁准确，不要猜测看不到的细节。
+look_unstable: 图片描述服务暂时不稳，这次没看成，跟用户说声稍后再试，别硬编图里的内容
+look_cmd_off: 看图功能已临时关闭，等模型服务恢复了再让你看，可以告诉对方先用文字描述图片
+cmd_look_off: 已关看图。网关视觉服务恢复后用 /开看图 重新打开
+cmd_look_on: 已开看图
 bypass_placeholder: （一条画图指令：图片的细节发送者已单独指定，直接用 draw 画一张就好）
 cmd_personas: 可用人格：{{list}}（用 /切换人格 <名> 切换）
 cmd_switched: 切换完成，当前人格：{{persona}}
