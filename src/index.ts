@@ -427,6 +427,10 @@ onebot.onMessage((raw) => {
       lastSpokeAt: lastSpoke.get(msg.chatKey) ?? 0,
       spokenToday: count,
     });
+    // gate 判决留痕（不记正文）
+    const verdict = (decision.enter ? "enter:" : "skip:") + decision.reason;
+    const score = decision.enter && decision.score !== undefined ? " score=" + decision.score : "";
+    console.log("[fish] gate " + msg.chatKey + " " + msg.nickname.slice(0, 12) + " -> " + verdict + score);
     if (!decision.enter) return;
 
     const conv = await conversationFor(msg.chatKey);
