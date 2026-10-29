@@ -6,34 +6,43 @@
  */
 import { createModels, createProvider, type Models } from "@earendil-works/pi-ai/models";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { openAICodexResponsesApi } from "@earendil-works/pi-ai/api/openai-codex-responses.lazy";
+import { openaiCodexOAuth } from "./oauth-openai.ts";
+import { fileCredentialStore } from "./credential-store.ts";
 import type { FishModelConfig } from "./model-config.ts";
 
 export function createFishModels(config: FishModelConfig): Models {
-  if (!config.key) {
+  const oauth = config.authMode === "oauth";
+  if (!oauth && !config.key) {
     throw new Error(`没有拿到 ${config.providerId} 的 key：${config.keySource}`);
   }
+
+  const api = config.api === "openai-codex-responses" ? openAICodexResponsesApi() : openAICompletionsApi();
 
   const provider = createProvider({
     id: config.providerId,
     name: config.providerId,
     ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
-    auth: {
-      apiKey: {
-        name: `${config.providerId} key`,
-        // 只在这里出现，不进 env、不进日志、不进 prompt
-        resolve: async () => ({ auth: { apiKey: config.key }, source: config.keySource }),
-      },
-    },
+    auth: oauth
+      ? { oauth: openaiCodexOAuth }
+      : {
+          apiKey: {
+            name: `${config.providerId} key`,
+            // 只在这里出现，不进 env、不进日志、不进 prompt
+            resolve: async () => ({ auth: { apiKey: config.key }, source: config.keySource }),
+          },
+        },
     models: config.models.map((model) => ({
       ...model,
-      api: "openai-completions" as const,
+      api: config.api === "openai-codex-responses" ? ("openai-codex-responses" as const) : ("openai-completions" as const),
       provider: config.providerId,
       ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
     })),
-    api: openAICompletionsApi(),
+    api,
   });
 
-  const models = createModels();
+  // oauth 的刷新与落盘交给 pi-ai：凭据存储就是 config/auth.json
+  const models = createModels({ credentials: fileCredentialStore(config.credentialsPath) });
   models.setProvider(provider);
   return models;
 }

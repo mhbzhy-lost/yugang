@@ -21,7 +21,8 @@
     "down": "node --env-file-if-exists=.env scripts/down.ts",
     "doctor": "node --env-file-if-exists=.env scripts/doctor.ts",
     "token": "node --env-file-if-exists=.env scripts/token.ts",
-    "memes": "node --env-file-if-exists=.env scripts/memes.ts"
+    "memes": "node --env-file-if-exists=.env scripts/memes.ts",
+    "login": "node --env-file-if-exists=.env scripts/login.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",
