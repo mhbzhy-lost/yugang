@@ -81,7 +81,9 @@ export function validateOutbound(intent: EgressIntent, ctx: EgressContext): Reje
   if (messages.length === 0) return { code: "empty" };
   if (messages.length > ctx.limits.maxMessages) return { code: "too_many_messages" };
 
-  if (ctx.sentThisRun + messages.length > ctx.limits.maxPerRun) {
+  // 带 media 的发送（画完的图/表情）是画图链路的必要出口，不占每轮额度；
+  // 纯文字照旧防话痨。分钟级 quota_minute 对两者都生效（防刷屏）。
+  if (!intent.media && ctx.sentThisRun + messages.length > ctx.limits.maxPerRun) {
     return { code: "quota_run", vars: { count: String(ctx.sentThisRun) } };
   }
   const minuteAgo = ctx.now - 60_000;

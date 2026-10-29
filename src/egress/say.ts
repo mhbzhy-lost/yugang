@@ -5,7 +5,9 @@
  * 宿主按顺序发出、中间加抖动延迟。被拒绝时以 tool 错误返回（文案来自 prompt/messages.md）。
  *
  * 每轮硬上限：一轮 = 一次 submit 触发的 agent loop（pi-durable 用 pi.live.run.taskId 标识它），
- * 轮内第二次及之后的 say 调用直接以 tool 错误拒绝，不 emit、不静默。
+ * 轮内第二次及之后的纯文字 say 直接以 tool 错误拒绝，不 emit、不静默。
+ * 带 media 的发送（画完的图）是画图链路的必要出口：不受每轮限制也不占额度，
+ * 否则模型先贫一句嘴就会把画好的图悶死在盘上。
  *
  * 模型的正文、思考、tool 调用文本，永远不进入 QQ。
  */
@@ -87,11 +89,12 @@ export function createSayTool(deps: SayDeps) {
 
       // 每轮硬上限：校验通过、真要开口前才计数——被拒绝的尝试不消耗机会，
       // 模型在同一轮里改口重说的设计得以保留。判定与记录同步，并发第二个也拦得住。
+      // 带 media 的发送豁免：不检查也不消耗额度（画完的图必须能发出去），纯文字照旧一轮一条。
       // 轮标识用 run.inputs[0]（本轮要 settle 的输入任务）：整轮跨 generation 不变；
       // run.taskId 每代都会换，不能用。轮结束后 run 整个移除，下一轮自然换新标识。
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
-      if (round !== undefined) {
+      if (round !== undefined && args.media === undefined) {
         if (saidIn.get(api.conversationId) === round) {
           throw new Error(deps.prompts.messages["say_once"] ?? "already said this round");
         }
