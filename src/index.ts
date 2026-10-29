@@ -128,8 +128,10 @@ const fish = await openFish({
 
     if (chatKey.startsWith("qq:group:")) {
       const groupId = Number(chatKey.slice("qq:group:".length));
+      // 引用只认本轮绑定的 quoteId：缺失就裸发，绝不回退 lastMessageId——
+      // 那会拿后续消息当引用目标，正文与引用错位、整轮答非所问
       const quote = (payload.quote || payload.quoteForce === true || lastMention.get(conversationId) === true)
-        ? (payload.quoteId ?? lastMessageId.get(conversationId))
+        ? payload.quoteId
         : undefined;
       await onebot.sendGroup(groupId, payload.items, { quote });
       if (payload.media) await onebot.sendImageGroup(groupId, resolve(config.mediaRoot, payload.media));
