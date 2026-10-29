@@ -13,6 +13,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, type Models } from "@earendil-works/pi-ai/models";
 import {
   Harness,
+  configure,
   createRegistry,
   defineEntry,
   defineExtension,
@@ -210,6 +211,22 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       if (registered.has(name)) continue;
       console.warn(`[鱼缸] 会话键 ${key} 的人格 ${name} 未注册`);
       console.warn(`  该会话失去全部 section 与工具（含 say）`);
+    }
+  }
+
+  // 模型以部署配置为准：存量会话的 pi.agent 里钉着启动时的 model 引用。换模型后
+  // registry 只注册新 provider，旧引用（如 glm）查不到 → 每轮直接 no_model。
+  // 所以每次启动把已有会话的 model 对齐回当前配置；只写 model，不动 extensions/cwd。
+  {
+    const snapshot = await harness.snapshot(ChatsDoc, ctx);
+    const ids = new Set<number>(Object.values(snapshot?.chats ?? {}).map(Number));
+    for (const id of ids) {
+      if (!Number.isFinite(id)) continue;
+      const conversation = await harness.conversation(id as ConversationId, ctx);
+      if (!conversation) continue;
+      await harness.commit(async (tx) => {
+        await configure(tx, id as ConversationId, { model: options.model });
+      }, ctx);
     }
   }
 
