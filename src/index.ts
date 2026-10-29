@@ -440,50 +440,6 @@ if (existsSync(marker)) {
 await drainLoop();
 recoveringDrain = false;
 
-// 活体诊断端点：仅回环。GET /diag 在本进程内跑三种探测并返回结果，不碰任何会话
-const DIAG_PORT = Number(process.env.DIAG_PORT ?? 7788);
-import("node:http").then(({ createServer }) => {
-  const server = createServer((req, res) => {
-    if (req.url !== "/diag" || !process.env.SD_WEBUI_URL) { res.writeHead(404).end(); return; }
-    const u = new URL(process.env.SD_WEBUI_URL!);
-    const results: string[] = [];
-    const done = () => { res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }); res.end(results.join("\n")); };
-    let pending = 5;
-    const fin = (label: string, ok: string) => { results.push(`${label}: ${ok}`); if (--pending === 0) done(); };
-    // 1) 裸 TCP
-    import("node:net").then(({ connect }) => {
-      const s = connect({ host: u.hostname, port: Number(u.port || 80), timeout: 4000 });
-      s.on("connect", () => { s.destroy(); fin("tcp", "OK"); });
-      s.on("error", (e) => { s.destroy(); fin("tcp", "FAIL " + ((e as { code?: string }).code ?? e.message)); });
-      s.on("timeout", () => { s.destroy(); fin("tcp", "TIMEOUT"); });
-    });
-    // 2) 裸 http GET
-    import("node:http").then(({ request }) => {
-      const r = request({ host: u.hostname, port: Number(u.port || 80), path: "/sdapi/v1/options", timeout: 6000 }, (x) => { fin("http", "HTTP " + x.statusCode); x.resume(); });
-      r.on("error", (e) => fin("http", "FAIL " + ((e as { code?: string }).code ?? e.message)));
-      r.on("timeout", () => { r.destroy(); fin("http", "TIMEOUT"); });
-      r.end();
-    });
-    // 3) 网关与公网对照（定位封锁边界）
-    import("node:net").then(({ connect }) => {
-      const s = connect({ host: "SD_LAN_GW", port: 53, timeout: 4000 });
-      s.on("connect", () => { s.destroy(); fin("gateway", "OK"); });
-      s.on("error", (e) => { s.destroy(); fin("gateway", "FAIL " + ((e as { code?: string }).code ?? e.message)); });
-      s.on("timeout", () => { s.destroy(); fin("gateway", "TIMEOUT"); });
-    });
-    import("node:net").then(({ connect }) => {
-      const s = connect({ host: "open.bigmodel.cn", port: 443, timeout: 5000 });
-      s.on("connect", () => { s.destroy(); fin("bigmodel", "OK"); });
-      s.on("error", (e) => { s.destroy(); fin("bigmodel", "FAIL " + ((e as { code?: string }).code ?? e.message)); });
-      s.on("timeout", () => { s.destroy(); fin("bigmodel", "TIMEOUT"); });
-    });
-    // 4) undici fetch
-    fetch(process.env.SD_WEBUI_URL! + "/sdapi/v1/sd-models", { signal: AbortSignal.timeout(6000) })
-      .then((r) => fin("fetch", "HTTP " + r.status))
-      .catch((e) => fin("fetch", "FAIL " + ((e as { cause?: { code?: string } }).cause?.code ?? e.message)));
-  });
-  server.listen(DIAG_PORT, "127.0.0.1", () => console.log(`[fish] diag endpoint on 127.0.0.1:${DIAG_PORT}/diag`));
-});
 const shown = describeModel(config.modelConfig);
 console.log(`[鱼缸] 已连接，模型 ${shown.provider}/${shown.model}，工具 ${fish.toolNames.join("、")}`);
 console.log(`[鱼缸] 凭据 ${shown.key}（${shown.keySource}）`);

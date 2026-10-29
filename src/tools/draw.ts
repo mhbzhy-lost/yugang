@@ -5,10 +5,10 @@
  * 不让模型自己调参。图落 <mediaRoot>/gen/，出口仍走 say.media。
  * 一轮最多画一次，失败不消耗次数。
  */
-import { mkdirSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { spawn } from "node:child_process";
 import { connect } from "node:net";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
@@ -34,7 +34,21 @@ const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 4.5 };
  *  Apple 签名的 /usr/bin/ssh 豁免——draw 时拉起 ssh -L 常驻，鱼只连 127.0.0.1。
  *  隧道进程孤儿化也豁免，崩了下一次 draw 会重建。 */
 let tunnelChild: ReturnType<typeof spawn> | null = null;
-function ensureTunnel(realHost: string, realPort: number, localPort: number): Promise<void> {
+const TUNNEL_PID = join(process.cwd(), "var", "sd-tunnel.pid");
+
+/** 读 pidfile 杀掉跨鱼生命周期的旧隧道（钉死隧道数量恒为 1）。 */
+function killStaleTunnel(): void {
+  try {
+    const pid = Number(readFileSync(TUNNEL_PID, "utf8").trim());
+    if (Number.isFinite(pid) && pid > 0) {
+      try { process.kill(pid, "SIGTERM"); } catch { /* 已死 */ }
+      try { rmSync(TUNNEL_PID); } catch { /* 无妨 */ }
+    }
+  } catch { /* 无 pidfile */ }
+  if (tunnelChild && tunnelChild.exitCode === null) tunnelChild.kill();
+}
+
+function ensureTunnel(realHost: string, realPort: number, localPort: number, rebuild = false): Promise<void> {
   const tryPort = (): Promise<boolean> =>
     new Promise((resolve) => {
       const probe = connect({ host: "127.0.0.1", port: localPort, timeout: 800 });
@@ -43,14 +57,20 @@ function ensureTunnel(realHost: string, realPort: number, localPort: number): Pr
       probe.on("timeout", () => { probe.destroy(); resolve(false); });
     });
   return (async (): Promise<void> => {
-    if (await tryPort()) return;
-    if (tunnelChild && tunnelChild.exitCode === null) tunnelChild.kill();
+    if (!rebuild && await tryPort()) return;
+    // rebuild 或端口不通：先清旧（含半死隧道——ssh 活着但转发目标已死时端口仍会被接受，
+    // 只有请求层失败才能发现，所以 draw 的失败路径会带 rebuild=true 重来一次）
+    killStaleTunnel();
+    await new Promise((r) => setTimeout(r, 300));
     tunnelChild = spawn(
       "/usr/bin/ssh",
       ["-N", "-L", `127.0.0.1:${localPort}:${realHost}:${realPort}`, "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", `${process.env.USER ?? "macmini-user"}@127.0.0.1`],
       { detached: true, stdio: "ignore" },
     );
     tunnelChild.unref();
+    if (tunnelChild.pid) {
+      try { mkdirSync(join(process.cwd(), "var"), { recursive: true }); writeFileSync(TUNNEL_PID, String(tunnelChild.pid)); } catch { /* 无妨 */ }
+    }
     for (let i = 0; i < 16; i++) {
       await new Promise((r) => setTimeout(r, 500));
       if (await tryPort()) return;
@@ -112,9 +132,7 @@ export function createDrawTool(deps: DrawDeps) {
           try {
             return await new Promise<string>((resolve, reject) => {
               const req = request(
-                // 显式绑定 en0 源地址：mini 上 Clash 的 bridge100 挂了 REJECT 默认路由，
-                // 不绑定的套接字可能落到那条死路由上（EHOSTUNREACH）
-                { host: u.hostname, port: Number(u.port || 80), path: u.pathname, method: "POST", timeout: 120_000, localAddress: process.env.SD_BIND_IP || undefined, headers: { "content-type": "application/json" } },
+                { host: u.hostname, port: Number(u.port || 80), path: u.pathname, method: "POST", timeout: 120_000, headers: { "content-type": "application/json" } },
                 (res) => {
                   const chunks: Buffer[] = [];
                   res.on("data", (c: Buffer) => chunks.push(c));
@@ -133,7 +151,16 @@ export function createDrawTool(deps: DrawDeps) {
         throw last;
       };
       try {
-        const raw = await post();
+        let raw: string;
+        try {
+          raw = await post();
+        } catch (first) {
+          // 半死隧道自愈：请求失败但隧道端口还在听（Windows 重启后的典型态）——强制重建再来一次
+          const halfDead = first instanceof Error && !/^HTTP /.test(first.message);
+          if (!halfDead) throw first;
+          await ensureTunnel(realHost, realPort, localPort, true);
+          raw = await post();
+        }
         const j = JSON.parse(raw) as { images?: string[] };
         const b64 = j.images?.[0];
         if (!b64) throw new Error("no image");
@@ -150,12 +177,8 @@ export function createDrawTool(deps: DrawDeps) {
           }],
         };
       } catch (error) {
-        const cause = (error as { cause?: { code?: string; message?: string } })?.cause;
-        console.error("[fish] draw error:", error, "cause:", cause);
-        throw new Error(
-          (deps.prompts.messages["draw_failed"] ?? "draw_failed") +
-            `: ${error instanceof Error ? error.message : "unknown"}${cause ? ` (${cause.code ?? cause.message})` : ""}`,
-        );
+        console.error(`[fish] draw error: ${error instanceof Error ? error.message : "unknown"}`);
+        throw new Error((deps.prompts.messages["draw_failed"] ?? "draw_failed") + `: ${error instanceof Error ? error.message : "unknown"}`);
       } finally {
         clearTimeout(timer);
       }
