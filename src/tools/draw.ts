@@ -21,7 +21,8 @@ export interface DrawDeps {
 }
 
 const DRAWN = new Map<string, unknown>();
-// 预设：SDXL 动漫模型竖版出图；步数与 CFG 取 Forge 常用档。模型/采样器用 WebUI 端当前配置。
+// 预设：质量词前置注入，模型的 prompt 附在后面；SDXL 动漫模型竖版；步数与 CFG 取 Forge 常用档。模型/采样器用 WebUI 端当前配置。
+const PRESET_POSITIVE = "masterpiece, best quality, score_7, score_8, score_9, (anime:1.2), ";
 const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 4.5 };
 
 export function createDrawTool(deps: DrawDeps) {
@@ -61,7 +62,7 @@ export function createDrawTool(deps: DrawDeps) {
           signal: ctrl.signal,
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            prompt: positive,
+            prompt: PRESET_POSITIVE + positive,
             negative_prompt: (args.negative ?? "").trim(),
             ...PRESET,
           }),
