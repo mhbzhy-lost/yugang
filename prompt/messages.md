@@ -5,12 +5,10 @@ say_sent: 已发到群里
 say_once: 这一轮已经说了 3 条，就此打住
 empty: 空消息，没什么可说的
 too_long: 太长了（{{length}} 字，上限 {{limit}}），压成一句群里的话
-too_many_lines: 换行太多，群聊里就是一句话，不要排版
 markdown: 不要用 {{what}}
 secret: {{what}}
 duplicate: 刚说过一样的话，换个说法或者别说
 quota_run: 这一轮已经说了 {{count}} 条，够了
-quota_minute: 这个群一分钟内说得够多了，先闭嘴
 provenance: 这段是从思考或工具结果里抄的（连续 {{overlap}} 字重合），自己重说一遍
 media_outside: 图片路径不在媒体目录里
 media_missing: 找不到这个图片文件

@@ -22,9 +22,9 @@ test("正常一句话放行", () => {
   assert.equal(validateOutbound({ messages: ["在的，刚在刷手机"] }, ctx()), null);
 });
 
-test("长文放行，多行仍被拒", () => {
-  assert.equal(validateOutbound({ messages: ["字".repeat(200)] }, ctx()), null); // 字数上限已按主人要求移除
-  assert.equal(validateOutbound({ messages: ["一\n二\n三\n四"] }, ctx())?.code, "too_many_lines");
+test("长文与多行均放行", () => {
+  assert.equal(validateOutbound({ messages: ["字".repeat(200)] }, ctx()), null); // 字数上限已移除
+  assert.equal(validateOutbound({ messages: ["一\n二\n三\n四"] }, ctx()), null); // 换行限制已移除
 });
 
 test("markdown 结构被拒（思考 dump 的典型特征）", () => {
@@ -57,7 +57,7 @@ test("媒体必须在白名单目录内且真是图片", () => {
 test("配额与去重", () => {
   assert.equal(validateOutbound({ messages: ["嗯"] }, ctx({ sentThisRun: 4 }))?.code, "quota_run");
   const recent = Array.from({ length: 8 }, () => ({ text: "别的", at: 999_000 }));
-  assert.equal(validateOutbound({ messages: ["嗯"] }, ctx({ recent }))?.code, "quota_minute");
+  assert.equal(validateOutbound({ messages: ["嗯"] }, ctx({ recent })), null); // 每分钟条数限制已移除，不再拒
   assert.equal(validateOutbound({ messages: ["在的"] }, ctx({ recent: [{ text: "在的。", at: 999_500 }] }))?.code, "duplicate");
 });
 

@@ -22,10 +22,10 @@ export interface EgressLimits {
 
 export const DEFAULT_LIMITS: Omit<EgressLimits, "mediaRoot"> = {
   maxChars: Infinity, // 字数上限已按主人要求移除；换行限制仍在
-  maxNewlines: 2,
+  maxNewlines: Infinity, // 换行限制已按主人要求移除
   maxMessages: 3,
   maxPerRun: 3,
-  maxPerMinute: 6,
+  maxPerMinute: Infinity, // 每分钟条数限制已按主人要求移除
   // media 只转发文件不进模型上下文，QQ 端容量大：媒体大小限制放宽到 32MB
   maxMediaBytes: 32 * 1024 * 1024,
 };
@@ -59,12 +59,10 @@ export const REJECTION_CODES = [
   "empty",
   "too_many_messages",
   "too_long",
-  "too_many_lines",
   "markdown",
   "secret",
   "duplicate",
   "quota_run",
-  "quota_minute",
   "provenance",
   "media_outside",
   "media_missing",
@@ -83,20 +81,15 @@ export function validateOutbound(intent: EgressIntent, ctx: EgressContext): Reje
   if (messages.length > ctx.limits.maxMessages) return { code: "too_many_messages" };
 
   // 带 media 的发送（画完的图/表情）是画图链路的必要出口，不占每轮额度；
-  // 纯文字照旧防话痨。分钟级 quota_minute 对两者都生效（防刷屏）。
+  // 纯文字照旧防话痨。
   if (!intent.media && ctx.sentThisRun + messages.length > ctx.limits.maxPerRun) {
     return { code: "quota_run", vars: { count: String(ctx.sentThisRun) } };
-  }
-  const minuteAgo = ctx.now - 60_000;
-  const recentMinute = ctx.recent.filter((m) => m.at >= minuteAgo);
-  if (recentMinute.length + messages.length > ctx.limits.maxPerMinute) {
-    return { code: "quota_minute" };
   }
 
   for (const [index, text] of messages.entries()) {
     const single = validateOne(text, ctx);
     if (single) return { ...single, index };
-    if (recentMinute.some((m) => sameText(m.text, text))) return { code: "duplicate", index };
+    if (ctx.recent.some((m) => sameText(m.text, text))) return { code: "duplicate", index };
   }
 
   if (intent.media !== undefined) {
@@ -112,7 +105,6 @@ function validateOne(text: string, ctx: EgressContext): Rejection | null {
   if (text.length > ctx.limits.maxChars) {
     return { code: "too_long", vars: { length: String(text.length), limit: String(ctx.limits.maxChars) } };
   }
-  if (countNewlines(text) > ctx.limits.maxNewlines) return { code: "too_many_lines" };
 
   const markup = findMarkup(text);
   if (markup) return { code: "markdown", vars: { what: markup } };
@@ -126,11 +118,6 @@ function validateOne(text: string, ctx: EgressContext): Rejection | null {
   return null;
 }
 
-function countNewlines(text: string): number {
-  let n = 0;
-  for (const ch of text) if (ch === "\n") n++;
-  return n;
-}
 
 const MARKUP_RULES: readonly [RegExp, string][] = [
   [/^#{1,6}\s/m, "markdown 标题"],
