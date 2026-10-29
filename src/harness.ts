@@ -158,8 +158,8 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         models,
         model: options.compact.model ?? options.model,
         prompts,
-        maxEntries: options.compact.maxEntries ?? 200,
-        maxChars: options.compact.maxChars ?? 30_000,
+        maxEntries: options.compact.maxEntries ?? 80,
+        maxChars: options.compact.maxChars ?? 12_000,
         onError: (error) => console.error("[鱼缸] 压缩失败", error instanceof Error ? error.message : error),
       })
     : undefined;

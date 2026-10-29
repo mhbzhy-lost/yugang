@@ -33,7 +33,8 @@ const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
 mkdirSync(HOME, { recursive: true });
 
 const config = {
-  onebotUrl: process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001",  onebotToken: process.env.ONEBOT_TOKEN,
+  onebotUrl: process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001",
+  onebotToken: process.env.ONEBOT_TOKEN,
   // 模型与凭据：从 ~/pi-config 抄（provider 条目 + auth.json 的 key），见 src/model-config.ts
   modelConfig: loadModelConfig(),
   gateModel: {
@@ -50,7 +51,7 @@ const config = {
   cooldownMs: Number(process.env.COOLDOWN_MS ?? "90000"),
   ambientChance: Number(process.env.AMBIENT_CHANCE ?? "0.1"),
   // 周报群：每周日 21 点把这一周的群画像发到这个群（留空 = 不发）
-  weeklyGroupId: process.env.WEEKLY_GROUP_ID ?? "10001",
+  weeklyGroupId: process.env.WEEKLY_GROUP_ID ?? "",
 };
 mkdirSync(config.mediaRoot, { recursive: true });
 
@@ -105,8 +106,8 @@ const fish = await openFish({
   workspaceRoot: config.workspaceRoot,
   compact: {
     model: gateModel,
-    maxEntries: Number(process.env.COMPACT_MAX_ENTRIES ?? "200"),
-    maxChars: Number(process.env.COMPACT_MAX_CHARS ?? "30000"),
+    maxEntries: Number(process.env.COMPACT_MAX_ENTRIES ?? "80"),
+    maxChars: Number(process.env.COMPACT_MAX_CHARS ?? "12000"),
   },
   // outbox 里的消息由 fish.drain() 逐条交给这里；幂等表再加一层保险
   emit: async (conversationId, payload) => {

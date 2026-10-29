@@ -5,7 +5,7 @@
  * 图存到 <mediaRoot>/gen/，返回 gen/ 引用，真正发图仍走 say 的 media 参数（出口唯一）。
  * 一轮最多生一次，只有真的拿到图才消耗机会。
  */
-import { mkdirSync, writeFile } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { Type } from "@earendil-works/pi-ai";
@@ -100,7 +100,7 @@ export function createImggenTool(deps: ImggenDeps) {
         const file = `${Date.now()}-${randomUUID().slice(0, 8)}.png`;
         const img = await doFetch(urls[0]!, { signal: ctrl.signal });
         if (!img.ok) throw new Error(`download HTTP ${img.status}`);
-        await writeFile(join(outDir, file), new Uint8Array(await img.arrayBuffer()));
+        writeFileSync(join(outDir, file), new Uint8Array(await img.arrayBuffer()));
 
         if (round !== undefined) GENERATED.set(api.conversationId, round);
         return {

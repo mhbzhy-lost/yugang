@@ -75,7 +75,7 @@ export function renderWeekly(stats: WeeklyStats): string[] {
   const speakers = stats.topSpeakers.map((s, i) => `${i + 1}.${s.nickname}(${s.count})`).join(" ");
   const hours = stats.topHours.map((h) => `${h.hour}点(${h.count})`).join(" ");
   return [
-    "【本周搬史群周报】",
+    "【本周群周报】",
     `七天发言 ${stats.totalIn} 条，我插了 ${stats.totalOut} 句嘴`,
     `逐日：${day}`,
     `话痨榜：${speakers || "没人说话"}`,
