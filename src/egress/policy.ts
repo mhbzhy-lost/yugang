@@ -21,7 +21,7 @@ export interface EgressLimits {
 }
 
 export const DEFAULT_LIMITS: Omit<EgressLimits, "mediaRoot"> = {
-  maxChars: 120,
+  maxChars: Infinity, // 字数上限已按主人要求移除；换行限制仍在
   maxNewlines: 2,
   maxMessages: 3,
   maxPerRun: 3,

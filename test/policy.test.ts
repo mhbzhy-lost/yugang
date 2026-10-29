@@ -22,8 +22,8 @@ test("正常一句话放行", () => {
   assert.equal(validateOutbound({ messages: ["在的，刚在刷手机"] }, ctx()), null);
 });
 
-test("过长与多行被拒", () => {
-  assert.equal(validateOutbound({ messages: ["字".repeat(200)] }, ctx())?.code, "too_long");
+test("长文放行，多行仍被拒", () => {
+  assert.equal(validateOutbound({ messages: ["字".repeat(200)] }, ctx()), null); // 字数上限已按主人要求移除
   assert.equal(validateOutbound({ messages: ["一\n二\n三\n四"] }, ctx())?.code, "too_many_lines");
 });
 
