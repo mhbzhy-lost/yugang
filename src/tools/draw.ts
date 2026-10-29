@@ -33,8 +33,8 @@ const DRAWN = new Map<string, unknown>();
 const PRESET_POSITIVE = "masterpiece, best quality, score_7, score_8, score_9, (anime:1.2), ";
 const PRESET_NEGATIVE = "low quality, worst quality, score_1, score_2, score_3, early, old, shiny skin, ";
 const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 4.5, sampler_name: "ER SDE", scheduler: "beta" };
-/** 高分辨率模式（hires fix）：Anime6B 放大 2 倍，二段步数 0=继承主步数，denoising 0.4，其余默认。 */
-const HIRES = { enable_hr: true, hr_upscaler: "Anime6B", hr_scale: 2, hr_second_pass_steps: 0, denoising_strength: 0.4 };
+/** 高分辨率模式（hires fix）：RealESRGAN anime_6B 放大 2 倍，二段步数 0=继承主步数，denoising 0.4，其余默认。 */
+const HIRES = { enable_hr: true, hr_upscaler: "RealESRGAN_x4plus_anime_6B", hr_scale: 2, hr_second_pass_steps: 0, denoising_strength: 0.4 };
 /** 画风预设：追加在 positive 末尾的额外注入。 */
 const PRESETS: Record<string, string> = {
   default: "",
