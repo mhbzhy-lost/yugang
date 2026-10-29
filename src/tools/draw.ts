@@ -58,27 +58,40 @@ export function createDrawTool(deps: DrawDeps) {
 
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      // EHOSTUNREACH 偶发（对端网卡省电不回 ARP）：重试三次，间隔 2 秒
-      const attempt = async (): Promise<Response> => {
+      // 裸 http 绕开 undici：活体进程里 fetch 对局域网稳定 EHOSTUNREACH，裸 socket 全通
+      const post = async (): Promise<string> => {
+        const u = new URL(`${deps.baseUrl}/sdapi/v1/txt2img`);
+        const body = JSON.stringify({
+          prompt: PRESET_POSITIVE + positive,
+          negative_prompt: PRESET_NEGATIVE + (args.negative ?? "").trim(),
+          ...PRESET,
+        });
         let last: unknown;
         for (let i = 0; i < 3; i++) {
-          try { return await doFetch(`${deps.baseUrl}/sdapi/v1/txt2img`, {
-          method: "POST",
-          signal: ctrl.signal,
-          headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              prompt: PRESET_POSITIVE + positive,
-              negative_prompt: PRESET_NEGATIVE + (args.negative ?? "").trim(),
-              ...PRESET,
-            }),
-          }); } catch (e) { last = e; await new Promise((r) => setTimeout(r, 2000)); }
+          try {
+            return await new Promise<string>((resolve, reject) => {
+              const req = request(
+                { host: u.hostname, port: Number(u.port || 80), path: u.pathname, method: "POST", timeout: 120_000, headers: { "content-type": "application/json" } },
+                (res) => {
+                  const chunks: Buffer[] = [];
+                  res.on("data", (c: Buffer) => chunks.push(c));
+                  res.on("end", () => {
+                    if ((res.statusCode ?? 500) >= 400) reject(new Error(`HTTP ${res.statusCode}`));
+                    else resolve(Buffer.concat(chunks).toString("utf8"));
+                  });
+                },
+              );
+              req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+              req.on("error", reject);
+              req.end(body);
+            });
+          } catch (e) { last = e; await new Promise((r) => setTimeout(r, 2000)); }
         }
         throw last;
       };
       try {
-        const res = await attempt();
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const j = (await res.json()) as { images?: string[] };
+        const raw = await post();
+        const j = JSON.parse(raw) as { images?: string[] };
         const b64 = j.images?.[0];
         if (!b64) throw new Error("no image");
 
