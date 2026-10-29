@@ -172,13 +172,29 @@ export class OneBot {
         const imageSegs = Array.isArray(quotedMessage)
           ? quotedMessage.filter((s: OneBotSegment) => s?.type === "image").slice(0, 2)
           : [];
+        // 被引消息的文本：纯文本被引也要把原文带上，否则鱼答非所问（旧版只管图）
+        const quotedText = Array.isArray(quotedMessage)
+          ? quotedMessage.filter((s: OneBotSegment) => s?.type === "text")
+              .map((s: OneBotSegment) => String((s.data as Record<string, unknown> | undefined)?.["text"] ?? ""))
+              .join("")
+              .trim()
+              .slice(0, 200)
+          : "";
+        const sender = (quoted?.data ?? quoted)?.sender ?? {};
+        const quotedFrom = String(sender.card || sender.nickname || "").trim().slice(0, 20);
+        const textPart = quotedText
+          ? `${quotedFrom ? `${quotedFrom}：` : ""}「${quotedText}」`
+          : "";
         const savedList: string[] = [];
         for (const seg of imageSegs) {
           const saved = await this.downloadImage(seg, this.#mediaRoot);
           if (saved) savedList.push(saved.ref);
         }
-        if (savedList.length > 0) shown = savedList.map((r) => `[回复的图 ${r}]`).join(" ");
-        else if (imageSegs.length === 0) shown = "[回复的消息没有图]";
+        if (savedList.length > 0) {
+          shown = [textPart, ...savedList.map((r) => `[回复的图 ${r}]`)].filter(Boolean).join(" ");
+        } else if (imageSegs.length === 0) {
+          shown = textPart || "[回复的消息看不到内容]";
+        }
       } catch {
         // 保留默认占位符
       }
