@@ -89,7 +89,9 @@ test("look 能看图，越界和不存在都被拦", async () => {
     const view = await root.viewState(ctx);
     const result = view.value.entries.filter((e) => e.kind === "pi.tool-result").at(-1);
     const content = JSON.stringify(result?.model ?? "");
-    assert.match(content, /image\/png/, "没把图交给模型");
+    // 新契约：图不进主会话，look 返回的是描述文字（faux 模型的文本回复），不再有 image 块
+    assert.ok(content.includes("toolName\":\"look\""), "look 结果存在");
+    assert.ok(!content.includes("image/"), "主会话不应出现图片块");
     view.dispose();
 
     faux.setResponses([

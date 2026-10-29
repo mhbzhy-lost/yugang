@@ -21,6 +21,10 @@ import { createTagsTool } from "./tags.ts";
 export interface ToolDeps {
   mediaRoot: string;
   prompts: PromptSet;
+  /** 模型池：look 用独立请求把图描述成文字，图片不进主会话。 */
+  models?: import("@earendil-works/pi-ai").Models;
+  /** look 的视觉描述模型；缺省用主模型。 */
+  visionModel?: { provider: string; modelId: string };
   /** DeepSeek Search API 的 key；有才具备联网搜索能力。 */
   searchKey?: string;
   /** 主人 QQ：fs/restart 自改工具的身份闸。缺省则这些工具不可用（永远拒绝）。 */

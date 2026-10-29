@@ -104,6 +104,8 @@ export interface FishOptions {
     maxEntries?: number;
     maxChars?: number;
   };
+  /** look 的视觉描述模型；缺省用主模型。 */
+  visionModel?: ModelRef;
   emit: (conversationId: ConversationId, payload: OutboundPayload) => void | Promise<void>;
   /** 贴表情回应，只带表情编号；目标消息由宿主自己记。 */
   react: (conversationId: ConversationId, emoji: string) => void | Promise<void>;
@@ -148,7 +150,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
 
   const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf });
   const react = createReactTool({ prompts, react: options.react, now });
-  const tools = createTools({ mediaRoot, prompts, searchKey: options.searchKey, imggenKey: options.imggenKey, sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, bypassOf: options.bypassOf });
+  const tools = createTools({ mediaRoot, prompts, models, visionModel: options.visionModel ?? options.model, searchKey: options.searchKey, imggenKey: options.imggenKey, sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, bypassOf: options.bypassOf });
 
   // 启动即校验：每个工具都必须有一份 prompt/tools/<name>.md，缺了就起不来
   for (const tool of [say, react, ...tools]) {

@@ -106,6 +106,10 @@ const fish = await openFish({
   storage: await openNodeSqliteStorage(join(HOME, "fish.db")),
   models,
   model: mainModel,
+  // look 的视觉描述模型：缺省用主模型自身；可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型
+  visionModel: process.env.VISION_MODEL_ID
+    ? { provider: process.env.VISION_PROVIDER ?? config.modelConfig.providerId, modelId: process.env.VISION_MODEL_ID }
+    : undefined,
   promptRoot: config.promptRoot,
   mediaRoot: config.mediaRoot,
   // 搜索凭据：与模型凭据同源（config/auth.json 的 deepseek 条目），缺了工具会以可读错误回应

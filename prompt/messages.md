@@ -52,6 +52,7 @@ draw_done: gen/{{file}} — 画好了，用 say 的 media 参数发出去
 tags_empty: 词表还没就绪或关键词为空
 tags_none: 词表里没有「{{keyword}}」，换英文关键词试试
 draw_off: 本地画图没配置地址，用不了
+look_describe: 看一眼这张图，用两三句话告诉我图里有什么：主体、动作、画风、图上的文字。简洁准确，不要猜测看不到的细节。
 bypass_placeholder: （一条画图指令：图片的细节发送者已单独指定，直接用 draw 画一张就好）
 cmd_personas: 可用人格：{{list}}（用 /切换人格 <名> 切换）
 cmd_switched: 切换完成，当前人格：{{persona}}
