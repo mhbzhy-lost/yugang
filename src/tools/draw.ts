@@ -11,6 +11,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { userInfo } from "node:os";
 import { connect } from "node:net";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
@@ -19,7 +20,7 @@ import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
 export interface DrawDeps {
   prompts: PromptSet;
   mediaRoot: string;
-  /** SD WebUI 的 baseUrl，如 http://SD_LAN_HOST:7860 */
+  /** SD WebUI 的 baseUrl，如 http://<局域网IP>:7860 */
   baseUrl: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
@@ -66,7 +67,7 @@ async function ensureTunnel(realHost: string, realPort: number, localPort: numbe
   await new Promise((r) => setTimeout(r, 300));
   tunnelChild = spawn(
     "/usr/bin/ssh",
-    ["-N", "-L", `127.0.0.1:${localPort}:${realHost}:${realPort}`, "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", `${process.env.USER ?? "macmini-user"}@127.0.0.1`],
+    ["-N", "-L", `127.0.0.1:${localPort}:${realHost}:${realPort}`, "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", `${userInfo().username}@127.0.0.1`],
     { detached: true, stdio: "ignore" },
   );
   tunnelChild.unref();
