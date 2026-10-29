@@ -282,7 +282,7 @@ async function handleCommand(msg: IncomingMessage): Promise<string | null> {
     quoteId: msg.messageId,
     quoteForce: true,
     at: Date.now(),
-    key: `cmd:${msg.messageId}`, // 幂等键：崩溃重放不重复发
+    key: `cmd:${msg.messageId ?? Date.now()}`, // 幂等键：崩溃重放不重复发
   });
   await drainLoop();
   return text;

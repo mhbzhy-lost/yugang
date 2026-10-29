@@ -121,7 +121,11 @@ export class OneBot {
     // 展开先于图片落盘：子图占位这时并入 imageSegments，随下面的既有循环一起下载。
     // 拉取失败只把占位换成失败标记，不抛错，不阻断整条消息进闸。
     for (const forwardId of parsed.forwardIds ?? []) {
-      if (!forwardId) continue;
+      if (!forwardId) {
+        // 段缺失 id：占位直接落失败标记，不留「展开中」悬在文本里误导
+        parsed.text = parsed.text.replace("[转发合集，展开中]", "[转发合集，展开失败]");
+        continue;
+      }
       const shown = await this.#expandForward(forwardId, parsed);
       parsed.text = parsed.text.replace("[转发合集，展开中]", shown);
     }
