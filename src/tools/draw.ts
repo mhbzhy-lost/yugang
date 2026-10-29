@@ -85,9 +85,11 @@ export function createDrawTool(deps: DrawDeps) {
           }],
         };
       } catch (error) {
+        const cause = (error as { cause?: { code?: string; message?: string } })?.cause;
+        console.error("[fish] draw error:", error, "cause:", cause);
         throw new Error(
           (deps.prompts.messages["draw_failed"] ?? "draw_failed") +
-            `: ${error instanceof Error ? error.message : "unknown"}`,
+            `: ${error instanceof Error ? error.message : "unknown"}${cause ? ` (${cause.code ?? cause.message})` : ""}`,
         );
       } finally {
         clearTimeout(timer);
