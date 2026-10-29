@@ -178,13 +178,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   // 所以显式关掉：上下文靠分群隔离与 reset 控制，而不是靠一个我们看不到的 prompt。
   // extensions 必须钉住默认实例：缺省语义是「全部已装、后装者胜」——不钉住的话，
   // 没写 selection 的存量会话会被后装的 fish:<名> 顶替 persona section。
-  const settings = {
-    compaction: { enabled: false },
-    extensions: [fishExtension],
-    // 请求级超时：模型请求 hang 死时占着调度槽只能靠重启解救（实测卡过 4 分钟）；
-    // 超时后交给 pi-durable 的 retry 策略，不再无限等。正常轮 5-30s，长思考/搜索轮 120s 够用。
-    stream: { timeoutMs: 120_000, maxRetries: 1 },
-  };
+  const settings = { compaction: { enabled: false }, extensions: [fishExtension] };
 
   const harness = await Harness.open(
     options.storage,
