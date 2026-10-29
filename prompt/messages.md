@@ -57,6 +57,8 @@ look_unstable: 图片描述服务暂时不稳，这次没看成，跟用户说�
 look_cmd_off: 看图功能已临时关闭，等模型服务恢复了再让你看，可以告诉对方先用文字描述图片
 cmd_look_off: 已关看图。网关视觉服务恢复后用 /开看图 重新打开
 cmd_look_on: 已开看图
+cmd_compacted: 已压缩：{{entries}} 条/{{chars}} 字换成新页
+cmd_compact_skip: 这个会话没什么可压的
 bypass_placeholder: （一条画图指令：图片的细节发送者已单独指定，直接用 draw 画一张就好）
 cmd_personas: 可用人格：{{list}}（用 /切换人格 <名> 切换）
 cmd_switched: 切换完成，当前人格：{{persona}}

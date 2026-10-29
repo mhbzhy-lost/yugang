@@ -34,17 +34,17 @@ export interface CompactResult {
 }
 
 export interface Compactor {
-  maybeCompact(conversation: Conversation): Promise<CompactResult>;
+  maybeCompact(conversation: Conversation, force?: boolean): Promise<CompactResult>;
 }
 
 export function createCompactor(options: CompactorOptions): Compactor {
   return {
-    async maybeCompact(conversation) {
+    async maybeCompact(conversation, force = false) {
       const rendered = await renderTranscript(conversation);
       if (rendered.transcript.trim().length === 0) return { compacted: false, reason: "empty" };
 
       const { entries, chars, transcript } = rendered;
-      if (entries < options.maxEntries && chars < options.maxChars) {
+      if (!force && entries < options.maxEntries && chars < options.maxChars) {
         return { compacted: false, reason: "below_threshold", entries, chars };
       }
 

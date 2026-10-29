@@ -281,6 +281,12 @@ async function handleCommand(msg: IncomingMessage): Promise<string | null> {
   } else if (msg.text === "/开看图") {
     setLookDisabled(false);
     text = fish.prompts.messages["cmd_look_on"] ?? "";
+  } else if (msg.text === "/压缩") {
+    // 强制换页当前会话（无视阈值）：混入的重内容（图块等）立即清掉
+    const result = await fish.compact(conv, true);
+    text = result.compacted
+      ? renderTemplate(fish.prompts.messages["cmd_compacted"] ?? "", { entries: String(result.entries), chars: String(result.chars) })
+      : (fish.prompts.messages["cmd_compact_skip"] ?? "");
   } else if (target) {
     const persona = target[1];
     if (fish.personas.includes(persona)) {

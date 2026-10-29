@@ -124,7 +124,7 @@ export interface Fish {
   openers: Record<string, string>;
   toolNames: string[];
   /** 压缩一次上下文；没到阈值就什么都不做。 */
-  compact(conversation: Conversation): Promise<CompactResult>;
+  compact(conversation: Conversation, force?: boolean): Promise<CompactResult>;
   /** 取（或创建）某个群在指定人格下的会话；映射持久化，重启后还是同一个会话。未注册人格回退默认。 */
   group(groupKey: string, profile?: GroupProfile, persona?: string): Promise<Conversation>;
   /** 把 outbox 里排队的消息发出去；返回实际发了几条。 */
@@ -297,9 +297,9 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     personas: [DEFAULT_PERSONA, ...Object.keys(prompts.personas)],
     openers,
     toolNames: [say.name, react.name, ...tools.map((t) => t.name)],
-    async compact(conversation) {
+    async compact(conversation, force) {
       if (!compactor) return { compacted: false, reason: "below_threshold" };
-      return compactor.maybeCompact(conversation);
+      return compactor.maybeCompact(conversation, force);
     },
     async enqueue(conversationId, payload) {
       await harness.commit(async (tx) => {
