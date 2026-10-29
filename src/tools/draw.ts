@@ -33,8 +33,10 @@ const DRAWN = new Map<string, unknown>();
 const PRESET_POSITIVE = "masterpiece, best quality, score_7, score_8, score_9, (anime:1.2), ";
 const PRESET_NEGATIVE = "low quality, worst quality, score_1, score_2, score_3, early, old, shiny skin, ";
 const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 4.5, sampler_name: "ER SDE", scheduler: "beta" };
-/** 高分辨率模式（hires fix）：RealESRGAN anime_6B 放大 2 倍，二段步数 0=继承主步数，denoising 0.4，其余默认。 */
-const HIRES = { enable_hr: true, hr_upscaler: "RealESRGAN_x4plus_anime_6B", hr_scale: 2, hr_second_pass_steps: 0, denoising_strength: 0.4 };
+/** 高分辨率模式（hires fix）：RealESRGAN anime_6B 放大 2 倍，二段步数 0=继承主步数，denoising 0.4，其余默认。
+ *  hr_additional_modules 必须显式给 ["Use same choices"]（沿用当前模块）：Forge Neo 的 API 不传时为 None，
+ *  会在采样后的换模块环节炸 TypeError（'NoneType' object is not iterable）。 */
+const HIRES = { enable_hr: true, hr_upscaler: "RealESRGAN_x4plus_anime_6B", hr_scale: 2, hr_second_pass_steps: 0, denoising_strength: 0.4, hr_additional_modules: ["Use same choices"] };
 /** 画风预设：追加在 positive 末尾的额外注入。 */
 const PRESETS: Record<string, string> = {
   default: "",
