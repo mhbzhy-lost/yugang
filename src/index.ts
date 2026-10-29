@@ -558,6 +558,7 @@ process.on("SIGTERM", () => {
   console.log("[鱼缸] SIGTERM，冲刷后退出");
   void (async () => {
     try { const n = await fish.drain(); if (n > 0) console.log(`[鱼缸] 退出前补发 ${n} 条`); } catch { /* 尽力而为 */ }
+    onebot.close(); // 先冲刷再断 WS：让协议端立即感知重连，不等它自己的超时
     try { await fish.close(); } catch { /* 尽力而为 */ }
     process.exit(0);
   })();

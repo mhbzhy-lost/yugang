@@ -389,6 +389,16 @@ export class OneBot {
       return null;
     }
   }
+
+  /** 优雅退出用：显式断开 WS，让协议端立即感知重连，不等它自己的超时。 */
+  close(): void {
+    try {
+      this.#ws?.close();
+    } catch {
+      /* 已断则罢 */
+    }
+    this.#ws = undefined;
+  }
 }
 
 // 魔数嗅探：返回真实扩展名；convert 标记需要 sips 归一化为 JPEG 的格式。
