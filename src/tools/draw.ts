@@ -57,17 +57,25 @@ export function createDrawTool(deps: DrawDeps) {
 
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      try {
-        const res = await doFetch(`${deps.baseUrl}/sdapi/v1/txt2img`, {
+      // EHOSTUNREACH 偶发（对端网卡省电不回 ARP）：重试三次，间隔 2 秒
+      const attempt = async (): Promise<Response> => {
+        let last: unknown;
+        for (let i = 0; i < 3; i++) {
+          try { return await doFetch(`${deps.baseUrl}/sdapi/v1/txt2img`, {
           method: "POST",
           signal: ctrl.signal,
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            prompt: PRESET_POSITIVE + positive,
-            negative_prompt: PRESET_NEGATIVE + (args.negative ?? "").trim(),
-            ...PRESET,
-          }),
-        });
+            body: JSON.stringify({
+              prompt: PRESET_POSITIVE + positive,
+              negative_prompt: PRESET_NEGATIVE + (args.negative ?? "").trim(),
+              ...PRESET,
+            }),
+          }); } catch (e) { last = e; await new Promise((r) => setTimeout(r, 2000)); }
+        }
+        throw last;
+      };
+      try {
+        const res = await attempt();
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const j = (await res.json()) as { images?: string[] };
         const b64 = j.images?.[0];
