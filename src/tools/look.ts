@@ -7,7 +7,9 @@
  * 图不进主会话：look 内部用独立请求让视觉模型把图描述成文字，只把描述返回给主会话，
  * 主会话 transcript 从头到尾都是纯文本（缓存前缀稳定，也不反复撞网关的视觉管线）。
  */
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve, sep, extname } from "node:path";
 import { Type, type Models } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
@@ -122,42 +124,47 @@ async function describeImage(
   // pi-ai 内部 model.input 取不到而抛错（describe 永远失败 → 退回原图 → 卡死）
   const model = deps.models.getModel(deps.visionModel.provider, deps.visionModel.modelId);
   if (!model) return null;
-  try {
-    const stream = deps.models.streamSimple(model, {
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "image", data: base64, mimeType },
-            { type: "text", text: deps.prompts.messages["look_describe"] ?? "描述这张图" },
-          ],
-        },
-      ],
-    });
-    const message = await stream.result();
-    const text = message.content
-      .filter((b): b is { type: "text"; text: string } => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
-    return text || null;
-  } catch (error) {
-    // 不静默：描述失败的原因要能在日志里看到（不含图片内容与凭据）
-    console.warn("[鱼缸] 看图描述失败:", error instanceof Error ? error.message : String(error));
-    return null;
+  // 显式 maxTokens：不传时服务端用一个很小的默认额度，推理模型的思考内容会把额度吃光，
+  // 正文变空——表现就是「识图时好时坏」。空结果再重试，最多三次。
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const stream = deps.models.streamSimple(model, {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image", data: base64, mimeType },
+              { type: "text", text: deps.prompts.messages["look_describe"] ?? "描述这张图" },
+            ],
+          },
+        ],
+        maxTokens: 1500,
+      });
+      const message = await stream.result();
+      const text = message.content
+        .filter((b): b is { type: "text"; text: string } => b.type === "text")
+        .map((b) => b.text)
+        .join("")
+        .trim();
+      if (text) return text;
+      console.warn(`[鱼缸] 看图描述为空 第${attempt}次 stop=${message.stopReason} ${message.errorMessage ?? ""}`.trim());
+    } catch (error) {
+      // 不静默：描述失败的原因要能在日志里看到（不含图片内容与凭据）
+      console.warn(`[鱼缸] 看图描述失败 第${attempt}次:`, error instanceof Error ? error.message : String(error));
+    }
+    await new Promise((r) => setTimeout(r, 400 * attempt));
   }
+  return null;
 }
 
 /** macOS sips 压缩：GIF 取首帧、超尺寸缩到 1280px，输出 JPEG；失败返回 null。 */
 function shrink(file: string): Buffer | null {
   try {
-    const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-    const { tmpdir } = require("node:os") as typeof import("node:os");
     const out = `${tmpdir()}/look-shrink-${Date.now()}-${Math.random().toString(16).slice(2, 6)}.jpg`;
     const res = spawnSync("sips", ["-s", "format", "jpeg", "-s", "formatOptions", "70", "-Z", "1280", file, "--out", out], { timeout: 20_000 });
     if (res.status !== 0) return null;
-    const buf = require("node:fs").readFileSync(out) as Buffer;
-    require("node:fs").unlinkSync(out);
+    const buf = readFileSync(out);
+    unlinkSync(out);
     return buf.length > 0 ? buf : null;
   } catch {
     return null;
