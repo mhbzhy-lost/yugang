@@ -178,7 +178,12 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   // 所以显式关掉：上下文靠分群隔离与 reset 控制，而不是靠一个我们看不到的 prompt。
   // extensions 必须钉住默认实例：缺省语义是「全部已装、后装者胜」——不钉住的话，
   // 没写 selection 的存量会话会被后装的 fish:<名> 顶替 persona section。
-  const settings = { compaction: { enabled: false }, extensions: [fishExtension] };
+  const settings = {
+    compaction: { enabled: false },
+    extensions: [fishExtension],
+    // 中断的轮不恢复重跑：重启后针对陈年消息的迟到回复很怪（主人定案丢了就丢）
+    restartLimit: 0,
+  };
 
   const harness = await Harness.open(
     options.storage,
@@ -226,6 +231,18 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       const box = await harness.snapshot(OutboxDoc, conversationId, ctx);
       const next = box?.queue.find((record) => record.status === "queued");
       if (!next) return sent;
+
+      // 陈年消息不补：超过 2 分钟的排队消息直接丢弃。过时回复比不回复更怪
+      // （主人定案「丢了就丢了」）；新鲜消息（优雅退出/秒级重启场景）照常补发。
+      if (now() - next.at > 120_000) {
+        await harness.commit(async (tx) => {
+          const doc = await tx.doc(OutboxDoc, conversationId);
+          const index = doc.queue.findIndex((item) => item.key === next.key);
+          if (index >= 0) doc.queue.splice(index, 1);
+        }, ctx);
+        console.log(`[鱼缸] 丢弃过期消息（${Math.round((now() - next.at) / 1000)}s 前）`);
+        continue;
+      }
 
       // 先标 sending 再发：崩在这中间的消息状态是"不确定"，重启时不重发（宁可少发不重复）
       await harness.commit(async (tx) => {
