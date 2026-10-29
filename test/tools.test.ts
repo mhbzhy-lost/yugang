@@ -57,7 +57,7 @@ test("工具面为窄接口：无 bash，自改工具已注册", async () => {
   }
 });
 
-test("say 每轮硬上限 1 次：同轮第二次报 tool 错，下一轮恢复", async () => {
+test("say 每轮硬上限 3 次：同轮第 4 次报 tool 错，下一轮恢复", async () => {
   const { faux, outbox, fish } = boot();
   const open = await fish;
   try {
@@ -65,16 +65,18 @@ test("say 每轮硬上限 1 次：同轮第二次报 tool 错，下一轮恢复"
       agent: { model: { provider: faux.provider.id, modelId: faux.models[0].id } },
     });
 
-    // 同一轮 say 两次：第一次放行，第二次以 tool 错误拒绝，不 emit
+    // 同一轮 say 四次：前三次放行，第四次以 tool 错误拒绝，不 emit
     faux.setResponses([
       fauxAssistantMessage([fauxToolCall("say", { messages: ["头一句"] })], { stopReason: "toolUse" }),
       fauxAssistantMessage([fauxToolCall("say", { messages: ["再来一句"] })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("say", { messages: ["第三句"] })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("say", { messages: ["第四句"] })], { stopReason: "toolUse" }),
       fauxAssistantMessage("说完了"),
     ]);
     const settled = await (await root.submit({ type: "input", content: "说两句" }, ctx)).wait(ctx);
     assert.equal(settled.status, "done");
     await open.drain([root.id]);
-    assert.deepEqual(outbox.map((o) => o.text), ["头一句"], "一轮内只有第一次 say 落进 outbox");
+    assert.deepEqual(outbox.map((o) => o.text), ["头一句", "再来一句", "第三句"], "一轮内前三句 say 落进 outbox");
 
     const view = await root.viewState(ctx);
     const results = view.value.entries.filter((e) => e.kind === "pi.tool-result");
@@ -82,7 +84,7 @@ test("say 每轮硬上限 1 次：同轮第二次报 tool 错，下一轮恢复"
       results.some((e) => JSON.stringify(e.model ?? "").includes("已经说过") ||
         JSON.stringify(e.model ?? "").includes("够了")),
       "第二次 say 的拒绝没有以 tool 错误回给模型（quota_run 或 say_once 任一文案）",
-    );
+    );  // 注：本用例中第 2/3 次放行、第 4 次拒绝，拒绝文案同上断言
     view.dispose();
 
     // 下一轮（新的一轮）恢复：上限按轮计，不株连。
@@ -94,7 +96,7 @@ test("say 每轮硬上限 1 次：同轮第二次报 tool 错，下一轮恢复"
     ]);
     await (await root.submit({ type: "input", content: "再说" }, ctx)).wait(ctx);
     await open.drain([root.id]);
-    assert.deepEqual(outbox.map((o) => o.text), ["头一句", "新一轮"]);
+    assert.deepEqual(outbox.map((o) => o.text), ["头一句", "再来一句", "第三句", "新一轮"]);
   } finally {
     await open.close();
   }
