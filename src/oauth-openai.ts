@@ -138,6 +138,87 @@ export async function refreshTokens(credential: OAuthCredential, signal?: AbortS
   return toCredential(await readTokens(response, "refresh"));
 }
 
+/**
+ * 浏览器 PKCE 授权（pi 本地登录走的就是这条路）：拿 URL 让用户在已登录的浏览器里授权，
+ * 回调地址是 http://localhost:1455/auth/callback —— 鱼跑在无头机器上，所以回调由用户
+ * 复制回来的整条 URL（或 code#state）完成，不需要本地监听端口。
+ */
+const AUTHORIZE_URL = `${AUTH_BASE}/oauth/authorize`;
+const REDIRECT_URI = "http://localhost:1455/auth/callback";
+const SCOPE = "openid profile email offline_access";
+
+export interface BrowserLoginStart {
+  url: string;
+  verifier: string;
+  state: string;
+}
+
+function base64url(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("base64url");
+}
+
+export async function startBrowserLogin(originator = "yugang"): Promise<BrowserLoginStart> {
+  const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
+  const challenge = base64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
+  const state = base64url(crypto.getRandomValues(new Uint8Array(16)));
+  const url = new URL(AUTHORIZE_URL);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("client_id", CLIENT_ID);
+  url.searchParams.set("redirect_uri", REDIRECT_URI);
+  url.searchParams.set("scope", SCOPE);
+  url.searchParams.set("code_challenge", challenge);
+  url.searchParams.set("code_challenge_method", "S256");
+  url.searchParams.set("state", state);
+  url.searchParams.set("id_token_add_organizations", "true");
+  url.searchParams.set("codex_cli_simplified_flow", "true");
+  url.searchParams.set("originator", originator);
+  return { url: url.toString(), verifier, state };
+}
+
+/** 接受整条回调 URL、`code#state` 或裸 code。 */
+export function parseAuthorizationInput(input: string): { code?: string; state?: string } {
+  const value = input.trim();
+  if (!value) return {};
+  try {
+    const url = new URL(value);
+    return { code: url.searchParams.get("code") ?? undefined, state: url.searchParams.get("state") ?? undefined };
+  } catch {
+    /* 不是 URL，继续按文本解析 */
+  }
+  if (value.includes("#")) {
+    const [code, state] = value.split("#", 2);
+    return { code, state };
+  }
+  if (value.includes("code=")) {
+    const params = new URLSearchParams(value);
+    return { code: params.get("code") ?? undefined, state: params.get("state") ?? undefined };
+  }
+  return { code: value };
+}
+
+export async function finishBrowserLogin(
+  start: { verifier: string; state: string },
+  input: string,
+  signal?: AbortSignal,
+): Promise<OAuthCredential> {
+  const parsed = parseAuthorizationInput(input);
+  if (parsed.state && parsed.state !== start.state) throw new Error("state mismatch: login interrupted or url incomplete");
+  if (!parsed.code) throw new Error("没拿到授权码");
+  const response = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: CLIENT_ID,
+      code: parsed.code,
+      code_verifier: start.verifier,
+      redirect_uri: REDIRECT_URI,
+    }),
+    ...(signal ? { signal } : {}),
+  });
+  return toCredential(await readTokens(response, "exchange"));
+}
+
 /** pi-ai 需要的 OAuthAuth 形状：登录、刷新、请求凭据。 */
 export const openaiCodexOAuth = {
   name: "OpenAI (ChatGPT Plus/Pro)",
