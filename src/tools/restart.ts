@@ -29,8 +29,12 @@ export function createRestartTool(deps: RestartDeps) {
     name: "restart",
     description: prompt.description,
     callers: ["model"],
-    parameters: Type.Object({}),
-    execute: async (_args, api, context) => {
+    parameters: Type.Object({
+      message: Type.String({
+        description: prompt.params["message"] ?? "",
+      }),
+    }),
+    execute: async (args, api, context) => {
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
       const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
@@ -42,6 +46,12 @@ export function createRestartTool(deps: RestartDeps) {
       try {
         mkdirSync(join(root, "var"), { recursive: true });
         writeFileSync(join(root, "var", "restart.marker"), String(Date.now()));
+        const text = (args.message ?? "").trim();
+        if (!text) throw new Error("message 必填：总得有句遗言");
+        writeFileSync(
+          join(root, "var", "restart.pending.json"),
+          JSON.stringify({ conversationId: String(api.conversationId), text }),
+        );
       } catch {}
       const child = spawn("/bin/sh", ["-c", "sleep 3 && npm run up >> var/fish-console.log 2>&1"], {
         cwd: root,

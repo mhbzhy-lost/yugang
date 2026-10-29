@@ -23,6 +23,8 @@ import { absorbSecrets } from "./egress/absorb.ts";
 import { resetRun, resetLook, ledgerOf } from "./egress/ledger.ts";
 import { validateOutbound, DEFAULT_LIMITS } from "./egress/policy.ts";
 import { createChatlog } from "./chatlog.ts";
+import { localDay } from "./usage.ts";
+import { weeklyStats, renderWeekly } from "./stats.ts";
 import { createUsageLedger, sumUsage } from "./usage.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
 
@@ -31,8 +33,7 @@ const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
 mkdirSync(HOME, { recursive: true });
 
 const config = {
-  onebotUrl: process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001",
-  onebotToken: process.env.ONEBOT_TOKEN,
+  onebotUrl: process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001",  onebotToken: process.env.ONEBOT_TOKEN,
   // 模型与凭据：从 ~/pi-config 抄（provider 条目 + auth.json 的 key），见 src/model-config.ts
   modelConfig: loadModelConfig(),
   gateModel: {
@@ -48,6 +49,8 @@ const config = {
   dailyQuota: Number(process.env.DAILY_QUOTA ?? "40"),
   cooldownMs: Number(process.env.COOLDOWN_MS ?? "90000"),
   ambientChance: Number(process.env.AMBIENT_CHANCE ?? "0.1"),
+  // 周报群：每周日 21 点把这一周的群画像发到这个群（留空 = 不发）
+  weeklyGroupId: process.env.WEEKLY_GROUP_ID ?? "10001",
 };
 mkdirSync(config.mediaRoot, { recursive: true });
 
@@ -96,13 +99,14 @@ const fish = await openFish({
       return undefined;
     }
   })(),
+  imggenKey: process.env.MODELSCOPE_KEY,
   master: config.master,
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
   workspaceRoot: config.workspaceRoot,
   compact: {
     model: gateModel,
-    maxEntries: Number(process.env.COMPACT_MAX_ENTRIES ?? "80"),
-    maxChars: Number(process.env.COMPACT_MAX_CHARS ?? "12000"),
+    maxEntries: Number(process.env.COMPACT_MAX_ENTRIES ?? "200"),
+    maxChars: Number(process.env.COMPACT_MAX_CHARS ?? "30000"),
   },
   // outbox 里的消息由 fish.drain() 逐条交给这里；幂等表再加一层保险
   emit: async (conversationId, payload) => {
@@ -119,7 +123,9 @@ const fish = await openFish({
       await onebot.sendGroup(groupId, payload.items, { quote });
       if (payload.media) await onebot.sendImageGroup(groupId, resolve(config.mediaRoot, payload.media));
     } else if (chatKey.startsWith("qq:private:")) {
-      await onebot.sendPrivate(Number(chatKey.slice("qq:private:".length)), payload.items);
+      const userId = Number(chatKey.slice("qq:private:".length));
+      await onebot.sendPrivate(userId, payload.items);
+      if (payload.media) await onebot.sendImagePrivate(userId, resolve(config.mediaRoot, payload.media));
     }
 
     for (const text of payload.items) {
@@ -233,6 +239,40 @@ const gate = createGate({
   cooldownMs: config.cooldownMs,
   ambientChance: config.ambientChance,
 });
+
+/** 群周报：周日 21 点整点档私聊发给主人一次，var/weekly.json 记住发过的周防止重发。 */
+function startWeekly(): void {
+  const weeklyPath = join(HOME, "weekly.json");
+  const weekOf = (t: number) => {
+    const d = new Date(t);
+    const day = (d.getDay() + 6) % 7; // 周一为 0
+    return localDay(t - day * 86_400_000);
+  };
+  setInterval(() => {
+    void (async () => {
+      const now = Date.now();
+      const d = new Date(now);
+      if (d.getDay() !== 0 || d.getHours() !== 21 || d.getMinutes() !== 0) return;
+      const week = weekOf(now);
+      const done = new Set(existsSync(weeklyPath) ? (JSON.parse(readFileSync(weeklyPath, "utf8")) as string[]) : []);
+      const chatKey = `qq:private:${config.master}`;
+      if (!config.master || done.has(`${chatKey}:${week}`)) return;
+      const groupKey = `qq:group:${config.weeklyGroupId}`;
+      const stats = weeklyStats(join(HOME, "chatlog"), groupKey, now);
+      if (!stats) return;
+      const conv = await fish.group(chatKey);
+      for (const line of renderWeekly(stats)) {
+        await fish.enqueue(conv.id, { items: [line], at: now, key: `weekly:${week}:${line.slice(0, 8)}` });
+      }
+      done.add(`${chatKey}:${week}`);
+      writeFileSync(weeklyPath, JSON.stringify([...done].slice(-200)));
+      await drainLoop();
+    })().catch((error: unknown) => {
+      console.error("[鱼缸] 周报发送失败", error instanceof Error ? error.message : error);
+    });
+  }, 60_000).unref?.();
+}
+startWeekly();
 
 // 每个群的运行态：最近流水、上次开口时间、今天开口次数
 const recent = new Map<string, { nickname: string; text: string }[]>();
@@ -357,6 +397,30 @@ if (!config.master) {
 const known = await fish.harness.snapshot((await import("./store.ts")).ChatsDoc, ctx);
 for (const [chatKey, conversationId] of Object.entries(known?.chats ?? {})) {
   chatKeys.set(String(conversationId), chatKey);
+}
+// 重启遗言：restart 工具写下的 restart.pending.json，起来后补发那句，发完即删
+const pendingPath = join(process.cwd(), "var", "restart.pending.json");
+if (existsSync(pendingPath)) {
+  try {
+    const pending = JSON.parse(readFileSync(pendingPath, "utf8")) as { conversationId: string; text: string };
+    const chatKey = [...chatKeys.entries()].find(([id]) => String(id) === pending.conversationId)?.[1];
+    if (chatKey) {
+      const conv = await conversationFor(chatKey);
+      await fish.enqueue(conv.id, {
+        items: [pending.text],
+        at: Date.now(),
+        key: `restart-pending:${pending.conversationId}:${Date.now()}`,
+      });
+      await drainLoop();
+      console.log(`[鱼缸] 重启遗言已补发到 ${chatKey}`);
+    } else {
+      console.error(`[鱼缸] 重启遗言找不到会话：${pending.conversationId}`);
+    }
+    rmSync(pendingPath);
+  } catch (error) {
+    console.error("[鱼缸] 补发重启遗言失败", error instanceof Error ? error.message : error);
+    try { rmSync(pendingPath); } catch {}
+  }
 }
 // 有意重启的标记：把卡在 sending 的消息翻回 queued 一起补发（真崩溃不重发，语义不变）
 const marker = join(process.cwd(), "var", "restart.marker");

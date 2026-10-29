@@ -58,6 +58,8 @@ export interface FishOptions {
   mediaRoot: string;
   /** DeepSeek Search API 的 key；给了才有联网搜索能力。 */
   searchKey?: string;
+  /** ModelScope API-KEY：生图凭据；给了才有生图能力。 */
+  imggenKey?: string;
   /** 主人 QQ：fs/restart 自改工具的身份闸，给了才注册这些工具。 */
   master?: string;
   /** submissionId → 本轮触发消息；把回复引用绑在轮上，防串线。 */
@@ -111,7 +113,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
 
   const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf });
   const react = createReactTool({ prompts, react: options.react, now });
-  const tools = createTools({ mediaRoot, prompts, searchKey: options.searchKey, master: options.master, triggerOf: options.triggerOf });
+  const tools = createTools({ mediaRoot, prompts, searchKey: options.searchKey, imggenKey: options.imggenKey, master: options.master, triggerOf: options.triggerOf });
 
   // 启动即校验：每个工具都必须有一份 prompt/tools/<name>.md，缺了就起不来
   for (const tool of [say, react, ...tools]) {
@@ -156,8 +158,8 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         models,
         model: options.compact.model ?? options.model,
         prompts,
-        maxEntries: options.compact.maxEntries ?? 80,
-        maxChars: options.compact.maxChars ?? 12_000,
+        maxEntries: options.compact.maxEntries ?? 200,
+        maxChars: options.compact.maxChars ?? 30_000,
         onError: (error) => console.error("[鱼缸] 压缩失败", error instanceof Error ? error.message : error),
       })
     : undefined;

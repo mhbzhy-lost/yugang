@@ -42,3 +42,8 @@ fs_not_found_text: 原文没找到，先 read 看准
 fs_ambiguous_text: 原文在文件里出现多次，扩大范围再改
 meme_empty: 表情包库是空的，先用文字回
 meme_used: 这一轮挑过了，先用挑到的
+imggen_prompt: prompt 得有内容，500 字以内
+imggen_nokey: 还没配置生图凭据，生不了
+imggen_used: 这一轮生过图了，先把图发出去
+imggen_failed: 生图没成功：{{detail}}
+imggen_done: gen/{{file}} — 生好了，用 say 的 media 参数（gen/ 开头的引用）发出去

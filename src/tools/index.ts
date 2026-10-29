@@ -14,6 +14,7 @@ import { createFsTools } from "./fs.ts";
 import { createRestartTool } from "./restart.ts";
 import { createTreeTool } from "./tree.ts";
 import { createTestTool } from "./test.ts";
+import { createImggenTool } from "./imggen.ts";
 
 export interface ToolDeps {
   mediaRoot: string;
@@ -22,6 +23,8 @@ export interface ToolDeps {
   searchKey?: string;
   /** 主人 QQ：fs/restart 自改工具的身份闸。缺省则这些工具不可用（永远拒绝）。 */
   master?: string;
+  /** ModelScope API-KEY：生图凭据。缺省则 imggen 调用会以可读错误回应。 */
+  imggenKey?: string;
   /** submissionId → 本轮触发消息；与 say 的引用绑定同源。 */
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
 }
@@ -44,6 +47,7 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     createVideoTool({ prompts: deps.prompts }),
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
     ...fsTools,
+    createImggenTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, key: deps.imggenKey }),
     ...treeTool,
     ...testTool,
     ...restartTool,
