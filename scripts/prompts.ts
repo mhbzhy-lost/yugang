@@ -32,7 +32,8 @@ console.log(`${prompts.persona.split("\n").slice(0, 3).join("\n")}\n…`);
 
 console.log(`\n== 人格书 ${Object.keys(prompts.personas).length} 本（prompt/personas/*.md）\n`);
 for (const [name, book] of Object.entries(prompts.personas)) {
-  console.log(`  ${name}: ${book.length} 字，首行「${book.split("\n")[0]}」`);
+  const opener = book.opener ? "，[开场白 ✓]" : "";
+  console.log(`  ${name}: ${book.body.length} 字${opener}，首行「${book.body.split("\n")[0]}」`);
 }
 
 console.log("\n== pi-durable 注入的 prompt\n");

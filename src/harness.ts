@@ -118,6 +118,8 @@ export interface Fish {
   settings: { compaction: { enabled: boolean }; extensions: readonly Extension[] };
   /** 注册的人格名单：["默认", ...人格书文件名]。 */
   personas: string[];
+  /** 有人格书 frontmatter 开场白的人格：名 → opener 文本；宿主切换成功后机械补发，不进模型。 */
+  openers: Record<string, string>;
   toolNames: string[];
   /** 压缩一次上下文；没到阈值就什么都不做。 */
   compact(conversation: Conversation): Promise<CompactResult>;
@@ -159,8 +161,10 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   const fishTools: readonly ToolRegistration[] = [say, react, ...tools];
   const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts });
   const personaExtensions = new Map<string, Extension>();
+  const openers: Record<string, string> = {};
   for (const [name, book] of Object.entries(prompts.personas)) {
-    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book, { tools: fishTools, prompts }));
+    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts }));
+    if (book.opener) openers[name] = book.opener;
   }
 
   const registry = createRegistry();
@@ -272,6 +276,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     prompts,
     settings,
     personas: [DEFAULT_PERSONA, ...Object.keys(prompts.personas)],
+    openers,
     toolNames: [say.name, react.name, ...tools.map((t) => t.name)],
     async compact(conversation) {
       if (!compactor) return { compacted: false, reason: "below_threshold" };

@@ -14,6 +14,14 @@ export interface ToolPrompt {
   params: Record<string, string>;
 }
 
+/** 人格书：frontmatter 属性 + 正文。frontmatter 只认单行 `key: value`（目前用 opener）。 */
+export interface PersonaBook {
+  /** 剥离 frontmatter 后的正文，供 persona section 注入；frontmatter 绝不进模型。 */
+  body: string;
+  /** frontmatter 的 opener：宿主切换到该人格后机械补发的开场白，不进模型。 */
+  opener?: string;
+}
+
 export interface PromptSet {
   root: string;
   persona: string;
@@ -28,8 +36,8 @@ export interface PromptSet {
   messages: Record<string, string>;
   /** key 是工具名，来自 prompt/tools/<name>.md 的文件名。 */
   tools: Record<string, ToolPrompt>;
-  /** 人格书：key 是人格名（prompt/personas/<名>.md 的文件名），value 是全文。目录缺失/为空 → 空。 */
-  personas: Record<string, string>;
+  /** 人格书：key 是人格名（prompt/personas/<名>.md 的文件名）。目录缺失/为空 → 空。 */
+  personas: Record<string, PersonaBook>;
 }
 
 export function loadPrompts(root: string): PromptSet {
@@ -50,17 +58,31 @@ export function loadPrompts(root: string): PromptSet {
  * 人格书目录：文件名 = 人格名（中文名合法）。目录缺失或为空 = 只有默认人格，不报错。
  * 名字不能含 `#`（会话映射键的分隔符），也不能叫「默认」（默认人格没有后缀键）。
  */
-function loadPersonas(dir: string): Record<string, string> {
+function loadPersonas(dir: string): Record<string, PersonaBook> {
   if (!existsSync(dir)) return {};
-  const personas: Record<string, string> = {};
+  const personas: Record<string, PersonaBook> = {};
   for (const entry of readdirSync(dir).sort()) {
     if (!entry.endsWith(".md")) continue;
     const name = entry.slice(0, -3);
     if (name.includes("#")) throw new Error(`人格名不能含 #：${entry}`);
     if (name === "默认") throw new Error(`人格名不能叫 默认：${entry}`);
-    personas[name] = read(join(dir, entry));
+    const book = parsePersonaBook(read(join(dir, entry)));
+    if (!book.body) throw new Error(`人格书剥掉 frontmatter 后没有正文：${entry}`);
+    personas[name] = book;
   }
   return personas;
+}
+
+/** 人格书解析：frontmatter 只认单行 `key: value`，剥离后的正文单独放 body。 */
+export function parsePersonaBook(text: string): PersonaBook {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
+  if (!match) return { body: text.trim() };
+  const meta: Record<string, string> = {};
+  for (const raw of match[1].split(/\r?\n/)) {
+    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(raw.trim());
+    if (kv) meta[kv[1]] = kv[2].trim();
+  }
+  return { body: match[2].trim(), ...(meta.opener ? { opener: meta.opener } : {}) };
 }
 
 function loadTools(dir: string): Record<string, ToolPrompt> {

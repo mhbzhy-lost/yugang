@@ -257,6 +257,7 @@ async function handleCommand(msg: IncomingMessage): Promise<string | null> {
   const target = /^\/切换人格\s+(\S+)/.exec(msg.text);
   let text: string;
   let media: string | undefined;
+  let opener: string | undefined;
   if (msg.text === "/查询可用人格") {
     text = renderTemplate(fish.prompts.messages["cmd_personas"] ?? "", { list });
   } else if (target) {
@@ -271,6 +272,8 @@ async function handleCommand(msg: IncomingMessage): Promise<string | null> {
       text = renderTemplate(fish.prompts.messages["cmd_switched"] ?? "", { persona });
       // 人设图存在才带（相对 mediaRoot 引用，无 media/ 层）；默认人格不配图
       media = existsSync(join(config.mediaRoot, "personas", `${persona}.png`)) ? `personas/${persona}.png` : undefined;
+      // 人格书 frontmatter 里的开场白：回执之后由宿主机械补发，不进模型
+      opener = fish.openers[persona];
     } else {
       text = renderTemplate(fish.prompts.messages["cmd_bad_persona"] ?? "", { persona, list });
     }
@@ -286,6 +289,16 @@ async function handleCommand(msg: IncomingMessage): Promise<string | null> {
     at: Date.now(),
     key: `cmd:${msg.messageId ?? Date.now()}`, // 幂等键：崩溃重放不重复发
   });
+  // 开场白紧随回执（同一会话、同一 outbox，顺序即发送顺序）；无 opener 的人格不増发。
+  // 不带图不引用；幂等键前缀区别于回执。
+  if (opener) {
+    await fish.enqueue(conv.id, {
+      items: [opener],
+      quote: false,
+      at: Date.now(),
+      key: `opener:${msg.messageId ?? Date.now()}`,
+    });
+  }
   await drainLoop();
   return text;
 }
