@@ -1,6 +1,7 @@
 /**
  * 极简 OneBot v11 客户端（零依赖，用 Node 内置 WebSocket）。
- * 只做这个项目需要的事：收消息、发消息（可拆条、可引用）、贴表情、查群档案、下载图片。
+ * 只做这个项目需要的事：收消息、发消息（可拆条、可引用）、贴表情、查群档案、下载图片、
+ * 展开合并转发（限一层，文本进上下文、子图走同一落盘路径）。
  */
 
 export interface OneBotSegment {
@@ -39,6 +40,8 @@ export type IncomingMessage = {
   imageSegments: OneBotSegment[];
   /** reply 段引用的消息 id；宿主取回被引消息里的图后替换占位符。 */
   replyIds: string[];
+  /** forward 段的合集 id；宿主异步拉子消息展开成文本摘要后清空（见 #onFrame）。 */
+  forwardIds?: string[];
 };
 
 export interface SendOptions {
@@ -113,6 +116,16 @@ export class OneBot {
     if (frame.post_type !== "message") return;
     const parsed = parseEvent(frame, this.#selfId);
     if (!parsed) return;
+
+    // 合并转发：parseEvent 是同步纯函数、拿不到 OneBot 实例，异步拉取放在这里（同 replyIds 先例）。
+    // 展开先于图片落盘：子图占位这时并入 imageSegments，随下面的既有循环一起下载。
+    // 拉取失败只把占位换成失败标记，不抛错，不阻断整条消息进闸。
+    for (const forwardId of parsed.forwardIds ?? []) {
+      if (!forwardId) continue;
+      const shown = await this.#expandForward(forwardId, parsed);
+      parsed.text = parsed.text.replace("[转发合集，展开中]", shown);
+    }
+    parsed.forwardIds = [];
 
     // 图片落盘，把占位替换成真实引用
     if (parsed.imageSegments.length > 0 && this.#mediaRoot) {
@@ -237,6 +250,64 @@ export class OneBot {
     }
   }
 
+  /** 拉一条合并转发的子消息列表；超时 5s、连接断开等一切失败一律返回 null，由调用方保留失败占位。 */
+  async getForwardMsg(id: string): Promise<{ sender: { nickname?: string }; message: OneBotSegment[] }[] | null> {
+    try {
+      // call 内建超时是 20s（对拉取来说太久），这里 race 一个 5s 时钟先到先得；
+      // call 的承诺被 .catch 挂住，晚到的 20s 超时不会变成未处理拒绝。
+      const res = await Promise.race([
+        this.call("get_forward_msg", { message_id: id }).catch(() => null),
+        sleep(5_000).then(() => null),
+      ]);
+      // OB11 文档：列表在 data.messages；节点内容字段各实现叫 message 或 content，都收。
+      const raw = res?.data?.messages ?? res?.data ?? res?.messages;
+      if (!Array.isArray(raw)) return null;
+      return raw.map((item: any) => ({
+        sender: { nickname: item?.sender?.nickname == null ? undefined : String(item.sender.nickname) },
+        message: (Array.isArray(item?.message)
+          ? item.message
+          : Array.isArray(item?.content)
+            ? item.content
+            : []) as OneBotSegment[],
+      }));
+    } catch {
+      return null;
+    }
+  }
+
+  /** 把一个转发合集展开成文本摘要（前 10 条）；子图 ≤2 张并入 imageSegments 走既有 downloadImage 路径。 */
+  async #expandForward(id: string, msg: IncomingMessage): Promise<string> {
+    const subs = await this.getForwardMsg(id);
+    if (!subs || subs.length === 0) return "[转发合集，展开失败]";
+    const lines = [`[转发合集 ${subs.length} 条]`];
+    let subImages = 0;
+    for (const [index, sub] of subs.slice(0, 10).entries()) {
+      let body = "";
+      for (const seg of sub.message ?? []) {
+        if (seg.type === "text") body += String(seg.data?.["text"] ?? "");
+        else if (seg.type === "image") {
+          if (subImages < 2) {
+            // 占位与直发图同格式、共用 images.length 计数；images 与 imageSegments 始终成对推进，
+            // 占位号 = imageSegments 下标，落盘替换才不会错位。
+            body += ` [图片#${msg.images.length}] `;
+            msg.imageSegments.push(seg);
+            msg.images.push({ ref: "" });
+            subImages++;
+          } else {
+            body += " [图片 未展开] ";
+          }
+        } else if (seg.type === "forward") {
+          // 嵌套转发不递归；同步阶段拿不到子消息数，占位不写 N。
+          body += " [嵌套转发] ";
+        }
+      }
+      const num = String.fromCharCode(0x2460 + index); // ①..⑩
+      lines.push(`${num}${sub.sender?.nickname ?? "?"}: ${body.replace(/\s+/g, " ").trim()}`);
+    }
+    if (subs.length > 10) lines.push(`…共 ${subs.length} 条`);
+    return lines.join("\n");
+  }
+
   /** 把图片落盘到 mediaRoot/inbound，返回相对引用。 */
   async downloadImage(segment: OneBotSegment, mediaRoot: string): Promise<IncomingImage | null> {
     const data = segment.data ?? {};
@@ -332,6 +403,7 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
   const images: IncomingImage[] = [];
   const segments: OneBotSegment[] = [];
   const replyIds: string[] = [];
+  const forwardIds: string[] = [];
   const message = frame.message;
 
   if (typeof message === "string") {
@@ -351,6 +423,12 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
       } else if (seg.type === "reply") {
         text += ` [回复某条消息#${replyIds.length}] `;
         replyIds.push(String(seg.data?.["id"] ?? ""));
+      } else if (seg.type === "forward") {
+        // OB11 文档形态 {type:"forward", data:{id}}（开发机无生产日志，以文档为准，
+        // 上线后 F1 真机复验兜底）；同步阶段拿不到子消息数，占位不写 N，
+        // 异步展开在 #onFrame。本函数保持同步纯函数。
+        text += " [转发合集，展开中] ";
+        forwardIds.push(String(seg.data?.["id"] ?? ""));
       }
     }
   }
@@ -361,7 +439,7 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
   if (!text) return null;
 
   const nickname = frame.sender?.card || frame.sender?.nickname || String(userId);
-  const base = { userId, nickname, text, mentionsBot, messageId: frame.message_id, images, imageSegments: segments, replyIds };
+  const base = { userId, nickname, text, mentionsBot, messageId: frame.message_id, images, imageSegments: segments, replyIds, forwardIds };
 
   if (frame.message_type === "group" && frame.group_id) {
     return { ...base, chatKey: `qq:group:${frame.group_id}`, groupId: frame.group_id };
