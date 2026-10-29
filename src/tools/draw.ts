@@ -33,6 +33,8 @@ const DRAWN = new Map<string, unknown>();
 const PRESET_POSITIVE = "masterpiece, best quality, score_7, score_8, score_9, (anime:1.2), ";
 const PRESET_NEGATIVE = "low quality, worst quality, score_1, score_2, score_3, early, old, shiny skin, ";
 const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 4.5, sampler_name: "ER SDE", scheduler: "beta" };
+/** 高分辨率模式（hires fix）：Anime6B 放大 2 倍，二段步数 0=继承主步数，denoising 0.4，其余默认。 */
+const HIRES = { enable_hr: true, hr_upscaler: "Anime6B", hr_scale: 2, hr_second_pass_steps: 0, denoising_strength: 0.4 };
 /** 画风预设：追加在 positive 末尾的额外注入。 */
 const PRESETS: Record<string, string> = {
   default: "",
@@ -98,6 +100,7 @@ export function createDrawTool(deps: DrawDeps) {
       prompt: Type.String({ description: prompt.params["prompt"] ?? "" }),
       negative: Type.Optional(Type.String({ description: prompt.params["negative"] ?? "" })),
       preset: Type.Optional(Type.Union([Type.Literal("default"), Type.Literal("hsr"), Type.Literal("secret")], { description: prompt.params["preset"] ?? "" })),
+      highres: Type.Optional(Type.Boolean({ description: prompt.params["highres"] ?? "" })),
     }),
     execute: async (args, api, context) => {
       const positive = args.prompt.trim();
@@ -128,6 +131,7 @@ export function createDrawTool(deps: DrawDeps) {
         prompt: PRESET_POSITIVE + positive + (PRESETS[args.preset ?? "default"] ?? "") + (stash ? `, ${stash}` : ""),
         negative_prompt: PRESET_NEGATIVE + (args.negative ?? "").trim(),
         ...PRESET,
+        ...(args.highres ? HIRES : {}),
       });
       const post = async (): Promise<string> => {
         let last: unknown;
