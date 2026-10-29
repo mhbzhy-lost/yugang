@@ -71,7 +71,9 @@ export function createDrawTool(deps: DrawDeps) {
           try {
             return await new Promise<string>((resolve, reject) => {
               const req = request(
-                { host: u.hostname, port: Number(u.port || 80), path: u.pathname, method: "POST", timeout: 120_000, headers: { "content-type": "application/json" } },
+                // 显式绑定 en0 源地址：mini 上 Clash 的 bridge100 挂了 REJECT 默认路由，
+                // 不绑定的套接字可能落到那条死路由上（EHOSTUNREACH）
+                { host: u.hostname, port: Number(u.port || 80), path: u.pathname, method: "POST", timeout: 120_000, localAddress: process.env.SD_BIND_IP || undefined, headers: { "content-type": "application/json" } },
                 (res) => {
                   const chunks: Buffer[] = [];
                   res.on("data", (c: Buffer) => chunks.push(c));
