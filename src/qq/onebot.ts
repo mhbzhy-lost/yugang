@@ -4,6 +4,8 @@
  * 展开合并转发（限一层，文本进上下文、子图走同一落盘路径）。
  */
 
+import { isLookDisabled } from "../tools/look.ts";
+
 export interface OneBotSegment {
   type: string;
   data?: Record<string, unknown>;
@@ -135,9 +137,15 @@ export class OneBot {
     }
     // forwardIds 不清空：gate 要用它把无 @ 的合集零成本拒掉
 
-    // 图片落盘，把占位替换成真实引用
+    // 图片落盘，把占位替换成真实引用；看图关闭时非 @ 消息不下载不暴露 ref——
+    // 模型只看到中性的 [图]，不会无端提看不了；@ 鱼要求看图的照常全链路
     if (parsed.imageSegments.length > 0 && this.#mediaRoot) {
+      const skipImages = isLookDisabled() && !parsed.mentionsBot;
       for (const [index, segment] of parsed.imageSegments.entries()) {
+        if (skipImages) {
+          parsed.text = parsed.text.replace(`[图片#${index}]`, "[图]");
+          continue;
+        }
         const saved = await this.downloadImage(segment, this.#mediaRoot);
         const shown = saved ? `[图片 ${saved.ref}]` : "[图片 读不到]";
         parsed.text = parsed.text.replace(`[图片#${index}]`, shown);
