@@ -6,6 +6,7 @@
  * 一轮最多画一次，失败不消耗次数。
  */
 import { mkdirSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
