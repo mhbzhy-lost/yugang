@@ -144,6 +144,15 @@ const fish = await openFish({
       }
     : {}),
   voiceCooldownMs: () => Math.round(fishConfig().config.voiceCooldownMinutes * 60_000),
+  // 语音对象闸：主人 或 本会话特别关注名单里的人
+  voiceAudience: {
+    master: config.master,
+    isWatched: (conversationId, userId) => {
+      const chatKey = chatKeys.get(String(conversationId));
+      if (!chatKey) return false;
+      return watchedByChat.get(baseChatKey(chatKey))?.has(userId) ?? false;
+    },
+  },
   // look 的视觉描述模型：缺省用主模型自身；可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型
   visionModel: process.env.VISION_MODEL_ID
     ? { provider: process.env.VISION_PROVIDER ?? config.modelConfig.providerId, modelId: process.env.VISION_MODEL_ID }

@@ -71,7 +71,7 @@ gif_ingest_task: 上面这段对话里，{{who}} 发了一张动图：{{ref}}。
 voice_off: 现在还没有语音能力
 voice_with_media: 语音不能和图片、表情包一起发，选一个
 voice_too_long: 这句话太长了（{{length}} 字），语音只适合短句，长的用文字说
-voice_cooldown: 刚发过语音，隔一会儿再说，这句先用文字
+voice_restricted: 语音只用来回主人和特别关注的人，对其他人用文字说\nvoice_cooldown: 刚发过语音，隔一会儿再说，这句先用文字
 voice_failed: 语音没合成出来，改用文字说吧
 say_one_media: media 和 meme 只能给一个
 say_media_used: 这一轮已经配过图了，下一轮再配
