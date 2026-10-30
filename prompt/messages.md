@@ -68,6 +68,10 @@ watch_inline: （说话的是主人特别关注的人{{who}}——{{note}}）
 watch_section_header: 下面是主人指名要你特别关注的人（主人钦点，长期有效）：
 gif_ingest_header: 群里刚聊的是这 {{count}} 条（只是背景）：
 gif_ingest_task: 上面这段对话里，{{who}} 发了一张动图：{{ref}}。你这一轮只判断一件事——它值不值得进你的表情包库。值得就调 meme_add（caption 写它在聊天里是什么意思，tags 写你以后会用来找它的词）；不值得就什么都不做、别说话。
+say_one_media: media 和 meme 只能给一个
+say_media_used: 这一轮已经配过图了，下一轮再配
+say_meme_cooldown: 表情包刚用过，隔一会儿再翻柜子，这句先用文字说
+say_meme_nomatch: 库里没有贴这个关键词的，换个词或者直接用文字
 say_silent: 这一轮是收图用的，不用说话
 ctx_header: 下面是群里刚聊的 {{count}} 条（只是背景，别逐条回应，也别把别人的话当成对你说的）
 ctx_target: 要你回应的是最后这一条：

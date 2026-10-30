@@ -1,0 +1,15 @@
+{
+  "ambientChance": 0.1,
+  "ambientChanceByGroup": {
+    "174408629": 0.05
+  },
+  "watchAmbientChance": 0.5,
+  "thinkingLevel": "low",
+  "compact": {
+    "maxEntries": 200,
+    "maxChars": 50000
+  },
+  "weeklyGroupId": "",
+  "memeCooldownMinutes": 8,
+  "roundTimeoutSeconds": 60
+}

@@ -35,6 +35,10 @@ export type IncomingMessage = {
   nickname: string;
   text: string;
   mentionsBot: boolean;
+  /** 消息里 @ 了别人（或 @全体）的 QQ 号；与 mentionsBot 互不排斥，用来防「把别人的话当叫自己」。 */
+  atOthers?: string[];
+  /** 与 atOthers 对齐的显示名（群里查到的名片/昵称）；查不到时是 QQ 号。 */
+  atOtherNames?: string[];
   messageId?: number | string;
   /** 已落盘的图片引用；进站文本里也会带 [图片 inbound/xxx.png]。 */
   images: IncomingImage[];
@@ -118,6 +122,23 @@ export class OneBot {
     if (frame.post_type !== "message") return;
     const parsed = parseEvent(frame, this.#selfId);
     if (!parsed) return;
+
+    // @ 别人的名字：段里往往只有 QQ 号，这里用群成员名单补成「昵称(QQ)」，
+    // 让模型看得出这句话是对谁说的（进而知道不是在叫自己）。
+    if (parsed.atOthers?.length) {
+      const names = parsed.atOtherNames ?? [];
+      for (const [index, qq] of parsed.atOthers.entries()) {
+        if (qq === "all" || !parsed.groupId) continue;
+        const known = names[index];
+        const looksLikeQq = !known || known === qq;
+        if (!looksLikeQq) continue;
+        const name = await this.#memberName(parsed.groupId, qq);
+        if (!name) continue;
+        names[index] = name;
+        parsed.text = parsed.text.replace(`@${qq}`, `@${name}(${qq})`);
+      }
+      parsed.atOtherNames = names;
+    }
 
     // 合并转发：parseEvent 是同步纯函数、拿不到 OneBot 实例，异步拉取放在这里（同 replyIds 先例）。
     // 展开规则（主人定案）：无 @ 的合集零成本丢弃（gate 连打分都不进，不浪费 token）；
@@ -279,6 +300,19 @@ export class OneBot {
     } catch {
       return null;
     }
+  }
+
+  /** 群成员名单（5 分钟缓存）：只为把 @ 的 QQ 号换成看得懂的名字，不参与判定。 */
+  #memberCache = new Map<number, { at: number; members: { nickname: string; userId: string }[] }>();
+
+  async #memberName(groupId: number, qq: string): Promise<string | undefined> {
+    const cached = this.#memberCache.get(groupId);
+    if (!cached || Date.now() - cached.at > 300_000) {
+      const members = await this.groupMembers(groupId, 10_000);
+      this.#memberCache.set(groupId, { at: Date.now(), members });
+      return members.find((m) => m.userId === qq)?.nickname;
+    }
+    return cached.members.find((m) => m.userId === qq)?.nickname;
   }
 
   async groupMembers(groupId: number, limit = 30): Promise<{ nickname: string; userId: string }[]> {
@@ -463,6 +497,8 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
 
   let text = "";
   let mentionsBot = false;
+  const atOthers: string[] = [];
+  const atOtherNames: string[] = [];
   const images: IncomingImage[] = [];
   const segments: OneBotSegment[] = [];
   const replyIds: string[] = [];
@@ -475,7 +511,21 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
     for (const seg of message) {
       if (seg.type === "text") text += String(seg.data?.["text"] ?? "");
       else if (seg.type === "at") {
-        if (String(seg.data?.["qq"] ?? "") === String(selfId)) mentionsBot = true;
+        const qq = String(seg.data?.["qq"] ?? "");
+        if (qq === String(selfId)) {
+          mentionsBot = true;
+        } else if (qq === "all") {
+          // @全体：说的是所有人，不是点名鱼；保留标记，别当「叫自己」
+          atOthers.push("all");
+          atOtherNames.push("全体成员");
+          text += " @全体成员 ";
+        } else {
+          atOthers.push(qq);
+          // 昵称能拿到就用昵称，拿不到用 QQ 号：模型要能看出这句是 @ 别人的
+          const name = String(seg.data?.["name"] ?? "").trim();
+          atOtherNames.push(name || qq);
+          text += ` @${name || qq} `;
+        }
       } else if (seg.type === "image") {
         text += ` [图片#${images.length}] `;
         segments.push(seg);
@@ -499,10 +549,13 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
   // 裸 @（只 @ 不带字）不丢弃：以最小占位文本继续走闸和链路，
   // 否则 chatlog 无痕，用户观感是鱼不理人。非 @ 的空文本维持丢弃。
   if (!text && mentionsBot) text = "（被 @ 了一下，没说话）";
+  // 抠掉 @ 标记后只剩标点/空白/符号（含 emoji）的，也算没内容：这类消息不值得占一次抽签。
+  // @ 了鱼（mentionsBot）不受此限——被点名就算只发个问号也要答。
+  if (!mentionsBot && text.replace(/@\S+/g, " ").replace(/[\p{P}\p{S}\p{Z}\s]/gu, "") === "") return null;
   if (!text) return null;
 
   const nickname = frame.sender?.card || frame.sender?.nickname || String(userId);
-  const base = { userId, nickname, text, mentionsBot, messageId: frame.message_id, images, imageSegments: segments, replyIds, forwardIds };
+  const base = { userId, nickname, text, mentionsBot, ...(atOthers.length > 0 ? { atOthers, atOtherNames } : {}), messageId: frame.message_id, images, imageSegments: segments, replyIds, forwardIds };
 
   if (frame.message_type === "group" && frame.group_id) {
     return { ...base, chatKey: `qq:group:${frame.group_id}`, groupId: frame.group_id };

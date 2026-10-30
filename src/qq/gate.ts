@@ -30,6 +30,8 @@ export interface GateOptions {
   ambientChanceByGroup?: Record<string, number>;
   /** 主人特别关注的人发言时的概率（比普通闲聊高得多，但不等于必答）。 */
   watchedChance?: number;
+  /** 每轮现取的概率（热更新用）；给了就盖过上面三个静态值。 */
+  chances?: () => { ambient: number; byGroup: Record<string, number>; watched: number };
   now?: () => number;
   random?: () => number;
 }
@@ -76,8 +78,11 @@ export function createGate(options: GateOptions): Gate {
 
       // 随机粗筛：绝大多数非 @ 消息到这就结束；可按群覆盖（0 = 该群不回闲聊）。
       // 特别关注的人单独用更高的概率（watchedChance，缺省 0.5），照顾到但不等于必答。
-      const base = options.ambientChanceByGroup?.[String(msg.groupId)] ?? options.ambientChance;
-      const chance = watched === true ? (options.watchedChance ?? 0.5) : base;
+      const live = options.chances?.();
+      const base = live
+        ? (live.byGroup[String(msg.groupId)] ?? live.ambient)
+        : (options.ambientChanceByGroup?.[String(msg.groupId)] ?? options.ambientChance);
+      const chance = watched === true ? (live?.watched ?? options.watchedChance ?? 0.5) : base;
       if (random() > chance) return { enter: false, reason: "sampled_out" };
       return { enter: true, reason: "sampled" };
     },
@@ -88,8 +93,17 @@ export function createGate(options: GateOptions): Gate {
 export function renderForModel(msg: IncomingMessage, master: string): string {
   const where = msg.groupId ? `群${msg.groupId}` : `私聊`;
   const reply = msg.messageId ? ` 回复msg:${msg.messageId}` : "";
-  const tags = [msg.mentionsBot ? "对你说话" : "", String(msg.userId) === master ? "你主人" : ""]
-    .filter(Boolean)
-    .join(" ");
-  return `[${where} | ${msg.nickname}(${msg.userId})${reply}${tags ? ` ${tags}` : ""}] ${msg.text}`;
+  const tags: string[] = [];
+  if (msg.mentionsBot) tags.push("对你说话");
+  if ((msg.atOthers?.length ?? 0) > 0 && !msg.mentionsBot) {
+    const who = (msg.atOthers ?? [])
+      .map((qq, index) => {
+        const name = msg.atOtherNames?.[index];
+        return name && name !== qq && qq !== "all" ? `${name}(${qq})` : name || qq;
+      })
+      .join("、");
+    tags.push(`在@${who}（不是在叫你）`);
+  }
+  if (String(msg.userId) === master) tags.push("你主人");
+  return `[${where} | ${msg.nickname}(${msg.userId})${reply}${tags.length > 0 ? ` ${tags.join(" ")}` : ""}] ${msg.text}`;
 }

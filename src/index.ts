@@ -31,9 +31,13 @@ import { createUsageLedger, sumUsage } from "./usage.ts";
 import { bypassAllowed, splitBypass } from "./bypass.ts";
 import { ChatsDoc, WatchDoc } from "./store.ts";
 import { renderTemplate } from "./prompts.ts";
+import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
 
 const ctx = BACKGROUND_CONTEXT;
+
+// 可热更新的行为配置：fish.config.json > .env > 默认
+const fishConfig = createConfigLoader();
 
 // 收表情包专用轮：这一轮只允许调 meme_add，不许说话（say 会拒绝）
 const silentRounds = new Set<string>();
@@ -68,9 +72,6 @@ const config = {
   master: process.env.MASTER_QQ ?? "",
   groups: (process.env.GROUPS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
   bypassGroups: (process.env.BYPASS_GROUPS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
-  quietHours: process.env.QUIET_HOURS?.split("-").map(Number) as [number, number] | undefined,
-  dailyQuota: Number(process.env.DAILY_QUOTA ?? "40"),
-  cooldownMs: Number(process.env.COOLDOWN_MS ?? "90000"),
   ambientChance: Number(process.env.AMBIENT_CHANCE ?? "0.1"),
   // 按群覆盖随机门："群号:值,群号:值"；未列出的群用上面的全局值
   ambientChanceByGroup: Object.fromEntries(
@@ -128,7 +129,9 @@ const fish = await openFish({
   model: mainModel,
   // 思考档位：off|minimal|low|medium|high|xhigh|max。最低可用思考档是 low
   // （deepseek 的 minimal 映射为 null，等于不支持），缺省 off
-  thinkingLevel: (process.env.THINKING_LEVEL ?? "off") as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max",
+  thinkingLevel: fishConfig().config.thinkingLevel,
+  // 表情包跨轮冷却：每个人格会话独立计时
+  memeCooldownMs: Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
   // look 的视觉描述模型：缺省用主模型自身；可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型
   visionModel: process.env.VISION_MODEL_ID
     ? { provider: process.env.VISION_PROVIDER ?? config.modelConfig.providerId, modelId: process.env.VISION_MODEL_ID }
@@ -171,8 +174,8 @@ const fish = await openFish({
   workspaceRoot: config.workspaceRoot,
   compact: {
     model: gateModel,
-    maxEntries: Number(process.env.COMPACT_MAX_ENTRIES ?? "80"),
-    maxChars: Number(process.env.COMPACT_MAX_CHARS ?? "12000"),
+    maxEntries: fishConfig().config.compact.maxEntries,
+    maxChars: fishConfig().config.compact.maxChars,
   },
   // outbox 里的消息由 fish.drain() 逐条交给这里；幂等表再加一层保险
   emit: async (conversationId, payload) => {
@@ -358,7 +361,7 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
       const roundId = String(submission.id);
       silentRounds.add(roundId);
       try {
-        const settled = await submission.wait(ctx);
+        const settled = await settleWithTimeout(submission, conv, msg, fishConfig().config.roundTimeoutSeconds, false);
         let added = false;
         try {
           const index = JSON.parse(readFileSync(join(config.mediaRoot, "memes", "index.json"), "utf8")) as { md5?: string }[];
@@ -378,6 +381,49 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
     }
     return; // 一条消息只收一张
   }
+}
+
+/**
+ * 等一轮结算，但设上限：超过 roundTimeoutSeconds 就直接放弃这一轮。
+ *
+ * 为什么要丢：一轮里可能排着好几条 submission（画图、长思考、连续消息），
+ * 轮到自己时原消息已经过去几分钟，回过去只会让人觉得它答非所问。
+ * 超时主动 abort，把这个 submission 从队列里撤掉，别让后面的消息继续排。
+ */
+async function settleWithTimeout(
+  submission: { id: number | string; wait: (context: unknown) => Promise<{ status: string; reason?: string }>; abort: (context: unknown) => Promise<unknown> },
+  conversation: { id: number | string },
+  msg: IncomingMessage,
+  timeoutSeconds: number,
+  abortConversation: boolean,
+): Promise<{ status: string; reason?: string }> {
+  const timeoutMs = Math.max(5, timeoutSeconds) * 1000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<{ status: string; reason?: string }>((resolve) => {
+    timer = setTimeout(() => resolve({ status: "timeout", reason: `超过 ${timeoutSeconds} 秒` }), timeoutMs);
+  });
+  // wait 自己挂 catch：超时后它还会在后面 resolve/reject，别变成未处理拒绝
+  const waiting = submission.wait(ctx).catch(() => ({ status: "aborted" as const }));
+  const settled = await Promise.race([waiting, timeout]);
+  if (timer) clearTimeout(timer);
+  if (settled.status !== "timeout") return settled;
+
+  console.warn(`[鱼缸] 轮超时：${msg.chatKey} ${msg.nickname}（${msg.messageId ?? "?"}）超过 ${timeoutSeconds} 秒，丢弃`);
+  try {
+    await submission.abort(ctx);
+  } catch (error) {
+    console.error("[鱼缸] 超时中止失败", error instanceof Error ? error.message : error);
+  }
+  // 主轮超时：连这一会话排队的输入一起撤掉（它们已经是陈年消息了）。
+  // 收图轮不动会话：它只是排队等前面的活干完，撤整个会话会误杀别人正在跑的轮。
+  if (abortConversation) {
+    try {
+      await (conversation as unknown as { abort?: (context: unknown) => Promise<void> }).abort?.(ctx);
+    } catch {
+      /* 尽力而为 */
+    }
+  }
+  return { status: "timeout", reason: `超过 ${timeoutSeconds} 秒` };
 }
 
 function withContext(msg: IncomingMessage, bucket: readonly { nickname: string; text: string }[]): string {
@@ -474,13 +520,17 @@ async function drainLoop(): Promise<void> {
 const gate = createGate({
   master: config.master,
   groups: config.groups,
-  quietHours: config.quietHours,
-  dailyQuota: config.dailyQuota,
-  cooldownMs: config.cooldownMs,
-  ambientChance: config.ambientChance,
-  ambientChanceByGroup: Object.keys(config.ambientChanceByGroup).length > 0 ? config.ambientChanceByGroup : undefined,
+  dailyQuota: 0,
+  cooldownMs: 0,
+  ambientChance: fishConfig().config.ambientChance,
+  ambientChanceByGroup: Object.keys(fishConfig().config.ambientChanceByGroup).length > 0 ? fishConfig().config.ambientChanceByGroup : undefined,
   // 特别关注者发言时的放行概率（比普通闲聊高，但不是必答）
-  watchedChance: Number(process.env.WATCH_AMBIENT_CHANCE ?? "0.5"),
+  watchedChance: fishConfig().config.watchAmbientChance,
+  // 每轮现取：改 fish.config.json 下一轮就生效，不用重启
+  chances: () => {
+    const c = fishConfig().config;
+    return { ambient: c.ambientChance, byGroup: c.ambientChanceByGroup, watched: c.watchAmbientChance };
+  },
 });
 
 // 启动装载特别关注名单：随机门与命中注入都要用，重启后立刻生效
@@ -509,7 +559,9 @@ function startWeekly(): void {
       const done = new Set(existsSync(weeklyPath) ? (JSON.parse(readFileSync(weeklyPath, "utf8")) as string[]) : []);
       const chatKey = `qq:private:${config.master}`;
       if (!config.master || done.has(`${chatKey}:${week}`)) return;
-      const groupKey = `qq:group:${config.weeklyGroupId}`;
+      const weeklyGroupId = fishConfig().config.weeklyGroupId ?? "";
+      if (!weeklyGroupId) return;
+      const groupKey = `qq:group:${weeklyGroupId}`;
       const stats = weeklyStats(join(HOME, "chatlog"), groupKey, now);
       if (!stats) return;
       const conv = await fish.group(chatKey);
@@ -614,7 +666,7 @@ onebot.onMessage((raw) => {
     });
     if (bypass) bypassOf.set(String(submission.id), bypass.stash);
 
-    const settled = await submission.wait(ctx);
+    const settled = await settleWithTimeout(submission, conv, msg, fishConfig().config.roundTimeoutSeconds, true);
     triggerOf.delete(String(submission.id));
     bypassOf.delete(String(submission.id));
     if (settled.status !== "done") {

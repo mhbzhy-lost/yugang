@@ -106,6 +106,10 @@ export interface FishOptions {
   master?: string;
   /** submissionId → 本轮触发消息；把回复引用绑在轮上，防串线。 */
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
+  /** 表情包跨轮冷却（毫秒）。 */
+  memeCooldownMs?: number;
+  /** 静默轮（自动收表情包）：这一轮 say 一律拒绝。 */
+  silentOf?: (roundId: unknown) => boolean;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费，轮结束失效。 */
   bypassOf?: (roundId: unknown) => string | undefined;
   /** 每个群的工作目录根；实际 cwd 是 <workspaceRoot>/<groupKey>。 */
@@ -161,7 +165,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
 
-  const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf });
+  const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf, ...(options.silentOf ? { silentOf: options.silentOf } : {}), ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}) });
   const react = createReactTool({ prompts, react: options.react, now });
   const tools = createTools({ mediaRoot, prompts, models, visionModel: options.visionModel ?? options.model, searchKey: options.searchKey, modelscopeKey: options.modelscopeKey, sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, bypassOf: options.bypassOf });
 

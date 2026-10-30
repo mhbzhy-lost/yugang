@@ -6,3 +6,5 @@ config/auth.json
 .env
 .pi/
 .trash/
+# 运行时行为配置（每台机器一份，模板是 fish.config.example）
+fish.config.json

@@ -11,10 +11,12 @@
  *
  * 模型的正文、思考、tool 调用文本，永远不进入 QQ。
  */
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineEntry, defineTool, type ConversationId } from "@earendil-works/pi-durable";
 import { validateOutbound, type EgressLimits } from "./policy.ts";
-import { ledgerOf, recordSent } from "./ledger.ts";
+import { ledgerOf, recordMedia, recordSent } from "./ledger.ts";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
 import { OutboxDoc } from "../store.ts";
 
@@ -41,6 +43,8 @@ export interface SayDeps {
   now?: () => number;
   /** submissionId → 本轮触发消息；宿主注入，能把引用目标绑在轮上。 */
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
+  /** 表情包跨轮冷却（毫秒），缺省 8 分钟。 */
+  memeCooldownMs?: number;
   /** 收图轮之类的静默轮：这一轮不许说话。 */
   silentOf?: (roundId: unknown) => boolean;
 }
@@ -65,6 +69,7 @@ export function createSayTool(deps: SayDeps) {
         maxItems: deps.limits.maxMessages,
       }),
       media: Type.Optional(Type.String({ description: prompt.params["media"] ?? "" })),
+      meme: Type.Optional(Type.String({ description: prompt.params["meme"] ?? "" })),
       quote: Type.Optional(Type.Boolean({ description: prompt.params["quote"] ?? "" })),
     }),
     execute: async (args, api, context) => {
@@ -80,8 +85,27 @@ export function createSayTool(deps: SayDeps) {
       const ts = now();
       const ledger = ledgerOf(api.conversationId);
 
+      // 表情包一条龙：传了 meme 关键词就直接挑图挂到 media 上，省掉先调 meme 再发的一轮往返。
+      // 频次三道上限：一轮最多一张图（任何来源）、跨轮冷却（默认 8 分钟）、库里得有贴题的。
+      let media = args.media;
+      let sentMeme = false;
+      if (args.meme !== undefined && args.meme.trim() !== "") {
+        if (media !== undefined) throw new Error(deps.prompts.messages["say_one_media"] ?? "say_one_media");
+        if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
+        const cooldownMs = deps.memeCooldownMs ?? 8 * 60_000;
+        if (ledger.lastMemeAt !== undefined && ts - ledger.lastMemeAt < cooldownMs) {
+          throw new Error(deps.prompts.messages["say_meme_cooldown"] ?? "say_meme_cooldown");
+        }
+        const picked = pickMeme(deps, args.meme);
+        if (!picked) throw new Error(deps.prompts.messages["say_meme_nomatch"] ?? "say_meme_nomatch");
+        media = `memes/${picked}`;
+        sentMeme = true;
+      } else if (media !== undefined && ledger.mediaThisRun >= 1) {
+        throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
+      }
+
       const rejection = validateOutbound(
-        { messages: args.messages, ...(args.media === undefined ? {} : { media: args.media }) },
+        { messages: args.messages, ...(media === undefined ? {} : { media }) },
         {
           limits: deps.limits,
           now: ts,
@@ -106,7 +130,7 @@ export function createSayTool(deps: SayDeps) {
       // run.taskId 每代都会换，不能用。轮结束后 run 整个移除，下一轮自然换新标识。
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
-      if (round !== undefined && args.media === undefined) {
+      if (round !== undefined && media === undefined) {
         const said = saidIn.get(api.conversationId);
         if (said?.round === round && said.count >= 3) {
           throw new Error(deps.prompts.messages["say_once"] ?? "already said this round");
@@ -118,7 +142,7 @@ export function createSayTool(deps: SayDeps) {
 
       const payload: OutboundPayload = {
         items: args.messages.map((m) => m.trim()),
-        ...(args.media === undefined ? {} : { media: args.media }),
+        ...(media === undefined ? {} : { media }),
         quote: args.quote === true,
         ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
         ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
@@ -134,8 +158,40 @@ export function createSayTool(deps: SayDeps) {
       }, context);
 
       recordSent(api.conversationId, payload.items, ts);
+      if (media !== undefined) recordMedia(api.conversationId, ts, sentMeme);
 
       return { output: [{ type: "text", text: deps.prompts.messages["say_sent"] ?? "ok" }] };
     },
   });
+}
+
+/** 从库里挑一张最贴关键词的（命中权重与 meme 工具一致），并列时随机，避免每次同图。 */
+function pickMeme(deps: SayDeps, keyword: string): string | undefined {
+  const indexUrl = join(deps.limits.mediaRoot, "memes", "index.json");
+  if (!existsSync(indexUrl)) return undefined;
+  let entries: { file: string; caption: string; tags: string[] }[];
+  try {
+    entries = JSON.parse(readFileSync(indexUrl, "utf8")) as { file: string; caption: string; tags: string[] }[];
+  } catch {
+    return undefined;
+  }
+  const terms = keyword.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const scored = entries
+    .map((e) => {
+      let score = 0;
+      for (const kw of terms) {
+        const tagHit = e.tags.some((tag) => {
+          const t = tag.toLowerCase();
+          return t.includes(kw) || kw.includes(t);
+        });
+        if (tagHit) score += 2;
+        else if (e.caption.toLowerCase().includes(kw)) score += 1;
+      }
+      return { e, score };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score);
+  if (scored.length === 0) return undefined;
+  const top = scored.filter((x) => x.score === scored[0]!.score);
+  return top[Math.floor(Math.random() * top.length)]!.e.file;
 }
