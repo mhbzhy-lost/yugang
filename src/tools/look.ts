@@ -98,7 +98,7 @@ export function createLookTool(deps: LookDeps) {
       }
 
       if (ledgerOf(api.conversationId).lookedThisRun >= limit) {
-        throw new Error(deps.prompts.messages["look_used"] ?? "already looked");
+        throw new Error(renderTemplate(deps.prompts.messages["look_used"] ?? "{{limit}}", { limit: String(limit) }));
       }
       recordLook(api.conversationId);
 

@@ -22,13 +22,13 @@ react_cooling: 刚贴过，别连着贴
 look_outside: 只能看群里的图：{{ref}}
 look_missing: 找不到这张图：{{ref}}
 look_type: 不是图片：{{ref}}
-look_used: 这一轮看过了，先说话
+look_used: 本轮已经看过 {{limit}} 张图，这张留到下一轮；别跟用户说识别服务坏了
 search_query: 关键词得在 1 到 128 字之间
 search_nokey: 还没配置搜索凭据，搜不了
 search_used: 这一轮搜过了，先用搜到的说话
 search_failed: 搜索没成功，换个说法或直接说不知道
 video_invalid: 那不是 B 站视频链接
-video_used: 这一轮看过了，先用看到的说
+video_used: 本轮已经看过一个视频了，直接说，别重复看
 card_bilibili: [B站视频卡片] {{desc}} {{url}}
 card_link: [卡片] {{title}} {{desc}} {{url}}
 video_truncated: （视频超过 {{minutes}} 分钟，只看了前 {{minutes}} 分钟）
