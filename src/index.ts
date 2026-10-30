@@ -446,10 +446,6 @@ startWeekly();
 // 特别关注：chatKey（不含人格后缀）→ userId → 备注。随机门用它提高被关注者的概率，
 // 进模型前用它在那个人说话的那一行打标记。启动时从文档装载，watch 工具变更后即时同步。
 const watchedByChat = new Map<string, Map<string, { name?: string; note: string }>>();
-const baseChatKey = (key: string): string => {
-  const mark = key.lastIndexOf("#");
-  return mark > 0 && key.startsWith("qq:") ? key.slice(0, mark) : key;
-};
 function applyWatched(chatKey: string, people: { userId: string; name?: string; note: string }[]): void {
   const key = baseChatKey(chatKey);
   if (people.length === 0) {
