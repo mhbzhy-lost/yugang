@@ -20,7 +20,21 @@ export interface WatchDeps {
   master: string;
   /** 查这个会话所在群的全部成员（用于校验 QQ 号真在群里）；undefined = 无从校验。 */
   membersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
+  /** 名单变更后通知宿主（宿主据此调整这些人的随机门概率）。 */
+  onChanged?: (conversationId: string, userIds: string[]) => void;
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
+}
+
+/** 把该会话最新名单推给宿主（随机门与命中注入都要知道谁是特别关注）。 */
+async function notify(
+  deps: WatchDeps,
+  conversationId: string,
+  read: { snapshot: (doc: typeof WatchDoc, id: string, context: unknown) => Promise<{ people?: WatchedPerson[] } | undefined> },
+  context: unknown,
+): Promise<void> {
+  if (!deps.onChanged) return;
+  const snapshot = await read.snapshot(WatchDoc, conversationId, context);
+  deps.onChanged(conversationId, (snapshot?.people ?? []).map((p) => String(p.userId)));
 }
 
 export function createWatchTool(deps: WatchDeps) {
@@ -88,6 +102,7 @@ export function createWatchTool(deps: WatchDeps) {
           doc.people = doc.people.filter((p) => p.userId !== userId);
           removed = doc.people.length !== before;
         }, context);
+        if (removed) await notify(deps, api.conversationId, api as never, context);
         const text = removed
           ? renderTemplate(deps.prompts.messages["watch_removed"] ?? "", { userId })
           : renderTemplate(deps.prompts.messages["watch_not_found"] ?? "", { userId });
@@ -112,6 +127,7 @@ export function createWatchTool(deps: WatchDeps) {
         if (doc.people.length > 20) doc.people.splice(0, doc.people.length - 20);
       }, context);
 
+      await notify(deps, api.conversationId, api as never, context);
       const text = renderTemplate(deps.prompts.messages["watch_added"] ?? "", {
         who: name ? `${name}(${userId})` : userId,
         note,

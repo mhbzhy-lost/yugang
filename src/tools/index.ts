@@ -30,6 +30,7 @@ export interface ToolDeps {
   /** 主人 QQ：fs/restart 自改工具的身份闸。缺省则这些工具不可用（永远拒绝）。 */
   master?: string;
   /** 会话 → 群成员名单；watch 用它校验被关注人真的在群里。 */
+  onWatchChanged?: (conversationId: string, userIds: string[]) => void;
   groupMembersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
   /** ModelScope API-KEY：本地 SD 画不出来时 draw 的兜底凭据。缺省则只剩本地画图。 */
   modelscopeKey?: string;
@@ -46,8 +47,8 @@ export interface ToolDeps {
 export function createTools(deps: ToolDeps): ToolRegistration[] {
   const fsTools = deps.master
     ? (() => {
-        const { read, edit, write, del } = createFsTools({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf });
-        return [read, edit, write, del];
+        const { read, grep, edit, write, del } = createFsTools({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf });
+        return [read, grep, edit, write, del];
       })()
     : [];
   const treeTool = deps.master ? [createTreeTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf })] : [];
@@ -62,7 +63,7 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
     ...fsTools,
     createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl, bypassOf: deps.bypassOf, modelscopeKey: deps.modelscopeKey }),
-    ...(deps.master ? [createWatchTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf, ...(deps.groupMembersOf ? { membersOf: deps.groupMembersOf } : {}) })] : []),
+    ...(deps.master ? [createWatchTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf, ...(deps.groupMembersOf ? { membersOf: deps.groupMembersOf } : {}), ...(deps.onWatchChanged ? { onChanged: deps.onWatchChanged } : {}) })] : []),
     createTagsTool({ prompts: deps.prompts, csvPath: deps.tagsCsv }),
     ...treeTool,
     ...testTool,

@@ -28,7 +28,7 @@ import { localDay } from "./usage.ts";
 import { weeklyStats, renderWeekly } from "./stats.ts";
 import { createUsageLedger, sumUsage } from "./usage.ts";
 import { bypassAllowed, splitBypass } from "./bypass.ts";
-import { ChatsDoc } from "./store.ts";
+import { ChatsDoc, WatchDoc } from "./store.ts";
 import { renderTemplate } from "./prompts.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
 
@@ -133,6 +133,15 @@ const fish = await openFish({
   master: config.master,
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
   // watch 的号码校验：从会话映射回群号，再拉全量成员（不要 limit，要能校验到每个人）
+  onWatchChanged: (conversationId, userIds) => {
+    const chatKey = chatKeys.get(String(conversationId));
+    if (!chatKey) return;
+    // 只带了 id，备注靠重新读文档太绕：这里增量维护，新 id 先占位，备注由下次启动装载补齐
+    const key = baseChatKey(chatKey);
+    const map = watchedByChat.get(key) ?? new Map();
+    for (const id of userIds) if (!map.has(id)) map.set(id, { note: "" });
+    watchedByChat.set(key, map);
+  },
   groupMembersOf: async (conversationId) => {
     const chatKey = chatKeys.get(String(conversationId));
     if (!chatKey || !chatKey.startsWith("qq:group:")) return [];
@@ -295,7 +304,12 @@ function withContext(msg: IncomingMessage, bucket: readonly { nickname: string; 
   const header = renderTemplate(fish.prompts.messages["ctx_header"] ?? "", { count: String(prior.length) });
   const marker = fish.prompts.messages["ctx_target"] ?? "";
   const context = prior.map((m) => `${m.nickname}: ${m.text}`).join("\n");
-  return [header, context, marker, base].filter((line) => line.length > 0).join("\n");
+  // 命中特别关注：在要回的那一行前面打标（机械匹配 QQ 号，不靠模型回忆）
+  const watched = watchedByChat.get(msg.chatKey)?.get(String(msg.userId));
+  const watchNote = watched
+    ? renderTemplate(fish.prompts.messages["watch_inline"] ?? "", { who: msg.nickname, note: watched.note })
+    : "";
+  return [header, context, marker, watchNote, base].filter((line) => line.length > 0).join("\n");
 }
 
 async function handleCommand(msg: IncomingMessage): Promise<string | null> {
@@ -381,7 +395,18 @@ const gate = createGate({
   cooldownMs: config.cooldownMs,
   ambientChance: config.ambientChance,
   ambientChanceByGroup: Object.keys(config.ambientChanceByGroup).length > 0 ? config.ambientChanceByGroup : undefined,
+  // 特别关注者发言时的放行概率（比普通闲聊高，但不是必答）
+  watchedChance: Number(process.env.WATCH_AMBIENT_CHANCE ?? "0.5"),
 });
+
+// 启动装载特别关注名单：随机门与命中注入都要用，重启后立刻生效
+{
+  const chats = await fish.harness.snapshot(ChatsDoc, ctx);
+  for (const [chatKey, conversationId] of Object.entries(chats?.chats ?? {})) {
+    const watch = await fish.harness.snapshot(WatchDoc, Number(conversationId) as never, ctx);
+    applyWatched(chatKey, watch?.people ?? []);
+  }
+}
 
 /** 群周报：周日 21 点整点档私聊发给主人一次，var/weekly.json 记住发过的周防止重发。 */
 function startWeekly(): void {
@@ -418,6 +443,22 @@ function startWeekly(): void {
 startWeekly();
 
 // 每个群的运行态：最近流水、上次开口时间、今天开口次数
+// 特别关注：chatKey（不含人格后缀）→ userId → 备注。随机门用它提高被关注者的概率，
+// 进模型前用它在那个人说话的那一行打标记。启动时从文档装载，watch 工具变更后即时同步。
+const watchedByChat = new Map<string, Map<string, { name?: string; note: string }>>();
+const baseChatKey = (key: string): string => {
+  const mark = key.lastIndexOf("#");
+  return mark > 0 && key.startsWith("qq:") ? key.slice(0, mark) : key;
+};
+function applyWatched(chatKey: string, people: { userId: string; name?: string; note: string }[]): void {
+  const key = baseChatKey(chatKey);
+  if (people.length === 0) {
+    watchedByChat.delete(key);
+    return;
+  }
+  watchedByChat.set(key, new Map(people.map((p) => [String(p.userId), { ...(p.name ? { name: p.name } : {}), note: p.note }])));
+}
+
 const recent = new Map<string, { nickname: string; text: string }[]>();
 const lastSpoke = new Map<string, number>();
 const spokenToday = new Map<string, { day: string; count: number }>();
@@ -446,8 +487,10 @@ onebot.onMessage((raw) => {
     const stat = spokenToday.get(msg.chatKey);
     const count = stat && stat.day === today() ? stat.count : 0;
 
+    const watched = watchedByChat.get(msg.chatKey)?.get(String(msg.userId));
     const decision = await gate.decide({
       msg,
+      ...(watched ? { watched: true } : {}),
       recent: bucket.slice(0, -1),
       lastSpokeAt: lastSpoke.get(msg.chatKey) ?? 0,
       spokenToday: count,

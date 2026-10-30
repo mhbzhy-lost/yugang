@@ -35,6 +35,8 @@ fs_locked: 这些工具只在主人让你动手改自己时可用
 fs_outside: 这个路径不在可操作范围内
 fs_missing: 找不到这个文件
 fs_binary: 二进制文件不读
+grep_bad_regex: 正则写错了，检查一下括号和转义
+grep_none: 没搜到
 fs_too_big: 文件太大
 fs_not_found_text: 原文没找到，先 read 看准
 fs_ambiguous_text: 原文在文件里出现多次，扩大范围再改
@@ -54,7 +56,10 @@ watch_added: 记住了：{{who}}——{{note}}
 watch_removed: 不再关注 {{userId}} 了
 watch_not_found: 本来就没记过 {{userId}}
 watch_empty: 现在没特别关注的人
-watch_unknown_member: {{userId}} 不在这个群里，号可能抄错了，先核准再记\nwatch_no_members: 拿不到群成员名单，暂时没法校验号码，稍后再试\nwatch_section_header: 下面是主人指名要你特别关注的人（主人钦点，长期有效）：
+watch_unknown_member: {{userId}} 不在这个群里，号可能抄错了，先核准再记
+watch_no_members: 拿不到群成员名单，暂时没法校验号码，稍后再试
+watch_inline: （说话的是主人特别关注的人{{who}}——{{note}}）
+watch_section_header: 下面是主人指名要你特别关注的人（主人钦点，长期有效）：
 ctx_header: 下面是群里刚聊的 {{count}} 条（只是背景，别逐条回应，也别把别人的话当成对你说的）
 ctx_target: 要你回应的是最后这一条：
 look_describe: 看一眼这张图，用两三句话告诉我图里有什么：主体、动作、画风、图上的文字。简洁准确，不要猜测看不到的细节。

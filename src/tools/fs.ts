@@ -5,7 +5,7 @@
  * .git/、node_modules/、.trash/ 一律硬封禁——凭据不能进模型上下文，版本库不能被改写。
  * delete 不真删，移入 .trash/ 可恢复。所有操作打印审计行。
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
@@ -55,7 +55,11 @@ export function createFsTools(deps: FsDeps) {
     name: "read",
     description: p.tools["read"].description,
     callers: ["model"],
-    parameters: Type.Object({ path: Type.String({ description: p.tools["read"].params["path"] ?? "" }) }),
+    parameters: Type.Object({
+      path: Type.String({ description: p.tools["read"].params["path"] ?? "" }),
+      startLine: Type.Optional(Type.Number({ description: p.tools["read"].params["startLine"] ?? "" })),
+      endLine: Type.Optional(Type.Number({ description: p.tools["read"].params["endLine"] ?? "" })),
+    }),
     execute: async (args, api, context) => {
       await assertUnlocked(api as never, context);
       const full = resolveInside(root, args.path);
@@ -67,10 +71,115 @@ export function createFsTools(deps: FsDeps) {
         throw new Error(p.messages["fs_missing"] ?? "fs_missing");
       }
       if (!st.isFile()) throw new Error(p.messages["fs_missing"] ?? "fs_missing");
-      if (st.size > READ_CAP) throw new Error(p.messages["fs_too_big"] ?? "fs_too_big");
       if (BIN_EXT.has(extname(full).toLowerCase())) throw new Error(p.messages["fs_binary"] ?? "fs_binary");
-      audited("read", full.slice(root.length + 1), `${st.size}B`);
-      return { output: [{ type: "text", text: readFileSync(full, "utf8") }] };
+
+      const from = args.startLine !== undefined ? Math.max(1, Math.floor(args.startLine)) : undefined;
+      const to = args.endLine !== undefined ? Math.max(1, Math.floor(args.endLine)) : undefined;
+
+      // 不带行号：整文件，受大小上限保护；带行号：按行切片，大文件也能分段读
+      if (from === undefined && to === undefined) {
+        if (st.size > READ_CAP) throw new Error(p.messages["fs_too_big"] ?? "fs_too_big");
+        audited("read", full.slice(root.length + 1), `${st.size}B`);
+        return { output: [{ type: "text", text: readFileSync(full, "utf8") }] };
+      }
+
+      const lines = readFileSync(full, "utf8").split("\n");
+      const start = (from ?? 1) - 1;
+      const end = Math.min(lines.length, to ?? lines.length);
+      if (start >= lines.length) throw new Error(p.messages["fs_missing"] ?? "fs_missing");
+      const slice = lines.slice(start, Math.max(start + 1, end));
+      const text = slice.map((line, i) => `${start + i + 1}\t${line}`).join("\n");
+      audited("read", full.slice(root.length + 1), `${start + 1}-${start + slice.length}行`);
+      return { output: [{ type: "text", text }] };
+    },
+  });
+
+  // grep：只搜仓库内文本文件，返回「文件:行:内容」。大文件不整读，结果也有条数上限
+  const grep = defineTool({
+    name: "grep",
+    description: p.tools["grep"].description,
+    callers: ["model"],
+    parameters: Type.Object({
+      pattern: Type.String({ description: p.tools["grep"].params["pattern"] ?? "" }),
+      path: Type.Optional(Type.String({ description: p.tools["grep"].params["path"] ?? "" })),
+      glob: Type.Optional(Type.String({ description: p.tools["grep"].params["glob"] ?? "" })),
+      ignoreCase: Type.Optional(Type.Boolean({ description: p.tools["grep"].params["ignoreCase"] ?? "" })),
+      limit: Type.Optional(Type.Number({ description: p.tools["grep"].params["limit"] ?? "" })),
+    }),
+    execute: async (args, api, context) => {
+      await assertUnlocked(api as never, context);
+      const wanted = args.path ?? ".";
+      const base = wanted === "." || wanted === "" ? root : resolveInside(root, wanted);
+      if (!base) throw new Error(p.messages["fs_outside"] ?? "fs_outside");
+      let re: RegExp;
+      try {
+        re = new RegExp(args.pattern, args.ignoreCase ? "i" : "");
+      } catch {
+        throw new Error(p.messages["grep_bad_regex"] ?? "grep_bad_regex");
+      }
+      const limit = Math.min(Math.max(1, Math.floor(args.limit ?? 60)), 200);
+      const globRe = args.glob ? new RegExp(`^${args.glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`) : undefined;
+
+      const hits: string[] = [];
+      const scanFile = (full: string): void => {
+        const rel = full.slice(root.length + 1);
+        if (rel === ".env" || rel === join("config", "auth.json")) return;
+        if (BIN_EXT.has(extname(full).toLowerCase())) return;
+        if (globRe && !globRe.test(full.split(sep).pop() ?? "") && !globRe.test(rel)) return;
+        let stat;
+        try {
+          stat = statSync(full);
+        } catch {
+          return;
+        }
+        if (!stat.isFile() || stat.size > 2_000_000) return;
+        let content: string;
+        try {
+          content = readFileSync(full, "utf8");
+        } catch {
+          return;
+        }
+        const lines = content.split("\n");
+        for (let i = 0; i < lines.length && hits.length < limit; i++) {
+          const line = lines[i] ?? "";
+          if (line.length > 300) continue;
+          if (re.test(line)) hits.push(`${rel}:${i + 1}:${line.trim().slice(0, 200)}`);
+        }
+      };
+
+      const walk = (dir: string, depth: number): void => {
+        if (hits.length >= limit || depth > 6) return;
+        let entries;
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const entry of entries) {
+          if (hits.length >= limit) return;
+          const full = join(dir, entry.name);
+          const rel = full.slice(root.length + 1);
+          if (entry.isDirectory()) {
+            if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".trash" || entry.name === ".pi") continue;
+            walk(full, depth + 1);
+            continue;
+          }
+          if (!entry.isFile()) continue;
+          scanFile(full);
+        }
+      };
+      try {
+        if (statSync(base).isFile()) scanFile(base);
+        else walk(base, 0);
+      } catch {
+        throw new Error(p.messages["fs_missing"] ?? "fs_missing");
+      }
+
+      audited("grep", `${args.pattern} @ ${base.slice(root.length + 1) || "."}`, `${hits.length}命中`);
+      const text = hits.length === 0
+        ? (p.messages["grep_none"] ?? "grep_none")
+        : hits.join("\n");
+      return { output: [{ type: "text", text }] };
     },
   });
 
@@ -144,5 +253,5 @@ export function createFsTools(deps: FsDeps) {
     },
   });
 
-  return { read, edit, write, del };
+  return { read, grep, edit, write, del };
 }

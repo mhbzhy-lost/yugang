@@ -28,12 +28,16 @@ export interface GateOptions {
   ambientChance: number;
   /** 按群覆盖的随机门概率（群号 → 值）；未列出的群用 ambientChance。值为 0 = 该群只应答 @，不回闲聊。 */
   ambientChanceByGroup?: Record<string, number>;
+  /** 主人特别关注的人发言时的概率（比普通闲聊高得多，但不等于必答）。 */
+  watchedChance?: number;
   now?: () => number;
   random?: () => number;
 }
 
 export interface GateInput {
   msg: IncomingMessage;
+  /** 这条消息的发送者是否在主人给的特别关注名单里。 */
+  watched?: boolean;
   /** 【仅兼容保留】最近的群聊流水。 */
   recent?: readonly { nickname: string; text: string }[];
   lastSpokeAt?: number;
@@ -51,7 +55,7 @@ export interface Gate {
 export function createGate(options: GateOptions): Gate {
   const random = options.random ?? Math.random;
   return {
-    async decide({ msg }) {
+    async decide({ msg, watched }) {
       // 私聊：只认主人
       if (msg.chatKey.startsWith("qq:private:")) {
         if (String(msg.userId) === options.master) return { enter: true, reason: "private" };
@@ -70,8 +74,10 @@ export function createGate(options: GateOptions): Gate {
       // 要让鱼看合集：回复合集并 @，或发合集时直接 @。
       if ((msg.forwardIds?.length ?? 0) > 0) return { enter: false, reason: "forward_ignored" };
 
-      // 随机粗筛：绝大多数非 @ 消息到这就结束；可按群覆盖（0 = 该群不回闲聊）
-      const chance = options.ambientChanceByGroup?.[String(msg.groupId)] ?? options.ambientChance;
+      // 随机粗筛：绝大多数非 @ 消息到这就结束；可按群覆盖（0 = 该群不回闲聊）。
+      // 特别关注的人单独用更高的概率（watchedChance，缺省 0.5），照顾到但不等于必答。
+      const base = options.ambientChanceByGroup?.[String(msg.groupId)] ?? options.ambientChance;
+      const chance = watched === true ? (options.watchedChance ?? 0.5) : base;
       if (random() > chance) return { enter: false, reason: "sampled_out" };
       return { enter: true, reason: "sampled" };
     },
