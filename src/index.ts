@@ -357,8 +357,13 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
     const content = [header, context, task].filter((line) => line.length > 0).join("\n");
     try {
       const submission = await conv.submit({ type: "input", content }, ctx);
-      silentRounds.add(String(submission.id));
-      await submission.wait(ctx);
+      const roundId = String(submission.id);
+      silentRounds.add(roundId);
+      try {
+        await submission.wait(ctx);
+      } finally {
+        silentRounds.delete(roundId);
+      }
     } catch (error) {
       console.error("[鱼缸] 收图轮失败", error instanceof Error ? error.message : error);
     } finally {
