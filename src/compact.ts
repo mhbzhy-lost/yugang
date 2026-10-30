@@ -21,6 +21,8 @@ export interface CompactorOptions {
   prompts: PromptSet;
   /** 攒够多少条就压。 */
   maxEntries: number;
+  /** 现取的阈值（热更新用）；给了就盖过上面两个静态值。 */
+  limits?: () => { maxEntries: number; maxChars: number };
   /** 或者攒够多少字就压。 */
   maxChars: number;
   onError?: (error: unknown) => void;
@@ -44,7 +46,8 @@ export function createCompactor(options: CompactorOptions): Compactor {
       if (rendered.transcript.trim().length === 0) return { compacted: false, reason: "empty" };
 
       const { entries, chars, transcript } = rendered;
-      if (!force && entries < options.maxEntries && chars < options.maxChars) {
+      const limits = options.limits ? options.limits() : { maxEntries: options.maxEntries, maxChars: options.maxChars };
+      if (!force && entries < limits.maxEntries && chars < limits.maxChars) {
         return { compacted: false, reason: "below_threshold", entries, chars };
       }
 

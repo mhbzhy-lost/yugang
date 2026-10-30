@@ -106,8 +106,8 @@ export interface FishOptions {
   master?: string;
   /** submissionId → 本轮触发消息；把回复引用绑在轮上，防串线。 */
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
-  /** 表情包跨轮冷却（毫秒）。 */
-  memeCooldownMs?: number;
+  /** 表情包跨轮冷却（毫秒）；传函数则每次现取，改配置立即生效。 */
+  memeCooldownMs?: number | (() => number);
   /** 静默轮（自动收表情包）：这一轮 say 一律拒绝。 */
   silentOf?: (roundId: unknown) => boolean;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费，轮结束失效。 */
@@ -120,6 +120,8 @@ export interface FishOptions {
     model?: ModelRef;
     maxEntries?: number;
     maxChars?: number;
+    /** 现取的阈值（热更新用）：改配置后下一轮压缩就按新值判断。 */
+    limits?: () => { maxEntries: number; maxChars: number };
   };
   /** look 的视觉描述模型；缺省用主模型。 */
   visionModel?: ModelRef;
@@ -256,6 +258,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         prompts,
         maxEntries: options.compact.maxEntries ?? 80,
         maxChars: options.compact.maxChars ?? 12_000,
+        ...(options.compact.limits ? { limits: options.compact.limits } : {}),
         onError: (error) => console.error("[鱼缸] 压缩失败", error instanceof Error ? error.message : error),
       })
     : undefined;

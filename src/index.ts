@@ -131,7 +131,7 @@ const fish = await openFish({
   // （deepseek 的 minimal 映射为 null，等于不支持），缺省 off
   thinkingLevel: fishConfig().config.thinkingLevel,
   // 表情包跨轮冷却：每个人格会话独立计时
-  memeCooldownMs: Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
+  memeCooldownMs: () => Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
   // look 的视觉描述模型：缺省用主模型自身；可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型
   visionModel: process.env.VISION_MODEL_ID
     ? { provider: process.env.VISION_PROVIDER ?? config.modelConfig.providerId, modelId: process.env.VISION_MODEL_ID }
@@ -176,6 +176,7 @@ const fish = await openFish({
     model: gateModel,
     maxEntries: fishConfig().config.compact.maxEntries,
     maxChars: fishConfig().config.compact.maxChars,
+    limits: () => fishConfig().config.compact,
   },
   // outbox 里的消息由 fish.drain() 逐条交给这里；幂等表再加一层保险
   emit: async (conversationId, payload) => {

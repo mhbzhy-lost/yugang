@@ -43,8 +43,8 @@ export interface SayDeps {
   now?: () => number;
   /** submissionId → 本轮触发消息；宿主注入，能把引用目标绑在轮上。 */
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
-  /** 表情包跨轮冷却（毫秒），缺省 8 分钟。 */
-  memeCooldownMs?: number;
+  /** 表情包跨轮冷却（毫秒），缺省 8 分钟；给函数就是每次现取（热更新用）。 */
+  memeCooldownMs?: number | (() => number);
   /** 收图轮之类的静默轮：这一轮不许说话。 */
   silentOf?: (roundId: unknown) => boolean;
 }
@@ -92,7 +92,7 @@ export function createSayTool(deps: SayDeps) {
       if (args.meme !== undefined && args.meme.trim() !== "") {
         if (media !== undefined) throw new Error(deps.prompts.messages["say_one_media"] ?? "say_one_media");
         if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
-        const cooldownMs = deps.memeCooldownMs ?? 8 * 60_000;
+        const cooldownMs = (typeof deps.memeCooldownMs === "function" ? deps.memeCooldownMs() : deps.memeCooldownMs) ?? 8 * 60_000;
         if (ledger.lastMemeAt !== undefined && ts - ledger.lastMemeAt < cooldownMs) {
           throw new Error(deps.prompts.messages["say_meme_cooldown"] ?? "say_meme_cooldown");
         }
