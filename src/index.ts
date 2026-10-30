@@ -85,8 +85,10 @@ function personaOf(chatKey: string): string {
   return at > 0 ? chatKey.slice(at + 1) : DEFAULT_PERSONA_NAME;
 }
 
-function markVoiceEligible(msg: IncomingMessage): boolean {
-  if (!voiceConfigFor(msg.chatKey)) return false;
+function markVoiceEligible(msg: IncomingMessage, conversationId?: string): boolean {
+  // 音色跟着「当前会话的人格」走：同一个群切到爱莉希雅就该有爱莉的声音
+  const chatKey = conversationId !== undefined ? (chatKeys.get(String(conversationId)) ?? msg.chatKey) : msg.chatKey;
+  if (!voiceConfigFor(chatKey)) return false;
   // 群里要 @ 鱼才算「叫我」，私聊本来就是对鱼说的，不用 @
   const calledOut = msg.mentionsBot || msg.chatKey.startsWith("qq:private:");
   if (calledOut && VOICE_REQUEST.test(msg.text)) return true;
@@ -675,7 +677,7 @@ onebot.onMessage((raw) => {
     // 把触发消息绑到 submission 上：鱼的回复引用本轮自己的触发消息，
     // 轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）
     // 语音资格在入站侧算好：这一轮能不能用语音，写进 content 让鱼自己权衡
-    const voiceEligible = markVoiceEligible(msg);
+    const voiceEligible = markVoiceEligible(msg, String(conv.id));
     let content = withContext(msg, bucket);
     if (voiceEligible) {
       const hint = fish.prompts.messages["voice_hint"] ?? "";
