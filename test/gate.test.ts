@@ -101,13 +101,25 @@ test("@ 与回复合集必答，并且会刷新该群的计时", async () => {
   assert.equal(replied.reason, "replied_forward");
 });
 
-test("特别关注的人仍走随机门，不受限流影响", async () => {
-  const pass = build({ random: () => 0, watchedChance: 0.5 });
+test("特别关注：冷却够了直接回，不看随机", async () => {
+  const gate = build({ random: () => 1, watchedChance: 0.5 }); // 随机必不中
+  const first = await gate.decide({ msg: msg(), watched: true, ...idle });
+  assert.equal(first.enter, true, "安静够久时关注者应当直接进");
+  assert.equal(first.reason, "watched_rate_pass");
+});
+
+test("特别关注：冷却没到才掷随机门", async () => {
+  let clock = 1_000_000;
+  const pass = build({ now: () => clock, random: () => 0, watchedChance: 0.5 });
+  await pass.decide({ msg: msg(), ...idle }); // 普通消息占掉冷却
+  clock += 5_000;
   const watchedIn = await pass.decide({ msg: msg(), watched: true, ...idle });
   assert.equal(watchedIn.enter, true);
   assert.equal(watchedIn.reason, "watched");
 
-  const drop = build({ random: () => 1, watchedChance: 0.5 });
+  const drop = build({ now: () => clock, random: () => 1, watchedChance: 0.5 });
+  await drop.decide({ msg: msg(), ...idle });
+  clock += 5_000;
   const watchedOut = await drop.decide({ msg: msg(), watched: true, ...idle });
   assert.equal(watchedOut.enter, false);
   assert.equal(watchedOut.reason, "watched_sampled_out");

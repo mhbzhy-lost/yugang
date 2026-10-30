@@ -3,7 +3,7 @@
  *
  * 当前策略（2026-10 二次改版）——@ 必答 + 限流：
  *   私聊只认主人；群里任何人 @ → 必答；回复合集 → 必答；
- *   特别关注者 → 仍走随机门（watchAmbientChance）；
+ *   特别关注者 → 先过限流门：安静够久就直接进；没到间隔才掷随机（watchAmbientChance）。
  *   其余消息（含主人的非 @）→ 同一群两条被处理消息之间至少隔 ambientMinIntervalSeconds。
  *
  * 为什么从随机门换成限流：随机门对「沉寂很久突然有人说话」这种场景不友好——
@@ -50,7 +50,7 @@ export interface GateInput {
 }
 
 export type GateDecision =
-  | { enter: true; reason: "private" | "mentioned" | "replied_forward" | "watched" | "rate_pass" }
+  | { enter: true; reason: "private" | "mentioned" | "replied_forward" | "watched_rate_pass" | "watched" | "rate_pass" }
   | { enter: false; reason: string };
 
 export interface Gate {
@@ -98,18 +98,26 @@ export function createGate(options: GateOptions): Gate {
 
       const live = options.chances?.();
 
-      // 特别关注：保留随机门（照顾到但不等于必答）
+      const minInterval = live?.minIntervalMs ?? options.ambientMinIntervalMs ?? 30_000;
+      const last = lastHandled.get(msg.chatKey) ?? 0;
+      const cooledDown = at - last >= minInterval;
+
+      // 特别关注：先过 30s 门——安静够久就直接回（不必再抽签），
+      // 免得出现「关注的人说话没反应，随后别人说话却回了」的尴尬。
+      // 只有冷却没到（群里刚热闹过）才掷随机，算是「顺带也照顾一下」。
       if (watched === true) {
+        if (cooledDown) {
+          markHandled(msg.chatKey, at);
+          return { enter: true, reason: "watched_rate_pass" };
+        }
         const chance = live?.watched ?? options.watchedChance ?? 0.5;
         if (random() > chance) return { enter: false, reason: "watched_sampled_out" };
         markHandled(msg.chatKey, at);
         return { enter: true, reason: "watched" };
       }
 
-      // 其余消息：限流。安静越久越容易进，刚处理过就闭嘴。
-      const minInterval = live?.minIntervalMs ?? options.ambientMinIntervalMs ?? 30_000;
-      const last = lastHandled.get(msg.chatKey) ?? 0;
-      if (at - last < minInterval) return { enter: false, reason: "rate_limited" };
+      // 其余消息：纯限流。安静越久越容易进，刚处理过就闭嘴。
+      if (!cooledDown) return { enter: false, reason: "rate_limited" };
       markHandled(msg.chatKey, at);
       return { enter: true, reason: "rate_pass" };
     },
