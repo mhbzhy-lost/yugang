@@ -19,6 +19,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import type { Conversation } from "@earendil-works/pi-durable";
 import { openFish, type GroupProfile } from "./harness.ts";
 import { OneBot, type IncomingMessage } from "./qq/onebot.ts";
+import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "./voice-route.ts";
 import { createGate, renderForModel } from "./qq/gate.ts";
 import { setLookDisabled } from "./tools/look.ts";
 import { absorbSecrets } from "./egress/absorb.ts";
@@ -36,9 +37,6 @@ import { UsageDoc } from "@earendil-works/pi-durable";
 
 const ctx = BACKGROUND_CONTEXT;
 
-// 语音是否启用：TTS_URL 存在才算（服务在本机跑）
-const ttsEnabled = Boolean(process.env.TTS_URL);
-
 // 可热更新的行为配置：fish.config.json > .env > 内置默认
 const fishConfig = createConfigLoader();
 
@@ -49,38 +47,24 @@ const silentRounds = new Set<string>();
 // 只是提示，不是门禁——用不用由鱼自己判断。
 const voiceCredits = new Map<string, Map<string, number>>();
 
+// 会话 id → 映射键（chatKey 或 chatKey#人格）。chatKeys 存的是剥离人格的 base 键
+// （emit 要解析数字 id），人格相关的配置（音色）必须走这张表，否则重启后
+// 人格身份丢失 → personaOf 回退「默认」→ 拿默认音色开口（长征机用爱莉声音说话）
+const mappingKeys = new Map<string, string>();
+
 /** 主人或本会话特别关注的人？ */
 function isVoiceVip(msg: IncomingMessage): boolean {
   if (String(msg.userId) === config.master) return true;
   return watchedByChat.get(msg.chatKey)?.has(String(msg.userId)) ?? false;
 }
 
-/** 默认人格名（prompt/persona.md 那本，没有 # 后缀）。 */
-const DEFAULT_PERSONA_NAME = "默认";
-
-function personaOf(chatKey: string): string {
-  const at = chatKey.lastIndexOf("#");
-  return at > 0 ? chatKey.slice(at + 1) : DEFAULT_PERSONA_NAME;
-}
-
 /**
  * chatKey（可能带人格后缀）→ 该会话的语音配置。
- * 只有 fish.config 的 voices 里明确配了这个人格，才有语音能力；
- * 默认人格允许用 .env 的 TTS_URL 兜底（单人格部署方便）。
+ * 只有 fish.config 的 voices 里明确配了这个人格，才有语音能力——没有兜底。
+ * 兜底就是串音：任何没配音色的人格都会去用默认音色（长征机用爱莉声音开口）。
  */
 function voiceConfigFor(chatKey: string): { url: string; referWav?: string; referText?: string; referLanguage?: string } | undefined {
-  const name = personaOf(chatKey);
-  const byPersona = fishConfig().config.voices[name];
-  if (byPersona) return byPersona;
-  if (name === DEFAULT_PERSONA_NAME && process.env.TTS_URL) {
-    return {
-      url: process.env.TTS_URL,
-      ...(process.env.TTS_REF_WAV ? { referWav: process.env.TTS_REF_WAV } : {}),
-      ...(process.env.TTS_REF_TEXT ? { referText: process.env.TTS_REF_TEXT } : {}),
-      ...(process.env.TTS_REF_LANG ? { referLanguage: process.env.TTS_REF_LANG } : {}),
-    };
-  }
-  return undefined;
+  return pickVoice(fishConfig().config.voices, chatKey);
 }
 
 // 特别关注：chatKey（不含人格后缀）→ userId → 备注。随机门用它提高被关注者的概率，
@@ -174,8 +158,8 @@ const fish = await openFish({
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
   // 表情包跨轮冷却：每个人格会话独立计时
   memeCooldownMs: () => Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
-  // 语音：按会话所在人格取配置（fish.config 的 voices；.env 的 TTS_URL 只给默认人格兜底）
-  ttsOf: (conversationId) => voiceConfigFor(chatKeys.get(String(conversationId)) ?? ""),
+  // 语音：按会话所在人格取配置（只认 fish.config 的 voices，没配就是没有语音）
+  ttsOf: (conversationId) => voiceConfigFor(mappingKeys.get(String(conversationId)) ?? ""),
   // look 的视觉描述模型：缺省用主模型自身；可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型
   visionModel: process.env.VISION_MODEL_ID
     ? { provider: process.env.VISION_PROVIDER ?? config.modelConfig.providerId, modelId: process.env.VISION_MODEL_ID }
@@ -298,6 +282,7 @@ async function conversationFor(chatKey: string): Promise<Conversation> {
     conversations.set(mapKey, conv);
     // 路由永远用原始 chatKey（剥离 #人格 后缀），否则 emit 解析不出数字 id
     chatKeys.set(conv.id, chatKey);
+    mappingKeys.set(conv.id, mapKey);
   }
   return conv;
 }
@@ -616,7 +601,7 @@ onebot.onMessage((raw) => {
     // 每第 3 条（主人/关注对象，且过了闸门）追加一行提示，让鱼知道这条可以用语音
     let content = withContext(msg, bucket);
     const voiceOwner = String(conv.id);
-    if (voiceConfigFor(chatKeys.get(voiceOwner) ?? msg.chatKey) && isVoiceVip(msg)) {
+    if (voiceConfigFor(mappingKeys.get(voiceOwner) ?? msg.chatKey) && isVoiceVip(msg)) {
       const perUser = voiceCredits.get(msg.chatKey) ?? new Map<string, number>();
       const count = (perUser.get(String(msg.userId)) ?? 0) + 1;
       perUser.set(String(msg.userId), count);
@@ -692,6 +677,7 @@ for (const [chatKey, conversationId] of Object.entries(known?.chats ?? {})) {
   // 存键可能是映射键（chatKey#人格）：剥离后缀再灌 chatKeys，
   // 否则重启后补发 Number("qq:group:123#鲸鱼娘")=NaN，丢消息且打断后续会话补发
   chatKeys.set(String(conversationId), baseChatKey(chatKey));
+  mappingKeys.set(String(conversationId), chatKey);
 }
 // 重启遗言：restart 工具写下的 restart.pending.json，起来后补发那句，发完即删
 const pendingPath = join(process.cwd(), "var", "restart.pending.json");

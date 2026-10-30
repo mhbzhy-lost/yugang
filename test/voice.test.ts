@@ -23,6 +23,7 @@ import { LiveDoc } from "@earendil-works/pi-durable";
 import { createSayTool, OutboundEntry } from "../src/egress/say.ts";
 import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
 import { loadPrompts } from "../src/prompts.ts";
+import { personaOf, pickVoice } from "../src/voice-route.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
@@ -141,4 +142,20 @@ test("drain 把 voice 透传给 emit（漏字段会让整条语音消失）", as
   } finally {
     await fish.close();
   }
+});
+
+test("音色按人格隔离：没配音色的人格拿不到别人的声音", () => {
+  const voices = { 爱莉希雅: { url: "http://127.0.0.1:9880" } };
+
+  // 长征机群：映射键带 #长征机，voices 里没有 → 没有语音能力（不能回落到爱莉）
+  assert.equal(pickVoice(voices, "qq:group:5278#长征机"), undefined);
+
+  // 爱莉群：正常命中
+  assert.deepEqual(pickVoice(voices, "qq:group:5915#爱莉希雅"), { url: "http://127.0.0.1:9880" });
+
+  // 默认人格（没有 # 后缀）也没有配置 → 没有语音（曾经的 .env 兜底就是这么串音的）
+  assert.equal(pickVoice(voices, "qq:private:2928390812"), undefined);
+
+  assert.equal(personaOf("qq:group:5278#长征机"), "长征机");
+  assert.equal(personaOf("qq:private:2928390812"), "默认");
 });
