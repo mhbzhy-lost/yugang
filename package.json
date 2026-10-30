@@ -9,7 +9,7 @@
   },
   "scripts": {
     "test": "node --test \"test/*.test.ts\"",
-    "start": "node --env-file-if-exists=.env src/index.ts",
+    "start": "node --use-env-proxy --env-file-if-exists=.env src/index.ts",
     "probe": "node --env-file-if-exists=.env scripts/probe.ts",
     "prompts": "node scripts/prompts.ts",
     "ops": "node --env-file-if-exists=.env scripts/ops.ts",
