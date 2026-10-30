@@ -202,7 +202,11 @@ export class OneBot {
       let shown = "[回复的图 读不到]";
       try {
         const quoted = await this.call("get_msg", { message_id: replyId });
-        const quotedMessage = quoted?.data?.message ?? quoted?.message;
+        // 有的实现把被引消息给成 CQ 字符串而不是段数组；统一成段数组，否则一律「看不到内容」
+        const rawQuoted = quoted?.data?.message ?? quoted?.message;
+        const quotedMessage = typeof rawQuoted === "string"
+          ? [{ type: "text", data: { text: rawQuoted.replace(/\[CQ:[^\]]+\]/g, " ").trim() } }]
+          : rawQuoted;
         if (Array.isArray(quotedMessage)) {
           const fwd = quotedMessage.find((s: OneBotSegment) => s?.type === "forward");
           const fwdId = String((fwd?.data as Record<string, unknown> | undefined)?.["id"] ?? "");
@@ -211,6 +215,19 @@ export class OneBot {
             shown = await this.#expandForward(fwdId, parsed);
           }
         }
+        // 被引消息是分享卡片（B 站小程序等）：把它挂到 cards 上，由宿主渲染成文本。
+        // 只取卡片时 shown 用 [卡片#N] 占位，宿主会替换成「[B站视频卡片] 标题 链接」。
+        let cardToken = "";
+        if (Array.isArray(quotedMessage)) {
+          const jsonSeg = quotedMessage.find((s: OneBotSegment) => s?.type === "json");
+          const card = jsonSeg ? parseShareCard(jsonSeg.data?.["data"]) : null;
+          if (card) {
+            parsed.cards = parsed.cards ?? [];
+            parsed.cards.push(card);
+            cardToken = `[卡片#${parsed.cards.length - 1}]`;
+          }
+        }
+
         const imageSegs = Array.isArray(quotedMessage)
           ? quotedMessage.filter((s: OneBotSegment) => s?.type === "image").slice(0, 2)
           : [];
@@ -233,9 +250,9 @@ export class OneBot {
           if (saved) savedList.push(saved.ref);
         }
         if (savedList.length > 0) {
-          shown = [textPart, ...savedList.map((r) => `[回复的图 ${r}]`)].filter(Boolean).join(" ");
+          shown = [cardToken, textPart, ...savedList.map((r) => `[回复的图 ${r}]`)].filter(Boolean).join(" ");
         } else if (imageSegs.length === 0) {
-          shown = textPart || "[回复的消息看不到内容]";
+          shown = [cardToken, textPart].filter(Boolean).join(" ") || "[回复的消息看不到内容]";
         }
       } catch {
         // 保留默认占位符
