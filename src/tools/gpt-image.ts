@@ -22,6 +22,16 @@ export interface GptImageToolDeps {
   fetchImpl?: typeof fetch;
 }
 
+/** 不传就用这些：都是 gpt-image-2 的常用档，避免每条调用都要把六个参数写全。 */
+const DEFAULTS = {
+  model: "gpt-image-2",
+  n: 1,
+  size: "auto",
+  quality: "auto",
+  background: "auto",
+  output_format: "png",
+} as const;
+
 const MAX_REFERENCE_IMAGES = 5;
 const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
 const MIME: Record<string, string> = {
@@ -92,8 +102,9 @@ export function createGptImageTool(deps: GptImageToolDeps) {
         references.push(`data:${mime};base64,${bytes.toString("base64")}`);
       }
 
-      // 只有显式给了的字段才进请求体：没给就让后端用默认值，不替模型补
-      const params: Record<string, unknown> = { prompt: positive };
+      // 先铺默认值，再用显式传进来的覆盖；output_compression / moderation 没有默认，
+      // 不传就不发给后端
+      const params: Record<string, unknown> = { prompt: positive, ...DEFAULTS };
       for (const key of ["model", "n", "size", "quality", "background", "output_format", "output_compression", "moderation"] as const) {
         const value = args[key];
         if (value !== undefined) params[key] = value;
@@ -109,7 +120,10 @@ export function createGptImageTool(deps: GptImageToolDeps) {
         ...(deps.timeoutMs === undefined ? {} : { timeoutMs: deps.timeoutMs }),
         ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
       });
-      console.log(`[fish] gpt_image ok: ${files.length} 张 / ${Date.now() - started}ms / ${positive.slice(0, 40)}`);
+      const { prompt: _omit, ...effective } = params;
+      console.log(
+        `[fish] gpt_image ok: ${files.length} 张 / ${Date.now() - started}ms / ${JSON.stringify(effective)} / 参考图${references.length}张 / ${positive.slice(0, 40)}`,
+      );
 
       return {
         output: [
