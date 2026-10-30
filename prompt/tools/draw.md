@@ -18,6 +18,9 @@ params:
 
 prompt 写画面本身：想画得准就先 tags 查词，再拼 prompt。negative / preset /
 highres 只有本地那一路认，走在线时会被忽略——所以别把关键信息只写在 negative 里。
+
+在线那一路的尺寸和画质不受参数控制：想要竖版/横版/方图，直接把「竖版构图」「横版
+构图」写进 prompt；也别向用户承诺具体分辨率。
 用户提到高分辨率、大图、超分时 highres 传 true（更大也更慢）。
 
 拿到 gen/ 引用后必须立刻用 say 的 media 参数发出去，只画不发等于白干。

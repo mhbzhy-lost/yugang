@@ -17,18 +17,20 @@ import { refreshTokens } from "../oauth-openai.ts";
 const ENDPOINT = "https://chatgpt.com/backend-api/codex/images/generations";
 /** Codex 客户端自称；后端按这个值决定放不放行。 */
 const ORIGINATOR = "codex_cli_rs";
-/** 竖版默认尺寸（和本地 SD 的 832×1216 比例接近，便于同一套 prompt 复用）。 */
-const DEFAULT_SIZE = "1024x1536";
 
 export interface GptImageOptions {
   /** config/auth.json 路径；里面必须有 openai-codex 的 OAuth 凭据。 */
   authPath: string;
   prompt: string;
   mediaRoot: string;
-  /** 尺寸，默认 1024x1536；gpt-image-2 支持任意分辨率（受后端限制）。 */
-  size?: string;
-  quality?: "auto" | "low" | "medium" | "high";
-  /** 超时，默认 180 秒（生图常见 20–60 秒，排队时更久）。 */
+  /**
+   * 超时，默认 180 秒（生图常见 15–30 秒，透明背景那次 26 秒）。
+   *
+   * 不提供 size / quality 参数：实测 Codex 后端不吃这两个字段。
+   * 同一段 prompt 换 size（1024x1536 / 1536x1024 / 1024x1024）回来都是 1254×1254；
+   * quality 换 low / high 的 image_tokens 都是 515。画幅由 prompt 的构图描述决定
+   * （例如「竖版构图」），不同 prompt 实测回来过 1536×1024、1312×1199、1374×1145。
+   */
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
@@ -64,8 +66,10 @@ export async function generateWithGptImage(options: GptImageOptions): Promise<st
     body: JSON.stringify({
       model: "gpt-image-2",
       prompt: options.prompt,
-      size: options.size ?? DEFAULT_SIZE,
-      quality: options.quality ?? "auto",
+      // 输出容器显式钉死 png：下面固定按 .png 落盘，别让后端某天换默认格式
+      output_format: "png",
+      // auto：让模型自己决定透明/不透明；显式 transparent 实测可用（返回 RGBA），
+      // 但目前没有需要抠图的功能，先不暴露
       background: "auto",
     }),
     signal: AbortSignal.timeout(options.timeoutMs ?? 180_000),
