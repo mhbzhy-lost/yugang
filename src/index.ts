@@ -169,6 +169,8 @@ const fish = await openFish({
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
   // 只有 video 单独放宽：要下视频、抽帧、逐帧过视觉模型
   toolTimeoutOverrides: { video: 90 },
+  // codex 订阅走 WebSocket（Node 的 WS 不吃 --use-env-proxy），过代理时必须退回 sse
+  ...(process.env.MODEL_TRANSPORT === "sse" ? { streamTransport: "sse" as const } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时
   memeCooldownMs: () => Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
   // 语音：按会话所在人格取配置（只认 fish.config 的 voices，没配就是没有语音）

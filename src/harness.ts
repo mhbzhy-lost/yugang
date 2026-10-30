@@ -124,6 +124,11 @@ export interface FishOptions {
   toolTimeoutSeconds?: number;
   /** 个别工具的单独超时（秒）：只放宽指定工具，其余仍按 toolTimeoutSeconds。 */
   toolTimeoutOverrides?: Record<string, number>;
+  /**
+   * 模型请求的传输方式；缺省 auto（provider 自己挑，codex 会优先 WebSocket）。
+   * 走 HTTP 代理时必须设 sse：Node 的 WebSocket 不吃 --use-env-proxy，会直接报 WebSocket error。
+   */
+  streamTransport?: "sse" | "websocket" | "websocket-cached" | "auto";
   /** 按会话取 TTS 配置（人格相关）；返回 undefined 表示这个会话没有语音能力。 */
   ttsOf?: (conversationId: string) => import("./tts.ts").TtsConfig | undefined;
   /** 静默轮（自动收表情包）：这一轮 say 一律拒绝。 */
@@ -226,6 +231,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   const settings = {
     compaction: { enabled: false },
     extensions: [fishExtension],
+    ...(options.streamTransport ? { stream: { transport: options.streamTransport } } : {}),
     // 中断的轮不恢复重跑：重启后针对陈年消息的迟到回复很怪（主人定案丢了就丢）
     restartLimit: 0,
   };
