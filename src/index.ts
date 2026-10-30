@@ -318,16 +318,13 @@ async function conversationFor(chatKey: string): Promise<Conversation> {
  * 动图自动收：gif 进群时起一个静默轮，把前 10 条上下文一起给鱼，
  * 由它判断这张图值不值得当表情包、调用 meme_add 打标入库。
  *
- * 边界：只认 .gif（白名单，避免把截图/照片也拖进模型）；
- * md5 已在库里的跳过；同一群 90 秒内只收一次，防刷屏式刷库。
+ * 边界：只认 .gif（白名单，避免把截图/照片也拖进模型）；md5 已在库里的跳过。
  */
-const gifIngestAt = new Map<string, number>();
 async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; text: string }[]): Promise<void> {
   if (!msg.chatKey.startsWith("qq:group:")) return;
   if (!config.groups.length || !config.groups.includes(String(msg.groupId))) return;
   const gifs = msg.images.filter((img) => typeof img.ref === "string" && img.ref.toLowerCase().endsWith(".gif"));
   if (gifs.length === 0) return;
-  if (Date.now() - (gifIngestAt.get(msg.chatKey) ?? 0) < 90_000) return;
 
   for (const gif of gifs) {
     const full = resolve(config.mediaRoot, gif.ref);
@@ -345,7 +342,6 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
       /* 没有索引就当空库 */
     }
 
-    gifIngestAt.set(msg.chatKey, Date.now());
     const conv = await conversationFor(msg.chatKey);
     const prior = bucket.slice(0, -1).slice(-10);
     const header = renderTemplate(fish.prompts.messages["gif_ingest_header"] ?? "", { count: String(prior.length) });
