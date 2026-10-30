@@ -13,7 +13,7 @@
  * 时长上限 30 分钟：超了只取前 30 分钟，并明确告诉鱼这是截断的。
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Type, type Models } from "@earendil-works/pi-ai";
@@ -40,6 +40,27 @@ export interface VideoDeps {
 
 const USED = new Map<string, unknown>(); // conversationId → 本轮已用的轮标识
 const HEADERS = { "user-agent": "Mozilla/5.0", referer: "https://www.bilibili.com/" };
+
+/**
+ * 清理上次崩溃/重启留下的抽帧临时目录。
+ * 正常的临时目录在 finally 里就删了，但进程被 SIGKILL/部署重启打断时会残留。
+ */
+export function cleanupStaleVideoTemps(): void {
+  try {
+    for (const name of readdirSync(tmpdir())) {
+      if (!name.startsWith("yg-video-")) continue;
+      const path = join(tmpdir(), name);
+      try {
+        const age = Date.now() - statSync(path).mtimeMs;
+        if (age > 60 * 60_000) rmSync(path, { recursive: true, force: true });
+      } catch {
+        // 单个目录删不掉不影响启动
+      }
+    }
+  } catch {
+    // 临时目录读不了就算了
+  }
+}
 
 interface Frame {
   time: number;

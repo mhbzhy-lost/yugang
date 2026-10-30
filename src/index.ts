@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createFishModels } from "./models.ts";
 import { describeModel, loadModelConfig } from "./model-config.ts";
+import { cleanupStaleVideoTemps } from "./tools/video.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { Conversation } from "@earendil-works/pi-durable";
 import { openFish, type GroupProfile } from "./harness.ts";
@@ -100,6 +101,8 @@ function applyWatched(chatKey: string, people: { userId: string; name?: string; 
 
 const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
 mkdirSync(HOME, { recursive: true });
+
+cleanupStaleVideoTemps(); // 清掉上次被打断的抽帧临时目录（正常路径在 finally 里删）
 
 const config = {
   onebotUrl: process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001",
