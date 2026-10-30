@@ -18,6 +18,8 @@ import { WatchDoc, type WatchedPerson } from "../store.ts";
 export interface WatchDeps {
   prompts: PromptSet;
   master: string;
+  /** 查这个会话所在群的全部成员（用于校验 QQ 号真在群里）；undefined = 无从校验。 */
+  membersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
 }
 
@@ -65,6 +67,17 @@ export function createWatchTool(deps: WatchDeps) {
       const userId = (args.userId ?? "").trim();
       if (!/^\d{3,}$/.test(userId)) {
         throw new Error(deps.prompts.messages["watch_need_id"] ?? "watch_need_id");
+      }
+
+      // 号码校验：只能关注本群真实存在的人（模型偶尔会抄错号，抄错了永远命中不了）
+      const members = deps.membersOf ? await deps.membersOf(String(api.conversationId)) : undefined;
+      if (members !== undefined) {
+        if (members.length === 0) {
+          throw new Error(deps.prompts.messages["watch_no_members"] ?? "watch_no_members");
+        }
+        if (!members.some((m) => m.userId === userId)) {
+          throw new Error(renderTemplate(deps.prompts.messages["watch_unknown_member"] ?? "", { userId }));
+        }
       }
 
       if (args.action === "remove") {

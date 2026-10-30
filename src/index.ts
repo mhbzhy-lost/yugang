@@ -132,6 +132,14 @@ const fish = await openFish({
   tagsCsv: join(HOME, "danbooru.csv"),
   master: config.master,
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
+  // watch 的号码校验：从会话映射回群号，再拉全量成员（不要 limit，要能校验到每个人）
+  groupMembersOf: async (conversationId) => {
+    const chatKey = chatKeys.get(String(conversationId));
+    if (!chatKey || !chatKey.startsWith("qq:group:")) return [];
+    const groupId = Number(chatKey.slice("qq:group:".length));
+    if (!Number.isFinite(groupId)) return [];
+    return onebot.groupMembers(groupId, 10_000);
+  },
   bypassOf: (roundId) => bypassOf.get(String(roundId)),
   workspaceRoot: config.workspaceRoot,
   compact: {
