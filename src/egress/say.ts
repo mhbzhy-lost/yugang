@@ -108,7 +108,9 @@ export function createSayTool(deps: SayDeps) {
         if (spoken.length > 60) throw new Error(renderTemplate(deps.prompts.messages["voice_too_long"] ?? "", { length: String(spoken.length) }));
         // 语音资格由入站侧标记（主人/关注对象攒够次数，或对方明确要语音）；
         // 这里只做机械核对，不判断该不该说——那是鱼自己的事。
-        const voiceRound = live?.run?.inputs?.[0];
+        // 这里不能用下面那个 live：它在这个分支之后才声明（TDZ）
+        const voiceLive = await api.snapshot(LiveDoc, api.conversationId, context);
+        const voiceRound = voiceLive?.run?.inputs?.[0];
         if (voiceRound === undefined || deps.voiceOf?.(voiceRound) !== true) {
           throw new Error(deps.prompts.messages["voice_unavailable"] ?? "voice_unavailable");
         }
