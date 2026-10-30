@@ -42,6 +42,16 @@ const ttsEnabled = Boolean(process.env.TTS_URL);
 // 可热更新的行为配置：fish.config.json > .env > 内置默认
 const fishConfig = createConfigLoader();
 
+// chatKey → userId → 已累计的发言次数：每第 3 条给一句「可以选择用语音回」的提示。
+// 只是提示，不是门禁——用不用由鱼自己判断。
+const voiceCredits = new Map<string, Map<string, number>>();
+
+/** 主人或本会话特别关注的人？ */
+function isVoiceVip(msg: IncomingMessage): boolean {
+  if (String(msg.userId) === config.master) return true;
+  return watchedByChat.get(msg.chatKey)?.has(String(msg.userId)) ?? false;
+}
+
 /** 默认人格名（prompt/persona.md 那本，没有 # 后缀）。 */
 const DEFAULT_PERSONA_NAME = "默认";
 
@@ -641,10 +651,21 @@ onebot.onMessage((raw) => {
     // 群员插话走 follow-up：不打断正在跑的那一轮。
     // 把触发消息绑到 submission 上：鱼的回复引用本轮自己的触发消息，
     // 轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）
-    const submission = await conv.submit(
-      { type: "input", content: withContext(msg, bucket) },
-      ctx,
-    );
+    // 每第 3 条（主人/关注对象，且过了闸门）追加一行提示，让鱼知道这条可以用语音
+    let content = withContext(msg, bucket);
+    const voiceOwner = String(conv.id);
+    if (voiceConfigFor(chatKeys.get(voiceOwner) ?? msg.chatKey) && isVoiceVip(msg)) {
+      const perUser = voiceCredits.get(msg.chatKey) ?? new Map<string, number>();
+      const count = (perUser.get(String(msg.userId)) ?? 0) + 1;
+      perUser.set(String(msg.userId), count);
+      voiceCredits.set(msg.chatKey, perUser);
+      if (count % 3 === 0) {
+        const hint = fish.prompts.messages["voice_hint"] ?? "";
+        if (hint) content = content + "\n" + hint;
+      }
+    }
+
+    const submission = await conv.submit({ type: "input", content }, ctx);
     triggerOf.set(String(submission.id), {
       messageId: msg.messageId,
       mentionsBot: msg.mentionsBot,
