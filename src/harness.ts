@@ -112,8 +112,6 @@ export interface FishOptions {
   tts?: import("./tts.ts").TtsConfig;
   /** 语音对象闸：主人 QQ 与特别关注名单查询。 */
   voiceAudience?: { master: string; isWatched: (conversationId: string, userId: string) => boolean };
-  /** 语音跨轮冷却（毫秒）；传函数则每次现取。 */
-  voiceCooldownMs?: number | (() => number);
   /** 静默轮（自动收表情包）：这一轮 say 一律拒绝。 */
   silentOf?: (roundId: unknown) => boolean;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费，轮结束失效。 */
@@ -173,7 +171,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
 
-  const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf, ...(options.tts ? { tts: options.tts } : {}), ...(options.voiceAudience ? { master: options.voiceAudience.master, isWatched: options.voiceAudience.isWatched } : {}), ...(options.voiceCooldownMs !== undefined ? { voiceCooldownMs: options.voiceCooldownMs } : {}), ...(options.silentOf ? { silentOf: options.silentOf } : {}), ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}) });
+  const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf, ...(options.tts ? { tts: options.tts } : {}), ...(options.voiceAudience ? { master: options.voiceAudience.master, isWatched: options.voiceAudience.isWatched } : {}),  ...(options.silentOf ? { silentOf: options.silentOf } : {}), ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}) });
   const react = createReactTool({ prompts, react: options.react, now });
   const tools = createTools({ mediaRoot, prompts, models, visionModel: options.visionModel ?? options.model, searchKey: options.searchKey, modelscopeKey: options.modelscopeKey, sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, bypassOf: options.bypassOf });
 

@@ -143,7 +143,6 @@ const fish = await openFish({
         },
       }
     : {}),
-  voiceCooldownMs: () => Math.round(fishConfig().config.voiceCooldownMinutes * 60_000),
   // 语音对象闸：主人 或 本会话特别关注名单里的人
   voiceAudience: {
     master: config.master,

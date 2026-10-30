@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineEntry, defineTool, type ConversationId } from "@earendil-works/pi-durable";
 import { validateOutbound, type EgressLimits } from "./policy.ts";
-import { ledgerOf, recordMedia, recordSent, recordVoice } from "./ledger.ts";
+import { ledgerOf, recordMedia, recordSent } from "./ledger.ts";
 import { synthesizeToMedia } from "../tts.ts";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
 import { OutboxDoc } from "../store.ts";
@@ -54,8 +54,6 @@ export interface SayDeps {
   master?: string;
   /** 这个人在本会话是否被特别关注（语音对象闸）。 */
   isWatched?: (conversationId: string, userId: string) => boolean;
-  /** 语音跨轮冷却（毫秒），缺省 10 分钟。 */
-  voiceCooldownMs?: number | (() => number);
   /** 收图轮之类的静默轮：这一轮不许说话。 */
   silentOf?: (roundId: unknown) => boolean;
 }
@@ -117,10 +115,6 @@ export function createSayTool(deps: SayDeps) {
           (String(voiceTo) === deps.master || deps.isWatched?.(api.conversationId, String(voiceTo)) === true);
         if (!allowed) throw new Error(deps.prompts.messages["voice_restricted"] ?? "voice_restricted");
         if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
-        const cooldownMs = (typeof deps.voiceCooldownMs === "function" ? deps.voiceCooldownMs() : deps.voiceCooldownMs) ?? 10 * 60_000;
-        if (ledger.lastVoiceAt !== undefined && ts - ledger.lastVoiceAt < cooldownMs) {
-          throw new Error(deps.prompts.messages["voice_cooldown"] ?? "voice_cooldown");
-        }
         try {
           const synth = await synthesizeToMedia(deps.tts, spoken, deps.limits.mediaRoot);
           voice = synth.ref;
@@ -200,7 +194,7 @@ export function createSayTool(deps: SayDeps) {
 
       recordSent(api.conversationId, payload.items, ts);
       if (media !== undefined) recordMedia(api.conversationId, ts, sentMeme);
-      if (voice !== undefined) recordVoice(api.conversationId, ts);
+      if (voice !== undefined) recordMedia(api.conversationId, ts);
 
       return { output: [{ type: "text", text: deps.prompts.messages["say_sent"] ?? "ok" }] };
     },
