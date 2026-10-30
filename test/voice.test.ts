@@ -29,7 +29,7 @@ interface Captured {
   voice?: string;
 }
 
-function setup(over: { tts?: boolean; voiceAllowed?: boolean } = {}) {
+function setup(over: { tts?: boolean } = {}) {
   const mediaRoot = mkdtempSync(join(tmpdir(), "yg-voice-"));
   mkdirSync(join(mediaRoot, "voice"), { recursive: true });
   const prompts = loadPrompts(PROMPTS);
@@ -41,7 +41,6 @@ function setup(over: { tts?: boolean; voiceAllowed?: boolean } = {}) {
     prompts,
     now: () => 1_000,
     ...(over.tts === false ? {} : { ttsOf: () => ({ url: "http://127.0.0.1:9/tts" }) }),
-    voiceOf: () => over.voiceAllowed !== false,
     // 假合成：写一个真文件，返回相对引用
     ttsSynthesize: async (_config, text, root) => {
       const file = `voice/${text.length}-test.wav`;
@@ -69,14 +68,6 @@ test("没配音色：voice 直接被拒", async () => {
   await assert.rejects(
     () => say.execute({ messages: ["晚安"], voice: true } as never, api, ctx),
     /还没有语音能力/,
-  );
-});
-
-test("本轮没被标记可语音：拒绝", async () => {
-  const { say, api } = setup({ voiceAllowed: false });
-  await assert.rejects(
-    () => say.execute({ messages: ["晚安"], voice: true } as never, api, ctx),
-    /不适合用语音/,
   );
 });
 

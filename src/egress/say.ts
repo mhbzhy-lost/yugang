@@ -50,8 +50,6 @@ export interface SayDeps {
   memeCooldownMs?: number | (() => number);
   /** 语音合成配置（按会话现取：一个会话一个人格，音色跟着人格走）。 */
   ttsOf?: (conversationId: string) => import("../tts.ts").TtsConfig | undefined;
-  /** 这一轮是否被标记为「可以回语音」（由入站侧机械判定，见 index.ts）。 */
-  voiceOf?: (roundId: unknown) => boolean;
   /** 合成实现；测试可注入桩，线上用 synthesizeToMedia。 */
   ttsSynthesize?: (config: import("../tts.ts").TtsConfig, text: string, mediaRoot: string) => Promise<{ ref: string; bytes: Buffer }>;
   /** 收图轮之类的静默轮：这一轮不许说话。 */
@@ -108,14 +106,7 @@ export function createSayTool(deps: SayDeps) {
         const spoken = args.messages.map((m) => m.trim()).filter(Boolean).join("，");
         if (!spoken) throw new Error(deps.prompts.messages["empty"] ?? "empty");
         if (spoken.length > 60) throw new Error(renderTemplate(deps.prompts.messages["voice_too_long"] ?? "", { length: String(spoken.length) }));
-        // 语音资格由入站侧标记（主人/关注对象攒够次数，或对方明确要语音）；
-        // 这里只做机械核对，不判断该不该说——那是鱼自己的事。
-        // 这里不能用下面那个 live：它在这个分支之后才声明（TDZ）
-        const voiceLive = await api.snapshot(LiveDoc, api.conversationId, context);
-        const voiceRound = voiceLive?.run?.inputs?.[0];
-        if (voiceRound === undefined || deps.voiceOf?.(voiceRound) !== true) {
-          throw new Error(deps.prompts.messages["voice_unavailable"] ?? "voice_unavailable");
-        }
+        // 用不用语音由鱼自己判断（prompt 里给了场合），这里只确认这个会话有音色
         if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
         try {
           const synth = await (deps.ttsSynthesize ?? synthesizeToMedia)(tts, spoken, deps.limits.mediaRoot);

@@ -110,8 +110,6 @@ export interface FishOptions {
   memeCooldownMs?: number | (() => number);
   /** 按会话取 TTS 配置（人格相关）；返回 undefined 表示这个会话没有语音能力。 */
   ttsOf?: (conversationId: string) => import("./tts.ts").TtsConfig | undefined;
-  /** 本轮是否可以回语音（入站侧机械标记）。 */
-  voiceOf?: (roundId: unknown) => boolean;
   /** 静默轮（自动收表情包）：这一轮 say 一律拒绝。 */
   silentOf?: (roundId: unknown) => boolean;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费，轮结束失效。 */
@@ -171,7 +169,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
 
-  const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf, ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}), ...(options.voiceOf ? { voiceOf: options.voiceOf } : {}),  ...(options.silentOf ? { silentOf: options.silentOf } : {}), ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}) });
+  const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf, ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}),   ...(options.silentOf ? { silentOf: options.silentOf } : {}), ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}) });
   const react = createReactTool({ prompts, react: options.react, now });
   const tools = createTools({ mediaRoot, prompts, models, visionModel: options.visionModel ?? options.model, searchKey: options.searchKey, modelscopeKey: options.modelscopeKey, sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, bypassOf: options.bypassOf });
 
