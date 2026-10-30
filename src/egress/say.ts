@@ -105,7 +105,7 @@ export function createSayTool(deps: SayDeps) {
         if (media !== undefined || args.meme) throw new Error(deps.prompts.messages["voice_with_media"] ?? "voice_with_media");
         const spoken = args.messages.map((m) => m.trim()).filter(Boolean).join("，");
         if (!spoken) throw new Error(deps.prompts.messages["empty"] ?? "empty");
-        if (spoken.length > 60) throw new Error(renderTemplate(deps.prompts.messages["voice_too_long"] ?? "", { length: String(spoken.length) }));
+        if (spoken.length > 100) throw new Error(renderTemplate(deps.prompts.messages["voice_too_long"] ?? "", { length: String(spoken.length) }));
         // 用不用语音由鱼自己判断（prompt 里给了场合），这里只确认这个会话有音色
         if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
         try {

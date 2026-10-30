@@ -91,9 +91,9 @@ test("正常路径：payload 带 voice、不发文字气泡、音频落盘", asy
   assert.deepEqual(outbox[0]?.items, [], "语音消息不再发文字气泡");
 });
 
-test("超过 60 字：拒绝并提示改文字", async () => {
+test("超过 100 字：拒绝并提示改文字", async () => {
   const { say, api } = setup();
-  const long = "啊".repeat(61);
+  const long = "啊".repeat(101);
   await assert.rejects(
     () => say.execute({ messages: [long], voice: true } as never, api, ctx),
     /voice_too_long|太长/,
