@@ -11,7 +11,19 @@ import { openaiCodexOAuth } from "./oauth-openai.ts";
 import { fileCredentialStore } from "./credential-store.ts";
 import type { FishModelConfig } from "./model-config.ts";
 
+/** 把一份 provider 配置挂到已有的 Models 上（主模型与视觉模型可能是不同 provider）。 */
+export function addFishProvider(models: Models, config: FishModelConfig): Models {
+  models.setProvider(buildProvider(config));
+  return models;
+}
+
 export function createFishModels(config: FishModelConfig): Models {
+  const models = createModels({ credentials: fileCredentialStore(config.credentialsPath) });
+  models.setProvider(buildProvider(config));
+  return models;
+}
+
+function buildProvider(config: FishModelConfig) {
   const oauth = config.authMode === "oauth";
   if (!oauth && !config.key) {
     throw new Error(`没有拿到 ${config.providerId} 的 key：${config.keySource}`);
@@ -41,10 +53,7 @@ export function createFishModels(config: FishModelConfig): Models {
     api,
   });
 
-  // oauth 的刷新与落盘交给 pi-ai：凭据存储就是 config/auth.json
-  const models = createModels({ credentials: fileCredentialStore(config.credentialsPath) });
-  models.setProvider(provider);
-  return models;
+  return provider;
 }
 
 /** 校验：provider 里真的有这个模型，否则给出可用清单（不含凭据）。 */

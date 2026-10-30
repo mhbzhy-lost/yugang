@@ -303,9 +303,10 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       const next = box?.queue.find((record) => record.status === "queued");
       if (!next) return sent;
 
-      // 陈年消息不补：超过 2 分钟的排队消息直接丢弃。过时回复比不回复更怪
-      // （主人定案「丢了就丢了」）；新鲜消息（优雅退出/秒级重启场景）照常补发。
-      if (now() - next.at > 120_000) {
+      // 陈年消息不补：超过 10 分钟的排队消息直接丢弃。原先设 2 分钟，
+      // 但模型慢时（比如走订阅的 codex 一轮 30–90 秒）消息会在队列里等到过期，
+      // 表现就是「鱼想回了，但回复被当成过期丢了」。10 分钟足够覆盖正常慢轮。
+      if (now() - next.at > 600_000) {
         await harness.commit(async (tx) => {
           const doc = await tx.doc(OutboxDoc, conversationId);
           const index = doc.queue.findIndex((item) => item.key === next.key);

@@ -13,7 +13,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createFishModels } from "./models.ts";
+import { addFishProvider, createFishModels } from "./models.ts";
 import { describeModel, loadModelConfig } from "./model-config.ts";
 import { cleanupStaleVideoTemps } from "./tools/video.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -125,6 +125,20 @@ const config = {
 mkdirSync(config.mediaRoot, { recursive: true });
 
 const models = createFishModels(config.modelConfig);
+// 视觉模型可能是另一个 provider（例如主体走 codex 订阅、识图仍用 glm）：
+// 把它也挂进同一个 Models，否则 getModel 拿不到 → 看图直接判「服务不稳」
+if (process.env.VISION_MODEL_ID && process.env.VISION_PROVIDER && process.env.VISION_PROVIDER !== config.modelConfig.providerId) {
+  try {
+    const visionConfig = loadModelConfig({
+      providerId: process.env.VISION_PROVIDER,
+      modelId: process.env.VISION_MODEL_ID,
+    });
+    addFishProvider(models, visionConfig);
+    console.log("[鱼缸] 视觉模型 provider 已挂载:", process.env.VISION_PROVIDER, process.env.VISION_MODEL_ID);
+  } catch (error) {
+    console.warn("[鱼缸] 视觉模型 provider 挂载失败:", error instanceof Error ? error.message : error);
+  }
+}
 const mainModel = { provider: config.modelConfig.providerId, modelId: config.modelConfig.modelId };
 const gateModel = {
   provider: config.gateModel.provider || mainModel.provider,
