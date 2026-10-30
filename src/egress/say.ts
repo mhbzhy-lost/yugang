@@ -50,10 +50,8 @@ export interface SayDeps {
   memeCooldownMs?: number | (() => number);
   /** 语音合成配置；没配就等于没有语音能力。 */
   tts?: import("../tts.ts").TtsConfig;
-  /** 主人 QQ：语音只回主人与特别关注的人。 */
-  master?: string;
-  /** 这个人在本会话是否被特别关注（语音对象闸）。 */
-  isWatched?: (conversationId: string, userId: string) => boolean;
+  /** 这一轮是否被标记为「可以回语音」（由入站侧机械判定，见 index.ts）。 */
+  voiceOf?: (roundId: unknown) => boolean;
   /** 收图轮之类的静默轮：这一轮不许说话。 */
   silentOf?: (roundId: unknown) => boolean;
 }
@@ -107,13 +105,12 @@ export function createSayTool(deps: SayDeps) {
         const spoken = args.messages.map((m) => m.trim()).filter(Boolean).join("，");
         if (!spoken) throw new Error(deps.prompts.messages["empty"] ?? "empty");
         if (spoken.length > 60) throw new Error(renderTemplate(deps.prompts.messages["voice_too_long"] ?? "", { length: String(spoken.length) }));
-        // 语音只回主人和被特别关注的人：别人说话时用语音既冒犯也没意义
+        // 语音资格由入站侧标记（主人/关注对象攒够次数，或对方明确要语音）；
+        // 这里只做机械核对，不判断该不该说——那是鱼自己的事。
         const voiceRound = live?.run?.inputs?.[0];
-        const voiceTo = voiceRound !== undefined ? deps.triggerOf?.(voiceRound)?.userId : undefined;
-        const allowed =
-          voiceTo !== undefined &&
-          (String(voiceTo) === deps.master || deps.isWatched?.(api.conversationId, String(voiceTo)) === true);
-        if (!allowed) throw new Error(deps.prompts.messages["voice_restricted"] ?? "voice_restricted");
+        if (voiceRound === undefined || deps.voiceOf?.(voiceRound) !== true) {
+          throw new Error(deps.prompts.messages["voice_unavailable"] ?? "voice_unavailable");
+        }
         if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
         try {
           const synth = await synthesizeToMedia(deps.tts, spoken, deps.limits.mediaRoot);

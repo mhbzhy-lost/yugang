@@ -36,11 +36,43 @@ import { UsageDoc } from "@earendil-works/pi-durable";
 
 const ctx = BACKGROUND_CONTEXT;
 
+// 语音是否启用：TTS_URL 存在才算（服务在本机跑）
+const ttsEnabled = Boolean(process.env.TTS_URL);
+
 // 可热更新的行为配置：fish.config.json > .env > 默认
 const fishConfig = createConfigLoader();
 
 // 收表情包专用轮：这一轮只允许调 meme_add，不许说话（say 会拒绝）
 const silentRounds = new Set<string>();
+// 可回语音的轮：由入站侧机械标记（见 markVoiceEligible），不是概率闸
+const voiceRounds = new Set<string>();
+// chatKey → userId → 已累积的发言次数（每 3 次给一次语音资格）
+const voiceCredits = new Map<string, Map<string, number>>();
+
+/** 同一句话里出现这些词，且是 @ 鱼说的，就算「明确要求语音」。 */
+const VOICE_REQUEST = /语音|说句话|说一句|出声|声音|念一下|念一遍|读出来|用嗓子/;
+
+/**
+ * 入站侧判定这一条消息的回复能不能用语音（机械规则，不靠模型猜）：
+ *
+ *   1. @ 了鱼并且明确要语音 → 任何人都可以（点歌的客人优先）
+ *   2. 主人 / 特别关注对象：每说 3 句话，第 3 句的回复可用一次语音
+ *
+ * 只在「能回」这一侧打标；用不用、怎么用，交给鱼自己决定。
+ */
+function markVoiceEligible(msg: IncomingMessage): boolean {
+  if (!ttsEnabled) return false;
+  if (msg.mentionsBot && VOICE_REQUEST.test(msg.text)) return true;
+
+  const vip = String(msg.userId) === config.master || (watchedByChat.get(msg.chatKey)?.has(String(msg.userId)) ?? false);
+  if (!vip) return false;
+
+  const perUser = voiceCredits.get(msg.chatKey) ?? new Map<string, number>();
+  const count = (perUser.get(String(msg.userId)) ?? 0) + 1;
+  perUser.set(String(msg.userId), count);
+  voiceCredits.set(msg.chatKey, perUser);
+  return count % 3 === 0;
+}
 
 // 特别关注：chatKey（不含人格后缀）→ userId → 备注。随机门用它提高被关注者的概率，
 // 进模型前用它在那个人说话的那一行打标记。启动时从文档装载，watch 工具变更后即时同步。
@@ -143,15 +175,8 @@ const fish = await openFish({
         },
       }
     : {}),
-  // 语音对象闸：主人 或 本会话特别关注名单里的人
-  voiceAudience: {
-    master: config.master,
-    isWatched: (conversationId, userId) => {
-      const chatKey = chatKeys.get(String(conversationId));
-      if (!chatKey) return false;
-      return watchedByChat.get(baseChatKey(chatKey))?.has(userId) ?? false;
-    },
-  },
+  // 语音资格由入站侧打分（见 markVoiceEligible），这里只查表
+  voiceOf: (roundId) => voiceRounds.has(String(roundId)),
   // look 的视觉描述模型：缺省用主模型自身；可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型
   visionModel: process.env.VISION_MODEL_ID
     ? { provider: process.env.VISION_PROVIDER ?? config.modelConfig.providerId, modelId: process.env.VISION_MODEL_ID }
@@ -682,10 +707,19 @@ onebot.onMessage((raw) => {
     // 群员插话走 follow-up：不打断正在跑的那一轮。
     // 把触发消息绑到 submission 上：鱼的回复引用本轮自己的触发消息，
     // 轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）
+    // 语音资格在入站侧算好：这一轮能不能用语音，写进 content 让鱼自己权衡
+    const voiceEligible = markVoiceEligible(msg);
+    let content = withContext(msg, bucket);
+    if (voiceEligible) {
+      const hint = fish.prompts.messages["voice_hint"] ?? "";
+      if (hint) content = content + "\n" + hint;
+    }
+
     const submission = await conv.submit(
-      { type: "input", content: withContext(msg, bucket) },
+      { type: "input", content },
       ctx,
     );
+    if (voiceEligible) voiceRounds.add(String(submission.id));
     triggerOf.set(String(submission.id), {
       messageId: msg.messageId,
       mentionsBot: msg.mentionsBot,
@@ -695,6 +729,7 @@ onebot.onMessage((raw) => {
 
     const settled = await settleWithTimeout(submission, conv, msg, fishConfig().config.roundTimeoutSeconds, true);
     triggerOf.delete(String(submission.id));
+    voiceRounds.delete(String(submission.id));
     bypassOf.delete(String(submission.id));
     if (settled.status !== "done") {
       const why = [settled.status, (settled as { reason?: string }).reason, (settled as { detail?: string }).detail]
