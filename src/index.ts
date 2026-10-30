@@ -18,7 +18,7 @@ import { describeModel, loadModelConfig } from "./model-config.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { Conversation } from "@earendil-works/pi-durable";
 import { openFish, type GroupProfile } from "./harness.ts";
-import { OneBot } from "./qq/onebot.ts";
+import { OneBot, type IncomingMessage } from "./qq/onebot.ts";
 import { createGate, renderForModel } from "./qq/gate.ts";
 import { setLookDisabled } from "./tools/look.ts";
 import { absorbSecrets } from "./egress/absorb.ts";
@@ -171,6 +171,7 @@ const fish = await openFish({
   // 思考档位：off|minimal|low|medium|high|xhigh|max。最低可用思考档是 low
   // （deepseek 的 minimal 映射为 null，等于不支持），缺省 off
   thinkingLevel: fishConfig().config.thinkingLevel,
+  toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
   // 表情包跨轮冷却：每个人格会话独立计时
   memeCooldownMs: () => Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
   // 语音：按会话所在人格取配置（fish.config 的 voices；.env 的 TTS_URL 只给默认人格兜底）
@@ -360,7 +361,7 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
       const roundId = String(submission.id);
       silentRounds.add(roundId);
       try {
-        const settled = await settleWithTimeout(submission, conv, msg, fishConfig().config.roundTimeoutSeconds, false);
+        const settled = await submission.wait(ctx);
         let added = false;
         try {
           const index = JSON.parse(readFileSync(join(config.mediaRoot, "memes", "index.json"), "utf8")) as { md5?: string }[];
@@ -382,48 +383,6 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
   }
 }
 
-/**
- * 等一轮结算，但设上限：超过 roundTimeoutSeconds 就直接放弃这一轮。
- *
- * 为什么要丢：一轮里可能排着好几条 submission（画图、长思考、连续消息），
- * 轮到自己时原消息已经过去几分钟，回过去只会让人觉得它答非所问。
- * 超时主动 abort，把这个 submission 从队列里撤掉，别让后面的消息继续排。
- */
-async function settleWithTimeout(
-  submission: { id: number | string; wait: (context: unknown) => Promise<{ status: string; reason?: string }>; abort: (context: unknown) => Promise<unknown> },
-  conversation: { id: number | string },
-  msg: IncomingMessage,
-  timeoutSeconds: number,
-  abortConversation: boolean,
-): Promise<{ status: string; reason?: string }> {
-  const timeoutMs = Math.max(5, timeoutSeconds) * 1000;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<{ status: string; reason?: string }>((resolve) => {
-    timer = setTimeout(() => resolve({ status: "timeout", reason: `超过 ${timeoutSeconds} 秒` }), timeoutMs);
-  });
-  // wait 自己挂 catch：超时后它还会在后面 resolve/reject，别变成未处理拒绝
-  const waiting = submission.wait(ctx).catch(() => ({ status: "aborted" as const }));
-  const settled = await Promise.race([waiting, timeout]);
-  if (timer) clearTimeout(timer);
-  if (settled.status !== "timeout") return settled;
-
-  console.warn(`[鱼缸] 轮超时：${msg.chatKey} ${msg.nickname}（${msg.messageId ?? "?"}）超过 ${timeoutSeconds} 秒，丢弃`);
-  try {
-    await submission.abort(ctx);
-  } catch (error) {
-    console.error("[鱼缸] 超时中止失败", error instanceof Error ? error.message : error);
-  }
-  // 主轮超时：连这一会话排队的输入一起撤掉（它们已经是陈年消息了）。
-  // 收图轮不动会话：它只是排队等前面的活干完，撤整个会话会误杀别人正在跑的轮。
-  if (abortConversation) {
-    try {
-      await (conversation as unknown as { abort?: (context: unknown) => Promise<void> }).abort?.(ctx);
-    } catch {
-      /* 尽力而为 */
-    }
-  }
-  return { status: "timeout", reason: `超过 ${timeoutSeconds} 秒` };
-}
 
 function withContext(msg: IncomingMessage, bucket: readonly { nickname: string; text: string }[]): string {
   const base = renderForModel(msg, config.master);
@@ -676,7 +635,7 @@ onebot.onMessage((raw) => {
     });
     if (bypass) bypassOf.set(String(submission.id), bypass.stash);
 
-    const settled = await settleWithTimeout(submission, conv, msg, fishConfig().config.roundTimeoutSeconds, true);
+    const settled = await submission.wait(ctx);
     triggerOf.delete(String(submission.id));
     bypassOf.delete(String(submission.id));
     if (settled.status !== "done") {

@@ -27,8 +27,8 @@ export interface FishConfig {
   thinkingLevel: ThinkingLevel;
   /** 换页阈值：条目数 / 字符数。 */
   compact: { maxEntries: number; maxChars: number };
-  /** 单轮超时（秒）：一条消息进模型后超过这么久还没结束就丢弃，不再回过时的话。 */
-  roundTimeoutSeconds: number;
+  /** 单次工具调用超时（秒）：某个工具卡住超过这么久就报错，不再干等。 */
+  toolTimeoutSeconds: number;
   /** 表情包跨轮冷却（分钟）：同一群两次配图之间的最短间隔。 */
   memeCooldownMinutes: number;
   /** 按人格配置的语音：人格名 → TTS 参数。没有条目的人格没有语音能力。 */
@@ -104,9 +104,9 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
     }
   }
 
-  const timeout = num(src["roundTimeoutSeconds"]);
-  if (timeout !== undefined && timeout >= 5 && timeout <= 600) out.roundTimeoutSeconds = timeout;
-  else if (src["roundTimeoutSeconds"] !== undefined) problems.push("roundTimeoutSeconds 必须在 5–600，已忽略");
+  const timeout = num(src["toolTimeoutSeconds"]);
+  if (timeout !== undefined && timeout >= 5 && timeout <= 600) out.toolTimeoutSeconds = timeout;
+  else if (src["toolTimeoutSeconds"] !== undefined) problems.push("toolTimeoutSeconds 必须在 5–600，已忽略");
 
   const cooldown = num(src["memeCooldownMinutes"]);
   if (cooldown !== undefined && cooldown >= 0 && cooldown <= 240) out.memeCooldownMinutes = cooldown;
@@ -163,8 +163,8 @@ function parseEnv(env: NodeJS.ProcessEnv, problems: string[]): Partial<FishConfi
   const watched = chance(env["WATCH_AMBIENT_CHANCE"]);
   if (watched !== undefined) out.watchAmbientChance = watched;
 
-  const roundTimeout = num(env["ROUND_TIMEOUT_SECONDS"]);
-  if (roundTimeout !== undefined && roundTimeout >= 5) out.roundTimeoutSeconds = roundTimeout;
+  const toolTimeout = num(env["TOOL_TIMEOUT_SECONDS"]);
+  if (toolTimeout !== undefined && toolTimeout >= 5) out.toolTimeoutSeconds = toolTimeout;
 
   const level = env["THINKING_LEVEL"];
   if (level && THINKING_LEVELS.includes(level as ThinkingLevel)) out.thinkingLevel = level as ThinkingLevel;
@@ -192,7 +192,7 @@ const DEFAULTS: FishConfig = {
   compact: { maxEntries: 200, maxChars: 50_000 },
   memeCooldownMinutes: 8,
   voices: {},
-  roundTimeoutSeconds: 60,
+  toolTimeoutSeconds: 30,
 };
 
 /** 读一次（不缓存），供热加载与启动各取所需。 */

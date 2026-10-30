@@ -29,6 +29,7 @@ import { createSayTool, OutboundEntry, type OutboundPayload } from "./egress/say
 import { createReactTool } from "./egress/react.ts";
 import { loadPrompts, renderTemplate, type PromptSet } from "./prompts.ts";
 import { createTools } from "./tools/index.ts";
+import { withToolTimeout } from "./tools/timeout.ts";
 import { WatchDoc } from "./store.ts";
 import { createCompactor, type CompactResult, type Compactor } from "./compact.ts";
 import { ChatsDoc, OutboxDoc } from "./store.ts";
@@ -108,6 +109,8 @@ export interface FishOptions {
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
   /** 表情包跨轮冷却（毫秒）；传函数则每次现取，改配置立即生效。 */
   memeCooldownMs?: number | (() => number);
+  /** 单次工具调用超时（秒），缺省 30。 */
+  toolTimeoutSeconds?: number;
   /** 按会话取 TTS 配置（人格相关）；返回 undefined 表示这个会话没有语音能力。 */
   ttsOf?: (conversationId: string) => import("./tts.ts").TtsConfig | undefined;
   /** 静默轮（自动收表情包）：这一轮 say 一律拒绝。 */
@@ -181,7 +184,12 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   }
 
   // 人格扩展：默认 fish + 每本人格书一个 fish:<名>；同一套工具实例，会话按名只选其一
-  const fishTools: readonly ToolRegistration[] = [say, react, ...tools];
+  // 单次工具调用超时（默认 30 秒）：卡住的通常是某一个工具，不是整轮
+  const toolTimeoutMs = (options.toolTimeoutSeconds ?? 30) * 1000;
+  const toolTimeoutMessage = prompts.messages["tool_timeout"] ?? "tool_timeout";
+  const fishTools: readonly ToolRegistration[] = [say, react, ...tools].map((tool) =>
+    withToolTimeout(tool, toolTimeoutMs, toolTimeoutMessage),
+  );
   const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts });
   const personaExtensions = new Map<string, Extension>();
   const openers: Record<string, string> = {};
