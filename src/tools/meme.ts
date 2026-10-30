@@ -80,7 +80,18 @@ export function createMemeTool(deps: MemeDeps) {
       const extras = (args.tags ?? []).map((t) => t.trim().toLowerCase()).filter(Boolean);
 
       // 一级过滤：必须带这个情绪词
-      const pool = entries.filter((e) => e.tags.some((t) => t.toLowerCase() === mood));
+      let pool = entries.filter((e) => e.tags.some((t) => t.toLowerCase() === mood));
+      // 兜底：还没补标的存量条目（或这一档真没图）→ 退回按字面找一遍，
+      // 别让一个没跑完的迁移把整个表情包功能变哑
+      let loose = false;
+      if (pool.length === 0) {
+        pool = entries.filter(
+          (e) =>
+            e.tags.some((t) => t.toLowerCase().includes(mood)) || e.caption.toLowerCase().includes(mood),
+        );
+        loose = true;
+        console.log("[鱼缸] meme loose match:", mood);
+      }
       // 二级过滤：可选，自由词命中越多排越前（能力给到，不强制）
       const scored = pool
         .map((e) => {
