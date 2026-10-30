@@ -39,6 +39,37 @@ const ctx = BACKGROUND_CONTEXT;
 // 语音是否启用：TTS_URL 存在才算（服务在本机跑）
 const ttsEnabled = Boolean(process.env.TTS_URL);
 
+// 可热更新的行为配置：fish.config.json > .env > 内置默认
+const fishConfig = createConfigLoader();
+
+/** 默认人格名（prompt/persona.md 那本，没有 # 后缀）。 */
+const DEFAULT_PERSONA_NAME = "默认";
+
+function personaOf(chatKey: string): string {
+  const at = chatKey.lastIndexOf("#");
+  return at > 0 ? chatKey.slice(at + 1) : DEFAULT_PERSONA_NAME;
+}
+
+/**
+ * chatKey（可能带人格后缀）→ 该会话的语音配置。
+ * 只有 fish.config 的 voices 里明确配了这个人格，才有语音能力；
+ * 默认人格允许用 .env 的 TTS_URL 兜底（单人格部署方便）。
+ */
+function voiceConfigFor(chatKey: string): { url: string; referWav?: string; referText?: string; referLanguage?: string } | undefined {
+  const name = personaOf(chatKey);
+  const byPersona = fishConfig().config.voices[name];
+  if (byPersona) return byPersona;
+  if (name === DEFAULT_PERSONA_NAME && process.env.TTS_URL) {
+    return {
+      url: process.env.TTS_URL,
+      ...(process.env.TTS_REF_WAV ? { referWav: process.env.TTS_REF_WAV } : {}),
+      ...(process.env.TTS_REF_TEXT ? { referText: process.env.TTS_REF_TEXT } : {}),
+      ...(process.env.TTS_REF_LANG ? { referLanguage: process.env.TTS_REF_LANG } : {}),
+    };
+  }
+  return undefined;
+}
+
 // 特别关注：chatKey（不含人格后缀）→ userId → 备注。随机门用它提高被关注者的概率，
 // 进模型前用它在那个人说话的那一行打标记。启动时从文档装载，watch 工具变更后即时同步。
 const watchedByChat = new Map<string, Map<string, { name?: string; note: string }>>();
