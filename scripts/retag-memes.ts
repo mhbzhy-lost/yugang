@@ -152,10 +152,22 @@ for (const entry of missing) console.log(`  ? ${entry.file}  ${entry.caption.sli
 if (dry) {
   console.log("--dry：不写回");
 } else if (applied.length > 0) {
+  // 跑批期间鱼可能还在收新图：写回前重读一次，按文件名合并，
+  // 绝不能整份覆盖——否则这几分钟里新入库的图会被抹掉。
   const backup = `${indexPath}.bak-${Date.now()}`;
   copyFileSync(indexPath, backup);
-  writeFileSync(indexPath, `${JSON.stringify(entries, null, 1)}\n`);
-  console.log(`已写回，备份：${backup}`);
+  const fresh = JSON.parse(readFileSync(indexPath, "utf8")) as Entry[];
+  const moodOf = new Map(applied.map((a) => [a.file, a.mood]));
+  let merged = 0;
+  for (const entry of fresh) {
+    const mood = moodOf.get(entry.file);
+    if (!mood) continue;
+    if (entry.tags.some((t) => t.toLowerCase() === mood.toLowerCase())) continue;
+    entry.tags = [mood, ...entry.tags];
+    merged++;
+  }
+  writeFileSync(indexPath, `${JSON.stringify(fresh, null, 1)}\n`);
+  console.log(`已写回：合并 ${merged} 条（当前库里 ${fresh.length} 条），备份：${backup}`);
 } else {
   console.log("没有可采纳的结果，未写回");
 }
