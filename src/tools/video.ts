@@ -205,6 +205,7 @@ export function createVideoTool(deps: VideoDeps) {
         USED.set(api.conversationId, round);
       }
 
+      const startedAt = Date.now();
       const tmp = mkdtempSync(join(tmpdir(), "yg-video-"));
       try {
         // 短链先展开
@@ -254,20 +255,36 @@ export function createVideoTool(deps: VideoDeps) {
         let framesText = "";
         if (deps.models && deps.visionModel && cid) {
           const timestamps = pickTimestamps(danmaku, capSeconds);
+          const framesStartedAt = Date.now();
           const frames = extractFrames(bv, cid, timestamps, tmp);
+          const grabMs = Date.now() - framesStartedAt;
           if (frames.length > 0) {
-            const lines: string[] = [];
-            for (const frame of frames) {
-              try {
-                const bytes = readFileSync(frame.path);
-                const described = await describeImage(deps, bytes.toString("base64"), "image/jpeg");
-                if (described) {
-                  lines.push(`[${fmtTime(frame.time)}] ${described.replace(/\s+/g, " ").slice(0, 220)}`);
+            const described = await Promise.all(
+              frames.map(async (frame) => {
+                try {
+                  const bytes = readFileSync(frame.path);
+                  const text = await describeImage(deps, bytes.toString("base64"), "image/jpeg");
+                  if (!text) return null;
+                  return { time: frame.time, line: `[${fmtTime(frame.time)}] ${text.replace(/\s+/g, " ").slice(0, 220)}` };
+                } catch {
+                  return null;
                 }
-              } catch {
-                // 单帧失败跳过
-              }
-            }
+              }),
+            );
+            const lines = described
+              .filter((x): x is { time: number; line: string } => x !== null)
+              .sort((a, b) => a.time - b.time)
+              .map((x) => x.line);
+            console.log(
+              "[鱼缸] video",
+              bv,
+              "抽帧",
+              grabMs,
+              "ms · 描述",
+              Date.now() - framesStartedAt - grabMs,
+              "ms · 帧",
+              frames.length,
+            );
             if (lines.length > 0) {
               framesText =
                 "\n" + (deps.prompts.messages["video_frames_header"] ?? "") + "\n" + lines.join("\n");
@@ -292,6 +309,7 @@ export function createVideoTool(deps: VideoDeps) {
         }
 
         const text = [head.join("\n"), danmakuText, framesText, comments].filter((s) => s.length > 0).join("\n");
+        console.log("[鱼缸] video", bv, "总用时", Date.now() - startedAt, "ms");
         return { output: [{ type: "text", text }] };
       } catch {
         throw new Error(renderTemplate(deps.prompts.messages["video_failed"] ?? "视频没打开", { url: raw }));
