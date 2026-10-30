@@ -48,8 +48,8 @@ export interface SayDeps {
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
   /** 表情包跨轮冷却（毫秒），缺省 8 分钟；给函数就是每次现取（热更新用）。 */
   memeCooldownMs?: number | (() => number);
-  /** 语音合成配置；没配就等于没有语音能力。 */
-  tts?: import("../tts.ts").TtsConfig;
+  /** 语音合成配置（按会话现取：一个会话一个人格，音色跟着人格走）。 */
+  ttsOf?: (conversationId: string) => import("../tts.ts").TtsConfig | undefined;
   /** 这一轮是否被标记为「可以回语音」（由入站侧机械判定，见 index.ts）。 */
   voiceOf?: (roundId: unknown) => boolean;
   /** 收图轮之类的静默轮：这一轮不许说话。 */
@@ -100,7 +100,8 @@ export function createSayTool(deps: SayDeps) {
       let voice: string | undefined;
 
       if (args.voice === true) {
-        if (!deps.tts?.url) throw new Error(deps.prompts.messages["voice_off"] ?? "voice_off");
+        const tts = deps.ttsOf?.(String(api.conversationId));
+        if (!tts?.url) throw new Error(deps.prompts.messages["voice_off"] ?? "voice_off");
         if (media !== undefined || args.meme) throw new Error(deps.prompts.messages["voice_with_media"] ?? "voice_with_media");
         const spoken = args.messages.map((m) => m.trim()).filter(Boolean).join("，");
         if (!spoken) throw new Error(deps.prompts.messages["empty"] ?? "empty");
@@ -113,7 +114,7 @@ export function createSayTool(deps: SayDeps) {
         }
         if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
         try {
-          const synth = await synthesizeToMedia(deps.tts, spoken, deps.limits.mediaRoot);
+          const synth = await synthesizeToMedia(tts, spoken, deps.limits.mediaRoot);
           voice = synth.ref;
         } catch (error) {
           console.error("[鱼缸] 语音合成失败", error instanceof Error ? error.message : error);

@@ -31,6 +31,8 @@ export interface FishConfig {
   roundTimeoutSeconds: number;
   /** 表情包跨轮冷却（分钟）：同一群两次配图之间的最短间隔。 */
   memeCooldownMinutes: number;
+  /** 按人格配置的语音：人格名 → TTS 参数。没有条目的人格没有语音能力。 */
+  voices: Record<string, { url: string; referWav?: string; referText?: string; referLanguage?: string }>;
   /** 周报发到哪个群；空 = 不发。 */
   weeklyGroupId?: string;
 }
@@ -110,6 +112,27 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
   if (cooldown !== undefined && cooldown >= 0 && cooldown <= 240) out.memeCooldownMinutes = cooldown;
   else if (src["memeCooldownMinutes"] !== undefined) problems.push("memeCooldownMinutes 必须在 0–240，已忽略");
 
+  const rawVoices = src["voices"];
+  if (rawVoices && typeof rawVoices === "object" && !Array.isArray(rawVoices)) {
+    const voices: FishConfig["voices"] = {};
+    for (const [persona, value] of Object.entries(rawVoices as Record<string, unknown>)) {
+      if (!value || typeof value !== "object") continue;
+      const v = value as Record<string, unknown>;
+      const url = typeof v["url"] === "string" ? v["url"].trim() : "";
+      if (!url) {
+        problems.push(`voices.${persona}.url 缺失，已忽略`);
+        continue;
+      }
+      voices[persona] = {
+        url,
+        ...(typeof v["referWav"] === "string" ? { referWav: v["referWav"] } : {}),
+        ...(typeof v["referText"] === "string" ? { referText: v["referText"] } : {}),
+        ...(typeof v["referLanguage"] === "string" ? { referLanguage: v["referLanguage"] } : {}),
+      };
+    }
+    out.voices = voices;
+  }
+
   const weekly = src["weeklyGroupId"];
   if (typeof weekly === "string" && /^\d+$/.test(weekly.trim())) out.weeklyGroupId = weekly.trim();
   else if (weekly !== undefined && weekly !== "") problems.push("weeklyGroupId 必须是群号（纯数字），已忽略");
@@ -168,6 +191,7 @@ const DEFAULTS: FishConfig = {
   thinkingLevel: "low",
   compact: { maxEntries: 200, maxChars: 50_000 },
   memeCooldownMinutes: 8,
+  voices: {},
   roundTimeoutSeconds: 60,
 };
 

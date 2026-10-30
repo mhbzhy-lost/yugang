@@ -11,5 +11,13 @@
   },
   "weeklyGroupId": "",
   "memeCooldownMinutes": 8,
-  "roundTimeoutSeconds": 60
+  "roundTimeoutSeconds": 60,
+  "voices": {
+    "爱莉希雅": {
+      "url": "http://127.0.0.1:9880",
+      "referWav": "/path/to/reference.wav",
+      "referText": "参考音频对应原文",
+      "referLanguage": "zh"
+    }
+  }
 }

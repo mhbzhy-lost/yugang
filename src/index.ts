@@ -38,6 +38,8 @@ const ctx = BACKGROUND_CONTEXT;
 
 // 语音是否启用：TTS_URL 存在才算（服务在本机跑）
 const ttsEnabled = Boolean(process.env.TTS_URL);
+/** 默认人格名（无后缀的人格书就是 prompt/persona.md）。 */
+const DEFAULT_PERSONA_NAME = "默认";
 
 // 可热更新的行为配置：fish.config.json > .env > 默认
 const fishConfig = createConfigLoader();
@@ -60,8 +62,31 @@ const VOICE_REQUEST = /语音|说句话|说一句|出声|声音|念一下|念一
  *
  * 只在「能回」这一侧打标；用不用、怎么用，交给鱼自己决定。
  */
+/** chatKey（可能带人格后缀）→ 该会话的语音配置；没有就返回 undefined。 */
+function voiceConfigFor(chatKey: string): { url: string; referWav?: string; referText?: string; referLanguage?: string } | undefined {
+  const name = personaOf(chatKey);
+  const voices = fishConfig().config.voices;
+  const byPersona = voices[name];
+  if (byPersona) return byPersona;
+  // 默认人格（没有 # 后缀）允许用 .env 兜底，方便单人格部署
+  if (name === DEFAULT_PERSONA_NAME && process.env.TTS_URL) {
+    return {
+      url: process.env.TTS_URL,
+      ...(process.env.TTS_REF_WAV ? { referWav: process.env.TTS_REF_WAV } : {}),
+      ...(process.env.TTS_REF_TEXT ? { referText: process.env.TTS_REF_TEXT } : {}),
+      ...(process.env.TTS_REF_LANG ? { referLanguage: process.env.TTS_REF_LANG } : {}),
+    };
+  }
+  return undefined;
+}
+
+function personaOf(chatKey: string): string {
+  const at = chatKey.lastIndexOf("#");
+  return at > 0 ? chatKey.slice(at + 1) : DEFAULT_PERSONA_NAME;
+}
+
 function markVoiceEligible(msg: IncomingMessage): boolean {
-  if (!ttsEnabled) return false;
+  if (!voiceConfigFor(msg.chatKey)) return false;
   // 群里要 @ 鱼才算「叫我」，私聊本来就是对鱼说的，不用 @
   const calledOut = msg.mentionsBot || msg.chatKey.startsWith("qq:private:");
   if (calledOut && VOICE_REQUEST.test(msg.text)) return true;
@@ -166,17 +191,8 @@ const fish = await openFish({
   thinkingLevel: fishConfig().config.thinkingLevel,
   // 表情包跨轮冷却：每个人格会话独立计时
   memeCooldownMs: () => Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
-  // 语音：本机 GPT-SoVITS。TTS_URL 为空 = 没有语音能力（say 的 voice 会直接拒绝）
-  ...(process.env.TTS_URL
-    ? {
-        tts: {
-          url: process.env.TTS_URL,
-          ...(process.env.TTS_REF_WAV ? { referWav: process.env.TTS_REF_WAV } : {}),
-          ...(process.env.TTS_REF_TEXT ? { referText: process.env.TTS_REF_TEXT } : {}),
-          ...(process.env.TTS_REF_LANG ? { referLanguage: process.env.TTS_REF_LANG } : {}),
-        },
-      }
-    : {}),
+  // 语音：按会话所在人格取配置（fish.config 的 voices；.env 的 TTS_URL 只给默认人格兜底）
+  ttsOf: (conversationId) => voiceConfigFor(chatKeys.get(String(conversationId)) ?? ""),
   // 语音资格由入站侧打分（见 markVoiceEligible），这里只查表
   voiceOf: (roundId) => voiceRounds.has(String(roundId)),
   // look 的视觉描述模型：缺省用主模型自身；可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型
