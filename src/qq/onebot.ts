@@ -244,6 +244,21 @@ export class OneBot {
   }
 
   /** 按顺序发几条文本，中间加抖动；第一句可以引用触发消息。 */
+  /** 发语音：内容走 base64://，绕开 QQ 沙盒对本地路径的限制（已实测）。 */
+  async sendVoiceGroup(groupId: number, bytes: Buffer): Promise<void> {
+    await this.call("send_group_msg", {
+      group_id: groupId,
+      message: [{ type: "record", data: { file: `base64://${bytes.toString("base64")}` } }],
+    });
+  }
+
+  async sendVoicePrivate(userId: number, bytes: Buffer): Promise<void> {
+    await this.call("send_private_msg", {
+      user_id: userId,
+      message: [{ type: "record", data: { file: `base64://${bytes.toString("base64")}` } }],
+    });
+  }
+
   async sendGroup(groupId: number, texts: readonly string[], options: SendOptions = {}): Promise<void> {
     const delay = options.delayMs ?? (() => 700 + Math.floor(Math.random() * 1200));
     for (const [index, text] of texts.entries()) {

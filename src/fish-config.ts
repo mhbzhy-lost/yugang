@@ -29,6 +29,8 @@ export interface FishConfig {
   compact: { maxEntries: number; maxChars: number };
   /** 单轮超时（秒）：一条消息进模型后超过这么久还没结束就丢弃，不再回过时的话。 */
   roundTimeoutSeconds: number;
+  /** 语音跨轮冷却（分钟）：同一会话两次语音之间的最短间隔。 */
+  voiceCooldownMinutes: number;
   /** 表情包跨轮冷却（分钟）：同一群两次配图之间的最短间隔。 */
   memeCooldownMinutes: number;
   /** 周报发到哪个群；空 = 不发。 */
@@ -106,6 +108,10 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
   if (timeout !== undefined && timeout >= 5 && timeout <= 600) out.roundTimeoutSeconds = timeout;
   else if (src["roundTimeoutSeconds"] !== undefined) problems.push("roundTimeoutSeconds 必须在 5–600，已忽略");
 
+  const voiceCooldown = num(src["voiceCooldownMinutes"]);
+  if (voiceCooldown !== undefined && voiceCooldown >= 0 && voiceCooldown <= 1440) out.voiceCooldownMinutes = voiceCooldown;
+  else if (src["voiceCooldownMinutes"] !== undefined) problems.push("voiceCooldownMinutes 必须在 0–1440，已忽略");
+
   const cooldown = num(src["memeCooldownMinutes"]);
   if (cooldown !== undefined && cooldown >= 0 && cooldown <= 240) out.memeCooldownMinutes = cooldown;
   else if (src["memeCooldownMinutes"] !== undefined) problems.push("memeCooldownMinutes 必须在 0–240，已忽略");
@@ -168,6 +174,7 @@ const DEFAULTS: FishConfig = {
   thinkingLevel: "low",
   compact: { maxEntries: 200, maxChars: 50_000 },
   memeCooldownMinutes: 8,
+  voiceCooldownMinutes: 10,
   roundTimeoutSeconds: 60,
 };
 

@@ -16,7 +16,8 @@ import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineEntry, defineTool, type ConversationId } from "@earendil-works/pi-durable";
 import { validateOutbound, type EgressLimits } from "./policy.ts";
-import { ledgerOf, recordMedia, recordSent } from "./ledger.ts";
+import { ledgerOf, recordMedia, recordSent, recordVoice } from "./ledger.ts";
+import { synthesizeToMedia } from "../tts.ts";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
 import { OutboxDoc } from "../store.ts";
 
@@ -24,6 +25,8 @@ export interface OutboundPayload {
   /** 按顺序发出的几条文本。 */
   items: string[];
   media?: string;
+  /** 语音文件（相对 mediaRoot），与 media 互斥。 */
+  voice?: string;
   /** 是否引用触发这一轮的那条消息。 */
   quote: boolean;
   at: number;
@@ -45,6 +48,10 @@ export interface SayDeps {
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
   /** 表情包跨轮冷却（毫秒），缺省 8 分钟；给函数就是每次现取（热更新用）。 */
   memeCooldownMs?: number | (() => number);
+  /** 语音合成配置；没配就等于没有语音能力。 */
+  tts?: import("../tts.ts").TtsConfig;
+  /** 语音跨轮冷却（毫秒），缺省 10 分钟。 */
+  voiceCooldownMs?: number | (() => number);
   /** 收图轮之类的静默轮：这一轮不许说话。 */
   silentOf?: (roundId: unknown) => boolean;
 }
@@ -70,6 +77,7 @@ export function createSayTool(deps: SayDeps) {
       }),
       media: Type.Optional(Type.String({ description: prompt.params["media"] ?? "" })),
       meme: Type.Optional(Type.String({ description: prompt.params["meme"] ?? "" })),
+      voice: Type.Optional(Type.Boolean({ description: prompt.params["voice"] ?? "" })),
       quote: Type.Optional(Type.Boolean({ description: prompt.params["quote"] ?? "" })),
     }),
     execute: async (args, api, context) => {
@@ -89,6 +97,27 @@ export function createSayTool(deps: SayDeps) {
       // 频次三道上限：一轮最多一张图（任何来源）、跨轮冷却（默认 8 分钟）、库里得有贴题的。
       let media = args.media;
       let sentMeme = false;
+      let voice: string | undefined;
+
+      if (args.voice === true) {
+        if (!deps.tts?.url) throw new Error(deps.prompts.messages["voice_off"] ?? "voice_off");
+        if (media !== undefined || args.meme) throw new Error(deps.prompts.messages["voice_with_media"] ?? "voice_with_media");
+        const spoken = args.messages.map((m) => m.trim()).filter(Boolean).join("，");
+        if (!spoken) throw new Error(deps.prompts.messages["empty"] ?? "empty");
+        if (spoken.length > 60) throw new Error(renderTemplate(deps.prompts.messages["voice_too_long"] ?? "", { length: String(spoken.length) }));
+        if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
+        const cooldownMs = (typeof deps.voiceCooldownMs === "function" ? deps.voiceCooldownMs() : deps.voiceCooldownMs) ?? 10 * 60_000;
+        if (ledger.lastVoiceAt !== undefined && ts - ledger.lastVoiceAt < cooldownMs) {
+          throw new Error(deps.prompts.messages["voice_cooldown"] ?? "voice_cooldown");
+        }
+        try {
+          const synth = await synthesizeToMedia(deps.tts, spoken, deps.limits.mediaRoot);
+          voice = synth.ref;
+        } catch (error) {
+          console.error("[鱼缸] 语音合成失败", error instanceof Error ? error.message : error);
+          throw new Error(deps.prompts.messages["voice_failed"] ?? "voice_failed");
+        }
+      }
       if (args.meme !== undefined && args.meme.trim() !== "") {
         if (media !== undefined) throw new Error(deps.prompts.messages["say_one_media"] ?? "say_one_media");
         if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
@@ -105,7 +134,7 @@ export function createSayTool(deps: SayDeps) {
       }
 
       const rejection = validateOutbound(
-        { messages: args.messages, ...(media === undefined ? {} : { media }) },
+        { messages: args.voice === true ? [] : args.messages, ...(media === undefined ? {} : { media }), ...(voice === undefined ? {} : { voice }) },
         {
           limits: deps.limits,
           now: ts,
@@ -130,7 +159,7 @@ export function createSayTool(deps: SayDeps) {
       // run.taskId 每代都会换，不能用。轮结束后 run 整个移除，下一轮自然换新标识。
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
-      if (round !== undefined && media === undefined) {
+      if (round !== undefined && media === undefined && voice === undefined) {
         const said = saidIn.get(api.conversationId);
         if (said?.round === round && said.count >= 3) {
           throw new Error(deps.prompts.messages["say_once"] ?? "already said this round");
@@ -143,6 +172,7 @@ export function createSayTool(deps: SayDeps) {
       const payload: OutboundPayload = {
         items: args.messages.map((m) => m.trim()),
         ...(media === undefined ? {} : { media }),
+        ...(voice === undefined ? {} : { voice }),
         quote: args.quote === true,
         ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
         ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
@@ -159,6 +189,7 @@ export function createSayTool(deps: SayDeps) {
 
       recordSent(api.conversationId, payload.items, ts);
       if (media !== undefined) recordMedia(api.conversationId, ts, sentMeme);
+      if (voice !== undefined) recordVoice(api.conversationId, ts);
 
       return { output: [{ type: "text", text: deps.prompts.messages["say_sent"] ?? "ok" }] };
     },

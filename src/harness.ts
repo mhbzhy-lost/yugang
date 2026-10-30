@@ -108,6 +108,10 @@ export interface FishOptions {
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
   /** 表情包跨轮冷却（毫秒）；传函数则每次现取，改配置立即生效。 */
   memeCooldownMs?: number | (() => number);
+  /** 本地 TTS 配置；没配就没有语音能力。 */
+  tts?: import("./tts.ts").TtsConfig;
+  /** 语音跨轮冷却（毫秒）；传函数则每次现取。 */
+  voiceCooldownMs?: number | (() => number);
   /** 静默轮（自动收表情包）：这一轮 say 一律拒绝。 */
   silentOf?: (roundId: unknown) => boolean;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费，轮结束失效。 */
@@ -167,7 +171,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
 
-  const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf, ...(options.silentOf ? { silentOf: options.silentOf } : {}), ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}) });
+  const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf, ...(options.tts ? { tts: options.tts } : {}), ...(options.voiceCooldownMs !== undefined ? { voiceCooldownMs: options.voiceCooldownMs } : {}), ...(options.silentOf ? { silentOf: options.silentOf } : {}), ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}) });
   const react = createReactTool({ prompts, react: options.react, now });
   const tools = createTools({ mediaRoot, prompts, models, visionModel: options.visionModel ?? options.model, searchKey: options.searchKey, modelscopeKey: options.modelscopeKey, sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, bypassOf: options.bypassOf });
 

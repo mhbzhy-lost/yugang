@@ -33,6 +33,8 @@ export const DEFAULT_LIMITS: Omit<EgressLimits, "mediaRoot"> = {
 export interface EgressIntent {
   messages: readonly string[];
   media?: string;
+  /** 语音文件（相对 mediaRoot）；与 media 互斥。 */
+  voice?: string;
 }
 
 export interface RecentMessage {
@@ -69,6 +71,7 @@ export const REJECTION_CODES = [
   "media_type",
   "media_big",
   "media_magic",
+  "voice_with_media",
 ] as const;
 
 export type RejectionCode = (typeof REJECTION_CODES)[number];
@@ -77,12 +80,13 @@ export type RejectionCode = (typeof REJECTION_CODES)[number];
 export function validateOutbound(intent: EgressIntent, ctx: EgressContext): Rejection | null {
   const messages = (intent.messages ?? []).map((m) => (m ?? "").trim());
 
-  if (messages.length === 0) return { code: "empty" };
+  // 语音可以单独发：voice 存在时允许 messages 为空
+  if (messages.length === 0 && intent.voice === undefined) return { code: "empty" };
   if (messages.length > ctx.limits.maxMessages) return { code: "too_many_messages" };
 
   // 带 media 的发送（画完的图/表情）是画图链路的必要出口，不占每轮额度；
   // 纯文字照旧防话痨。
-  if (!intent.media && ctx.sentThisRun + messages.length > ctx.limits.maxPerRun) {
+  if (!intent.media && !intent.voice && ctx.sentThisRun + messages.length > ctx.limits.maxPerRun) {
     return { code: "quota_run", vars: { count: String(ctx.sentThisRun) } };
   }
 
@@ -92,9 +96,14 @@ export function validateOutbound(intent: EgressIntent, ctx: EgressContext): Reje
     if (ctx.recent.some((m) => sameText(m.text, text))) return { code: "duplicate", index };
   }
 
+  if (intent.media !== undefined && intent.voice !== undefined) return { code: "voice_with_media" };
   if (intent.media !== undefined) {
     const media = validateMedia(intent.media, ctx.limits);
     if (media) return media;
+  }
+  if (intent.voice !== undefined) {
+    const voice = validateVoice(intent.voice, ctx.limits);
+    if (voice) return voice;
   }
 
   return null;
@@ -147,6 +156,7 @@ function findSecret(text: string): string | null {
 }
 
 const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+const VOICE_EXT = new Set([".wav", ".mp3", ".silk", ".amr"]);
 const MAGIC: readonly Buffer[] = [
   Buffer.from([0x89, 0x50, 0x4e, 0x47]),
   Buffer.from([0xff, 0xd8, 0xff]),
@@ -173,6 +183,25 @@ export function validateMedia(rawPath: string, limits: EgressLimits): Rejection 
       MAGIC.some((sig) => head.subarray(0, sig.length).equals(sig)) ||
       (head.subarray(0, 4).toString("ascii") === "RIFF" && head.subarray(8, 12).toString("ascii") === "WEBP");
     if (!isImage) return { code: "media_magic" };
+  } catch {
+    return { code: "media_missing" };
+  }
+  return null;
+}
+
+/** 语音文件校验：必须在 mediaRoot 内、是允许的音频后缀、存在且不超上限。 */
+export function validateVoice(rawPath: string, limits: EgressLimits): Rejection | null {
+  const root = resolve(limits.mediaRoot);
+  const full = resolve(root, rawPath);
+  if (full !== root && !full.startsWith(root + sep)) return { code: "media_outside" };
+  const ext = extname(full).toLowerCase();
+  if (!VOICE_EXT.has(ext)) return { code: "media_type", vars: { ext: ext || "(无)" } };
+  try {
+    const st = statSync(full);
+    if (!st.isFile()) return { code: "media_missing" };
+    if (st.size > limits.maxMediaBytes) {
+      return { code: "media_big", vars: { size: (st.size / 1048576).toFixed(1) } };
+    }
   } catch {
     return { code: "media_missing" };
   }

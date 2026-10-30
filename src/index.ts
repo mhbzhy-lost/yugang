@@ -132,6 +132,18 @@ const fish = await openFish({
   thinkingLevel: fishConfig().config.thinkingLevel,
   // 表情包跨轮冷却：每个人格会话独立计时
   memeCooldownMs: () => Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
+  // 语音：本机 GPT-SoVITS。TTS_URL 为空 = 没有语音能力（say 的 voice 会直接拒绝）
+  ...(process.env.TTS_URL
+    ? {
+        tts: {
+          url: process.env.TTS_URL,
+          ...(process.env.TTS_REF_WAV ? { referWav: process.env.TTS_REF_WAV } : {}),
+          ...(process.env.TTS_REF_TEXT ? { referText: process.env.TTS_REF_TEXT } : {}),
+          ...(process.env.TTS_REF_LANG ? { referLanguage: process.env.TTS_REF_LANG } : {}),
+        },
+      }
+    : {}),
+  voiceCooldownMs: () => Math.round(fishConfig().config.voiceCooldownMinutes * 60_000),
   // look 的视觉描述模型：缺省用主模型自身；可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型
   visionModel: process.env.VISION_MODEL_ID
     ? { provider: process.env.VISION_PROVIDER ?? config.modelConfig.providerId, modelId: process.env.VISION_MODEL_ID }
@@ -194,10 +206,16 @@ const fish = await openFish({
         : undefined;
       await onebot.sendGroup(groupId, payload.items, { quote });
       if (payload.media) await onebot.sendImageGroup(groupId, resolve(config.mediaRoot, payload.media));
+      if (payload.voice) {
+        await onebot.sendVoiceGroup(groupId, readFileSync(resolve(config.mediaRoot, payload.voice)));
+      }
     } else if (chatKey.startsWith("qq:private:")) {
       const userId = Number(chatKey.slice("qq:private:".length));
       await onebot.sendPrivate(userId, payload.items);
       if (payload.media) await onebot.sendImagePrivate(userId, resolve(config.mediaRoot, payload.media));
+      if (payload.voice) {
+        await onebot.sendVoicePrivate(userId, readFileSync(resolve(config.mediaRoot, payload.voice)));
+      }
     }
 
     for (const text of payload.items) {

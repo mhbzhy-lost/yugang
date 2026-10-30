@@ -11,5 +11,6 @@
   },
   "weeklyGroupId": "",
   "memeCooldownMinutes": 8,
-  "roundTimeoutSeconds": 60
+  "roundTimeoutSeconds": 60,
+  "voiceCooldownMinutes": 10
 }

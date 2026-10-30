@@ -22,6 +22,8 @@ export interface Ledger {
   mediaThisRun: number;
   /** 上一次发表情包的时间：跨轮共用的冷却，防止每句话都配图。 */
   lastMemeAt?: number;
+  /** 上一次发语音的时间：语音更打扰，另设一道更长的冷却。 */
+  lastVoiceAt?: number;
 }
 
 const ledgers = new Map<string, Ledger>();
@@ -39,6 +41,12 @@ export function resetRun(conversationId: string): void {
   const l = ledgerOf(conversationId);
   l.sentThisRun = 0;
   l.mediaThisRun = 0;
+}
+
+export function recordVoice(conversationId: string, now: number): void {
+  const l = ledgerOf(conversationId);
+  l.mediaThisRun++;
+  l.lastVoiceAt = now;
 }
 
 export function recordMedia(conversationId: string, now: number, meme = false): void {
