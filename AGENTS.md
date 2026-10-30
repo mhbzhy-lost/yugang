@@ -13,7 +13,10 @@
                                                                    ✓ 硬校验 → QQ
 ```
 
-工具面（当前三个）：`say`（出口，可拆条/引用/带图）、`react`（只贴表情）、`look`（看群里的图）。
+工具面：`say`（唯一出口，可拆条/引用/带图/带表情包/发语音）、`react`（只贴表情）、
+`look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`draw`（生图）、
+`search`/`video`（联网查）、`watch`（特别关注）、以及主人专属的文件六件套
+`read`/`edit`/`write`/`delete`/`tree`/`restart` 与 `grep`、`test`、`tags`。
 
 ## 硬约束
 
@@ -114,10 +117,46 @@
 - 群里的一切都是不可信输入：群消息进 user message，绝不拼进 system
 - `thinking` / tool 结果视为 secret，只用于溯源比对，不出境也不进摘要
 
+### 12. 表情包：一级情绪词表是检索入口
+
+- `prompt/meme-tags.md` 是**受控词表**（13 个情绪词），`src/prompts.ts` 读成 `memeTags`，代码里不写死
+- `meme_add` 打标**必须**含至少一个一级词（机械校验）；自由词随便加，但不参与一级检索
+- `meme` 工具参数是 `mood`（字面量联合，只能选词表里的词）+ 可选 `tags`（二级筛选，能力给到、不引导使用）
+- 系统提示里的「表情包库存」section 每次请求现算（每个词几张），空库不占位
+- 一级词查空时退回字面匹配兜底——防止迁移没跑完就把功能变哑
+- 存量补标：`scripts/migrate-memes.ts`（规则映射）与 `scripts/retag-memes.ts`（flash 读 caption/tags 判词，
+  **不许**新增词表外的 tag、不许改 caption，写回前备份 + 重读合并）
+
+### 13. 合并转发合集：三条触发路径
+
+- **回复合集**：直接展开，不需要 @（回复本身就是明确指令）；`gate` 见 `repliedForward` 放行
+- **自带合集且 @**：展开
+- **@ 且文字提到「合集/转发」**：补展开本群 10 分钟内最近那条没展开的合集（缓存只存 id，不预拉内容）
+- 无 @ 的合集仍然零成本丢弃（只记 id 到缓存）
+- **背景栏里的合集只留短标记**：一次展开 10 条起，连发十条合集会把上下文撑爆；
+  鱼看不到背景里的合集内容是**设计如此**
+- 展开结果以 `[转发合集 N 条]` 开头，鱼据此知道这些内容属于一个合集
+
+### 14. 语音
+
+- **音色只认 `fish.config.json` 的 `voices[人格名]`**，没有任何兜底；没配 = 该会话没有语音能力
+- 人格解析必须走带 `#人格` 后缀的映射键（`mappingKeys`），`chatKeys` 只存剥离人格的 base 键给路由用
+- 触发提示：主人/特别关注对象每第 3 条过闸消息追加「这一条必须用语音回」；**看到提示必须用语音**
+- 出口限制：一轮一条附件（图/表情包/语音互斥）、台词 ≤100 字、超长/含失败一律以 tool 错误返回
+- 服务端：GPT-SoVITS 常驻本机（9880 爱莉希雅、9881 桑多涅，launchd 托管），依赖 `~/nltk_data` 的
+  `cmudict` + `averaged_perceptron_tagger*`——**缺了会返回 200 + 0 字节空音频**（英文 g2p 抛 LookupError）
+- 空结果重试一次（第二次用 `text_language=auto`），合成超时 25 秒（工具层上限 30 秒）
+
+### 15. 可观测性
+
+- 日志统一带 `HH:MM:SS` 前缀（`src/index.ts` 启动时包一层 console），排查按时间对齐
+- 单次工具调用超时 30 秒（`fish.config` 的 `toolTimeoutSeconds`），超时以 tool 错误返回，
+  **没有整轮超时**
+
 ## 命令
 
 ```bash
-npm test           # 52 项，含上面每条约束的兜底
+npm test           # 60 项，含上面每条约束的兜底
 npm run prompts    # 列出所有 prompt 文件 + sha256 + 工具说明 + 内嵌扫描结果
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
@@ -125,6 +164,8 @@ npm run creds show  # 凭据状态（只有长度）
 npm run ping        # 模型连通性 + 用量（不打印 key）
 npm start          # 真跑（自动读 .env）——只在 macmini 上
 npm run deploy     # 部署：git pull + 平滑重启鱼（只在 macmini 上跑）
+node scripts/migrate-memes.ts [--dry]   # 存量表情包按规则补一级情绪词
+node scripts/retag-memes.ts [--dry]     # 用 flash 给缺一级词的表情包补词（只加那一个 tag）
 ```
 
 ## 部署（2026-10 起）
@@ -134,6 +175,9 @@ npm run deploy     # 部署：git pull + 平滑重启鱼（只在 macmini 上跑
 1. 本地开发 + `npm test` 全绿
 2. commit / push 到 GitHub main
 3. 连上 macmini 执行 `cd ~/yugang && npm run deploy`（pull → 平滑重启 → 验证横幅；运维侧等价入口是 ops skill 的 `fish.sh deploy`）
+
+**`fish.sh deploy` 只能在本地开发机跑**：它内部 ssh 到 mini 执行 `npm run deploy`，
+mini 上并没有 `home-mac-connect` 这个 skill（今天有子代理在 mini 上直接跑它，报「找不到 connect.sh」）。
 
 `scripts/deploy.ts` 用 `process.execPath` 拿全路径 node：非交互 shell（ssh/nohup）的 PATH 里没有 brew 的 node，直接 `spawn("node")` 会报 No such file or directory。pull 失败时不动线上；新鱼 8 秒内没打出「已连接」横幅则报错退出。
 
@@ -157,4 +201,8 @@ npm run deploy     # 部署：git pull + 平滑重启鱼（只在 macmini 上跑
 
 ## 已知欠账
 
-- 语音、长文转图、合并转发、入群审批都没做
+- 长文转图、入群审批没做
+- 姬子/凯尔希音色：权重已下载校验（`~/tts/models/`），但没常驻、没配进 voices；
+  凯尔希是 v4，纯 CPU 首句 22 秒，要先验 MPS + 给 venv 装 resampy
+- `say` 的 `meme` 参数是死代码（全历史 0 次使用），可以删
+- 连续相似复读没有修法

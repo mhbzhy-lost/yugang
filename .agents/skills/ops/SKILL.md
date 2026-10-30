@@ -13,11 +13,14 @@ scripts/fish.sh digest [日期] [群号] # 复盘某天某个群
 scripts/fish.sh probe                # QQ 侧验收
 scripts/fish.sh log 60               # 鱼日志尾部
 scripts/fish.sh deploy               # git pull + 平滑重启（标准部署入口）
-scripts/fish.sh memes-import         # 后台收编 inbound 暂存图
+scripts/fish.sh memes                # 表情包库状态（收图已改为鱼在对话里 meme_add，没有批量导入）
 scripts/fish.sh help                 # 全部子命令（其它命令原样透传）
 ```
 
 部署流程（见仓库 AGENTS.md「部署」）：本地开发 + `npm test` → commit/push → `fish.sh deploy`。
+
+**`fish.sh` 只能在本地开发机跑**：它内部经 connect.sh ssh 到 macmini，macmini 上并没有
+`home-mac-connect` 这个 skill（在 mini 上直接跑会报「找不到 connect.sh」）。
 
 `deploy` 单次约 15–20 秒（优雅停机最多 16s + pull + 启动 + 等横幅），**用后台异步方式跑**，
 不要和 npm test / git push 串在一条阻塞命令里干等；完成后再读日志确认横幅。
@@ -30,6 +33,13 @@ scripts/fish.sh help                 # 全部子命令（其它命令原样透�
 `.env`（gitignore，模板 `.env.example`）。四样必填：`ONEBOT_WS_URL` / `ONEBOT_TOKEN` /
 `MASTER_QQ` / `GROUPS`。token 用 `npm run token` 生成（会同步写好 NapCat 的 `onebot.json`）。`npm start`、`probe`、`ops`、`ping` 都会自动加载它。
 模块 key 不在 `.env` 里，在 `config/auth.json`。
+
+**行为参数在 `fish.config.json`**（mini 仓库根，gitignore，模板 `fish.config.example`，mtime 热加载）：
+`ambientChance` / `ambientChanceByGroup` / `watchAmbientChance` / `thinkingLevel` / `compact` /
+`memeCooldownMinutes` / `toolTimeoutSeconds` / `voices`（人格 → TTS 地址与参考音频）。
+优先级：`fish.config.json` > `.env` > 内置默认；文件写坏时保留上一次的有效值。
+
+音色只认 `voices`，`.env` 里的 `TTS_*` 已经删了——**没有任何兜底**，没配就是那个会话没有语音能力。
 
 ## 拉起 / 收掉
 
@@ -94,8 +104,25 @@ node scripts/ops.ts probe
 1. `node scripts/ops.ts digest <今天>` —— 群里有没有消息进来。没有 → 协议端或 WS 断了。
 2. 有消息但没出站 —— 看进程日志里的 `[鱼缸]` 行；`这一轮没答上来` 表示模型调用失败。
 3. 有 `这一轮没答上来` —— 检查模型 key / 余额 / base_url。
-4. 都正常但话少 —— 是闸挡的：`AMBIENT_CHANCE`、`DAILY_QUOTA`、`COOLDOWN_MS`、`QUIET_HOURS`。把 `AMBIENT_CHANCE` 临时调到 1 先确认链路通。
+4. 都正常但话少 —— 是闸挡的：看 `[fish] gate <chatKey> <昵称> -> skip:sampled_out`（日志现在带 `HH:MM:SS`）。
+   概率在 `fish.config.json` 的 `ambientChance` / `ambientChanceByGroup` / `watchAmbientChance`（热加载），
+   临时调到 1 先确认链路通。
 5. 私聊没反应 —— 只认 `MASTER_QQ`，陌生人一律不回。这是设计，不是 bug。
+
+## 语音没声音怎么查
+
+1. `lsof -i :9880` / `:9881` —— TTS 实例在不在；不在就 `launchctl kickstart -k gui/$(id -u)/com.yugang.tts`（或 `.sandrone`）
+2. `tail ~/tts/tts.log` 有 `LookupError … Resource 'cmudict' not found` —— **NLTK 数据丢了**：
+   `~/tts/GPT-SoVITS/.venv/bin/python -m nltk.downloader -d ~/nltk_data cmudict`
+   （缺了会返回 200 + 0 字节空音频，日志里只有一行 `[鱼缸] 语音合成失败`）
+3. 鱼日志有 `voice_off` —— 这个会话的人格在 `fish.config.json` 的 `voices` 里没有条目（没配就是没语音，不是 bug）
+4. 鱼日志有 `voice_too_long` / `voice_with_media` / `say_media_used` —— 出口闸拦的，看 `prompt/tools/say.md`
+
+## 合集（合并转发）看不了怎么查
+
+- `skip:forward_ignored` = 没 @ 的合集被丢弃（设计如此，只缓存 id 10 分钟）
+- 鱼说「看不了」但日志有 `补展开最近合集` = 展开了，内容在 user 消息最前面
+- 背景栏里的合集永远是 `[转发合集（内容略）]`：防止连发十条把上下文撑爆，**这是设计**
 
 ## 重启 / 补发
 
