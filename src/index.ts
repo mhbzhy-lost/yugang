@@ -50,6 +50,10 @@ const silentRounds = new Set<string>();
 const voiceRounds = new Set<string>();
 // chatKey → userId → 已累积的发言次数（每 3 次给一次语音资格）
 const voiceCredits = new Map<string, Map<string, number>>();
+// chatKey → { userId, at }：上一次明确要语音的时刻。重试（「再试试」）也应当有资格
+const lastVoiceRequest = new Map<string, { userId: string; at: number }>();
+/** 语音请求的延续窗口：刚被要求过语音，接着的一句仍然可以语音。 */
+const VOICE_REQUEST_WINDOW_MS = 120_000;
 
 /** 同一句话里出现这些词，且是 @ 鱼说的，就算「明确要求语音」。 */
 const VOICE_REQUEST = /语音|说句话|说一句|出声|声音|念一下|念一遍|读出来|用嗓子/;
@@ -91,7 +95,15 @@ function markVoiceEligible(msg: IncomingMessage, conversationId?: string): boole
   if (!voiceConfigFor(chatKey)) return false;
   // 群里要 @ 鱼才算「叫我」，私聊本来就是对鱼说的，不用 @
   const calledOut = msg.mentionsBot || msg.chatKey.startsWith("qq:private:");
-  if (calledOut && VOICE_REQUEST.test(msg.text)) return true;
+  if (calledOut && VOICE_REQUEST.test(msg.text)) {
+    lastVoiceRequest.set(msg.chatKey, { userId: String(msg.userId), at: Date.now() });
+    return true;
+  }
+  // 刚被同一人要求过语音：紧接的下一句（「再试试」）继续给资格，别让它试一次就断
+  const recent = lastVoiceRequest.get(msg.chatKey);
+  if (recent && recent.userId === String(msg.userId) && Date.now() - recent.at < VOICE_REQUEST_WINDOW_MS) {
+    return true;
+  }
 
   const vip = String(msg.userId) === config.master || (watchedByChat.get(msg.chatKey)?.has(String(msg.userId)) ?? false);
   if (!vip) return false;
