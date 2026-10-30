@@ -19,6 +19,9 @@ scripts/fish.sh help                 # 全部子命令（其它命令原样透�
 
 部署流程（见仓库 AGENTS.md「部署」）：本地开发 + `npm test` → commit/push → `fish.sh deploy`。
 
+`deploy` 单次约 15–20 秒（优雅停机最多 16s + pull + 启动 + 等横幅），**用后台异步方式跑**，
+不要和 npm test / git push 串在一条阻塞命令里干等；完成后再读日志确认横幅。
+
 下文命令仅在 macmini 上直接操作或排查离线副本时使用。本地仓库 `~/yugang（本地开发机）`；
 所有数据在 `var/`（可用 `YUGANG_HOME` 覆盖）。**先读 `AGENTS.md`**，那里是硬约束。
 
