@@ -1,11 +1,11 @@
 /**
  * 语音出口：say 的 voice 分支。
  *
- * 用假合成桩跑完整路径（不联网、不碰真 TTS），覆盖四件事：
- *  - 没配音色 → voice_off
- *  - 本轮没被标记 → voice_unavailable
+ * 用假合成桩跑完整路径（不联网、不碰真 TTS），覆盖：
+ *  - 没配音色 → 拒绝
  *  - 正常：payload 带 voice、文本气泡为空、文件落盘
  *  - 长句 / 与图片同发 → 拒绝
+ *  - drain 把 voice 透传给 emit（漏字段 = 语音凭空消失）
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -14,6 +14,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import { MemoryStorage } from "@earendil-works/pi-durable";
+import { openFish } from "../src/harness.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { LiveDoc } from "@earendil-works/pi-durable";
 import { createSayTool, OutboundEntry } from "../src/egress/say.ts";
@@ -101,4 +105,40 @@ test("语音与图片同发：拒绝", async () => {
     () => say.execute({ messages: ["晚安"], voice: true, media: "gen/x.png" } as never, api, ctx),
     /不能和图片/,
   );
+});
+
+test("drain 把 voice 透传给 emit（漏字段会让整条语音消失）", async () => {
+  const outbox: { items: string[]; voice?: string }[] = [];
+  const dir = mkdtempSync(join(tmpdir(), "yg-voice-drain-"));
+  const models = createModels();
+  const provider = fauxProvider();
+  models.setProvider(provider.provider);
+  const fish = await openFish({
+    storage: new MemoryStorage(),
+    models,
+    model: { provider: provider.provider.id, modelId: provider.models[0].id },
+    promptRoot: PROMPTS,
+    mediaRoot: dir,
+    workspaceRoot: mkdtempSync(join(tmpdir(), "yg-ws-")),
+    emit: (_id, payload) => {
+      outbox.push({ items: payload.items, ...(payload.voice ? { voice: payload.voice } : {}) });
+    },
+    react: () => {},
+    master: "1",
+  });
+  try {
+    const conv = await fish.group("qq:group:9");
+    await fish.enqueue(conv.id, {
+      items: [],
+      voice: "voice/test.wav",
+      quote: false,
+      at: Date.now(),
+      key: "test:voice:1",
+    });
+    const sent = await fish.drain();
+    assert.equal(sent, 1);
+    assert.equal(outbox[0]?.voice, "voice/test.wav", "voice 必须透传到 emit");
+  } finally {
+    await fish.close();
+  }
 });

@@ -306,6 +306,8 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         await options.emit(conversationId, {
           items: next.items,
           ...(next.media === undefined ? {} : { media: next.media }),
+          // voice 也要透传：和 quoteId 一样，漏一个字段就等于整条消息丢一半
+          ...(next.voice === undefined ? {} : { voice: next.voice }),
           quote: next.quote,
           // 引用绑定全链路贯通：早期漏传这两个字段，靠 lastMessageId 回退掩盖（会错位）；
           // 回退删除后 @ 场景全部裸发——不传，引用的真实修复在这里
