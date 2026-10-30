@@ -52,6 +52,8 @@ export interface SayDeps {
   ttsOf?: (conversationId: string) => import("../tts.ts").TtsConfig | undefined;
   /** 这一轮是否被标记为「可以回语音」（由入站侧机械判定，见 index.ts）。 */
   voiceOf?: (roundId: unknown) => boolean;
+  /** 合成实现；测试可注入桩，线上用 synthesizeToMedia。 */
+  ttsSynthesize?: (config: import("../tts.ts").TtsConfig, text: string, mediaRoot: string) => Promise<{ ref: string; bytes: Buffer }>;
   /** 收图轮之类的静默轮：这一轮不许说话。 */
   silentOf?: (roundId: unknown) => boolean;
 }
@@ -116,7 +118,7 @@ export function createSayTool(deps: SayDeps) {
         }
         if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
         try {
-          const synth = await synthesizeToMedia(tts, spoken, deps.limits.mediaRoot);
+          const synth = await (deps.ttsSynthesize ?? synthesizeToMedia)(tts, spoken, deps.limits.mediaRoot);
           voice = synth.ref;
         } catch (error) {
           console.error("[鱼缸] 语音合成失败", error instanceof Error ? error.message : error);
@@ -175,7 +177,8 @@ export function createSayTool(deps: SayDeps) {
       const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
 
       const payload: OutboundPayload = {
-        items: args.messages.map((m) => m.trim()),
+        // 语音消息只发语音，不再重复发一条文字（说了什么全在音频里）
+        items: voice !== undefined ? [] : args.messages.map((m) => m.trim()),
         ...(media === undefined ? {} : { media }),
         ...(voice === undefined ? {} : { voice }),
         quote: args.quote === true,
