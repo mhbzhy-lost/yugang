@@ -22,14 +22,15 @@ export interface GptImageToolDeps {
   fetchImpl?: typeof fetch;
 }
 
-/** 不传就用这些：都是 gpt-image-2 的常用档，避免每条调用都要把六个参数写全。 */
+/**
+ * 不传就用这些。只保留这条通道真正认的字段：
+ *   model / background / prompt（+ images 走 edits）
+ * 实测被后端忽略或拒绝的都已从工具面移除：n、size、quality、moderation、
+ * output_format、output_compression、seed、aspect_ratio、mask。
+ */
 const DEFAULTS = {
   model: "gpt-image-2",
-  n: 1,
-  size: "auto",
-  quality: "auto",
   background: "auto",
-  output_format: "png",
 } as const;
 
 const MAX_REFERENCE_IMAGES = 5;
@@ -53,24 +54,11 @@ export function createGptImageTool(deps: GptImageToolDeps) {
     parameters: Type.Object({
       prompt: Type.String({ description: prompt.params["prompt"] ?? "" }),
       model: Type.Optional(Type.String({ description: prompt.params["model"] ?? "" })),
-      n: Type.Optional(Type.Integer({ minimum: 1, maximum: 10, description: prompt.params["n"] ?? "" })),
-      size: Type.Optional(Type.String({ description: prompt.params["size"] ?? "" })),
-      quality: Type.Optional(
-        Type.Union(
-          [Type.Literal("auto"), Type.Literal("low"), Type.Literal("medium"), Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max")],
-          { description: prompt.params["quality"] ?? "" },
-        ),
-      ),
       background: Type.Optional(
         Type.Union([Type.Literal("auto"), Type.Literal("transparent"), Type.Literal("opaque")], {
           description: prompt.params["background"] ?? "",
         }),
       ),
-      output_format: Type.Optional(
-        Type.Union([Type.Literal("png"), Type.Literal("jpeg"), Type.Literal("webp")], { description: prompt.params["output_format"] ?? "" }),
-      ),
-      output_compression: Type.Optional(Type.Integer({ minimum: 0, maximum: 100, description: prompt.params["output_compression"] ?? "" })),
-      moderation: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("low")], { description: prompt.params["moderation"] ?? "" })),
       images: Type.Optional(
         Type.Array(Type.String(), {
           maxItems: MAX_REFERENCE_IMAGES,
@@ -102,10 +90,9 @@ export function createGptImageTool(deps: GptImageToolDeps) {
         references.push(`data:${mime};base64,${bytes.toString("base64")}`);
       }
 
-      // 先铺默认值，再用显式传进来的覆盖；output_compression / moderation 没有默认，
-      // 不传就不发给后端
+      // 先铺默认值，再用显式传进来的覆盖
       const params: Record<string, unknown> = { prompt: positive, ...DEFAULTS };
-      for (const key of ["model", "n", "size", "quality", "background", "output_format", "output_compression", "moderation"] as const) {
+      for (const key of ["model", "background"] as const) {
         const value = args[key];
         if (value !== undefined) params[key] = value;
       }
