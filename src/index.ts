@@ -164,11 +164,13 @@ const fish = await openFish({
   // （deepseek 的 minimal 映射为 null，等于不支持），缺省 off
   thinkingLevel: fishConfig().config.thinkingLevel,
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
+  // 只有 video 单独放宽：要下视频、抽帧、逐帧过视觉模型
+  toolTimeoutOverrides: { video: 90 },
   // 表情包跨轮冷却：每个人格会话独立计时
   memeCooldownMs: () => Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
   // 语音：按会话所在人格取配置（只认 fish.config 的 voices，没配就是没有语音）
   ttsOf: (conversationId) => voiceConfigFor(mappingKeys.get(String(conversationId)) ?? ""),
-  // look 的视觉描述模型：缺省用主模型自身；可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型
+  // look / video 的视觉描述模型：缺省用主模型自身；可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型
   visionModel: process.env.VISION_MODEL_ID
     ? { provider: process.env.VISION_PROVIDER ?? config.modelConfig.providerId, modelId: process.env.VISION_MODEL_ID }
     : undefined,

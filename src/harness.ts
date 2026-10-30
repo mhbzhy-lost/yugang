@@ -122,6 +122,8 @@ export interface FishOptions {
   memeCooldownMs?: number | (() => number);
   /** 单次工具调用超时（秒），缺省 30。 */
   toolTimeoutSeconds?: number;
+  /** 个别工具的单独超时（秒）：只放宽指定工具，其余仍按 toolTimeoutSeconds。 */
+  toolTimeoutOverrides?: Record<string, number>;
   /** 按会话取 TTS 配置（人格相关）；返回 undefined 表示这个会话没有语音能力。 */
   ttsOf?: (conversationId: string) => import("./tts.ts").TtsConfig | undefined;
   /** 静默轮（自动收表情包）：这一轮 say 一律拒绝。 */
@@ -198,9 +200,10 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   // 单次工具调用超时（默认 30 秒）：卡住的通常是某一个工具，不是整轮
   const toolTimeoutMs = (options.toolTimeoutSeconds ?? 30) * 1000;
   const toolTimeoutMessage = prompts.messages["tool_timeout"] ?? "tool_timeout";
-  const fishTools: readonly ToolRegistration[] = [say, react, ...tools].map((tool) =>
-    withToolTimeout(tool, toolTimeoutMs, toolTimeoutMessage),
-  );
+  const fishTools: readonly ToolRegistration[] = [say, react, ...tools].map((tool) => {
+    const override = options.toolTimeoutOverrides?.[tool.name];
+    return withToolTimeout(tool, override === undefined ? toolTimeoutMs : override * 1000, toolTimeoutMessage);
+  });
   const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, mediaRoot: options.mediaRoot });
   const personaExtensions = new Map<string, Extension>();
   const openers: Record<string, string> = {};

@@ -22,9 +22,9 @@ import { createTagsTool } from "./tags.ts";
 export interface ToolDeps {
   mediaRoot: string;
   prompts: PromptSet;
-  /** 模型池：look 用独立请求把图描述成文字，图片不进主会话。 */
+  /** 模型池：look / video 用独立请求把图描述成文字，图片不进主会话。 */
   models?: import("@earendil-works/pi-ai").Models;
-  /** look 的视觉描述模型；缺省用主模型。 */
+  /** look / video 的视觉描述模型；缺省用主模型。 */
   visionModel?: { provider: string; modelId: string };
   /** DeepSeek Search API 的 key；有才具备联网搜索能力。 */
   searchKey?: string;
@@ -60,7 +60,11 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
   return [
     createLookTool(deps),
     createSearchTool({ prompts: deps.prompts, key: deps.searchKey }),
-    createVideoTool({ prompts: deps.prompts }),
+    createVideoTool({
+      prompts: deps.prompts,
+      ...(deps.models ? { models: deps.models } : {}),
+      ...(deps.visionModel ? { visionModel: deps.visionModel } : {}),
+    }),
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
     ...(deps.master ? [createMemeAddTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, master: deps.master, triggerOf: deps.triggerOf })] : []),
     ...fsTools,

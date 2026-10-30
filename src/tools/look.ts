@@ -15,6 +15,7 @@ import { Type, type Models } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
 import { ledgerOf, recordLook } from "../egress/ledger.ts";
+import { describeImage } from "../media/describe.ts";
 
 export interface LookDeps {
   mediaRoot: string;
@@ -114,48 +115,6 @@ export function createLookTool(deps: LookDeps) {
 }
 
 /** 用一次性请求把图描述成文字：图片只在这里过一次视觉管线。 */
-async function describeImage(
-  deps: LookDeps,
-  base64: string,
-  mimeType: string,
-): Promise<string | null> {
-  if (!deps.models || !deps.visionModel) return null;
-  // streamSimple 只接受完整 model 对象：传 {provider, modelId} 引用会让
-  // pi-ai 内部 model.input 取不到而抛错（describe 永远失败 → 退回原图 → 卡死）
-  const model = deps.models.getModel(deps.visionModel.provider, deps.visionModel.modelId);
-  if (!model) return null;
-  // 显式 maxTokens：不传时服务端用一个很小的默认额度，推理模型的思考内容会把额度吃光，
-  // 正文变空——表现就是「识图时好时坏」。空结果再重试，最多三次。
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const stream = deps.models.streamSimple(model, {
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "image", data: base64, mimeType },
-              { type: "text", text: deps.prompts.messages["look_describe"] ?? "描述这张图" },
-            ],
-          },
-        ],
-        maxTokens: 1500,
-      });
-      const message = await stream.result();
-      const text = message.content
-        .filter((b): b is { type: "text"; text: string } => b.type === "text")
-        .map((b) => b.text)
-        .join("")
-        .trim();
-      if (text) return text;
-      console.warn(`[鱼缸] 看图描述为空 第${attempt}次 stop=${message.stopReason} ${message.errorMessage ?? ""}`.trim());
-    } catch (error) {
-      // 不静默：描述失败的原因要能在日志里看到（不含图片内容与凭据）
-      console.warn(`[鱼缸] 看图描述失败 第${attempt}次:`, error instanceof Error ? error.message : String(error));
-    }
-    await new Promise((r) => setTimeout(r, 400 * attempt));
-  }
-  return null;
-}
 
 /** macOS sips 压缩：GIF 取首帧、超尺寸缩到 1280px，输出 JPEG；失败返回 null。 */
 function shrink(file: string): Buffer | null {

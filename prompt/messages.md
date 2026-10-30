@@ -29,6 +29,10 @@ search_used: 这一轮搜过了，先用搜到的说话
 search_failed: 搜索没成功，换个说法或直接说不知道
 video_invalid: 那不是 B 站视频链接
 video_used: 这一轮看过了，先用看到的说
+video_truncated: （视频超过 {{minutes}} 分钟，只看了前 {{minutes}} 分钟）
+video_danmaku_header: 弹幕摘录：
+video_frames_header: 画面（按时间点）：
+video_comments_header: 热评：
 video_failed: 视频没打开：{{url}}
 busy_reply: 缸里正在归档记忆，稍等一下再叫我
 fs_locked: 这些工具只在主人让你动手改自己时可用
