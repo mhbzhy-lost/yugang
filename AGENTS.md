@@ -14,7 +14,7 @@
 ```
 
 工具面：`say`（唯一出口，可拆条/引用/带图/带表情包/发语音）、`react`（只贴表情）、
-`look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`draw`（生图：默认本地 SD，可选 gpt-image-2）、
+`look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`draw`（本地 SD 生图）、`gpt_image`（GPT Image 2 透传）、
 `search`/`video`（联网查）、`watch`（特别关注）、以及主人专属的文件六件套
 `read`/`edit`/`write`/`delete`/`tree`/`restart` 与 `grep`、`test`、`tags`。
 

@@ -16,7 +16,6 @@ import { connect } from "node:net";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
-import { generateWithGptImage } from "../media/gpt-image.ts";
 
 export interface DrawDeps {
   prompts: PromptSet;
@@ -27,8 +26,6 @@ export interface DrawDeps {
   fetchImpl?: typeof fetch;
   /** submissionId → 本轮触发消息自带的 bypass 段；拼在最终 positive prompt 末尾。 */
   bypassOf?: (roundId: unknown) => string | undefined;
-  /** ChatGPT/Codex 凭据文件（config/auth.json）：远程生图（gpt-image-2）用它，不给就只能本地画。 */
-  gptImageAuthPath?: string;
 }
 
 const DRAWN = new Map<string, unknown>();
@@ -105,7 +102,6 @@ export function createDrawTool(deps: DrawDeps) {
       prompt: Type.String({ description: prompt.params["prompt"] ?? "" }),
       negative: Type.Optional(Type.String({ description: prompt.params["negative"] ?? "" })),
       preset: Type.Optional(Type.Union([Type.Literal("default"), Type.Literal("hsr"), Type.Literal("secret")], { description: prompt.params["preset"] ?? "" })),
-      engine: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("gpt")], { description: prompt.params["engine"] ?? "" })),
       highres: Type.Optional(Type.Boolean({ description: prompt.params["highres"] ?? "" })),
     }),
     execute: async (args, api, context) => {
@@ -113,13 +109,7 @@ export function createDrawTool(deps: DrawDeps) {
       if (!positive || positive.length > 1000) {
         throw new Error(deps.prompts.messages["draw_prompt"] ?? "draw_prompt");
       }
-      const engine = args.engine ?? "local";
-      if (engine === "gpt" && !deps.gptImageAuthPath) {
-        throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
-      }
-      if (engine === "local" && !deps.baseUrl && !deps.gptImageAuthPath) {
-        throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
-      }
+      if (!deps.baseUrl) throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
 
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
@@ -185,53 +175,17 @@ export function createDrawTool(deps: DrawDeps) {
         return file;
       };
 
-      // 远程那一路：gpt-image-2（ChatGPT 订阅）。只吃原始用户描述——质量词、negative、
-      // preset、highres 都是本地 SD 的方言，远程不认识；bypass 注入照样拼在末尾。
-      const drawRemote = async (): Promise<string> => {
-        if (!deps.gptImageAuthPath) throw new Error("no gpt image auth");
-        return generateWithGptImage({
-          authPath: deps.gptImageAuthPath,
-          prompt: stash ? `${positive}, ${stash}` : positive,
-          mediaRoot: deps.mediaRoot,
-        });
-      };
-
-      const done = (file: string, how: string): { output: { type: "text"; text: string }[] } => {
+      try {
+        const file = await drawLocal();
         if (round !== undefined) DRAWN.set(api.conversationId, round);
-        console.log(`[fish] draw ok (${how}): ${positive.slice(0, 40)}${stash ? " (+bypass)" : ""}`);
+        console.log(`[fish] draw ok: ${positive.slice(0, 40)}${stash ? " (+bypass)" : ""}`);
         return {
           output: [{ type: "text", text: renderTemplate(deps.prompts.messages["draw_done"] ?? "gen/{{file}}", { file }) }],
         };
-      };
-
-      // 显式点名 gpt：直接走远程，不先折腾本地显卡
-      if (engine === "gpt") {
-        try {
-          return done(await drawRemote(), "gpt");
-        } catch (error) {
-          const why = error instanceof Error ? error.message : "unknown";
-          console.error(`[fish] draw gpt failed: ${why}`);
-          throw new Error((deps.prompts.messages["draw_failed"] ?? "draw_failed") + `: ${why}`);
-        }
-      }
-
-      try {
-        return done(await drawLocal(), "local");
       } catch (error) {
         const detail = error instanceof Error ? error.message : "unknown";
-        console.error(`[fish] draw local failed: ${detail}`);
-        // 本地画不出来（Windows 关机、隧道未就绪、显存排队超时）→ 自动换在线模型，
-        // 用**原始用户描述**：质量词注入、negative/preset/highres 都是本地 SD 的东西。
-        if (!deps.gptImageAuthPath) {
-          throw new Error((deps.prompts.messages["draw_failed"] ?? "draw_failed") + `: ${detail}`);
-        }
-        try {
-          return done(await drawRemote(), "gpt-fallback");
-        } catch (fallbackError) {
-          const why = fallbackError instanceof Error ? fallbackError.message : "unknown";
-          console.error(`[fish] draw gpt fallback failed: ${why}`);
-          throw new Error((deps.prompts.messages["draw_failed"] ?? "draw_failed") + `: ${detail} / ${why}`);
-        }
+        console.error(`[fish] draw failed: ${detail}`);
+        throw new Error((deps.prompts.messages["draw_failed"] ?? "draw_failed") + `: ${detail}`);
       }
     },
   });

@@ -1,12 +1,21 @@
 /**
- * GPT Image 生图：走 ChatGPT/Codex 订阅的图片后端。
+ * GPT Image 生图客户端：走 ChatGPT/Codex 订阅的图片后端。
  *
  * 端点与前缀都和 chat 请求不同，不是 api.openai.com/v1/images：
- *   POST https://chatgpt.com/backend-api/codex/images/generations
+ *   POST https://chatgpt.com/backend-api/codex/images/generations   （纯文生图）
+ *   POST https://chatgpt.com/backend-api/codex/images/edits         （带参考图）
  * 需要的三个额外头（少一个就 4xx）：chatgpt-account-id、originator、x-codex-image-turn-id。
  *
+ * 本模块只做透传：参数（size / quality / background / n / output_format / …）原样放进请求体，
+ * 不替调用方做取舍。实测后端的实际行为（2026-10）：
+ *   - size：不生效，同一 prompt 换三档尺寸都回 1254×1254；画幅由 prompt 的构图描述决定
+ *   - quality：不生效，low / high 的 image_tokens 都是 515
+ *   - n：不生效，永远回 1 张
+ *   - background=transparent：可用，回 RGBA（image_tokens 约 4 倍）
+ *   - seed / aspect_ratio / mask / moderation：Codex 后端不支持
+ *
  * 凭据复用 config/auth.json 里 `openai-codex` 那条 OAuth（和主模型同一个登录），
- * 快过期时就地刷新并写回，不引入新的 key、不进 env、不进日志。
+ * 快过期就地刷新并写回，不引入新的 key、不进 env、不进日志。
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -14,30 +23,28 @@ import { join } from "node:path";
 import { fileCredentialStore, type OAuthCredential } from "../credential-store.ts";
 import { refreshTokens } from "../oauth-openai.ts";
 
-const ENDPOINT = "https://chatgpt.com/backend-api/codex/images/generations";
+const GEN_ENDPOINT = "https://chatgpt.com/backend-api/codex/images/generations";
+const EDIT_ENDPOINT = "https://chatgpt.com/backend-api/codex/images/edits";
 /** Codex 客户端自称；后端按这个值决定放不放行。 */
 const ORIGINATOR = "codex_cli_rs";
 
-export interface GptImageOptions {
+export interface GptImageRequest {
   /** config/auth.json 路径；里面必须有 openai-codex 的 OAuth 凭据。 */
   authPath: string;
   prompt: string;
+  /** 原样透传给图片 API 的字段（model / n / size / quality / background / output_format / …）。 */
+  params?: Record<string, unknown>;
+  /** 参考图 data URL；给了就走 edits 端点（Codex 最多 5 张）。 */
+  images?: string[];
   mediaRoot: string;
-  /**
-   * 超时，默认 180 秒（生图常见 15–30 秒，透明背景那次 26 秒）。
-   *
-   * 不提供 size / quality 参数：实测 Codex 后端不吃这两个字段。
-   * 同一段 prompt 换 size（1024x1536 / 1536x1024 / 1024x1024）回来都是 1254×1254；
-   * quality 换 low / high 的 image_tokens 都是 515。画幅由 prompt 的构图描述决定
-   * （例如「竖版构图」），不同 prompt 实测回来过 1536×1024、1312×1199、1374×1145。
-   */
+  /** 超时，默认 180 秒（实测单张 14–27 秒）。 */
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
 
-/** 出图成功返回相对 mediaRoot 的引用（gen/xxx.png）；失败抛错，错误里不带凭据。 */
-export async function generateWithGptImage(options: GptImageOptions): Promise<string> {
-  const store = fileCredentialStore(options.authPath);
+/** 出图成功返回相对 mediaRoot 的引用列表（gen/xxx.png）；失败抛错，错误里不带凭据。 */
+export async function generateGptImages(request: GptImageRequest): Promise<string[]> {
+  const store = fileCredentialStore(request.authPath);
   const raw = await store.read("openai-codex");
   if (!raw || raw.type !== "oauth") throw new Error("gpt_image_no_auth");
   let credential = raw as OAuthCredential;
@@ -45,15 +52,29 @@ export async function generateWithGptImage(options: GptImageOptions): Promise<st
     throw new Error("gpt_image_bad_auth");
   }
 
-  // 提前一分钟刷新：生图一次几十秒，别让 token 在请求途中过期
+  // 提前一分钟刷新：生图一次十几秒，别让 token 在请求途中过期
   if (Number(credential.expires) - Date.now() < 60_000) {
     const refreshed = await refreshTokens(credential);
     await store.modify("openai-codex", async () => refreshed);
     credential = refreshed;
   }
 
-  const doFetch = options.fetchImpl ?? fetch;
-  const response = await doFetch(ENDPOINT, {
+  // prompt 以 request.prompt 为准；params 里其余字段原样透传
+  const { prompt: _ignored, model, ...rest } = (request.params ?? {}) as Record<string, unknown> & {
+    prompt?: unknown;
+    model?: unknown;
+  };
+  const body: Record<string, unknown> = {
+    model: typeof model === "string" && model.trim().length > 0 ? model.trim() : "gpt-image-2",
+    prompt: request.prompt,
+    ...rest,
+  };
+  if (request.images && request.images.length > 0) {
+    body["images"] = request.images.map((image_url) => ({ image_url }));
+  }
+
+  const doFetch = request.fetchImpl ?? fetch;
+  const response = await doFetch(request.images && request.images.length > 0 ? EDIT_ENDPOINT : GEN_ENDPOINT, {
     method: "POST",
     headers: {
       authorization: `Bearer ${credential.access}`,
@@ -63,28 +84,32 @@ export async function generateWithGptImage(options: GptImageOptions): Promise<st
       "content-type": "application/json",
       accept: "application/json",
     },
-    body: JSON.stringify({
-      model: "gpt-image-2",
-      prompt: options.prompt,
-      // 输出容器显式钉死 png：下面固定按 .png 落盘，别让后端某天换默认格式
-      output_format: "png",
-      // auto：让模型自己决定透明/不透明；显式 transparent 实测可用（返回 RGBA），
-      // 但目前没有需要抠图的功能，先不暴露
-      background: "auto",
-    }),
-    signal: AbortSignal.timeout(options.timeoutMs ?? 180_000),
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(request.timeoutMs ?? 180_000),
   });
 
   if (!response.ok) throw new Error(`gpt_image_http_${response.status}`);
-  const body = (await response.json()) as { data?: { b64_json?: string }[] };
-  const encoded = body.data?.[0]?.b64_json;
-  if (!encoded) throw new Error("gpt_image_empty");
-  const bytes = Buffer.from(encoded, "base64");
-  if (bytes.length < 1024) throw new Error("gpt_image_too_small");
+  const parsed = (await response.json()) as { data?: { b64_json?: string }[] };
+  const entries = (parsed.data ?? []).filter((item) => typeof item.b64_json === "string");
+  if (entries.length === 0) throw new Error("gpt_image_empty");
 
-  const outDir = join(options.mediaRoot, "gen");
+  const outDir = join(request.mediaRoot, "gen");
   mkdirSync(outDir, { recursive: true });
-  const file = `${Date.now()}-${randomUUID().slice(0, 8)}.png`;
-  writeFileSync(join(outDir, file), bytes);
-  return file;
+  const files: string[] = [];
+  for (const entry of entries) {
+    const bytes = Buffer.from(entry.b64_json as string, "base64");
+    if (bytes.length < 1024) throw new Error("gpt_image_too_small");
+    const file = `${Date.now()}-${randomUUID().slice(0, 8)}.${extensionOf(bytes)}`;
+    writeFileSync(join(outDir, file), bytes);
+    files.push(file);
+  }
+  return files;
+}
+
+/** 落盘后缀按真实字节判断，不看请求里的 output_format（后端可能不认）。 */
+function extensionOf(bytes: Buffer): "png" | "jpg" | "webp" {
+  if (bytes.subarray(0, 8).toString("hex") === "89504e470d0a1a0a") return "png";
+  if (bytes.subarray(0, 3).toString("hex") === "ffd8ff") return "jpg";
+  if (bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return "webp";
+  return "png";
 }

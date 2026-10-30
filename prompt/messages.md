@@ -105,3 +105,8 @@ cmd_personas: 可用人格：{{list}}（用 /切换人格 <名> 切换）
 cmd_switched: 切换完成，当前人格：{{persona}}
 cmd_bad_persona: 没有这个人格：{{persona}}。{{list}}
 cmd_unknown: 不认识的指令：{{cmd}}。可用：/查询可用人格、/切换人格 <名>
+
+gpt_image_prompt: 给我一句画面描述再画
+gpt_image_off: 在线生图没登录，先用 npm run login 登录
+gpt_image_bad_ref: 参考图 {{ref}} 用不了（要媒体目录里的图片）
+gpt_image_done: 画好了：{{files}} —— 用 say 的 media 参数发出去

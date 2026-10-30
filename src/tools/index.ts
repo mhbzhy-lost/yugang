@@ -16,6 +16,7 @@ import { createRestartTool } from "./restart.ts";
 import { createTreeTool } from "./tree.ts";
 import { createTestTool } from "./test.ts";
 import { createDrawTool } from "./draw.ts";
+import { createGptImageTool } from "./gpt-image.ts";
 import { createWatchTool } from "./watch.ts";
 import { createTagsTool } from "./tags.ts";
 
@@ -68,7 +69,8 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
     ...(deps.master ? [createMemeAddTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, master: deps.master, triggerOf: deps.triggerOf })] : []),
     ...fsTools,
-    createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl, bypassOf: deps.bypassOf, ...(deps.gptImageAuthPath ? { gptImageAuthPath: deps.gptImageAuthPath } : {}) }),
+    createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl, bypassOf: deps.bypassOf }),
+    createGptImageTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, ...(deps.gptImageAuthPath ? { authPath: deps.gptImageAuthPath } : {}) }),
     ...(deps.master ? [createWatchTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf, ...(deps.groupMembersOf ? { membersOf: deps.groupMembersOf } : {}), ...(deps.onWatchChanged ? { onChanged: deps.onWatchChanged } : {}) })] : []),
     createTagsTool({ prompts: deps.prompts, csvPath: deps.tagsCsv }),
     ...treeTool,
