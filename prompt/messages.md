@@ -68,7 +68,7 @@ watch_inline: （说话的是主人特别关注的人{{who}}——{{note}}）
 watch_section_header: 下面是主人指名要你特别关注的人（主人钦点，长期有效）：
 gif_ingest_header: 群里刚聊的是这 {{count}} 条（只是背景）：
 gif_ingest_task: 上面这段对话里，{{who}} 发了一张动图：{{ref}}。你这一轮只判断一件事——它值不值得进你的表情包库。值得就调 meme_add（caption 写它在聊天里是什么意思，tags 写你以后会用来找它的词）；不值得就什么都不做、别说话。
-voice_hint: （这条你可以选择用语音回：想用就在 say 里传 voice: true，不想用就正常文字）
+voice_hint: （这一条必须用语音回：say 里传 voice: true，别用文字。这是规则，不是建议）
 tool_timeout: 这个工具卡住超过半分钟了，先别重试，换个办法或者说句话
 voice_off: 现在还没有语音能力
 voice_with_media: 语音不能和图片、表情包一起发，选一个
