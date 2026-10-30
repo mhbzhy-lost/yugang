@@ -1,8 +1,5 @@
 {
-  "ambientChance": 0.1,
-  "ambientChanceByGroup": {
-    "174408629": 0.05
-  },
+  "ambientMinIntervalSeconds": 30,
   "watchAmbientChance": 0.5,
   "thinkingLevel": "low",
   "compact": {

@@ -17,10 +17,8 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export interface FishConfig {
-  /** 非 @ 消息进 loop 的概率（0–1）。 */
-  ambientChance: number;
-  /** 按群覆盖（群号 → 0–1）。 */
-  ambientChanceByGroup: Record<string, number>;
+  /** 非 @、非特别关注的消息：同一群两条被处理消息之间的最短间隔（秒）。 */
+  ambientMinIntervalSeconds: number;
   /** 特别关注者发言的概率（0–1）。 */
   watchAmbientChance: number;
   /** 思考档位；启动时写进会话 agent，改完重启才生效。 */
@@ -61,22 +59,12 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
   const src = raw as Record<string, unknown>;
   const out: Partial<FishConfig> = {};
 
-  const ambient = chance(src["ambientChance"]);
-  if (ambient !== undefined) out.ambientChance = ambient;
-  else if (src["ambientChance"] !== undefined) problems.push("ambientChance 必须是 0–1，已忽略");
+  const interval = num(src["ambientMinIntervalSeconds"]);
+  if (interval !== undefined && interval >= 5 && interval <= 3600) out.ambientMinIntervalSeconds = interval;
+  else if (src["ambientMinIntervalSeconds"] !== undefined) problems.push("ambientMinIntervalSeconds 必须在 5–3600，已忽略");
 
-  const groups = src["ambientChanceByGroup"];
-  if (groups && typeof groups === "object" && !Array.isArray(groups)) {
-    const byGroup: Record<string, number> = {};
-    for (const [key, value] of Object.entries(groups as Record<string, unknown>)) {
-      const v = chance(value);
-      if (!/^\d+$/.test(key) || v === undefined) {
-        problems.push(`ambientChanceByGroup[${key}] 不合法，已忽略`);
-        continue;
-      }
-      byGroup[key] = v;
-    }
-    out.ambientChanceByGroup = byGroup;
+  if (src["ambientChance"] !== undefined || src["ambientChanceByGroup"] !== undefined) {
+    problems.push("ambientChance[/ByGroup] 已废弃: 限流模式, 可删除");
   }
 
   const watched = chance(src["watchAmbientChance"]);
@@ -142,23 +130,8 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
 
 function parseEnv(env: NodeJS.ProcessEnv, problems: string[]): Partial<FishConfig> {
   const out: Partial<FishConfig> = {};
-  const ambient = chance(env["AMBIENT_CHANCE"]);
-  if (ambient !== undefined) out.ambientChance = ambient;
-
-  const rawGroups = env["AMBIENT_CHANCE_BY_GROUP"]?.trim();
-  if (rawGroups) {
-    const byGroup: Record<string, number> = {};
-    for (const pair of rawGroups.split(",")) {
-      const [key, value] = pair.split(":").map((s) => s.trim());
-      const v = chance(value);
-      if (!key || !/^\d+$/.test(key) || v === undefined) {
-        problems.push(`AMBIENT_CHANCE_BY_GROUP 里的 ${pair} 不合法，已忽略`);
-        continue;
-      }
-      byGroup[key] = v;
-    }
-    out.ambientChanceByGroup = byGroup;
-  }
+  const interval = num(env["AMBIENT_MIN_INTERVAL_SECONDS"]);
+  if (interval !== undefined && interval >= 5) out.ambientMinIntervalSeconds = interval;
 
   const watched = chance(env["WATCH_AMBIENT_CHANCE"]);
   if (watched !== undefined) out.watchAmbientChance = watched;
@@ -185,8 +158,7 @@ function parseEnv(env: NodeJS.ProcessEnv, problems: string[]): Partial<FishConfi
 }
 
 const DEFAULTS: FishConfig = {
-  ambientChance: 0.1,
-  ambientChanceByGroup: {},
+  ambientMinIntervalSeconds: 30,
   watchAmbientChance: 0.5,
   thinkingLevel: "low",
   compact: { maxEntries: 200, maxChars: 50_000 },

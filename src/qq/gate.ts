@@ -1,9 +1,14 @@
 /**
  * 门外的闸：决定这条消息要不要进 agent loop。
  *
- * 当前策略——@ 必答 + 随机粗筛：
- *   私聊只认主人；群里任何人 @ → 必答；其余消息（含主人的）按 AMBIENT_CHANCE
- *   随机放行，绝大多数到这就结束、零成本，不花任何模型调用。
+ * 当前策略（2026-10 二次改版）——@ 必答 + 限流：
+ *   私聊只认主人；群里任何人 @ → 必答；回复合集 → 必答；
+ *   特别关注者 → 仍走随机门（watchAmbientChance）；
+ *   其余消息（含主人的非 @）→ 同一群两条被处理消息之间至少隔 ambientMinIntervalSeconds。
+ *
+ * 为什么从随机门换成限流：随机门对「沉寂很久突然有人说话」这种场景不友好——
+ * 明明半天没人吱声，鱼也可能因为没抽中而一声不吭。限流模式下安静久了的第一条必定进，
+ * 之后的才按时间拦，行为更像「有人在听，只是不插话」。
  *
  * 曾经有第二道「便宜模型打分」闸，2026-10 被主人砍掉：它用的是主模型，
  * 主模型一挂，主动接话就整晚全灭（gate_failed 静默丢弃），而且完全不可复盘。
@@ -24,14 +29,12 @@ export interface GateOptions {
   dailyQuota: number;
   /** 【仅兼容保留，当前策略下无效】旧开口冷却。 */
   cooldownMs: number;
-  /** 非 @ 消息进入 loop 的概率（随机粗筛，零成本挡掉大多数）。 */
-  ambientChance: number;
-  /** 按群覆盖的随机门概率（群号 → 值）；未列出的群用 ambientChance。值为 0 = 该群只应答 @，不回闲聊。 */
-  ambientChanceByGroup?: Record<string, number>;
+  /** 非 @、非特别关注：同一群两条被处理消息之间的最短间隔（毫秒）。 */
+  ambientMinIntervalMs?: number;
   /** 主人特别关注的人发言时的概率（比普通闲聊高得多，但不等于必答）。 */
   watchedChance?: number;
-  /** 每轮现取的概率（热更新用）；给了就盖过上面三个静态值。 */
-  chances?: () => { ambient: number; byGroup: Record<string, number>; watched: number };
+  /** 每轮现取（热更新用）；给了就盖过上面的静态值。 */
+  chances?: () => { minIntervalMs: number; watched: number };
   now?: () => number;
   random?: () => number;
 }
@@ -47,7 +50,7 @@ export interface GateInput {
 }
 
 export type GateDecision =
-  | { enter: true; reason: "private" | "mentioned" | "sampled" }
+  | { enter: true; reason: "private" | "mentioned" | "replied_forward" | "watched" | "rate_pass" }
   | { enter: false; reason: string };
 
 export interface Gate {
@@ -56,11 +59,19 @@ export interface Gate {
 
 export function createGate(options: GateOptions): Gate {
   const random = options.random ?? Math.random;
+  const now = options.now ?? Date.now;
+  // 每个群最后一次「被处理」的时刻：入闸的 @ / 回复 / 限流放行都会刷新它
+  const lastHandled = new Map<string, number>();
+  const markHandled = (chatKey: string, at: number) => lastHandled.set(chatKey, at);
   return {
     async decide({ msg, watched }) {
+      const at = now();
       // 私聊：只认主人
       if (msg.chatKey.startsWith("qq:private:")) {
-        if (String(msg.userId) === options.master) return { enter: true, reason: "private" };
+        if (String(msg.userId) === options.master) {
+          markHandled(msg.chatKey, at);
+          return { enter: true, reason: "private" };
+        }
         return { enter: false, reason: "stranger_private" };
       }
 
@@ -70,24 +81,37 @@ export function createGate(options: GateOptions): Gate {
       }
 
       // 任何人 @（含裸 @）必答，零模型调用
-      if (msg.mentionsBot) return { enter: true, reason: "mentioned" };
+      if (msg.mentionsBot) {
+        markHandled(msg.chatKey, at);
+        return { enter: true, reason: "mentioned" };
+      }
 
       // 回复某条合并转发 = 明确指令（回复本身就是指向），不需要 @
-      if (msg.repliedForward) return { enter: true, reason: "replied_forward" };
+      if (msg.repliedForward) {
+        markHandled(msg.chatKey, at);
+        return { enter: true, reason: "replied_forward" };
+      }
 
       // 无 @ 的合并转发合集：零成本丢弃（展开也不发生）。
       // 要让鱼看合集：回复合集并 @，或发合集时直接 @。
       if ((msg.forwardIds?.length ?? 0) > 0) return { enter: false, reason: "forward_ignored" };
 
-      // 随机粗筛：绝大多数非 @ 消息到这就结束；可按群覆盖（0 = 该群不回闲聊）。
-      // 特别关注的人单独用更高的概率（watchedChance，缺省 0.5），照顾到但不等于必答。
       const live = options.chances?.();
-      const base = live
-        ? (live.byGroup[String(msg.groupId)] ?? live.ambient)
-        : (options.ambientChanceByGroup?.[String(msg.groupId)] ?? options.ambientChance);
-      const chance = watched === true ? (live?.watched ?? options.watchedChance ?? 0.5) : base;
-      if (random() > chance) return { enter: false, reason: "sampled_out" };
-      return { enter: true, reason: "sampled" };
+
+      // 特别关注：保留随机门（照顾到但不等于必答）
+      if (watched === true) {
+        const chance = live?.watched ?? options.watchedChance ?? 0.5;
+        if (random() > chance) return { enter: false, reason: "watched_sampled_out" };
+        markHandled(msg.chatKey, at);
+        return { enter: true, reason: "watched" };
+      }
+
+      // 其余消息：限流。安静越久越容易进，刚处理过就闭嘴。
+      const minInterval = live?.minIntervalMs ?? options.ambientMinIntervalMs ?? 30_000;
+      const last = lastHandled.get(msg.chatKey) ?? 0;
+      if (at - last < minInterval) return { enter: false, reason: "rate_limited" };
+      markHandled(msg.chatKey, at);
+      return { enter: true, reason: "rate_pass" };
     },
   };
 }

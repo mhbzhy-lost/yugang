@@ -1,8 +1,9 @@
 /**
- * 门：@ 必答 + 随机粗筛（2026-10 起没有打分闸）。
+ * 门：@ 必答 + 限流（2026-10 第二次改版：随机门换成最短间隔）。
  *  - 私聊只认主人，陌生人一律不进
- *  - 群里任何人 @ 硬通行，零模型调用
- *  - 其余消息（含主人的非 @）按 AMBIENT_CHANCE 随机放行，也不花模型调用
+ *  - 群里任何人 @ 硬通行，零模型调用；回复合集同样必答
+ *  - 特别关注者仍走随机门
+ *  - 其余消息（含主人的非 @）：同一群两条被处理消息之间至少隔 ambientMinIntervalSeconds
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -32,7 +33,7 @@ function build(over: Partial<GateOptions> = {}) {
     groups: [],
     dailyQuota: 10,
     cooldownMs: 60_000,
-    ambientChance: 1,
+    ambientMinIntervalMs: 30_000,
     ...over,
   });
 }
@@ -56,38 +57,60 @@ test("任何群友 @ 都硬通行", async () => {
   assert.equal(mentioned.reason, "mentioned");
 });
 
-test("非 @ 过随机粗筛：放行就进，不放行就沉默", async () => {
-  const pass = build({ random: () => 0 });
-  const entered = await pass.decide({ msg: msg({ userId: 1000 }), ...idle });
-  assert.equal(entered.enter, true);
-  assert.equal(entered.reason, "sampled");
+test("限流：安静够久的第一条放行，紧接着的都被拦", async () => {
+  let clock = 1_000_000;
+  const gate = build({ now: () => clock });
 
-  const drop = build({ random: () => 1, ambientChance: 0.05 });
-  const dropped = await drop.decide({ msg: msg({ userId: 1000 }), ...idle });
-  assert.equal(dropped.enter, false);
-  assert.equal(dropped.reason, "sampled_out");
+  const first = await gate.decide({ msg: msg(), ...idle });
+  assert.equal(first.enter, true);
+  assert.equal(first.reason, "rate_pass");
+
+  clock += 5_000;
+  const second = await gate.decide({ msg: msg(), ...idle });
+  assert.equal(second.enter, false);
+  assert.equal(second.reason, "rate_limited");
+
+  clock += 30_000;
+  const third = await gate.decide({ msg: msg(), ...idle });
+  assert.equal(third.enter, true, "间隔够了应该再放行");
 });
 
-test("随机门每次只掷一次骰子：0.05 档下抽样分布对得上", async () => {
-  const gate = build({ ambientChance: 0.05 });
-  let entered = 0;
-  for (let i = 0; i < 400; i++) {
-    const decision = await gate.decide({ msg: msg(), ...idle });
-    if (decision.enter) entered += 1;
-  }
-  // 期望 20 条；给足波动空间，只要不是「全进/全不进」这种明显错法即可
-  assert.ok(entered > 0 && entered < 60, `400 条里进了 ${entered} 条`);
+test("限流按群独立计数", async () => {
+  let clock = 1_000_000;
+  const gate = build({ now: () => clock });
+  await gate.decide({ msg: msg({ groupId: 42 }), ...idle });
+  const other = await gate.decide({ msg: msg({ groupId: 43, chatKey: "qq:group:43" }), ...idle });
+  assert.equal(other.enter, true, "别的群不该被这个群的计时挡住");
 });
 
-test("按群覆盖概率：0 的群只回 @", async () => {
-  const gate = build({ ambientChance: 0.05, ambientChanceByGroup: { "42": 0, "43": 1 } });
-  const quiet = await gate.decide({ msg: msg({ groupId: 42 }), ...idle });
-  assert.equal(quiet.enter, false);
-  assert.equal(quiet.reason, "sampled_out");
+test("@ 与回复合集必答，并且会刷新该群的计时", async () => {
+  let clock = 1_000_000;
+  const gate = build({ now: () => clock });
 
-  const loud = await gate.decide({ msg: msg({ groupId: 43, chatKey: "qq:group:43" }), ...idle });
-  assert.equal(loud.enter, true);
-  assert.equal(loud.reason, "sampled");
+  const mentioned = await gate.decide({ msg: msg({ mentionsBot: true }), ...idle });
+  assert.equal(mentioned.enter, true);
+  assert.equal(mentioned.reason, "mentioned");
+
+  const right = await gate.decide({ msg: msg(), ...idle });
+  assert.equal(right.enter, false, "@ 刚处理过，闲聊要等间隔");
+  assert.equal(right.reason, "rate_limited");
+
+  clock += 30_000;
+  const replied = await gate.decide({ msg: msg({ repliedForward: true }), ...idle });
+  assert.equal(replied.enter, true);
+  assert.equal(replied.reason, "replied_forward");
+});
+
+test("特别关注的人仍走随机门，不受限流影响", async () => {
+  const pass = build({ random: () => 0, watchedChance: 0.5 });
+  const watchedIn = await pass.decide({ msg: msg(), watched: true, ...idle });
+  assert.equal(watchedIn.enter, true);
+  assert.equal(watchedIn.reason, "watched");
+
+  const drop = build({ random: () => 1, watchedChance: 0.5 });
+  const watchedOut = await drop.decide({ msg: msg(), watched: true, ...idle });
+  assert.equal(watchedOut.enter, false);
+  assert.equal(watchedOut.reason, "watched_sampled_out");
 });
 
 test("群白名单与无 @ 合集仍然零成本拒掉", async () => {

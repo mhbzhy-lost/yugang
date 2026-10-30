@@ -35,7 +35,7 @@ scripts/fish.sh help                 # 全部子命令（其它命令原样透�
 模块 key 不在 `.env` 里，在 `config/auth.json`。
 
 **行为参数在 `fish.config.json`**（mini 仓库根，gitignore，模板 `fish.config.example`，mtime 热加载）：
-`ambientChance` / `ambientChanceByGroup` / `watchAmbientChance` / `thinkingLevel` / `compact` /
+`ambientMinIntervalSeconds` / `watchAmbientChance` / `thinkingLevel` / `compact` /
 `memeCooldownMinutes` / `toolTimeoutSeconds` / `voices`（人格 → TTS 地址与参考音频）。
 优先级：`fish.config.json` > `.env` > 内置默认；文件写坏时保留上一次的有效值。
 
@@ -105,8 +105,8 @@ node scripts/ops.ts probe
 2. 有消息但没出站 —— 看进程日志里的 `[鱼缸]` 行；`这一轮没答上来` 表示模型调用失败。
 3. 有 `这一轮没答上来` —— 检查模型 key / 余额 / base_url。
 4. 都正常但话少 —— 是闸挡的：看 `[fish] gate <chatKey> <昵称> -> skip:sampled_out`（日志现在带 `HH:MM:SS`）。
-   概率在 `fish.config.json` 的 `ambientChance` / `ambientChanceByGroup` / `watchAmbientChance`（热加载），
-   临时调到 1 先确认链路通。
+   `rate_limited` = 限流挡的：同一群两条被处理消息之间至少隔 `ambientMinIntervalSeconds`（默认 30s，热加载）；
+   `watched_sampled_out` = 特别关注者的随机门没抽中（`watchAmbientChance`，默认 0.5）。
 5. 私聊没反应 —— 只认 `MASTER_QQ`，陌生人一律不回。这是设计，不是 bug。
 
 ## 语音没声音怎么查

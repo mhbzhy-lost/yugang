@@ -116,17 +116,6 @@ const config = {
   master: process.env.MASTER_QQ ?? "",
   groups: (process.env.GROUPS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
   bypassGroups: (process.env.BYPASS_GROUPS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
-  ambientChance: Number(process.env.AMBIENT_CHANCE ?? "0.1"),
-  // 按群覆盖随机门："群号:值,群号:值"；未列出的群用上面的全局值
-  ambientChanceByGroup: Object.fromEntries(
-    (process.env.AMBIENT_CHANCE_BY_GROUP ?? "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((s) => s.split(":"))
-      .filter((p) => p.length === 2 && Number.isFinite(Number(p[1])))
-      .map(([g, v]) => [g, Number(v)]),
-  ),
   // 周报群：每周日 21 点把这一周的群画像发到这个群（留空 = 不发）
   weeklyGroupId: process.env.WEEKLY_GROUP_ID ?? "",
 };
@@ -484,14 +473,14 @@ const gate = createGate({
   groups: config.groups,
   dailyQuota: 0,
   cooldownMs: 0,
-  ambientChance: fishConfig().config.ambientChance,
-  ambientChanceByGroup: Object.keys(fishConfig().config.ambientChanceByGroup).length > 0 ? fishConfig().config.ambientChanceByGroup : undefined,
-  // 特别关注者发言时的放行概率（比普通闲聊高，但不是必答）
+  // 非 @、非特别关注：同一群两条被处理消息的最短间隔（限流）
+  ambientMinIntervalMs: fishConfig().config.ambientMinIntervalSeconds * 1000,
+  // 特别关注者发言时的放行概率（走随机门，照顾到但不是必答）
   watchedChance: fishConfig().config.watchAmbientChance,
   // 每轮现取：改 fish.config.json 下一轮就生效，不用重启
   chances: () => {
     const c = fishConfig().config;
-    return { ambient: c.ambientChance, byGroup: c.ambientChanceByGroup, watched: c.watchAmbientChance };
+    return { minIntervalMs: c.ambientMinIntervalSeconds * 1000, watched: c.watchAmbientChance };
   },
 });
 
