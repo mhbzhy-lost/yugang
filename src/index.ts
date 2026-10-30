@@ -274,7 +274,7 @@ async function conversationFor(chatKey: string): Promise<Conversation> {
  * 群消息进模型前的上下文拼装。
  *
  * 随机门会丢掉绝大多数闲聊，只把抽中的那条送进 loop——鱼的视野里就只剩一句话，
- * 答起来自然呆。这里把抽中那条**前面 5 条**当背景补进去，并明确标出要回的是最后一条：
+ * 答起来自然呆。这里把抽中那条**前面 10 条**当背景补进去，并明确标出要回的是最后一条：
  * 否则一次读 6 条，它分不清该接哪句。
  *
  * 只补背景，不改判定：进不进 loop 仍然只由闸门决定，补的这几条不进历史累计。
@@ -282,7 +282,7 @@ async function conversationFor(chatKey: string): Promise<Conversation> {
 function withContext(msg: IncomingMessage, bucket: readonly { nickname: string; text: string }[]): string {
   const base = renderForModel(msg, config.master);
   if (!msg.chatKey.startsWith("qq:group:")) return base;
-  const prior = bucket.slice(0, -1).slice(-5);
+  const prior = bucket.slice(0, -1).slice(-10);
   if (prior.length === 0) return base;
   const header = renderTemplate(fish.prompts.messages["ctx_header"] ?? "", { count: String(prior.length) });
   const marker = fish.prompts.messages["ctx_target"] ?? "";
