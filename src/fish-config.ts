@@ -158,7 +158,7 @@ function parseEnv(env: NodeJS.ProcessEnv, problems: string[]): Partial<FishConfi
 }
 
 const DEFAULTS: FishConfig = {
-  ambientMinIntervalSeconds: 30,
+  ambientMinIntervalSeconds: 60,
   watchAmbientChance: 0.5,
   thinkingLevel: "low",
   compact: { maxEntries: 200, maxChars: 50_000 },

@@ -105,7 +105,7 @@ node scripts/ops.ts probe
 2. 有消息但没出站 —— 看进程日志里的 `[鱼缸]` 行；`这一轮没答上来` 表示模型调用失败。
 3. 有 `这一轮没答上来` —— 检查模型 key / 余额 / base_url。
 4. 都正常但话少 —— 是闸挡的：看 `[fish] gate <chatKey> <昵称> -> skip:sampled_out`（日志现在带 `HH:MM:SS`）。
-   `rate_limited` = 限流挡的：同一群两条被处理消息之间至少隔 `ambientMinIntervalSeconds`（默认 30s，热加载）；
+   `rate_limited` = 限流挡的：同一群两条被处理消息之间至少隔 `ambientMinIntervalSeconds`（默认 60s，热加载）；
    `watched_rate_pass` = 特别关注者安静够久，直接放行；`watched` = 冷却没到但随机门抽中；
    `watched_sampled_out` = 关注者冷却没到且没抽中（`watchAmbientChance`）。
 5. 私聊没反应 —— 只认 `MASTER_QQ`，陌生人一律不回。这是设计，不是 bug。
