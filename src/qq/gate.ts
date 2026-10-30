@@ -102,18 +102,18 @@ export function createGate(options: GateOptions): Gate {
       const last = lastHandled.get(msg.chatKey) ?? 0;
       const cooledDown = at - last >= minInterval;
 
-      // 特别关注：先过 30s 门——安静够久就直接回（不必再抽签），
-      // 免得出现「关注的人说话没反应，随后别人说话却回了」的尴尬。
-      // 只有冷却没到（群里刚热闹过）才掷随机，算是「顺带也照顾一下」。
+      // 特别关注：先掷随机门，中了立刻回（不排队等冷却）；
+      // 没中再看 60s 门——安静够久也回。两条命中任一即放行，
+      // 尽量别出现「关注的人说话没反应，随后别人说话却回了」。
       if (watched === true) {
-        if (cooledDown) {
-          markHandled(msg.chatKey, at);
-          return { enter: true, reason: "watched_rate_pass" };
-        }
         const chance = live?.watched ?? options.watchedChance ?? 0.5;
-        if (random() > chance) return { enter: false, reason: "watched_sampled_out" };
+        if (random() <= chance) {
+          markHandled(msg.chatKey, at);
+          return { enter: true, reason: "watched" };
+        }
+        if (!cooledDown) return { enter: false, reason: "watched_sampled_out" };
         markHandled(msg.chatKey, at);
-        return { enter: true, reason: "watched" };
+        return { enter: true, reason: "watched_rate_pass" };
       }
 
       // 其余消息：纯限流。安静越久越容易进，刚处理过就闭嘴。
