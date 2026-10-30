@@ -28,6 +28,18 @@ export interface IncomingImage {
   ref: string;
 }
 
+/** QQ 分享卡片里我们要的那几个字段（小程序 com.tencent.miniapp_01 / structmsg 都覆盖）。 */
+export interface ShareCard {
+  /** 卡片主标题（B 站分享里通常是「哔哩哔哩」） */
+  title?: string;
+  /** 卡片正文（B 站分享里通常是视频标题/简介） */
+  desc?: string;
+  /** 真正能打开的链接：优先 qqdocurl（b23.tv 短链），其次 jumpUrl / url */
+  url?: string;
+  /** 缩略图 */
+  preview?: string;
+}
+
 export type IncomingMessage = {
   chatKey: string; // qq:group:<id> | qq:private:<id>
   groupId?: number;
@@ -50,6 +62,8 @@ export type IncomingMessage = {
   forwardIds?: string[];
   /** 这条消息回复的是不是一条合并转发合集；gate 用它放行（回复合集即明确指令，不需要 @）。 */
   repliedForward?: boolean;
+  /** 分享卡片（小程序 / 结构化分享）；文本里留 [卡片#N] 占位，由宿主按 prompt 文案渲染。 */
+  cards?: ShareCard[];
 };
 
 export interface SendOptions {
@@ -530,6 +544,45 @@ export function withAccessToken(url: string, token: string): string {
   return `${url}${sep}access_token=${encodeURIComponent(token)}`;
 }
 
+/**
+ * 解析 QQ 分享卡片的 JSON（小程序分享、结构化分享两种壳子）。
+ *
+ * 实测样例（B 站小程序，2026-10-30）：
+ *   app: com.tencent.miniapp_01
+ *   prompt: "[QQ小程序]买人生第一辆车之前要先学会算账…"
+ *   meta.detail_1: { title: "哔哩哔哩", desc: "买人生第一辆车…", qqdocurl: "https://b23.tv/3watppp" }
+ * 另一种壳子 com.tencent.structmsg 把信息放在 meta.news 里，字段名是 jumpUrl。
+ */
+export function parseShareCard(raw: unknown): ShareCard | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  let obj: any;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const meta = obj?.meta ?? {};
+  const detail = meta.detail_1 ?? meta.news ?? meta.detail_2 ?? {};
+  const pick = (...keys: string[]): string | undefined => {
+    for (const key of keys) {
+      const value = detail?.[key] ?? obj?.[key];
+      if (typeof value === "string" && value.trim().length > 0) return value.trim();
+    }
+    return undefined;
+  };
+  const title = pick("title");
+  const desc = pick("desc", "description", "prompt");
+  const url = pick("qqdocurl", "jumpUrl", "url", "source_url");
+  const preview = pick("preview");
+  if (!title && !desc && !url) return null;
+  return {
+    ...(title ? { title } : {}),
+    ...(desc ? { desc } : {}),
+    ...(url ? { url } : {}),
+    ...(preview ? { preview } : {}),
+  };
+}
+
 export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage | null {
   const userId = frame.user_id ?? 0;
   if (!userId) return null;
@@ -542,6 +595,7 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
   const segments: OneBotSegment[] = [];
   const replyIds: string[] = [];
   const forwardIds: string[] = [];
+  const cards: ShareCard[] = [];
   const message = frame.message;
 
   if (typeof message === "string") {
@@ -575,6 +629,14 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
       } else if (seg.type === "reply") {
         text += ` [回复某条消息#${replyIds.length}] `;
         replyIds.push(String(seg.data?.["id"] ?? ""));
+      } else if (seg.type === "json") {
+        const card = parseShareCard(seg.data?.["data"]);
+        if (card) {
+          text += ` [卡片#${cards.length}] `;
+          cards.push(card);
+        } else {
+          text += " [卡片] ";
+        }
       } else if (seg.type === "forward") {
         // OB11 文档形态 {type:"forward", data:{id}}（开发机无生产日志，以文档为准，
         // 上线后 F1 真机复验兜底）；同步阶段拿不到子消息数，占位不写 N，
@@ -594,7 +656,7 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
   if (!text) return null;
 
   const nickname = frame.sender?.card || frame.sender?.nickname || String(userId);
-  const base = { userId, nickname, text, mentionsBot, ...(atOthers.length > 0 ? { atOthers, atOtherNames } : {}), messageId: frame.message_id, images, imageSegments: segments, replyIds, forwardIds };
+  const base = { userId, nickname, text, mentionsBot, ...(atOthers.length > 0 ? { atOthers, atOtherNames } : {}), messageId: frame.message_id, images, imageSegments: segments, replyIds, forwardIds, ...(cards.length > 0 ? { cards } : {}) };
 
   if (frame.message_type === "group" && frame.group_id) {
     return { ...base, chatKey: `qq:group:${frame.group_id}`, groupId: frame.group_id };

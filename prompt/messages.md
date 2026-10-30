@@ -29,6 +29,8 @@ search_used: 这一轮搜过了，先用搜到的说话
 search_failed: 搜索没成功，换个说法或直接说不知道
 video_invalid: 那不是 B 站视频链接
 video_used: 这一轮看过了，先用看到的说
+card_bilibili: [B站视频卡片] {{desc}} {{url}}
+card_link: [卡片] {{title}} {{desc}} {{url}}
 video_truncated: （视频超过 {{minutes}} 分钟，只看了前 {{minutes}} 分钟）
 video_danmaku_header: 弹幕摘录：
 video_frames_header: 画面（按时间点）：

@@ -543,6 +543,20 @@ const today = () => new Date().toISOString().slice(0, 10);
 onebot.onMessage((raw) => {
   void (async () => {
     const msg = raw;
+    // 分享卡片：文本里只有 [卡片#N] 占位，这里按卡片内容渲染成可读文本
+    // （B 站小程序卡片带 b23.tv 短链，鱼据此就能调 video 去看那条视频）
+    if (msg.cards && msg.cards.length > 0) {
+      for (const [index, card] of msg.cards.entries()) {
+        const isBili = /bilibili\.com|b23\.tv/i.test(card.url ?? "");
+        const template = (isBili ? fish.prompts.messages["card_bilibili"] : fish.prompts.messages["card_link"]) ?? "";
+        const rendered = renderTemplate(template, {
+          title: card.title ?? "",
+          desc: card.desc ?? "",
+          url: card.url ?? "",
+        }).trim();
+        if (rendered) msg.text = msg.text.replace(`[卡片#${index}]`, rendered);
+      }
+    }
 
     const bucket = recent.get(msg.chatKey) ?? [];
     bucket.push({ nickname: msg.nickname, text: collapseForward(msg.text) });
