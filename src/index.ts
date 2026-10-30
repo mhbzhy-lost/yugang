@@ -33,6 +33,19 @@ import { renderTemplate } from "./prompts.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
 
 const ctx = BACKGROUND_CONTEXT;
+
+// 特别关注：chatKey（不含人格后缀）→ userId → 备注。随机门用它提高被关注者的概率，
+// 进模型前用它在那个人说话的那一行打标记。启动时从文档装载，watch 工具变更后即时同步。
+const watchedByChat = new Map<string, Map<string, { name?: string; note: string }>>();
+function applyWatched(chatKey: string, people: { userId: string; name?: string; note: string }[]): void {
+  const key = baseChatKey(chatKey);
+  if (people.length === 0) {
+    watchedByChat.delete(key);
+    return;
+  }
+  watchedByChat.set(key, new Map(people.map((p) => [String(p.userId), { ...(p.name ? { name: p.name } : {}), note: p.note }])));
+}
+
 const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
 mkdirSync(HOME, { recursive: true });
 
@@ -443,18 +456,6 @@ function startWeekly(): void {
 startWeekly();
 
 // 每个群的运行态：最近流水、上次开口时间、今天开口次数
-// 特别关注：chatKey（不含人格后缀）→ userId → 备注。随机门用它提高被关注者的概率，
-// 进模型前用它在那个人说话的那一行打标记。启动时从文档装载，watch 工具变更后即时同步。
-const watchedByChat = new Map<string, Map<string, { name?: string; note: string }>>();
-function applyWatched(chatKey: string, people: { userId: string; name?: string; note: string }[]): void {
-  const key = baseChatKey(chatKey);
-  if (people.length === 0) {
-    watchedByChat.delete(key);
-    return;
-  }
-  watchedByChat.set(key, new Map(people.map((p) => [String(p.userId), { ...(p.name ? { name: p.name } : {}), note: p.note }])));
-}
-
 const recent = new Map<string, { nickname: string; text: string }[]>();
 const lastSpoke = new Map<string, number>();
 const spokenToday = new Map<string, { day: string; count: number }>();
