@@ -352,11 +352,22 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
     });
     const content = [header, context, task].filter((line) => line.length > 0).join("\n");
     try {
+      // 留痕：这一轮是收图轮，起止都打日志，否则「为什么不收」永远查不到
+      console.log(`[鱼缸] 收图轮开始 ${gif.ref} md5=${md5.slice(0, 10)}`);
       const submission = await conv.submit({ type: "input", content }, ctx);
       const roundId = String(submission.id);
       silentRounds.add(roundId);
       try {
-        await submission.wait(ctx);
+        const settled = await submission.wait(ctx);
+        let added = false;
+        try {
+          const index = JSON.parse(readFileSync(join(config.mediaRoot, "memes", "index.json"), "utf8")) as { md5?: string }[];
+          added = index.some((e) => e.md5 === md5);
+        } catch {
+          /* 没有索引就当没加 */
+        }
+        const reason = settled.status === "done" ? (added ? "已入库" : "鱼判断不值得收") : `${settled.status}`;
+        console.log(`[鱼缸] 收图轮结束 ${gif.ref} → ${reason}`);
       } finally {
         silentRounds.delete(roundId);
       }
