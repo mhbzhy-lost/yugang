@@ -182,7 +182,7 @@ const fish = await openFish({
   thinkingLevel: fishConfig().config.thinkingLevel,
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
   // 只有 video 单独放宽：要下视频、抽帧、逐帧过视觉模型
-  toolTimeoutOverrides: { video: 90 },
+  toolTimeoutOverrides: { video: 90, draw: 150 },
   // codex 订阅走 WebSocket（Node 的 WS 不吃 --use-env-proxy），过代理时必须退回 sse
   ...(process.env.MODEL_TRANSPORT === "sse" ? { streamTransport: "sse" as const } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时
@@ -203,7 +203,7 @@ const fish = await openFish({
       return undefined;
     }
   })(),
-  modelscopeKey: process.env.MODELSCOPE_KEY,
+  gptImageAuthPath: config.modelConfig.credentialsPath,
   sdUrl: process.env.SD_WEBUI_URL,
   // （sdUrl 存在时见启动处的邻居保温定时器）
   tagsCsv: join(HOME, "danbooru.csv"),
