@@ -31,6 +31,8 @@ export interface PromptSet {
   groupProfile: string;
   /** 手工维护的人物档，作为常驻 section。 */
   people: string;
+  /** 表情包一级情绪词表（prompt/meme-tags.md 里一行一个词），打标与检索都只认这些。 */
+  memeTags: string[];
   messages: Record<string, string>;
   /** key 是工具名，来自 prompt/tools/<name>.md 的文件名。 */
   tools: Record<string, ToolPrompt>;
@@ -45,10 +47,20 @@ export function loadPrompts(root: string): PromptSet {
     handoff: read(join(root, "handoff.md")),
     groupProfile: read(join(root, "group-profile.md")),
     people: read(join(root, "people.md")),
+    memeTags: loadWordList(join(root, "meme-tags.md")),
     messages: parseMessageTable(read(join(root, "messages.md")), join(root, "messages.md")),
     tools: loadTools(join(root, "tools")),
     personas: loadPersonas(join(root, "personas")),
   };
+}
+
+/** 一行一个词的文件（# 开头是注释、空行忽略）；文件不存在 → 空数组。 */
+function loadWordList(path: string): string[] {
+  if (!existsSync(path)) return [];
+  return read(path)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
 }
 
 /**

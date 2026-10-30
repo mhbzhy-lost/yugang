@@ -48,6 +48,8 @@ export type IncomingMessage = {
   replyIds: string[];
   /** forward 段的合集 id；宿主异步拉子消息展开成文本摘要后清空（见 #onFrame）。 */
   forwardIds?: string[];
+  /** 这条消息回复的是不是一条合并转发合集；gate 用它放行（回复合集即明确指令，不需要 @）。 */
+  repliedForward?: boolean;
 };
 
 export interface SendOptions {
@@ -149,7 +151,9 @@ export class OneBot {
         continue;
       }
       if (!parsed.mentionsBot) {
-        // 没 @：不展开、不调 API，静态占位（这条消息会被闸直接拒，不进上下文）
+        // 没 @：不展开、不调 API，静态占位（这条消息会被闸直接拒，不进上下文）。
+        // 但记下「这个群最近有一条没展开的合集」——之后 @ 鱼问「上面那个合集」时能补展开。
+        this.#recentForward.set(parsed.chatKey, { id: forwardId, at: Date.now() });
         parsed.text = parsed.text.replace("[转发合集，展开中]", "[转发合集，未展开]");
         continue;
       }
@@ -178,19 +182,19 @@ export class OneBot {
     parsed.imageSegments = [];
 
     // 回复引用：取回被引消息，里面的图落盘后替换占位符，否则看不见被讨论的图；
-    // 被引消息若是合并转发且这条消息被 @：展开那个合集（主人定案的触发路径：回复合集并艾特）
+    // 被引消息若是合并转发：直接展开（回复合集本身就是明确指令，不再要求 @）。
     for (const [index, replyId] of (parsed.replyIds ?? []).entries()) {
-      if (!replyId || !this.#mediaRoot) continue;
+      if (!replyId) continue;
       let shown = "[回复的图 读不到]";
       try {
         const quoted = await this.call("get_msg", { message_id: replyId });
         const quotedMessage = quoted?.data?.message ?? quoted?.message;
-        if (parsed.mentionsBot && Array.isArray(quotedMessage)) {
+        if (Array.isArray(quotedMessage)) {
           const fwd = quotedMessage.find((s: OneBotSegment) => s?.type === "forward");
           const fwdId = String((fwd?.data as Record<string, unknown> | undefined)?.["id"] ?? "");
           if (fwd && fwdId) {
-            const expanded = await this.#expandForward(fwdId, parsed);
-            shown = expanded;
+            parsed.repliedForward = true;
+            shown = await this.#expandForward(fwdId, parsed);
           }
         }
         const imageSegs = Array.isArray(quotedMessage)
@@ -228,6 +232,26 @@ export class OneBot {
 
     if (!parsed.text.trim()) return;
     for (const h of this.#handlers) h(parsed);
+  }
+
+  /** 每个群最近一条「没展开」的合集：@ 鱼问「上面的合集」时补展开用。只存 id，不预拉内容。 */
+  readonly #recentForward = new Map<string, { id: string; at: number }>();
+
+  /** 取这个群最近的合集（TTL 内）；没有就 undefined。 */
+  recentForward(chatKey: string, ttlMs: number): string | undefined {
+    const hit = this.#recentForward.get(chatKey);
+    if (!hit) return undefined;
+    if (Date.now() - hit.at > ttlMs) return undefined;
+    return hit.id;
+  }
+
+  /** 展开指定合集（外部按 id 调用，失败返回 null，不抛）。 */
+  async expandForwardById(id: string, msg: IncomingMessage): Promise<string | null> {
+    try {
+      return await this.#expandForward(id, msg);
+    } catch {
+      return null;
+    }
   }
 
   async call(action: string, params: Record<string, unknown> = {}): Promise<any> {

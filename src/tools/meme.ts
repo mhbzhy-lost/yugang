@@ -1,15 +1,19 @@
 /**
  * meme —— 从本地表情包库里挑图。
  *
- * 库是生成数据（<mediaRoot>/memes/ + index.json，由 npm run memes import 维护）。
- * 这里只做检索：关键词命中标签或描述，返回最多三张的引用，
- * 真正发图仍走 say 的 media 参数（出口唯一）。一轮最多挑一次。
+ * 库是生成数据（<mediaRoot>/memes/ + index.json），由鱼用 meme_add 在对话里收录。
+ *
+ * 检索分两层（2026-10 改版）：
+ *   一级：mood 必须是受控情绪词表里的词（prompt/meme-tags.md），精确命中
+ *   二级：tags 可选，自由词做进一步筛选（能力给到，但不强制鱼使用）
+ * 为什么这么改：库里 478 个自由 tag 里一半是画面描述（粉毛、猫耳），
+ * 拿群聊话题（社保补缴、显卡）去子串匹配必然 0 命中。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
-import { requireTool, type PromptSet } from "../prompts.ts";
+import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
 
 export interface MemeDeps {
   prompts: PromptSet;
@@ -24,29 +28,44 @@ interface Entry {
 
 const USED = new Map<string, unknown>();
 
+/** 读索引（每次现读：索引就几 KB，带缓存会让刚收的图最多晚 60 秒才可搜）。 */
+export function loadMemeIndex(mediaRoot: string): Entry[] {
+  const indexUrl = join(mediaRoot, "memes", "index.json");
+  if (!existsSync(indexUrl)) return [];
+  try {
+    return JSON.parse(readFileSync(indexUrl, "utf8")) as Entry[];
+  } catch {
+    return [];
+  }
+}
+
+/** 每个一级情绪词各有几张（给 prompt section 用，让鱼一眼看到库存）。 */
+export function countMoods(entries: readonly Entry[], memeTags: readonly string[]): { mood: string; count: number }[] {
+  return memeTags.map((mood) => ({
+    mood,
+    count: entries.filter((e) => e.tags.some((tag) => tag.toLowerCase() === mood.toLowerCase())).length,
+  }));
+}
+
 export function createMemeTool(deps: MemeDeps) {
   const prompt = requireTool(deps.prompts, "meme");
-  const indexUrl = join(deps.mediaRoot, "memes", "index.json");
-
-  // 每次现读：索引就几 KB，读一次是 µs 级；带缓存会让刚收进库的图最多晚 60 秒才可搜
-  function load(): Entry[] {
-    if (!existsSync(indexUrl)) return [];
-    try {
-      return JSON.parse(readFileSync(indexUrl, "utf8")) as Entry[];
-    } catch {
-      return [];
-    }
-  }
+  const moods = deps.prompts.memeTags;
 
   return defineTool({
     name: "meme",
     description: prompt.description,
     callers: ["model"],
     parameters: Type.Object({
-      keyword: Type.String({ description: prompt.params["keyword"] ?? "" }),
+      // 一级情绪词：从词表生成字面量联合，模型只能选这些（机械校验，不靠自觉）
+      mood: moods.length > 0 ? Type.Union(moods.map((m) => Type.Literal(m))) : Type.String(),
+      tags: Type.Optional(
+        Type.Array(Type.String(), {
+          description: prompt.params["tags"] ?? "",
+        }),
+      ),
     }),
     execute: async (args, api, context) => {
-      const entries = load();
+      const entries = loadMemeIndex(deps.mediaRoot);
       if (entries.length === 0) {
         throw new Error(deps.prompts.messages["meme_empty"] ?? "表情包库是空的");
       }
@@ -57,38 +76,63 @@ export function createMemeTool(deps: MemeDeps) {
         if (round !== undefined) USED.set(api.conversationId, round);
       };
 
-      // 多个关键词用空格分隔：任一词命中就算，命中越多排越前（比单个词覆盖更多说法）
-      const terms = args.keyword.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      const scored = entries
+      const mood = String(args.mood ?? "").trim().toLowerCase();
+      const extras = (args.tags ?? []).map((t) => t.trim().toLowerCase()).filter(Boolean);
+
+      // 一级过滤：必须带这个情绪词
+      const pool = entries.filter((e) => e.tags.some((t) => t.toLowerCase() === mood));
+      // 二级过滤：可选，自由词命中越多排越前（能力给到，不强制）
+      const scored = pool
         .map((e) => {
           let score = 0;
-          for (const kw of terms) {
-            const tagHit = e.tags.some((t) => {
+          for (const kw of extras) {
+            if (e.tags.some((t) => {
               const tag = t.toLowerCase();
               return tag.includes(kw) || kw.includes(tag);
-            });
-            if (tagHit) score += 2;
-            else if (e.caption.toLowerCase().includes(kw)) score += 1;
+            })) {
+              score += 1;
+            } else if (e.caption.toLowerCase().includes(kw)) {
+              score += 1;
+            }
           }
           return { e, score };
         })
-        .filter((x) => x.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 3);
+        .filter((x) => extras.length === 0 || x.score > 0)
+        .sort((a, b) => b.score - a.score);
 
       if (scored.length === 0) {
-        const vocab = [...new Set(entries.flatMap((e) => e.tags))].slice(0, 24).join("、");
-        return { output: [{ type: "text", text: `没贴题的。库里现有主题：${vocab}` }] };
+        const inventory = countMoods(entries, deps.prompts.memeTags)
+          .filter((x) => x.count > 0)
+          .map((x) => `${x.mood}(${x.count})`)
+          .join("、");
+        const text = renderTemplate(deps.prompts.messages["meme_no_mood"] ?? "{{mood}}", {
+          mood: String(args.mood ?? ""),
+          inventory,
+        });
+        return { output: [{ type: "text", text }] };
       }
-      // 拿到真候选才算数：没贴题的尝试不消耗本轮机会，模型可以换词重试
+
       if (round !== undefined && USED.get(api.conversationId) === round) {
         throw new Error(deps.prompts.messages["meme_used"] ?? "这一轮挑过了");
       }
       markUsed();
-      const text = scored
-        .map((x) => `memes/${x.e.file} — ${x.e.caption}（${x.e.tags.join(" ")}）`)
+
+      // 同分打散：别每次都推同一张
+      const top = scored[0]?.score ?? 0;
+      const ties = scored.filter((x) => x.score === top);
+      const head = ties[Math.floor(Math.random() * ties.length)];
+      const picked = [head, ...scored.filter((x) => x !== head)].slice(0, 3).filter(Boolean);
+      const text = picked
+        .map((x) => `memes/${(x as { e: Entry }).e.file} — ${(x as { e: Entry }).e.caption}（${(x as { e: Entry }).e.tags.join(" ")}）`)
         .join("\n");
-      return { output: [{ type: "text", text: `${text}\n用 say 的 media 参数（memes/ 开头的引用）把最贴的那张发出去` }] };
+      return {
+        output: [
+          {
+            type: "text",
+            text: renderTemplate(deps.prompts.messages["meme_pick"] ?? "{{list}}", { list: text }),
+          },
+        ],
+      };
     },
   });
 }

@@ -30,6 +30,7 @@ import { createReactTool } from "./egress/react.ts";
 import { loadPrompts, renderTemplate, type PromptSet } from "./prompts.ts";
 import { createTools } from "./tools/index.ts";
 import { withToolTimeout } from "./tools/timeout.ts";
+import { loadMemeIndex, countMoods } from "./tools/meme.ts";
 import { WatchDoc } from "./store.ts";
 import { createCompactor, type CompactResult, type Compactor } from "./compact.ts";
 import { ChatsDoc, OutboxDoc } from "./store.ts";
@@ -47,7 +48,7 @@ export const DEFAULT_PERSONA = "默认";
 function makeFishExtension(
   name: string,
   persona: string,
-  parts: { tools: readonly ToolRegistration[]; prompts: PromptSet },
+  parts: { tools: readonly ToolRegistration[]; prompts: PromptSet; mediaRoot: string },
 ): Extension {
   return defineExtension({
     name,
@@ -64,6 +65,16 @@ function makeFishExtension(
         const header = parts.prompts.messages["watch_section_header"] ?? "";
         const lines = people.map((p) => `${p.name ? `${p.name}(${p.userId})` : p.userId}：${p.note}`);
         return [header, ...lines].filter((line) => line.length > 0).join("\n");
+      }, { tag: true }),
+      // 表情包库存：一级情绪词各几张，每次请求现算（几 KB 的索引，µs 级）
+      section("meme_tags", () => {
+        const entries = loadMemeIndex(parts.mediaRoot);
+        if (entries.length === 0) return undefined;
+        const rows = countMoods(entries, parts.prompts.memeTags).filter((x) => x.count > 0);
+        if (rows.length === 0) return undefined;
+        const header = parts.prompts.messages["meme_section_header"] ?? "";
+        const line = rows.map((x) => `${x.mood}${x.count}`).join(" · ");
+        return [header, `${line}（共 ${entries.length} 张）`].filter((s) => s.length > 0).join("\n");
       }, { tag: true }),
     ],
   });
@@ -190,11 +201,11 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   const fishTools: readonly ToolRegistration[] = [say, react, ...tools].map((tool) =>
     withToolTimeout(tool, toolTimeoutMs, toolTimeoutMessage),
   );
-  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts });
+  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, mediaRoot: options.mediaRoot });
   const personaExtensions = new Map<string, Extension>();
   const openers: Record<string, string> = {};
   for (const [name, book] of Object.entries(prompts.personas)) {
-    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts }));
+    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, mediaRoot: options.mediaRoot }));
     if (book.opener) openers[name] = book.opener;
   }
 

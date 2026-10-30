@@ -35,6 +35,15 @@ import { renderTemplate } from "./prompts.ts";
 import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
 
+// 日志一行一个时间戳：gate 判定与发送记录以前没有时间，排查只能靠原话簿对齐
+{
+  const stamp = () => new Date().toTimeString().slice(0, 8);
+  const rawLog = console.log.bind(console);
+  const rawError = console.error.bind(console);
+  console.log = (...args: unknown[]) => rawLog(`[${stamp()}]`, ...args);
+  console.error = (...args: unknown[]) => rawError(`[${stamp()}]`, ...args);
+}
+
 const ctx = BACKGROUND_CONTEXT;
 
 // 可热更新的行为配置：fish.config.json > .env > 内置默认
@@ -51,6 +60,16 @@ const voiceCredits = new Map<string, Map<string, number>>();
 // （emit 要解析数字 id），人格相关的配置（音色）必须走这张表，否则重启后
 // 人格身份丢失 → personaOf 回退「默认」→ 拿默认音色开口（长征机用爱莉声音说话）
 const mappingKeys = new Map<string, string>();
+
+/**
+ * 背景栏里的合集只留一个短标记：一次展开是 10 条起，若上面十条全是合集，
+ * 上下文会被瞬间撑爆。鱼看不到就看不到，没关系。
+ */
+function collapseForward(text: string): string {
+  if (!/\[转发合集 \d+ 条\]/.test(text)) return text;
+  const marker = fish.prompts.messages["forward_collapsed"] ?? "";
+  return marker.length > 0 ? marker : "[收集]";
+}
 
 /** 主人或本会话特别关注的人？ */
 function isVoiceVip(msg: IncomingMessage): boolean {
@@ -532,7 +551,7 @@ onebot.onMessage((raw) => {
     const msg = raw;
 
     const bucket = recent.get(msg.chatKey) ?? [];
-    bucket.push({ nickname: msg.nickname, text: msg.text });
+    bucket.push({ nickname: msg.nickname, text: collapseForward(msg.text) });
     if (bucket.length > 30) bucket.splice(0, bucket.length - 30);
     recent.set(msg.chatKey, bucket);
 
@@ -600,6 +619,18 @@ onebot.onMessage((raw) => {
     // 轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）
     // 每第 3 条（主人/关注对象，且过了闸门）追加一行提示，让鱼知道这条可以用语音
     let content = withContext(msg, bucket);
+    // @ 鱼 + 文字里提到合集/转发：把这个群最近一条没展开的合集拉出来（10 分钟内有效）。
+    // 场景：先发合集（不 @，被闸丢弃）→ 再 @ 问「上面那个能看吗」。合集记录里明确标了它是什么。
+    if (msg.mentionsBot && /合集|转发/.test(msg.text)) {
+      const pending = onebot.recentForward(msg.chatKey, 10 * 60_000);
+      if (pending) {
+        const expanded = await onebot.expandForwardById(pending, msg);
+        if (expanded) {
+          content = `${fish.prompts.messages["forward_recent_prefix"] ?? ""}\n${expanded}\n${content}`;
+          console.log(`[鱼缸] ${msg.chatKey} 补展开最近合集`);
+        }
+      }
+    }
     const voiceOwner = String(conv.id);
     if (voiceConfigFor(mappingKeys.get(voiceOwner) ?? msg.chatKey) && isVoiceVip(msg)) {
       const perUser = voiceCredits.get(msg.chatKey) ?? new Map<string, number>();

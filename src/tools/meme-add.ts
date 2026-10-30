@@ -83,6 +83,13 @@ export function createMemeAddTool(deps: MemeAddDeps) {
       if (!caption) throw new Error(deps.prompts.messages["meme_add_caption"] ?? "meme_add_caption");
       const tags = args.tags.map((t) => t.trim()).filter(Boolean).slice(0, 8);
       if (tags.length === 0) throw new Error(deps.prompts.messages["meme_add_caption"] ?? "meme_add_caption");
+      // 一级情绪词：必须至少有一个，否则以后检索不到（自由词随便加，不强制用）
+      const moods = deps.prompts.memeTags;
+      if (moods.length > 0 && !tags.some((t) => moods.some((m) => m.toLowerCase() === t.toLowerCase()))) {
+        throw new Error(
+          renderTemplate(deps.prompts.messages["meme_add_mood"] ?? "{{moods}}", { moods: moods.join("、") }),
+        );
+      }
 
       const bytes = readFileSync(full);
       const md5 = createHash("md5").update(bytes).digest("hex");

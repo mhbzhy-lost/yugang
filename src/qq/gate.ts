@@ -72,6 +72,9 @@ export function createGate(options: GateOptions): Gate {
       // 任何人 @（含裸 @）必答，零模型调用
       if (msg.mentionsBot) return { enter: true, reason: "mentioned" };
 
+      // 回复某条合并转发 = 明确指令（回复本身就是指向），不需要 @
+      if (msg.repliedForward) return { enter: true, reason: "replied_forward" };
+
       // 无 @ 的合并转发合集：零成本丢弃（展开也不发生）。
       // 要让鱼看合集：回复合集并 @，或发合集时直接 @。
       if ((msg.forwardIds?.length ?? 0) > 0) return { enter: false, reason: "forward_ignored" };

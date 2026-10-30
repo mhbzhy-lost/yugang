@@ -44,9 +44,15 @@ meme_add_master: 只有主人能让图长期留在库里，这张不收
 meme_add_missing: 找不到这张图：{{ref}}
 meme_add_type: 这不是能收的图片类型：{{ref}}
 meme_add_caption: 得写一句这张图什么意思，再给几个标签
+meme_add_mood: 标签里至少有一个得是一级情绪词（{{moods}}），从里面挑一个最贴的
 meme_add_dup: 库里已经有这张了（{{file}}），不用重复收
 meme_add_done: 收好了：memes/{{file}}，库里现在 {{count}} 张
+forward_recent_prefix: 以下是这个群刚才那条没展开的合集内容：
+forward_collapsed: [转发合集（内容略）]
+meme_section_header: 表情包库存（一级情绪词 → 张数）：
 meme_empty: 表情包库是空的，先用文字回
+meme_no_mood: 「{{mood}}」这一档还没有图。现有：{{inventory}}
+meme_pick: {{list}}
 meme_used: 这一轮挑过了，先用挑到的
 draw_prompt: 画面描述得有内容，1000 字以内
 draw_used: 这轮画过了，先把画发出去
