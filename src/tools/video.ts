@@ -215,7 +215,60 @@ export function createVideoTool(deps: VideoDeps) {
           target = res.url;
         }
         const bv = target.match(/BV[0-9A-Za-z]{10}/)?.[0];
-        if (!bv) throw new Error("no bv");
+        if (!bv) {
+          // 不是视频：图文动态（/opus/<id>）也支持——B 站分享卡片经常指向这里
+          const opusId = target.match(/\/opus\/(\d+)/)?.[1];
+          if (opusId) {
+            const opus = await getJson(
+              `https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail?timezone_offset=-480&id=${opusId}`,
+            );
+            const item = opus?.data?.item;
+            if (opus?.code !== 0 || !item) throw new Error("opus failed");
+            const modules = (item.modules ?? []) as any[];
+            const author = modules.find((m) => m?.module_type === "MODULE_TYPE_AUTHOR")?.module_author?.name ?? "?";
+            const published = modules.find((m) => m?.module_type === "MODULE_TYPE_AUTHOR")?.module_author?.pub_time ?? "";
+            const paragraphs = modules.find((m) => m?.module_type === "MODULE_TYPE_CONTENT")?.module_content?.paragraphs ?? [];
+            let body = "";
+            const pics: string[] = [];
+            for (const para of paragraphs as any[]) {
+              for (const node of para?.text?.nodes ?? []) {
+                if (node?.type === "TEXT_NODE_TYPE_WORD") body += node?.word?.words ?? "";
+              }
+              for (const pic of para?.pic?.pics ?? []) {
+                if (pics.length < 2 && pic?.url) pics.push(String(pic.url));
+              }
+            }
+            const head = [
+              `${author}${published ? ` · ${published}` : ""} 的图文动态`,
+              body.replace(/\s+/g, " ").slice(0, 600),
+            ].filter((s) => s.length > 0);
+
+            let picText = "";
+            if (deps.models && deps.visionModel && pics.length > 0) {
+              const described = await Promise.all(
+                pics.map(async (url, index) => {
+                  try {
+                    const res = await doFetch(url, { headers: HEADERS });
+                    if (!res.ok) return null;
+                    const bytes = Buffer.from(await res.arrayBuffer());
+                    const text = await describeImage(deps, bytes.toString("base64"), res.headers.get("content-type")?.split(";")[0] ?? "image/jpeg");
+                    return text ? `[图${index + 1}] ${text.replace(/\s+/g, " ").slice(0, 200)}` : null;
+                  } catch {
+                    return null;
+                  }
+                }),
+              );
+              const lines = described.filter((x): x is string => x !== null);
+              if (lines.length > 0) {
+                picText = "\n" + (deps.prompts.messages["video_frames_header"] ?? "") + "\n" + lines.join("\n");
+              }
+            }
+
+            console.log("[鱼缸] video opus", opusId, "总用时", Date.now() - startedAt, "ms");
+            return { output: [{ type: "text", text: head.join("\n") + picText }] };
+          }
+          throw new Error("no bv");
+        }
 
         const view = await getJson(`https://api.bilibili.com/x/web-interface/view?bvid=${bv}`);
         if (view?.code !== 0 || !view?.data) throw new Error("view failed");
