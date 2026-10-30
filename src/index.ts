@@ -42,6 +42,9 @@ const ttsEnabled = Boolean(process.env.TTS_URL);
 // 可热更新的行为配置：fish.config.json > .env > 内置默认
 const fishConfig = createConfigLoader();
 
+// 收表情包等后台轮：这一轮只允许调工具，不许说话（say 会拒绝）
+const silentRounds = new Set<string>();
+
 // chatKey → userId → 已累计的发言次数：每第 3 条给一句「可以选择用语音回」的提示。
 // 只是提示，不是门禁——用不用由鱼自己判断。
 const voiceCredits = new Map<string, Map<string, number>>();
