@@ -270,6 +270,26 @@ async function conversationFor(chatKey: string): Promise<Conversation> {
  * 回执固定落「切换前」的当前人格会话（conversationFor 惰性获取，群没说过话则
  * 惰性建默认会话，属可接受副作用）；切换动作本身绝不预建目标人格会话。
  */
+/**
+ * 群消息进模型前的上下文拼装。
+ *
+ * 随机门会丢掉绝大多数闲聊，只把抽中的那条送进 loop——鱼的视野里就只剩一句话，
+ * 答起来自然呆。这里把抽中那条**前面 5 条**当背景补进去，并明确标出要回的是最后一条：
+ * 否则一次读 6 条，它分不清该接哪句。
+ *
+ * 只补背景，不改判定：进不进 loop 仍然只由闸门决定，补的这几条不进历史累计。
+ */
+function withContext(msg: IncomingMessage, bucket: readonly { nickname: string; text: string }[]): string {
+  const base = renderForModel(msg, config.master);
+  if (!msg.chatKey.startsWith("qq:group:")) return base;
+  const prior = bucket.slice(0, -1).slice(-5);
+  if (prior.length === 0) return base;
+  const header = renderTemplate(fish.prompts.messages["ctx_header"] ?? "", { count: String(prior.length) });
+  const marker = fish.prompts.messages["ctx_target"] ?? "";
+  const context = prior.map((m) => `${m.nickname}: ${m.text}`).join("\n");
+  return [header, context, marker, base].filter((line) => line.length > 0).join("\n");
+}
+
 async function handleCommand(msg: IncomingMessage): Promise<string | null> {
   if (!msg.text.startsWith("/") || String(msg.userId) !== config.master) return null;
   const conv = await conversationFor(msg.chatKey); // 切换前先定回执落点
@@ -461,7 +481,7 @@ onebot.onMessage((raw) => {
     // 把触发消息绑到 submission 上：鱼的回复引用本轮自己的触发消息，
     // 轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）
     const submission = await conv.submit(
-      { type: "input", content: renderForModel(msg, config.master) },
+      { type: "input", content: withContext(msg, bucket) },
       ctx,
     );
     triggerOf.set(String(submission.id), {
