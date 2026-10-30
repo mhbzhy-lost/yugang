@@ -18,8 +18,6 @@ case "$CMD" in
   ps)                exec "$CONNECT" -- 'ps aux | grep -E "src/index.ts|memes.ts" | grep -v grep' ;;
   deploy)            exec "$CONNECT" -- "$PREFIX npm run deploy 2>&1" ;;
   memes)             exec "$CONNECT" -- "$PREFIX npm run memes status 2>&1" ;;
-  memes-import)      exec "$CONNECT" -- "$PREFIX nohup node scripts/memes.ts import > var/memes-import.log 2>&1 & echo 'import 已转后台，用 fish.sh memes-import-log 看进度'" ;;
-  memes-import-log)  exec "$CONNECT" -- "cd ~/yugang && tail -n 8 var/memes-import.log 2>&1" ;;
   help|--help|-h)
     cat <<'EOF'
 用法：fish.sh <子命令> [参数]   —— 全部在 macmini 的 ~/yugang 下执行
@@ -32,8 +30,6 @@ case "$CMD" in
   ps        进程状态（鱼 / meme import）
   deploy    git pull + 平滑重启鱼（标准部署入口）
   memes     表情包库状态
-  memes-import       后台收编 inbound 暂存图（ssh 断开不中断）
-  memes-import-log   收编进度
   其它任意命令原样透传，如：fish.sh npm test
 EOF
     ;;

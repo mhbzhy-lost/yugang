@@ -1,14 +1,12 @@
 /**
- * 表情包库管理：素材收编 + 视觉打标建索引。
+ * 表情包库概况（只读）。
  *
- *   npm run memes import    # memes/inbox 全收 + inbound 里非截图类格式（gif/webp） → 视觉打标 → 建索引
- *   npm run memes status    # 库存概况
+ *   npm run memes status
  *
- * 素材与索引都是生成数据，全在 <HOME>/media/memes/ 下，不进 git。
- * 打标走 glm-5.3-flash 视觉（凭据 config/auth.json 的 zai-coding-cn）。
+ * 入库不再走批处理：鱼在对话里判断「这张动图值不值得收」，用 meme_add 带着语境打标；
+ * 主人指名要收的其它图片也走同一个工具。库是生成数据，在 <HOME>/media/memes/ 下，不进 git。
  */
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -16,15 +14,6 @@ const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
 const MEDIA = resolve(process.env.MEDIA_ROOT ?? join(HOME, "media"));
 const MEMES = join(MEDIA, "memes");
 const INDEX = join(MEMES, "index.json");
-const INSTRUCTION = readFileSync(join(process.cwd(), "prompt", "memes.md"), "utf8");
-// 能进库的图片格式（与出口白名单一致）
-const EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
-/**
- * 截图/照片常见的格式：inbound 里这些一律**自动不收**（里面可能有聊天记录、家庭照），
- * 要收只能人工指定（鱼用 meme_add，或手动拷进 memes/inbox）。
- * 其余格式（gif / webp 等）基本都是梗图动图，自动收。
- */
-const MANUAL_ONLY = new Set([".png", ".jpg", ".jpeg", ".heic", ".heif"]);
 
 interface Entry {
   file: string;
@@ -33,8 +22,6 @@ interface Entry {
   tags: string[];
   at: number;
 }
-
-const [command = "status"] = process.argv.slice(2);
 
 function loadIndex(): Entry[] {
   if (!existsSync(INDEX)) return [];
@@ -45,96 +32,15 @@ function loadIndex(): Entry[] {
   }
 }
 
-function key(): string {
-  const auth = JSON.parse(readFileSync("config/auth.json", "utf8")) as { "zai-coding-cn"?: { key?: string } };
-  const k = auth["zai-coding-cn"]?.key;
-  if (!k) {
-    console.error("config/auth.json 里没有 zai-coding-cn 的 key，先 npm run creds import");
-    process.exit(1);
-  }
-  return k;
-}
+const [command = "status"] = process.argv.slice(2);
 
-async function caption(file: string, apiKey: string): Promise<{ caption: string; tags: string[] } | null> {
-  const b64 = readFileSync(file).toString("base64");
-  const res = await fetch("https://open.bigmodel.cn/api/coding/paas/v4/chat/completions", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: "glm-5.3-flash",
-      max_tokens: 120,
-      thinking: { type: "disabled" },
-      messages: [{
-        role: "user",
-        content: [
-          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } },
-          { type: "text", text: INSTRUCTION },
-        ],
-      }],
-    }),
-  });
-  if (!res.ok) return null;
-  const j = await res.json() as { choices?: { message?: { content?: string } }[] };
-  const text = String(j.choices?.[0]?.message?.content ?? "").trim().split("\n")[0];
-  const [desc, tagPart] = text.split("|");
-  if (!desc?.trim()) return null;
-  const tags = String(tagPart ?? "").split(/\s+/).filter(Boolean).slice(0, 6);
-  return { caption: desc.trim(), tags: tags.length > 0 ? tags : ["表情"] };
-}
-
-/**
- * 素材来源两处：
- *   memes/inbox     人工挑选目录，全部收编
- *   media/inbound   群友发的图，只自动收**非截图类格式**（gif/webp 这类动图）——
- *                   png/jpg/jpeg/heic/heif 可能是聊天记录或照片，一律留给人指定
- * 想让一张截图入库：用 meme_add 工具（鱼带着语境打标），或手动拷进 memes/inbox。
- */
-function sources(): string[] {
-  const out: string[] = [];
-  const collect = (dir: string, skipManualOnly: boolean): void => {
-    if (!existsSync(dir)) return;
-    for (const name of readdirSync(dir)) {
-      const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
-      if (!EXT.has(ext)) continue;
-      if (skipManualOnly && MANUAL_ONLY.has(ext)) continue;
-      const p = join(dir, name);
-      if (statSync(p).isFile()) out.push(p);
-    }
-  };
-  collect(join(MEMES, "inbox"), false);
-  collect(join(MEDIA, "inbound"), true);
-  return out;
-}
-
-if (command === "import") {
-  mkdirSync(MEMES, { recursive: true });
+if (command === "status") {
   const index = loadIndex();
-  const seen = new Set(index.map((e) => e.md5));
-  const apiKey = key();
-  let added = 0;
-  for (const src of sources()) {
-    const bytes = readFileSync(src);
-    const md5 = createHash("md5").update(bytes).digest("hex");
-    if (seen.has(md5)) continue;
-    const ext = src.slice(src.lastIndexOf(".")).toLowerCase();
-    const file = `${md5.slice(0, 10)}${ext}`;
-    copyFileSync(src, join(MEMES, file));
-    const labeled = await caption(join(MEMES, file), apiKey);
-    if (!labeled) {
-      console.log(`  ✗ ${file} 打标失败，跳过`);
-      continue;
-    }
-    index.push({ file, md5, ...labeled, at: Date.now() });
-    seen.add(md5);
-    added++;
-    console.log(`  ✓ ${file} ${labeled.caption} [${labeled.tags.join(" ")}]`);
+  console.log(`库存 ${index.length} 张 · 索引 ${existsSync(INDEX) ? INDEX : "（还没有，等鱼收第一张）"}`);
+  for (const entry of index.slice(-10)) {
+    console.log(`  ${entry.file} ${entry.caption} [${entry.tags.join(" ")}]`);
   }
-  writeFileSync(INDEX, `${JSON.stringify(index, null, 1)}\n`);
-  console.log(`✓ 新增 ${added} 张，库存共 ${index.length} 张 → ${INDEX}`);
-} else if (command === "status") {
-  const index = loadIndex();
-  console.log(`库存 ${index.length} 张 · 索引 ${existsSync(INDEX) ? INDEX : "（未建立，跑 npm run memes import）"}`);
 } else {
-  console.error(`不认识的命令：${command}（import / status）`);
+  console.error(`不认识的命令：${command}（只有 status；入库请让鱼用 meme_add）`);
   process.exit(1);
 }

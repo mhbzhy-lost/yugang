@@ -58,15 +58,18 @@ export function createMemeAddTool(deps: MemeAddDeps) {
       tags: Type.Array(Type.String(), { description: prompt.params["tags"] ?? "" }),
     }),
     execute: async (args, api, context) => {
-      // 身份闸：只有主人能让某张群友的图长期留在库里
+      const ref = args.ref.trim().replace(/^\[|\]$/g, "");
+
+      // 收录规则：动图（.gif）允许鱼自己判断入库；其他格式必须主人点头。
+      // 截图/照片多为 png/jpg/heic，统一留在主人指定这一侧。
+      const isGif = ref.toLowerCase().endsWith(".gif");
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
       const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
-      if (!deps.master || String(trigger?.userId ?? "") !== deps.master) {
+      const byMaster = deps.master !== "" && String(trigger?.userId ?? "") === deps.master;
+      if (!isGif && !byMaster) {
         throw new Error(deps.prompts.messages["meme_add_master"] ?? "meme_add_master");
       }
-
-      const ref = args.ref.trim().replace(/^\[|\]$/g, "");
       const full = resolve(root, ref);
       if (!full.startsWith(root + sep) || !existsSync(full)) {
         throw new Error(renderTemplate(deps.prompts.messages["meme_add_missing"] ?? "{{ref}}", { ref }));

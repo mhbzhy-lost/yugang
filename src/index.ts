@@ -8,6 +8,7 @@
  *
  * 模型的正文、思考、tool 调用文本都不在这条链上。
  */
+import { createHash } from "node:crypto";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -33,6 +34,9 @@ import { renderTemplate } from "./prompts.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
 
 const ctx = BACKGROUND_CONTEXT;
+
+// 收表情包专用轮：这一轮只允许调 meme_add，不许说话（say 会拒绝）
+const silentRounds = new Set<string>();
 
 // 特别关注：chatKey（不含人格后缀）→ userId → 备注。随机门用它提高被关注者的概率，
 // 进模型前用它在那个人说话的那一行打标记。启动时从文档装载，watch 工具变更后即时同步。
@@ -145,6 +149,7 @@ const fish = await openFish({
   tagsCsv: join(HOME, "danbooru.csv"),
   master: config.master,
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
+  silentOf: (roundId) => silentRounds.has(String(roundId)),
   // watch 的号码校验：从会话映射回群号，再拉全量成员（不要 limit，要能校验到每个人）
   onWatchChanged: (conversationId, userIds) => {
     const chatKey = chatKeys.get(String(conversationId));
@@ -309,6 +314,60 @@ async function conversationFor(chatKey: string): Promise<Conversation> {
  *
  * 只补背景，不改判定：进不进 loop 仍然只由闸门决定，补的这几条不进历史累计。
  */
+/**
+ * 动图自动收：gif 进群时起一个静默轮，把前 10 条上下文一起给鱼，
+ * 由它判断这张图值不值得当表情包、调用 meme_add 打标入库。
+ *
+ * 边界：只认 .gif（白名单，避免把截图/照片也拖进模型）；
+ * md5 已在库里的跳过；同一群 90 秒内只收一次，防刷屏式刷库。
+ */
+const gifIngestAt = new Map<string, number>();
+async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; text: string }[]): Promise<void> {
+  if (!msg.chatKey.startsWith("qq:group:")) return;
+  if (!config.groups.length || !config.groups.includes(String(msg.groupId))) return;
+  const gifs = msg.images.filter((img) => typeof img.ref === "string" && img.ref.toLowerCase().endsWith(".gif"));
+  if (gifs.length === 0) return;
+  if (Date.now() - (gifIngestAt.get(msg.chatKey) ?? 0) < 90_000) return;
+
+  for (const gif of gifs) {
+    const full = resolve(config.mediaRoot, gif.ref);
+    let md5: string;
+    try {
+      md5 = createHash("md5").update(readFileSync(full)).digest("hex");
+    } catch {
+      continue;
+    }
+    // 库里已有同一张（按 md5）就不再跑模型
+    try {
+      const index = JSON.parse(readFileSync(join(config.mediaRoot, "memes", "index.json"), "utf8")) as { md5?: string }[];
+      if (index.some((e) => e.md5 === md5)) return;
+    } catch {
+      /* 没有索引就当空库 */
+    }
+
+    gifIngestAt.set(msg.chatKey, Date.now());
+    const conv = await conversationFor(msg.chatKey);
+    const prior = bucket.slice(0, -1).slice(-10);
+    const header = renderTemplate(fish.prompts.messages["gif_ingest_header"] ?? "", { count: String(prior.length) });
+    const context = prior.map((m) => `${m.nickname}: ${m.text}`).join("\n");
+    const task = renderTemplate(fish.prompts.messages["gif_ingest_task"] ?? "", {
+      ref: gif.ref,
+      who: msg.nickname,
+    });
+    const content = [header, context, task].filter((line) => line.length > 0).join("\n");
+    try {
+      const submission = await conv.submit({ type: "input", content }, ctx);
+      silentRounds.add(String(submission.id));
+      await submission.wait(ctx);
+    } catch (error) {
+      console.error("[鱼缸] 收图轮失败", error instanceof Error ? error.message : error);
+    } finally {
+      await drainLoop();
+    }
+    return; // 一条消息只收一张
+  }
+}
+
 function withContext(msg: IncomingMessage, bucket: readonly { nickname: string; text: string }[]): string {
   const base = renderForModel(msg, config.master);
   if (!msg.chatKey.startsWith("qq:group:")) return base;
@@ -477,6 +536,10 @@ onebot.onMessage((raw) => {
       ? splitBypass(msg.text)
       : null;
     if (bypass) msg.text = bypass.clean || (fish.prompts.messages["bypass_placeholder"] ?? "(draw)");
+
+    // 动图自动收：群里来了一张 gif，就让鱼看着「前 10 条上下文」决定要不要收进库。
+    // 不走随机门（收图与开不开口无关），但它在静默轮里跑，不会冒话。
+    void maybeIngestGif(msg, bucket);
 
     // 主人 / 指令：bypass 剥离后、闸前拦截——机械秒回，不进 gate、不进 conversation
     if ((await handleCommand(msg)) !== null) return;

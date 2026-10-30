@@ -41,6 +41,8 @@ export interface SayDeps {
   now?: () => number;
   /** submissionId → 本轮触发消息；宿主注入，能把引用目标绑在轮上。 */
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
+  /** 收图轮之类的静默轮：这一轮不许说话。 */
+  silentOf?: (roundId: unknown) => boolean;
 }
 
 export function createSayTool(deps: SayDeps) {
@@ -66,6 +68,15 @@ export function createSayTool(deps: SayDeps) {
       quote: Type.Optional(Type.Boolean({ description: prompt.params["quote"] ?? "" })),
     }),
     execute: async (args, api, context) => {
+      // 静默轮（自动收表情包）只允许调工具，不许冒话
+      {
+        const live = await api.snapshot(LiveDoc, api.conversationId, context);
+        const round = live?.run?.inputs?.[0];
+        if (round !== undefined && deps.silentOf?.(round)) {
+          throw new Error(deps.prompts.messages["say_silent"] ?? "say_silent");
+        }
+      }
+
       const ts = now();
       const ledger = ledgerOf(api.conversationId);
 

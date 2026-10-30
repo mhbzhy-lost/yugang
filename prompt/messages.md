@@ -66,6 +66,9 @@ watch_unknown_member: {{userId}} 不在这个群里，号可能抄错了，先�
 watch_no_members: 拿不到群成员名单，暂时没法校验号码，稍后再试
 watch_inline: （说话的是主人特别关注的人{{who}}——{{note}}）
 watch_section_header: 下面是主人指名要你特别关注的人（主人钦点，长期有效）：
+gif_ingest_header: 群里刚聊的是这 {{count}} 条（只是背景）：
+gif_ingest_task: 上面这段对话里，{{who}} 发了一张动图：{{ref}}。你这一轮只判断一件事——它值不值得进你的表情包库。值得就调 meme_add（caption 写它在聊天里是什么意思，tags 写你以后会用来找它的词）；不值得就什么都不做、别说话。
+say_silent: 这一轮是收图用的，不用说话
 ctx_header: 下面是群里刚聊的 {{count}} 条（只是背景，别逐条回应，也别把别人的话当成对你说的）
 ctx_target: 要你回应的是最后这一条：
 look_describe: 看一眼这张图，用两三句话告诉我图里有什么：主体、动作、画风、图上的文字。简洁准确，不要猜测看不到的细节。

@@ -149,6 +149,9 @@ export class OneBot {
         const saved = await this.downloadImage(segment, this.#mediaRoot);
         const shown = saved ? `[图片 ${saved.ref}]` : "[图片 读不到]";
         parsed.text = parsed.text.replace(`[图片#${index}]`, shown);
+        // ref 回填到 images：宿主据此判断这张图是不是动图（自动收表情包用）
+        const slot = parsed.images[index];
+        if (saved && slot) slot.ref = saved.ref;
       }
     }
     parsed.imageSegments = [];
