@@ -15,6 +15,7 @@ import { createRestartTool } from "./restart.ts";
 import { createTreeTool } from "./tree.ts";
 import { createTestTool } from "./test.ts";
 import { createDrawTool } from "./draw.ts";
+import { createWatchTool } from "./watch.ts";
 import { createTagsTool } from "./tags.ts";
 
 export interface ToolDeps {
@@ -59,6 +60,7 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
     ...fsTools,
     createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl, bypassOf: deps.bypassOf, modelscopeKey: deps.modelscopeKey }),
+    ...(deps.master ? [createWatchTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf })] : []),
     createTagsTool({ prompts: deps.prompts, csvPath: deps.tagsCsv }),
     ...treeTool,
     ...testTool,

@@ -47,6 +47,14 @@ draw_done: gen/{{file}} — 画好了，用 say 的 media 参数发出去
 tags_empty: 词表还没就绪或关键词为空
 tags_none: 词表里没有「{{keyword}}」，换英文关键词试试
 draw_off: 本地画图没配置地址，用不了
+watch_no_master: 只有主人能让我特别关注谁，这条不算
+watch_need_id: 得给我那个人的 QQ 号
+watch_need_note: 说说要我记什么——怎么称呼他、该留意什么
+watch_added: 记住了：{{who}}——{{note}}
+watch_removed: 不再关注 {{userId}} 了
+watch_not_found: 本来就没记过 {{userId}}
+watch_empty: 现在没特别关注的人
+watch_section_header: 下面是主人指名要你特别关注的人（主人钦点，长期有效）：
 ctx_header: 下面是群里刚聊的 {{count}} 条（只是背景，别逐条回应，也别把别人的话当成对你说的）
 ctx_target: 要你回应的是最后这一条：
 look_describe: 看一眼这张图，用两三句话告诉我图里有什么：主体、动作、画风、图上的文字。简洁准确，不要猜测看不到的细节。

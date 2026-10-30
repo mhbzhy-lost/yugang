@@ -3,6 +3,7 @@
  *
  *   fish.chats    群 → conversationId 映射（重启后会话不变，记忆接得上）
  *   fish.outbox   待发出的消息（崩在"committed 但还没发"这一刻也不丢）
+ *   fish.watch    该会话的特别关注名单（主人点名要留意的群友 + 自由备注）
  *
  * 文档都是小 JSON，checkpointWhen 一律返回 true：每次存整份，不做增量。
  */
@@ -40,5 +41,33 @@ export const OutboxDoc = defineDoc<OutboxState>({
   history: "latest",
   fork: "current",
   initial: () => ({ queue: [] }),
+  checkpointWhen: () => true,
+});
+
+export interface WatchedPerson {
+  /** 被关注者的 QQ 号（字符串，和入站消息的 userId 同源）。 */
+  userId: string;
+  /** 主人提到的称呼，可空；只作提示，识别仍以 QQ 号为准。 */
+  name?: string;
+  /** 自由备注：怎么称呼他、他是什么人、见面要做什么，都写这里。 */
+  note: string;
+  at: number;
+}
+
+export interface WatchState {
+  people: WatchedPerson[];
+}
+
+/**
+ * 特别关注名单：会话级文档（人格之间天然隔离），换页（compact）不会动它，
+ * 每次请求由 section 重新渲染进 system prompt，等价于人格书那种常驻预填充信息。
+ */
+export const WatchDoc = defineDoc<WatchState>({
+  kind: "fish.watch",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "current",
+  initial: () => ({ people: [] }),
   checkpointWhen: () => true,
 });

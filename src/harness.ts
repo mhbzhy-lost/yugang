@@ -29,6 +29,7 @@ import { createSayTool, OutboundEntry, type OutboundPayload } from "./egress/say
 import { createReactTool } from "./egress/react.ts";
 import { loadPrompts, renderTemplate, type PromptSet } from "./prompts.ts";
 import { createTools } from "./tools/index.ts";
+import { WatchDoc } from "./store.ts";
 import { createCompactor, type CompactResult, type Compactor } from "./compact.ts";
 import { ChatsDoc, OutboxDoc } from "./store.ts";
 
@@ -54,6 +55,15 @@ function makeFishExtension(
       section("persona", () => persona, { tag: false }),
       // 手工维护的人物档：比对话记忆更牢，和 handoff 互补
       section("people", () => parts.prompts.people, { tag: true }),
+      // 特别关注名单：会话级文档，每次请求重新渲染（换页不动它），空名单不占位
+      section("watched", async (input, context) => {
+        const snapshot = await input.read.snapshot(WatchDoc, input.conversationId, context);
+        const people = snapshot?.people ?? [];
+        if (people.length === 0) return undefined;
+        const header = parts.prompts.messages["watch_section_header"] ?? "";
+        const lines = people.map((p) => `${p.name ? `${p.name}(${p.userId})` : p.userId}：${p.note}`);
+        return [header, ...lines].filter((line) => line.length > 0).join("\n");
+      }, { tag: true }),
     ],
   });
 }
