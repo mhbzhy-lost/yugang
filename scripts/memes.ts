@@ -1,7 +1,7 @@
 /**
  * 表情包库管理：素材收编 + 视觉打标建索引。
  *
- *   npm run memes import    # 只收编 memes/inbox 的图（人工挑选） → 视觉打标 → 建索引
+ *   npm run memes import    # memes/inbox 全收 + inbound 里非截图类格式（gif/webp） → 视觉打标 → 建索引
  *   npm run memes status    # 库存概况
  *
  * 素材与索引都是生成数据，全在 <HOME>/media/memes/ 下，不进 git。
@@ -17,7 +17,14 @@ const MEDIA = resolve(process.env.MEDIA_ROOT ?? join(HOME, "media"));
 const MEMES = join(MEDIA, "memes");
 const INDEX = join(MEMES, "index.json");
 const INSTRUCTION = readFileSync(join(process.cwd(), "prompt", "memes.md"), "utf8");
+// 能进库的图片格式（与出口白名单一致）
 const EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
+/**
+ * 截图/照片常见的格式：inbound 里这些一律**自动不收**（里面可能有聊天记录、家庭照），
+ * 要收只能人工指定（鱼用 meme_add，或手动拷进 memes/inbox）。
+ * 其余格式（gif / webp 等）基本都是梗图动图，自动收。
+ */
+const MANUAL_ONLY = new Set([".png", ".jpg", ".jpeg", ".heic", ".heif"]);
 
 interface Entry {
   file: string;
@@ -76,19 +83,26 @@ async function caption(file: string, apiKey: string): Promise<{ caption: string;
 }
 
 /**
- * 只收人工挑选目录：media/inbound 是群友发的原图，**不能**自动入库——
- * 里面混着聊天截图、家庭照，入库等于长期留存并可能被鱼再发出去。
- * 想让某张图进库：用 meme_add 工具（鱼带着语境打标），或人工拷进 memes/inbox。
+ * 素材来源两处：
+ *   memes/inbox     人工挑选目录，全部收编
+ *   media/inbound   群友发的图，只自动收**非截图类格式**（gif/webp 这类动图）——
+ *                   png/jpg/jpeg/heic/heif 可能是聊天记录或照片，一律留给人指定
+ * 想让一张截图入库：用 meme_add 工具（鱼带着语境打标），或手动拷进 memes/inbox。
  */
 function sources(): string[] {
   const out: string[] = [];
-  for (const dir of [join(MEMES, "inbox")]) {
-    if (!existsSync(dir)) continue;
+  const collect = (dir: string, skipManualOnly: boolean): void => {
+    if (!existsSync(dir)) return;
     for (const name of readdirSync(dir)) {
+      const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+      if (!EXT.has(ext)) continue;
+      if (skipManualOnly && MANUAL_ONLY.has(ext)) continue;
       const p = join(dir, name);
-      if (EXT.has(name.slice(name.lastIndexOf(".")).toLowerCase()) && statSync(p).isFile()) out.push(p);
+      if (statSync(p).isFile()) out.push(p);
     }
-  }
+  };
+  collect(join(MEMES, "inbox"), false);
+  collect(join(MEDIA, "inbound"), true);
   return out;
 }
 
