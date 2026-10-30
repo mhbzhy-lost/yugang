@@ -62,7 +62,9 @@ const VOICE_REQUEST = /语音|说句话|说一句|出声|声音|念一下|念一
  */
 function markVoiceEligible(msg: IncomingMessage): boolean {
   if (!ttsEnabled) return false;
-  if (msg.mentionsBot && VOICE_REQUEST.test(msg.text)) return true;
+  // 群里要 @ 鱼才算「叫我」，私聊本来就是对鱼说的，不用 @
+  const calledOut = msg.mentionsBot || msg.chatKey.startsWith("qq:private:");
+  if (calledOut && VOICE_REQUEST.test(msg.text)) return true;
 
   const vip = String(msg.userId) === config.master || (watchedByChat.get(msg.chatKey)?.has(String(msg.userId)) ?? false);
   if (!vip) return false;
