@@ -23,21 +23,18 @@ interface Entry {
 }
 
 const USED = new Map<string, unknown>();
-let cache: { at: number; entries: Entry[] } | null = null;
 
 export function createMemeTool(deps: MemeDeps) {
   const prompt = requireTool(deps.prompts, "meme");
   const indexUrl = join(deps.mediaRoot, "memes", "index.json");
 
+  // 每次现读：索引就几 KB，读一次是 µs 级；带缓存会让刚收进库的图最多晚 60 秒才可搜
   function load(): Entry[] {
     if (!existsSync(indexUrl)) return [];
     try {
-      const parsed = JSON.parse(readFileSync(indexUrl, "utf8")) as Entry[];
-      const at = Date.now();
-      if (!cache || at - cache.at > 60_000) cache = { at, entries: parsed };
-      return cache.entries;
+      return JSON.parse(readFileSync(indexUrl, "utf8")) as Entry[];
     } catch {
-      return cache?.entries ?? [];
+      return [];
     }
   }
 
