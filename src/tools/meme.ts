@@ -60,12 +60,20 @@ export function createMemeTool(deps: MemeDeps) {
         if (round !== undefined) USED.set(api.conversationId, round);
       };
 
-      const kw = args.keyword.trim().toLowerCase();
+      // 多个关键词用空格分隔：任一词命中就算，命中越多排越前（比单个词覆盖更多说法）
+      const terms = args.keyword.trim().toLowerCase().split(/\s+/).filter(Boolean);
       const scored = entries
         .map((e) => {
-          const tagHit = e.tags.some((t) => t.toLowerCase().includes(kw) || kw.includes(t.toLowerCase()));
-          const capHit = e.caption.toLowerCase().includes(kw);
-          return { e, score: tagHit ? 2 : capHit ? 1 : 0 };
+          let score = 0;
+          for (const kw of terms) {
+            const tagHit = e.tags.some((t) => {
+              const tag = t.toLowerCase();
+              return tag.includes(kw) || kw.includes(tag);
+            });
+            if (tagHit) score += 2;
+            else if (e.caption.toLowerCase().includes(kw)) score += 1;
+          }
+          return { e, score };
         })
         .filter((x) => x.score > 0)
         .sort((a, b) => b.score - a.score)

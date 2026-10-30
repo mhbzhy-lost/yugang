@@ -10,6 +10,7 @@ import { createLookTool } from "./look.ts";
 import { createSearchTool } from "./search.ts";
 import { createVideoTool } from "./video.ts";
 import { createMemeTool } from "./meme.ts";
+import { createMemeAddTool } from "./meme-add.ts";
 import { createFsTools } from "./fs.ts";
 import { createRestartTool } from "./restart.ts";
 import { createTreeTool } from "./tree.ts";
@@ -61,6 +62,7 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     createSearchTool({ prompts: deps.prompts, key: deps.searchKey }),
     createVideoTool({ prompts: deps.prompts }),
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
+    ...(deps.master ? [createMemeAddTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, master: deps.master, triggerOf: deps.triggerOf })] : []),
     ...fsTools,
     createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl, bypassOf: deps.bypassOf, modelscopeKey: deps.modelscopeKey }),
     ...(deps.master ? [createWatchTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf, ...(deps.groupMembersOf ? { membersOf: deps.groupMembersOf } : {}), ...(deps.onWatchChanged ? { onChanged: deps.onWatchChanged } : {}) })] : []),

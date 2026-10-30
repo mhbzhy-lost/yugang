@@ -40,6 +40,12 @@ grep_none: 没搜到
 fs_too_big: 文件太大
 fs_not_found_text: 原文没找到，先 read 看准
 fs_ambiguous_text: 原文在文件里出现多次，扩大范围再改
+meme_add_master: 只有主人能让图长期留在库里，这张不收
+meme_add_missing: 找不到这张图：{{ref}}
+meme_add_type: 这不是能收的图片类型：{{ref}}
+meme_add_caption: 得写一句这张图什么意思，再给几个标签
+meme_add_dup: 库里已经有这张了（{{file}}），不用重复收
+meme_add_done: 收好了：memes/{{file}}，库里现在 {{count}} 张
 meme_empty: 表情包库是空的，先用文字回
 meme_used: 这一轮挑过了，先用挑到的
 draw_prompt: 画面描述得有内容，1000 字以内

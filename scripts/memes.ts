@@ -1,7 +1,7 @@
 /**
  * 表情包库管理：素材收编 + 视觉打标建索引。
  *
- *   npm run memes import    # 收编 media/inbound 与 memes/inbox 的图 → 视觉打标 → 建索引
+ *   npm run memes import    # 只收编 memes/inbox 的图（人工挑选） → 视觉打标 → 建索引
  *   npm run memes status    # 库存概况
  *
  * 素材与索引都是生成数据，全在 <HOME>/media/memes/ 下，不进 git。
@@ -75,9 +75,14 @@ async function caption(file: string, apiKey: string): Promise<{ caption: string;
   return { caption: desc.trim(), tags: tags.length > 0 ? tags : ["表情"] };
 }
 
+/**
+ * 只收人工挑选目录：media/inbound 是群友发的原图，**不能**自动入库——
+ * 里面混着聊天截图、家庭照，入库等于长期留存并可能被鱼再发出去。
+ * 想让某张图进库：用 meme_add 工具（鱼带着语境打标），或人工拷进 memes/inbox。
+ */
 function sources(): string[] {
   const out: string[] = [];
-  for (const dir of [join(MEDIA, "inbound"), join(MEMES, "inbox")]) {
+  for (const dir of [join(MEMES, "inbox")]) {
     if (!existsSync(dir)) continue;
     for (const name of readdirSync(dir)) {
       const p = join(dir, name);

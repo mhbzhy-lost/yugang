@@ -49,7 +49,7 @@ test("工具面为窄接口：无 bash，自改工具已注册", async () => {
   try {
     const root = await open.harness.root(ctx);
     const names = (await root.agent(ctx)).tools.map((t) => t.name);
-    assert.deepEqual(names, ["say", "react", "look", "search", "video", "meme", "read", "grep", "edit", "write", "delete", "draw", "watch", "tags", "tree", "test", "restart"]);
+    assert.deepEqual(names, ["say", "react", "look", "search", "video", "meme", "meme_add", "read", "grep", "edit", "write", "delete", "draw", "watch", "tags", "tree", "test", "restart"]);
     assert.ok(!names.includes("bash"), "bash 必须不存在");
     assert.ok(!names.includes("shell"), "shell 必须不存在");
   } finally {
