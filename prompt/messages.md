@@ -80,6 +80,12 @@ draw_done: gen/{{file}} — 画好了，用 say 的 media 参数发出去
 tags_empty: 词表还没就绪或关键词为空
 tags_none: 词表里没有「{{keyword}}」，换英文关键词试试
 draw_off: 本地画图没配置地址，用不了
+draw_ref_outside: 只能改这一轮群里的图（inbound/…）或你自己画过的图（gen/…）：{{ref}}
+draw_ref_missing: 找不到这张图：{{ref}}
+draw_ref_type: 这张不是能重画的图片格式：{{ref}}
+draw_ref_big: 这张图太大，改不动：{{ref}}
+draw_ref_broken: 这张图读不出来（格式坏了或者转换失败）：{{ref}}
+draw_strength: 重画幅度只能在 0.1 到 0.9 之间
 watch_no_master: 只有主人能让我特别关注谁，这条不算
 watch_need_id: 得给我那个人的 QQ 号
 watch_need_note: 说说要我记什么——怎么称呼他、该留意什么
