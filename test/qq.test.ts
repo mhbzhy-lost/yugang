@@ -15,6 +15,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
+import { OutboxDoc } from "../src/store.ts";
 import { renderForModel } from "../src/qq/gate.ts";
 import type { IncomingMessage } from "../src/qq/onebot.ts";
 
@@ -74,7 +75,11 @@ test("群档案写进 transcript，模型看得到群名和成员", async () => 
     assert.ok(entry, "没有写群档案");
     const text = JSON.stringify(entry.model ?? "");
     assert.match(text, /深夜钓鱼群/);
-    assert.match(text, /张三/);
+    // 群档案 system prompt 只放成员 QQ 号，昵称不再进入
+    assert.match(text, /2000/);
+    assert.match(text, /2001/);
+    assert.doesNotMatch(text, /张三/);
+    assert.doesNotMatch(text, /李四/);
     view.dispose();
   } finally {
     await open.close();
@@ -171,24 +176,26 @@ test("react 只贴本轮触发的那条，不拿会话级最后一条消息", as
   }
 });
 
-test("发送失败时不记幂等账：outbox 放回 queued 后重试真的会再发一次", async () => {
-  let attempts = 0;
-  const sentKeys: string[] = [];
+test("发送失败后队首保持 sending：不重试、不重复、不跳过它发后面的", async () => {
+  let emitCalls = 0;
   const { fish } = boot({
-    emit: (_id, payload) => {
-      attempts += 1;
-      if (attempts === 1) throw new Error("网络抖了一下");
-      sentKeys.push(payload.key);
+    emit: (_id, _payload) => {
+      emitCalls += 1;
+      // 模拟 sendGroup 已发出第一条文本/@后第二条失败：emit 抛错时发出多少是未知的
+      throw new Error("网络抖了一下");
     },
   });
   const open = await fish;
   try {
     const conv = await open.group("qq:group:42");
-    await open.enqueue(conv.id, { items: ["哦"], at: Date.now(), key: "retry:1" });
+    await open.enqueue(conv.id, { items: ["第一条", "第二条"], at: Date.now(), key: "partial:1" });
+    await open.enqueue(conv.id, { items: ["后面那条"], at: Date.now(), key: "next:1" });
     const sent = await open.drain([conv.id]);
-    assert.equal(sent, 1, "重试成功的那条应该算发出去一条");
-    assert.equal(attempts, 2, "第一次失败后应该真的再调一次 emit，而不是被幂等表挡掉");
-    assert.deepEqual(sentKeys, ["retry:1"]);
+    assert.equal(sent, 0, "部分发送的那条不算发出去");
+    assert.equal(emitCalls, 1, "失败后不重试，不会把第一条文本/@再发一遍");
+    const box = await open.harness.snapshot(OutboxDoc, conv.id, ctx);
+    assert.equal(box?.queue[0]?.status, "sending", "未决记录保持 sending 供诊断");
+    assert.equal(box?.queue.length, 2, "后面的 queued 没有被跳过队首发出去");
   } finally {
     await open.close();
   }

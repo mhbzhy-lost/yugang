@@ -255,8 +255,8 @@ const fish = await openFish({
   },
   // outbox 里的消息由 fish.drain() 逐条交给这里；幂等表再加一层保险
   emit: async (conversationId, payload) => {
-    // 恢复轮强发：有意重启时还没真正发出的消息不走幂等去重（去重表可能已在崩溃前提前记了账）
-    if (!recoveringDrain && sent.has(payload.key)) return;
+    // 幂等键去重：崩溃重放、重启确认重复入队都会撞上同一个 key，只真发一次
+    if (sent.has(payload.key)) return;
     const chatKey = chatKeys.get(conversationId);
     if (!chatKey) return;
 
@@ -886,43 +886,41 @@ for (const [chatKey, conversationId] of Object.entries(known?.chats ?? {})) {
   chatKeys.set(String(conversationId), baseChatKey(chatKey));
   mappingKeys.set(String(conversationId), chatKey);
 }
-// 重启遗言：restart 工具写下的 restart.pending.json，起来后补发那句，发完即删
-const pendingPath = join(process.cwd(), "var", "restart.pending.json");
-if (existsSync(pendingPath)) {
+// 历史遗留的重启文件只清理不消费：sending 不再翻回 queued（发出多少不确定，宁可少发不重复），
+// 遗言（模型文本）不再补发
+for (const legacy of ["restart.marker", "restart.pending.json"]) {
+  const legacyPath = join(process.cwd(), "var", legacy);
+  if (existsSync(legacyPath)) {
+    try { rmSync(legacyPath); } catch {}
+    console.log(`[鱼缸] 已清理历史重启文件 ${legacy}`);
+  }
+}
+// restart 工具留下的通知：定位触发重启的会话，启动成功后向它发一条固定机械确认
+// （prompt/messages.md 的 restart_done，经 outbox 唯一出口）。先入队再删文件：启动中途
+// 崩掉也不会重复确认——outbox 键由通知里的稳定 key 派生，幂等表会挡掉已发出的那一次
+const noticePath = join(process.cwd(), "var", "restart.notice.json");
+if (existsSync(noticePath)) {
   try {
-    const pending = JSON.parse(readFileSync(pendingPath, "utf8")) as { conversationId: string; text: string };
-    const chatKey = [...chatKeys.entries()].find(([id]) => String(id) === pending.conversationId)?.[1];
+    const notice = JSON.parse(readFileSync(noticePath, "utf8")) as { conversationId: string; key: string };
+    const chatKey = [...chatKeys.entries()].find(([id]) => String(id) === notice.conversationId)?.[1];
     if (chatKey) {
       const conv = await conversationFor(chatKey);
       await fish.enqueue(conv.id, {
-        items: [pending.text],
+        items: [fish.prompts.messages["restart_done"] ?? "重启完成"],
         at: Date.now(),
-        key: `restart-pending:${pending.conversationId}:${Date.now()}`,
+        key: `restart-done:${notice.conversationId}:${notice.key}`,
       });
-      await drainLoop();
-      console.log(`[鱼缸] 重启遗言已补发到 ${chatKey}`);
+      console.log(`[鱼缸] 重启确认已排队到 ${chatKey}`);
     } else {
-      console.error(`[鱼缸] 重启遗言找不到会话：${pending.conversationId}`);
+      console.error(`[鱼缸] 重启通知找不到会话：${notice.conversationId}`);
     }
-    rmSync(pendingPath);
+    rmSync(noticePath);
   } catch (error) {
-    console.error("[鱼缸] 补发重启遗言失败", error instanceof Error ? error.message : error);
-    try { rmSync(pendingPath); } catch {}
-  }
-}
-// 有意重启的标记：把卡在 sending 的消息翻回 queued 一起补发（真崩溃不重发，语义不变）
-const marker = join(process.cwd(), "var", "restart.marker");
-let recoveringDrain = false;
-if (existsSync(marker)) {
-  const recovered = await fish.recoverStaleSends();
-  rmSync(marker);
-  if (recovered > 0) {
-    console.log(`[鱼缸] 有意重启恢复：${recovered} 条 sending → queued`);
-    recoveringDrain = true;
+    console.error("[鱼缸] 处理重启通知失败", error instanceof Error ? error.message : error);
+    try { rmSync(noticePath); } catch {}
   }
 }
 await drainLoop();
-recoveringDrain = false;
 
 const shown = describeModel(config.modelConfig);
 console.log(`[鱼缸] 已连接，模型 ${shown.provider}/${shown.model}，工具 ${fish.toolNames.join("、")}`);

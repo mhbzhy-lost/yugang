@@ -15,6 +15,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openFish } from "../src/harness.ts";
+import { OutboxDoc } from "../src/store.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
@@ -24,6 +25,7 @@ async function boot(dbPath: string, outbox: string[], failFirst = 0) {
   const models = createModels();
   models.setProvider(faux.provider);
   let fails = failFirst;
+  let emitCalls = 0;
   const fish = openFish({
     storage: await openNodeSqliteStorage(dbPath),
     models,
@@ -32,6 +34,7 @@ async function boot(dbPath: string, outbox: string[], failFirst = 0) {
     mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
     workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
     emit: (_id, payload) => {
+      emitCalls += 1;
       if (fails > 0) {
         fails--;
         throw new Error("网络抖了一下");
@@ -40,7 +43,7 @@ async function boot(dbPath: string, outbox: string[], failFirst = 0) {
     },
     react: () => {},
   });
-  return { faux, fish };
+  return { faux, fish, emitCalls: () => emitCalls };
 }
 
 test("群映射落盘：重开还是同一个会话", async () => {
@@ -92,7 +95,7 @@ test("崩在发送前：重开后补发，且只补一次", async () => {
   }
 });
 
-test("发送失败会重试，不丢消息", async () => {
+test("发送失败保留未决：不重试，也不跳过队首发后面的", async () => {
   const outbox: string[] = [];
   const built = await boot(join(mkdtempSync(join(tmpdir(), "yg-db-")), "fish.db"), outbox, 1);
   const { faux } = built;
@@ -105,10 +108,21 @@ test("发送失败会重试，不丢消息", async () => {
       fauxAssistantMessage("好了"),
     ]);
     await (await conv.submit({ type: "input", content: "在吗" }, ctx)).wait(ctx);
+    // 队尾再排一条：队首发送失败后，它不许越过未决记录被发出去
+    await open.enqueue(conv.id, { items: ["第二条"], at: Date.now(), key: "after:1" });
 
     const sent = await open.drain();
-    assert.equal(sent, 1);
-    assert.deepEqual(outbox, ["喂"], "第一次失败后应该重试成功");
+    assert.equal(sent, 0, "发送失败的那条不算发出去");
+    assert.deepEqual(outbox, [], "部分发送状态不确定，宁可少发不重复");
+    assert.equal(built.emitCalls(), 1, "失败后不再重试同一条");
+
+    const again = await open.drain();
+    assert.equal(again, 0);
+    assert.equal(built.emitCalls(), 1, "队首卡在 sending，后续 drain 不再调 emit");
+
+    const box = await open.harness.snapshot(OutboxDoc, conv.id, ctx);
+    assert.equal(box?.queue[0]?.status, "sending", "失败记录保留 sending 供诊断");
+    assert.equal(box?.queue.length, 2, "后面的记录原地不动");
   } finally {
     await open.close();
   }

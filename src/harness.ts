@@ -194,12 +194,10 @@ export interface Fish {
   compact(conversation: Conversation, force?: boolean): Promise<CompactResult>;
   /** 取（或创建）某个群在指定人格下的会话；映射持久化，重启后还是同一个会话。未注册人格回退默认。 */
   group(groupKey: string, profile?: GroupProfile, persona?: string): Promise<Conversation>;
-  /** 把 outbox 里排队的消息发出去；返回实际发了几条。 */
+  /** 把 outbox 里排队的消息发出去；返回实际发了几条。队首卡在 sending 的会话会被跳过（不重发）。 */
   drain(extra?: readonly ConversationId[]): Promise<number>;
   /** 不经模型直接往 outbox 里排队一条（宿主侧机械回复专用，同样走唯一出口）。 */
   enqueue(conversationId: ConversationId, payload: OutboundPayload): Promise<void>;
-  /** 有意重启后的恢复：把卡在 sending 的消息翻回 queued（配合 restart.marker 使用）。 */
-  recoverStaleSends(): Promise<number>;
   close(): Promise<void>;
 }
 
@@ -361,68 +359,63 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   async function drainConversation(conversationId: ConversationId): Promise<number> {
     let sent = 0;
     for (;;) {
+      // 只看队首：sending 在队首意味着上一次发送中断（发出多少不确定），整个会话停在这里——
+      // 不翻回 queued、不重试，也绝不跳过它去发后面的 queued（宁可少发不重复）
       const box = await harness.snapshot(OutboxDoc, conversationId, ctx);
-      const next = box?.queue.find((record) => record.status === "queued");
-      if (!next) return sent;
+      const head = box?.queue[0];
+      if (!head) return sent;
+      if (head.status === "sending") return sent;
 
       // 陈年消息不补：超过 10 分钟的排队消息直接丢弃。原先设 2 分钟，
       // 但模型慢时（比如走订阅的 codex 一轮 30–90 秒）消息会在队列里等到过期，
       // 表现就是「鱼想回了，但回复被当成过期丢了」。10 分钟足够覆盖正常慢轮。
-      if (now() - next.at > 600_000) {
+      if (now() - head.at > 600_000) {
         await harness.commit(async (tx) => {
           const doc = await tx.doc(OutboxDoc, conversationId);
-          const index = doc.queue.findIndex((item) => item.key === next.key);
+          const index = doc.queue.findIndex((item) => item.key === head.key);
           if (index >= 0) doc.queue.splice(index, 1);
         }, ctx);
-        console.log(`[鱼缸] 丢弃过期消息（${Math.round((now() - next.at) / 1000)}s 前）`);
+        console.log(`[鱼缸] 丢弃过期消息（${Math.round((now() - head.at) / 1000)}s 前）`);
         continue;
       }
 
       // 先标 sending 再发：崩在这中间的消息状态是"不确定"，重启时不重发（宁可少发不重复）
       await harness.commit(async (tx) => {
         const doc = await tx.doc(OutboxDoc, conversationId);
-        const record = doc.queue.find((item) => item.key === next.key);
+        const record = doc.queue.find((item) => item.key === head.key);
         if (record) record.status = "sending";
       }, ctx);
 
       try {
         await options.emit(conversationId, {
-          items: next.items,
-          ...(next.media === undefined ? {} : { media: next.media }),
+          items: head.items,
+          ...(head.media === undefined ? {} : { media: head.media }),
           // voice 也要透传：和 quoteId 一样，漏一个字段就等于整条消息丢一半
-          ...(next.voice === undefined ? {} : { voice: next.voice }),
+          ...(head.voice === undefined ? {} : { voice: head.voice }),
           // 主动 @ 跟 outbox 一起持久化：重启后补发必须还是同一条 @，不能静默降级成裸消息
-          ...(next.mentions === undefined ? {} : { mentions: next.mentions }),
-          quote: next.quote,
+          ...(head.mentions === undefined ? {} : { mentions: head.mentions }),
+          quote: head.quote,
           // 引用绑定全链路贯通：早期漏传这两个字段，靠 lastMessageId 回退掩盖（会错位）；
           // 回退删除后 @ 场景全部裸发——不传，引用的真实修复在这里
-          ...(next.quoteId !== undefined ? { quoteId: next.quoteId } : {}),
-          ...(next.quoteForce !== undefined ? { quoteForce: next.quoteForce } : {}),
-          at: next.at,
-          key: next.key,
+          ...(head.quoteId !== undefined ? { quoteId: head.quoteId } : {}),
+          ...(head.quoteForce !== undefined ? { quoteForce: head.quoteForce } : {}),
+          at: head.at,
+          key: head.key,
         });
       } catch (error) {
-        // 发送失败：放回队列重试，超过三次就丢弃并报错
-        await harness.commit(async (tx) => {
-          const doc = await tx.doc(OutboxDoc, conversationId);
-          const index = doc.queue.findIndex((item) => item.key === next.key);
-          if (index < 0) return;
-          if (next.attempts + 1 >= 3) doc.queue.splice(index, 1);
-          else {
-            doc.queue[index].status = "queued";
-            doc.queue[index].attempts += 1;
-          }
-        }, ctx);
-        if (next.attempts + 1 >= 3) {
-          throw new Error(`发送失败三次，已丢弃：${error instanceof Error ? error.message : error}`);
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1500).unref?.());
-        continue;
+        // 发送异常 = 不确定状态（sendGroup 可能已发出第一条文本和第一条 @）：保留 sending
+        // 供诊断，绝不翻回 queued 重试——重试会把可能已送达的内容再发一遍。停止本会话的
+        // 后续 drain（不能跳过队首发后面的记录），其余会话不受影响。
+        console.error(
+          `[鱼缸] ${String(conversationId)} 发送失败，保留 sending 不重试：` +
+            `${error instanceof Error ? error.message : error}`,
+        );
+        return sent;
       }
 
       await harness.commit(async (tx) => {
         const doc = await tx.doc(OutboxDoc, conversationId);
-        const index = doc.queue.findIndex((item) => item.key === next.key);
+        const index = doc.queue.findIndex((item) => item.key === head.key);
         if (index >= 0) doc.queue.splice(index, 1);
       }, ctx);
       sent++;
@@ -446,22 +439,6 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         const doc = await tx.doc(OutboxDoc, conversationId);
         doc.queue.push({ ...payload, status: "queued", attempts: 0 });
       }, ctx);
-    },
-    async recoverStaleSends() {
-      const snapshot = await harness.snapshot(ChatsDoc, ctx);
-      let recovered = 0;
-      for (const conversationId of Object.values(snapshot?.chats ?? {})) {
-        await harness.commit(async (tx) => {
-          const doc = await tx.doc(OutboxDoc, conversationId);
-          for (const item of doc.queue) {
-            if (item.status === "sending") {
-              item.status = "queued";
-              recovered++;
-            }
-          }
-        }, ctx);
-      }
-      return recovered;
     },
     async drain(extra = []) {
       const snapshot = await harness.snapshot(ChatsDoc, ctx);
@@ -519,8 +496,8 @@ export async function openFish(options: FishOptions): Promise<Fish> {
                       count: String(profile.count),
                       owner: profile.owner,
                       master: profile.master,
-                      members:
-                        profile.members.map((m) => `${m.nickname} / ${m.userId}`).join("\n") || "（拿不到名单）",
+                      // 首次群档案 system prompt 只放 QQ 号：昵称是外部可变输入，实时消息里已有 昵称(QQ)
+                      members: profile.members.map((m) => m.userId).join("\n") || "（拿不到名单）",
                     });
                     await tx.appendEntry(GroupProfileEntry, conversationId, {
                       model: [{ role: "system", content: text, timestamp: now() }],
