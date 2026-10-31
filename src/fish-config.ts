@@ -29,6 +29,8 @@ export interface FishConfig {
   toolTimeoutSeconds: number;
   /** 表情包跨轮冷却（分钟）：同一群两次配图之间的最短间隔。 */
   memeCooldownMinutes: number;
+  /** 模型忘调 say 时的正文兜底（仅必答轮）：零 say 时取正文首行过出口校验后补发；误发可关。 */
+  salvagePlainReply: boolean;
   /** 按人格配置的语音：人格名 → TTS 参数。没有条目的人格没有语音能力。 */
   voices: Record<string, { url: string; referWav?: string; referText?: string; referLanguage?: string }>;
   /** 周报发到哪个群；空 = 不发。 */
@@ -100,6 +102,10 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
   if (cooldown !== undefined && cooldown >= 0 && cooldown <= 240) out.memeCooldownMinutes = cooldown;
   else if (src["memeCooldownMinutes"] !== undefined) problems.push("memeCooldownMinutes 必须在 0–240，已忽略");
 
+  const salvage = src["salvagePlainReply"];
+  if (typeof salvage === "boolean") out.salvagePlainReply = salvage;
+  else if (salvage !== undefined) problems.push("salvagePlainReply 必须是 true/false，已忽略");
+
   const rawVoices = src["voices"];
   if (rawVoices && typeof rawVoices === "object" && !Array.isArray(rawVoices)) {
     const voices: FishConfig["voices"] = {};
@@ -165,6 +171,7 @@ const DEFAULTS: FishConfig = {
   memeCooldownMinutes: 8,
   voices: {},
   toolTimeoutSeconds: 30,
+  salvagePlainReply: true,
 };
 
 /** 读一次（不缓存），供热加载与启动各取所需。 */

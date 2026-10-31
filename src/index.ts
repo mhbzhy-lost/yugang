@@ -178,6 +178,18 @@ const bypassOf = new Map<string, string>();
 // 与 triggerOf 同生命周期：submit 后置 0，settle 的 finally 里删，成功/失败/抛错都不泄漏；
 // 只累计已登记的轮，收图轮等不经 submitRound 的提交不会留下孤儿条目。
 const sayCalled = new Map<string, number>();
+// 窗口键（chatKey\0发送者）→ 本组是否有「必答」放行（private/mentioned/replied_forward）。
+// gate 逐条放行时累积，flushBurst 整组消费并清掉：正文兜底只补必答轮——环境轮（rate_pass /
+// watched 等）零 say 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
+const burstMustAnswer = new Map<string, boolean>();
+
+/** 与 debouncer 一致的窗口键：群 + 发送者唯一确定一个待定组。 */
+function windowKey(chatKey: string, userId: number): string {
+  return `${chatKey}\u0000${userId}`;
+}
+
+/** 必答放行原因：只有以这些原因进闸的轮才允许正文兜底补发。 */
+const MUST_ANSWER_REASONS: ReadonlySet<string> = new Set(["private", "mentioned", "replied_forward"]);
 const conversations = new Map<string, Conversation>();
 
 const fish = await openFish({
@@ -450,6 +462,80 @@ async function sendBusyReplies(conv: Conversation, messageIds: readonly (number 
   if (queued) await drainLoop();
 }
 
+/** assistant entry 的可见正文：只拼 text block，thinking 与工具调用一概不碰。 */
+function flattenAssistantText(model: unknown): string {
+  if (!Array.isArray(model)) return "";
+  return model
+    .map((message) => {
+      const content = (message as { content?: unknown }).content;
+      if (!Array.isArray(content)) return "";
+      return content
+        .filter((block): block is { type: "text"; text: string } => block?.type === "text" && typeof block.text === "string")
+        .map((block) => block.text)
+        .join(" ");
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * 正文兜底补发（salvagePlainReply，仅必答轮）：一轮里一次 say 都没调但末条 assistant 有
+ * 非空正文时，取正文首行硬截 120 字，过与 say 完全相同的出口校验（结构 + 溯源 + 重复）
+ * 后经 outbox 补发。thinking / tool 文本永不涉及（只取 text block）；校验不过静默放弃，
+ * 本函数自身也永不抛错；误发可在 fish.config.json 里把 salvagePlainReply 设为 false 关掉。
+ */
+async function salvagePlainReply(
+  conv: Conversation,
+  chatKey: string,
+  trigger: { messageId?: number | string; mentionsBot: boolean },
+): Promise<void> {
+  try {
+    const view = await conv.viewState(ctx);
+    const entries = view.value.entries;
+    view.dispose();
+    // 只看本轮（最后一次 user 输入）之后末条 assistant 的正文
+    let lastUser = -1;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (entries[i]?.kind === "pi.user") { lastUser = i; break; }
+    }
+    if (lastUser < 0) return;
+    let text = "";
+    for (let i = lastUser + 1; i < entries.length; i++) {
+      const entry = entries[i] as { kind?: string; model?: unknown };
+      if (entry.kind === "pi.assistant") text = flattenAssistantText(entry.model);
+    }
+    const line = text.split("\n").map((s) => s.trim()).find(Boolean) ?? "";
+    if (!line) return;
+    const clipped = line.slice(0, 120);
+    const ledger = ledgerOf(conv.id);
+    const rejection = validateOutbound(
+      { messages: [clipped] },
+      {
+        limits: { ...DEFAULT_LIMITS, mediaRoot: config.mediaRoot },
+        now: Date.now(),
+        recent: ledger.recent,
+        sentThisRun: ledger.sentThisRun,
+        secrets: ledger.secrets,
+      },
+    );
+    if (rejection) {
+      console.log(`[鱼缸] ${chatKey} 兜底放弃：${rejection.code}`);
+      return;
+    }
+    await fish.enqueue(conv.id, {
+      items: [clipped],
+      quote: trigger.mentionsBot,
+      quoteId: trigger.messageId,
+      quoteForce: trigger.mentionsBot,
+      at: Date.now(),
+      key: `salvage:${trigger.messageId ?? Date.now()}`, // 幂等键：崩溃重放不重复发
+    });
+    console.log(`[鱼缸] ${chatKey} 兜底补发 1 条`);
+  } catch {
+    // 兜底本身不能拖垮主流程
+  }
+}
+
 /**
  * 提交一轮，等它跑完，再记账与换页。
  *
@@ -465,6 +551,8 @@ async function submitRound(input: {
   trigger: { messageId?: number | string; mentionsBot: boolean; userId?: number };
   /** 本轮是不是在回复别人（回复链要引用） */
   reply: boolean;
+  /** 本轮是否必答（闸放行原因 ∈ private/mentioned/replied_forward）：正文兜底只补必答轮 */
+  mustAnswer?: boolean;
   /** bypass 段（画图指令）；只在这一轮可见，轮 settle 即删 */
   bypass?: string;
 }): Promise<void> {
@@ -511,6 +599,10 @@ async function submitRound(input: {
       // 文案固定含「零出口轮」供 grep，完整解释在 .agents/skills/ops/SKILL.md
       if (result.status === "done" && (sayCalled.get(String(submission.id)) ?? 0) === 0) {
         console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say`);
+        // 必答轮的兜底补发：配置可关（mtime 热加载，每次触发现读）；环境轮只留上面的观测日志
+        if (input.mustAnswer === true && fishConfig().config.salvagePlainReply) {
+          await salvagePlainReply(conv, chatKey, trigger);
+        }
       }
       return result;
     } finally {
@@ -570,6 +662,9 @@ async function compactWithGuard(conv: Conversation, force = false): Promise<Comp
  */
 async function flushBurst(burst: PendingBurst): Promise<void> {
   const anchor = burst.anchor;
+  // 本组的必答标记整组消费一次（正文兜底判据）：窗口已随 timer 摘除，走哪条分支都不残留
+  const mustAnswer = burstMustAnswer.get(windowKey(burst.chatKey, burst.userId)) ?? false;
+  burstMustAnswer.delete(windowKey(burst.chatKey, burst.userId));
   // 会话/人格只认首次 push 那一份：5 秒窗口里主人 /切换人格 也改不了这一组的落点
   const conv = (burst.binding as Conversation | undefined) ?? (await conversationFor(anchor.chatKey));
 
@@ -613,6 +708,7 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     // 引用锚点与主动 @ 的身份闸都只认锚点；但整组里任意一条 @鱼，整组都必答
     trigger: { messageId: anchor.messageId, mentionsBot: burst.mustAnswer, userId: anchor.userId },
     reply: burst.quoteFromReply,
+    mustAnswer,
     ...(payload !== undefined ? { bypass: payload } : {}),
   });
 }
@@ -855,6 +951,9 @@ onebot.onMessage((raw) => {
     // 群消息：gate 放行不立即提交，等 5 秒静默把整组一起送进 loop（flushBurst）。
     // 会话在这里先定下来（人格按当下解析）并绑到窗口上：5 秒里 `/切换人格` 也改不了落点。
     if (msg.chatKey.startsWith("qq:group:")) {
+      // 必答放行随窗口累积（flush 时整组消费）：任一条必答进闸，整组都算必答
+      const key = windowKey(msg.chatKey, msg.userId);
+      burstMustAnswer.set(key, (burstMustAnswer.get(key) ?? false) || MUST_ANSWER_REASONS.has(decision.reason));
       push(await conversationFor(msg.chatKey));
       return;
     }
@@ -876,6 +975,7 @@ onebot.onMessage((raw) => {
       trigger: { messageId: msg.messageId, mentionsBot: msg.mentionsBot, userId: msg.userId },
       // 回复链：本轮触发本身是在回复某条消息，鱼的回应应引用触发那条
       reply: (msg.replyIds?.length ?? 0) > 0,
+      mustAnswer: MUST_ANSWER_REASONS.has(decision.reason),
       ...(bypass ? { bypass: bypass.stash } : {}),
     });
   })().catch((error: unknown) => {

@@ -16,5 +16,7 @@
       "referLanguage": "zh"
     }
   },
-  "toolTimeoutSeconds": 30
+  "toolTimeoutSeconds": 30,
+  "_salvagePlainReply": "注释：模型忘调 say 时的正文兜底，仅必答轮（私聊/被@/回复合集）生效——零 say 时取正文首行截 120 字补发；误发可把下面的键改成 false 关掉",
+  "salvagePlainReply": true
 }
