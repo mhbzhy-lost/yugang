@@ -9,11 +9,11 @@
   },
   "scripts": {
     "test": "node --test \"test/*.test.ts\"",
-    "start": "node --use-env-proxy --env-file-if-exists=.env src/index.ts",
+    "start": "node --env-file-if-exists=.env src/index.ts",
     "probe": "node --env-file-if-exists=.env scripts/probe.ts",
     "prompts": "node scripts/prompts.ts",
     "ops": "node --env-file-if-exists=.env scripts/ops.ts",
-    "ping": "node --use-env-proxy --env-file-if-exists=.env scripts/ping.ts",
+    "ping": "node --env-file-if-exists=.env scripts/ping.ts",
     "creds": "node scripts/creds.ts",
     "protocol": "node --env-file-if-exists=.env scripts/protocol.ts",
     "up": "node --env-file-if-exists=.env scripts/up.ts",
@@ -26,7 +26,8 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",
-    "@earendil-works/pi-durable": "1.4.0"
+    "@earendil-works/pi-durable": "1.4.0",
+    "https-proxy-agent": "9.1.0"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

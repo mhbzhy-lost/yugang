@@ -124,8 +124,8 @@ export async function loginWithDeviceCode(interaction: LoginInteraction): Promis
   }
 }
 
-export async function refreshTokens(credential: OAuthCredential, signal?: AbortSignal): Promise<OAuthCredential> {
-  const response = await fetch(TOKEN_URL, {
+export async function refreshTokens(credential: OAuthCredential, signal?: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<OAuthCredential> {
+  const response = await fetchImpl(TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({

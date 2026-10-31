@@ -194,6 +194,7 @@ const fish = await openFish({
         authPath: modelSelection.main.credentialsPath,
         provider: modelSelection.image.provider,
         model: modelSelection.image.modelId,
+        ...(modelSelection.image.proxy ? { proxy: modelSelection.image.proxy } : {}),
       }
     : undefined,
   // model 管理工具写回同一个文件

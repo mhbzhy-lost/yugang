@@ -16,8 +16,8 @@ import { generateGptImages } from "../media/gpt-image.ts";
 export interface GptImageToolDeps {
   prompts: PromptSet;
   mediaRoot: string;
-  /** models.image：authPath 决定凭据文件，provider 决定 auth.json 里哪条登录，model 是默认模型名。 */
-  gptImage?: { authPath: string; provider: string; model: string };
+  /** models.image：authPath 决定凭据文件，provider 决定 auth.json 里哪条登录，model 是默认模型名；proxy 只作用于这条通道。 */
+  gptImage?: { authPath: string; provider: string; model: string; proxy?: string };
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
@@ -104,6 +104,7 @@ export function createGptImageTool(deps: GptImageToolDeps) {
         params,
         ...(references.length > 0 ? { images: references } : {}),
         mediaRoot: deps.mediaRoot,
+        ...(deps.gptImage.proxy === undefined ? {} : { proxy: deps.gptImage.proxy }),
         ...(deps.timeoutMs === undefined ? {} : { timeoutMs: deps.timeoutMs }),
         ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
       }).catch((error: unknown) => {
