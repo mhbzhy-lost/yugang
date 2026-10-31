@@ -443,6 +443,22 @@ function hit(text: string, key: string): boolean {
 }
 
 /**
+ * section 整体（标题 + 正文）：body 为空或没有 scope 时不注入（undefined）。
+ * 标题拼装也在这里：harness 的 memory section 只调这一个函数，四处文案 key
+ * 的引用都留在本文件，messages.md 不会出现死文案。
+ */
+export function renderMemorySection(
+  state: MemoryState,
+  scope: RoundScope | undefined,
+  messages: Record<string, string>,
+): string | undefined {
+  const body = renderMemory(state, scope, messages);
+  if (!body) return undefined;
+  const header = messages["memory_section_header"] ?? "";
+  return [header, body].filter((line) => line.length > 0).join("\n");
+}
+
+/**
  * section-safe 处理：移除控制字符、空字节与 `<...>` 标记。
  * 记忆内容不能闭合 `<memory>` 或伪造新的 section 标记。
  */
