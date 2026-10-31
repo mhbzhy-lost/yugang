@@ -7,8 +7,8 @@
  */
 export const BYPASS_LIMIT = 200;
 
-/** bypass 段：前置字符非 ASCII 字母数字（兼容中文句号等 CJK 标点紧邻、也挡住「xxbypass:」误配），支持中英文冒号，段取到行尾（文本已单行归一）。 */
-const BYPASS_RE = /(?<![a-z0-9])bypass[：:]\s*(.+)$/i;
+/** bypass 段：前置字符非 ASCII 字母数字（兼容中文句号等 CJK 标点紧邻、也挡住「xxbypass:」误配），支持中英文冒号，段取到行尾（文本已单行归一）。宿主入口也用它定位 bypass 段做记忆文本剥离。 */
+export const BYPASS_RE = /(?<![a-z0-9])bypass[：:]\s*(.+)$/i;
 
 /** 主人或 BYPASS_GROUPS 名单内的群才有权用 bypass。 */
 export function bypassAllowed(
