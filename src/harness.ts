@@ -55,6 +55,8 @@ function makeFishExtension(
     tools: parts.tools,
     sections: [
       section("persona", () => persona, { tag: false }),
+      // 运维书：只给主人用的管理工具怎么用（模型切换 + 重启）
+      section("ops", () => parts.prompts.ops, { tag: true }),
       // 手工维护的人物档：比对话记忆更牢，和 handoff 互补
       section("people", () => parts.prompts.people, { tag: true }),
       // 特别关注名单：会话级文档，每次请求重新渲染（换页不动它），空名单不占位
@@ -110,6 +112,8 @@ export interface FishOptions {
   searchKey?: string;
   /** ChatGPT/Codex 图片通道（models.image）：authPath + provider 决定登录凭据，model 是默认模型名。 */
   gptImage?: { authPath: string; provider: string; model: string };
+  /** config/models.json 路径；model 管理工具写回时用。 */
+  modelsPath?: string;
   /** SD WebUI（Windows 宿主机）的 baseUrl；给了才有本地画图。 */
   sdUrl?: string;
   /** danbooru.csv 路径；给了才能查 tag 词表。 */
@@ -192,7 +196,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
 
   const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf, ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}),   ...(options.silentOf ? { silentOf: options.silentOf } : {}), ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}) });
   const react = createReactTool({ prompts, react: options.react, now });
-  const tools = createTools({ mediaRoot, prompts, models, visionModel: options.visionModel ?? options.model, searchKey: options.searchKey, ...(options.gptImage ? { gptImage: options.gptImage } : {}), sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, bypassOf: options.bypassOf });
+  const tools = createTools({ mediaRoot, prompts, models, visionModel: options.visionModel ?? options.model, searchKey: options.searchKey, ...(options.gptImage ? { gptImage: options.gptImage } : {}), ...(options.modelsPath ? { modelsPath: options.modelsPath } : {}), sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, bypassOf: options.bypassOf });
 
   // 启动即校验：每个工具都必须有一份 prompt/tools/<name>.md，缺了就起不来
   for (const tool of [say, react, ...tools]) {

@@ -28,13 +28,13 @@
 - **`callers: ["model"]`**：脚本、嵌套工具调用（`api.executeTool`）都碰不到 `say`，绕不过校验。
 - **拒绝不静默丢弃**：静默丢弃 = 群里一片死寂，而且模型永远学不会。
 
-## 没有 bash、没有 read、没有 skills、没有 MCP
+## 没有 bash、没有 skills、没有 MCP
 
-先后被砍掉的三样东西，理由都一样：**它们都是「通往一切的边」**。
+先后被砍掉的东西，理由都一样：**它们都是「通往一切的边」**。
 
 - `bash`：能给模型一条 shell，等于给整台机器
 - `skills`：脚本挂在 bash 那条边上，每加一项手艺都在扩大那条边
-- `read`：pi-durable 自带的 read 能读任意绝对路径，`/etc/passwd`、`~/.ssh/id_rsa` 都进得了上下文
+- `delete` / `edit` / `test`：通用改写与执行能力，风险远大于收益（2026-11 收掉）
 
 而群里坐着的是可以被 prompt 注入的陌生人。留下的东西必须**窄到能被一眼看完**。
 
@@ -44,11 +44,14 @@
   `src/tools/index.ts`。没有 shell，没有脚本解释器，没有 MCP server。
 - **每个工具是一个狭窄的函数**：确定的入参、确定的路径、确定的副作用。想让它危险，
   得有人显式写一行危险的代码，而不是模型自己拼一条命令。
-- **prompt 仍然全在 `prompt/tools/<name>.md`**：加一个工具 = 一个 `.ts` + 一个 `.md`，没有第三种位置。
+- **`read` / `grep` 能读仓库和 `/tmp/yugang`**；`.env`、`config/auth.json`、`.git`、`node_modules`、`.trash` 硬封禁。
+- **`write` 只能写 `/tmp/yugang`**（鱼自己的草稿区），仓库文件写不进去；
+  改模型配置用 `model` 管理工具，改完靠 `restart` 生效。
+- **`prompt` 仍然全在 `prompt/tools/<name>.md`**：加一个工具 = 一个 `.ts` + 一个 `.md`，没有第三种位置。
 
-**唯一能读文件的是 `look`**，而它只能读 `MEDIA_ROOT` 里的图片，一轮最多两次。
+**唯一能读媒体图片的是 `look`**，它只能读 `MEDIA_ROOT` 里的图片，一轮最多两次。
 要加别读文件的能力，正确做法是写一个「读某个确定目录下的某个确定文件」的工具，
-而不是把通用的 read 放回来。
+而不是把任意路径的通用读取放回来。
 
 代价：加能力要写 TypeScript、要重新部署。换来的是**能力面是可枚举的**——你把
 `src/tools/index.ts` 看一遍，就知道这条鱼最坏能干什么，而且这个清单会出现在 `npm run prompts` 里。
@@ -186,7 +189,7 @@ config/auth.example.json 模板，说明格式                                 �
 `providers.<name>.transport: "sse"` 是进程级流式传输设置（只取 `main` 的 provider）：
 Node 的 WS 不吃 `--use-env-proxy`，过代理时必须写 `"sse"`。
 
-鱼自己能 `read` / `edit` 这个文件（`config/auth.json` 在围栏外），改完用 `restart` 工具生效。
+鱼自己能 `read` 这个文件；主人可以让它用 `model` 工具切换三个角色，改完用 `restart` 生效。
 
 凭据只导一次，之后运行时不碰任何外部配置：
 

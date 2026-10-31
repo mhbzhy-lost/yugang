@@ -38,14 +38,13 @@ video_comments_header: 热评：
 video_failed: 视频没打开：{{url}}
 busy_reply: 缸里正在归档记忆，稍等一下再叫我
 fs_locked: 这些工具只在主人让你动手改自己时可用
-fs_outside: 这个路径不在可操作范围内
+fs_outside: 路径不在可读范围内（仓库或 /tmp/yugang）
+fs_write_outside: write 只能写 /tmp/yugang 里的文件
 fs_missing: 找不到这个文件
 fs_binary: 二进制文件不读
 grep_bad_regex: 正则写错了，检查一下括号和转义
 grep_none: 没搜到
 fs_too_big: 文件太大
-fs_not_found_text: 原文没找到，先 read 看准
-fs_ambiguous_text: 原文在文件里出现多次，扩大范围再改
 meme_add_master: 只有主人能让图长期留在库里，这张不收
 meme_add_missing: 找不到这张图：{{ref}}
 meme_add_type: 这不是能收的图片类型：{{ref}}
@@ -111,3 +110,14 @@ gpt_image_off: 在线生图没登录，先用 npm run login 登录
 gpt_image_unconfigured: 没配图片模型，去 config/models.json 的 models.image 里加一条
 gpt_image_bad_ref: 参考图 {{ref}} 用不了（要媒体目录里的图片）
 gpt_image_done: 画好了：{{files}} —— 用 say 的 media 参数发出去
+
+model_list_prefix: 当前模型：
+model_list_available: 可切换的 provider / 模型：
+model_image_hint: image 是图片透传通道，模型名不校验
+model_switch_missing: switch 需要 role、provider、model 三个参数
+model_bad_role: role 只能是 main / vision / image
+model_unknown_provider: providers 里没有 {{provider}}；现有：{{providers}}
+model_unknown_model: {{provider}} 没有模型 {{model}}；可用：{{models}}
+model_write_failed: 写 config/models.json 失败：{{error}}
+model_bad_json: config/models.json 解析失败：{{error}}
+model_switch_done: 已切换 {{role}} → {{provider}}/{{model}}，restart 后生效

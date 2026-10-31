@@ -29,6 +29,8 @@ export interface PromptSet {
   handoff: string;
   /** 群档案模板，建会话时渲染一次。 */
   groupProfile: string;
+  /** 运维书：管理工具（模型切换 / 重启）的使用约束，常驻 section。 */
+  ops: string;
   /** 手工维护的人物档，作为常驻 section。 */
   people: string;
   /** 表情包一级情绪词表（prompt/meme-tags.md 里一行一个词），打标与检索都只认这些。 */
@@ -46,6 +48,7 @@ export function loadPrompts(root: string): PromptSet {
     persona: read(join(root, "persona.md")),
     handoff: read(join(root, "handoff.md")),
     groupProfile: read(join(root, "group-profile.md")),
+    ops: read(join(root, "ops.md")),
     people: read(join(root, "people.md")),
     memeTags: loadWordList(join(root, "meme-tags.md")),
     messages: parseMessageTable(read(join(root, "messages.md")), join(root, "messages.md")),
@@ -165,7 +168,7 @@ export function requireTool(prompts: PromptSet, name: string): ToolPrompt {
 
 /** 审查用：列出所有 prompt 文件、大小与 sha256。 */
 export function auditPrompts(root: string): { file: string; bytes: number; sha256: string }[] {
-  const files = ["persona.md", "handoff.md", "group-profile.md", "people.md", "messages.md"];
+  const files = ["persona.md", "ops.md", "handoff.md", "group-profile.md", "people.md", "messages.md"];
   for (const entry of readdirSync(join(root, "tools")).sort()) {
     if (entry.endsWith(".md")) files.push(join("tools", entry));
   }

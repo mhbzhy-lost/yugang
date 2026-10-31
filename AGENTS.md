@@ -15,8 +15,8 @@
 
 工具面：`say`（唯一出口，可拆条/引用/带图/带表情包/发语音）、`react`（只贴表情）、
 `look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`draw`（本地 SD 生图）、`gpt_image`（GPT Image 2 透传）、
-`search`/`video`（联网查）、`watch`（特别关注）、以及主人专属的文件六件套
-`read`/`edit`/`write`/`delete`/`tree`/`restart` 与 `grep`、`test`、`tags`。
+`search`/`video`（联网查）、`watch`（特别关注）、以及主人专属的 `read`/`grep`/`write`（草稿区）、
+`tree`、`model`（切换各类能力使用的模型）、`restart` 与 `tags`。
 
 ## 硬约束
 
@@ -48,10 +48,12 @@
 
 ### 3. 能力面必须是可枚举的窄接口（2026-10 修订：主人解锁下有限自改）
 
-禁止 shell / 脚本执行 / MCP server。文件读写另设六个语义工具（read/edit/write/delete/tree/restart）：
-- 范围硬围栏：仅仓库工作区；.env、config/auth.json、.git、node_modules、.trash 硬封禁
+禁止 shell / 脚本执行 / MCP server。读写与自改另设语义工具（`read`/`grep`/`write`/`tree`/`model`/`restart`）：
+- `read` / `grep`：可读仓库与 `/tmp/yugang`；.env、config/auth.json、.git、node_modules、.trash 硬封禁
+- `write`：**只能写 `/tmp/yugang`**（鱼的草稿区），仓库文件写不进去
+- `model`：只改 `config/models.json` 的 `models` 角色表（main / vision / image），写完靠 `restart` 生效
 - 身份闸（机械判定）：仅主人（MASTER_QQ）触发的轮里可用，execute 内核对 triggerOf 的 userId
-- delete 只移入 .trash/ 可恢复；全部操作打审计日志；自改大事故靠 git 回滚
+- 全部操作打审计日志；自改大事故靠 git 回滚
 `look` 是唯一能读文件的东西，它只能读媒体目录里的图片，且一轮最多两次。
 
 原因：这些都是一条「通往一切的边」，而群里坐着的是可以被 prompt 注入的陌生人。

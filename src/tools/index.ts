@@ -14,9 +14,9 @@ import { createMemeAddTool } from "./meme-add.ts";
 import { createFsTools } from "./fs.ts";
 import { createRestartTool } from "./restart.ts";
 import { createTreeTool } from "./tree.ts";
-import { createTestTool } from "./test.ts";
 import { createDrawTool } from "./draw.ts";
 import { createGptImageTool } from "./gpt-image.ts";
+import { createModelTool } from "./model.ts";
 import { createWatchTool } from "./watch.ts";
 import { createTagsTool } from "./tags.ts";
 
@@ -31,6 +31,8 @@ export interface ToolDeps {
   searchKey?: string;
   /** 主人 QQ：fs/restart 自改工具的身份闸。缺省则这些工具不可用（永远拒绝）。 */
   master?: string;
+  /** config/models.json 路径；model 管理工具写回时用。 */
+  modelsPath?: string;
   /** 会话 → 群成员名单；watch 用它校验被关注人真的在群里。 */
   onWatchChanged?: (conversationId: string, userIds: string[]) => void;
   groupMembersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
@@ -49,12 +51,14 @@ export interface ToolDeps {
 export function createTools(deps: ToolDeps): ToolRegistration[] {
   const fsTools = deps.master
     ? (() => {
-        const { read, grep, edit, write, del } = createFsTools({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf });
-        return [read, grep, edit, write, del];
+        const { read, grep, write } = createFsTools({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf });
+        return [read, grep, write];
       })()
     : [];
   const treeTool = deps.master ? [createTreeTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf })] : [];
-  const testTool = deps.master ? [createTestTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf })] : [];
+  const modelTool = deps.master
+    ? [createModelTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf, ...(deps.modelsPath ? { modelsPath: deps.modelsPath } : {}) })]
+    : [];
   const restartTool = deps.master
     ? [createRestartTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf })]
     : [];
@@ -74,7 +78,7 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     ...(deps.master ? [createWatchTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf, ...(deps.groupMembersOf ? { membersOf: deps.groupMembersOf } : {}), ...(deps.onWatchChanged ? { onChanged: deps.onWatchChanged } : {}) })] : []),
     createTagsTool({ prompts: deps.prompts, csvPath: deps.tagsCsv }),
     ...treeTool,
-    ...testTool,
+    ...modelTool,
     ...restartTool,
   ];
 }

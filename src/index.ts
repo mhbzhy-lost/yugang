@@ -196,6 +196,8 @@ const fish = await openFish({
         model: modelSelection.image.modelId,
       }
     : undefined,
+  // model 管理工具写回同一个文件
+  modelsPath: modelSelection.main.configSource,
   sdUrl: process.env.SD_WEBUI_URL,
   // （sdUrl 存在时见启动处的邻居保温定时器）
   tagsCsv: join(HOME, "danbooru.csv"),
