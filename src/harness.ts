@@ -34,9 +34,22 @@ import { withToolTimeout } from "./tools/timeout.ts";
 import { loadMemeIndex, countMoods } from "./tools/meme/shared.ts";
 import { WatchDoc } from "./store.ts";
 import { createCompactor, MemoryExtractError, type CompactResult, type Compactor } from "./compact.ts";
-import { ChatsDoc, MemoryDoc, OutboxDoc } from "./store.ts";
-import { applyPatch, MEMORY_CAPS, renderMemorySection } from "./memory.ts";
-import { memoryKeyOf, peekScope } from "./memory-scope.ts";
+import { ChatsDoc, MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc, OutboxDoc } from "./store.ts";
+import {
+  approvePending,
+  isPatchEmpty,
+  mergeMemoryStates,
+  newPendingId,
+  rejectPending,
+  renderMemorySection,
+  summarizePatch,
+  formatAgeShort,
+  MEMORY_CAPS,
+  MEMORY_PENDING_CAP,
+  type MemoryCommand,
+  type PendingMemoryEntry,
+} from "./memory.ts";
+import { memoryKeyOf, peekScope, privateMemoryKeyOf } from "./memory-scope.ts";
 
 /** 群档案作为一条 system 消息放进 transcript，只在建会话时写一次。 */
 export const GroupProfileEntry = defineEntry("fish.group-profile");
@@ -61,6 +74,8 @@ function makeFishExtension(
     manifests: readonly ToolManifest[];
     /** conversationId → 原始 chatKey（人格后缀已去掉）；root 会话没有记忆，返回 undefined */
     memoryKeyOf: (conversationId: string) => string | undefined;
+    /** conversationId → 原始 chatKey：私有层 doc key（人格名@chatKey）由它现算 */
+    chatKeyOf: (conversationId: string) => string | undefined;
   },
 ): Extension {
   return defineExtension({
@@ -97,16 +112,23 @@ function makeFishExtension(
         return [header, `${line}（共 ${entries.length} 张）`].filter((s) => s.length > 0).join("\n");
       }, { tag: true }),
       // 长期记忆：只经这一个 system section 注入，绝不进 user message。只读 session
-      // family（不 commit、不写 lastUsedAt）；没有 scope 或没有可渲染内容时不占位。
-      // 改动这里或 renderMemoryTranscript 的白名单前必读 src/memory.ts 的安全边界注释：
-      // 记忆抽取只读结构化原始 entry，必须继续排除 pi.system、宿主任务文案和工具结果，
-      // 否则「记忆 → 抽取 → 记忆」的自我污染闭环会复活。
+      // family（不 commit、不写 lastUsedAt）；当前会话可见 = 公共 doc + 本会话私有 doc
+      // 合并渲染（mergeMemoryStates，总预算 ≤900 字不变）；私有层绝不注入非来源会话。
+      // 没有可渲染内容时不占位。改动这里或 renderMemoryTranscript 的白名单前必读
+      // src/memory.ts 的安全边界注释：记忆抽取只读结构化原始 entry，必须继续排除
+      // pi.system、宿主任务文案和工具结果，否则「记忆 → 抽取 → 记忆」的自我污染闭环会复活。
       section("memory", async (input, context) => {
         const memoryKey = parts.memoryKeyOf(String(input.conversationId));
         if (!memoryKey) return undefined;
-        const snapshot = await input.read.snapshot(MemoryDoc, memoryKey, context);
-        if (!snapshot) return undefined;
-        return renderMemorySection(snapshot, peekScope(String(input.conversationId)), parts.prompts.messages);
+        const chatKey = parts.chatKeyOf(String(input.conversationId));
+        const [pub, priv] = await Promise.all([
+          input.read.snapshot(MemoryDoc, memoryKey, context),
+          chatKey === undefined
+            ? Promise.resolve(undefined)
+            : input.read.snapshot(MemoryPrivateDoc, privateMemoryKeyOf(memoryKey, chatKey), context),
+        ]);
+        if (!pub && !priv) return undefined;
+        return renderMemorySection(mergeMemoryStates(pub, priv), peekScope(String(input.conversationId)), parts.prompts.messages);
       }, { tag: true }),
     ],
   });
@@ -217,6 +239,17 @@ export interface Fish {
   toolNames: string[];
   /** 压缩一次上下文；没到阈值就什么都不做。 */
   compact(conversation: Conversation, force?: boolean): Promise<CompactResult>;
+  /** 待审记忆一览（全局单视图）：按人格分组，组内最旧在前；不含没注册人格的残留 doc。 */
+  pendingMemories(): Promise<{ persona: string; entries: PendingMemoryEntry[] }[]>;
+  /** 同意一条待审：公共=并入人格公共 doc；私有=并入该人格在来源会话的私有 doc。 */
+  approveMemory(id: string, track: "公共" | "私有"): Promise<
+    { status: "ok"; track: "公共" | "私有"; persona: string; originChatKey: string; digest: string }
+      | { status: "missing" | "no_origin" }
+  >;
+  /** 拒绝待审：单条 id 或 "all"（全部人格的全部待审）；返回删掉的条数。 */
+  rejectMemory(id: string | "all"): Promise<number>;
+  /** /记忆 指令的机械回复（闸前通道，不进模型）：群内只回引导语，私聊里执行列表/同意/拒绝。 */
+  memoryCommandReply(chatKey: string, command: MemoryCommand): Promise<string>;
   /** 取（或创建）某个群在指定人格下的会话；映射持久化，重启后还是同一个会话。未注册人格回退默认。 */
   group(groupKey: string, profile?: GroupProfile, persona?: string): Promise<Conversation>;
   /** 把 outbox 里排队的消息发出去；返回实际发了几条。队首卡在 sending 的会话会被跳过（不重发）。 */
@@ -250,6 +283,17 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     "memory_people_header",
     "memory_lore_header",
     "memory_cards_header",
+    "cmd_memory_group",
+    "cmd_memory_usage",
+    "cmd_memory_empty",
+    "cmd_memory_list_header",
+    "cmd_memory_entry",
+    "cmd_memory_more",
+    "cmd_memory_ok",
+    "cmd_memory_missing",
+    "cmd_memory_no_origin",
+    "cmd_memory_rejected",
+    "cmd_memory_rejected_all",
   ]) {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
@@ -260,6 +304,10 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   // （不注入、不抽取）。
   const memoryKeyByConversation = new Map<string, string>();
   const memoryKeyOfConversation = (conversationId: string): string | undefined => memoryKeyByConversation.get(conversationId);
+  // conversationId → 原始 chatKey（不带人格后缀）：待审条目的来源会话与私有层 doc key
+  // （人格名@chatKey）都由它现算；group() 的创建与复用两条路径都会登记。
+  const chatKeyByConversation = new Map<string, string>();
+  const chatKeyOfConversation = (conversationId: string): string | undefined => chatKeyByConversation.get(conversationId);
 
   // 最终 loader：扫描 src/tools/<name>/TOOL.md + tool.ts，严格一一对应后调 factory 注册；
   // say / react / tool_search eager，其余已启用工具 deferred。依赖不满足（无 master、
@@ -307,11 +355,11 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     const override = options.toolTimeoutOverrides?.[tool.name];
     return withToolTimeout(tool, override === undefined ? toolTimeoutMs : override * 1000, toolTimeoutMessage);
   });
-  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation });
+  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation, chatKeyOf: chatKeyOfConversation });
   const personaExtensions = new Map<string, Extension>();
   const openers: Record<string, string> = {};
   for (const [name, book] of Object.entries(prompts.personas)) {
-    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation }));
+    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation, chatKeyOf: chatKeyOfConversation }));
     if (book.opener) openers[name] = book.opener;
   }
 
@@ -417,26 +465,25 @@ export async function openFish(options: FishOptions): Promise<Fish> {
           );
           return { text, subjects };
         },
-        saveMemories: async (memoryKey, patch) => {
-          // 同一 commit 内读改同一 family member：同一群不同人格可能同时压缩，
-          // 不能先在 commit 外 snapshot 再整份覆盖（后写会把先写的 patch 吃掉）
+        // 只入待审库：patch 不直接 apply，主人批准后才进公共/私有 doc（审批闸硬约束）。
+        // originChatKey 由 harness 的 conversation→chatKey 映射解析；同一 commit 内读改
+        // 同一 family member，不能先在 commit 外 snapshot 再整份覆盖（后写会把先写的吃掉）
+        savePendingMemories: async (memoryKey, patch, conversationId) => {
+          const originChatKey = chatKeyByConversation.get(String(conversationId)) ?? "";
           await harness.commit(async (tx) => {
-            const doc = await tx.doc(MemoryDoc, memoryKey, memoryKey);
             const extractedAt = now();
-            const next = applyPatch(
-              {
-                people: doc.people,
-                lore: doc.lore,
-                cards: doc.cards,
-                version: 1,
-                ...(doc.lastExtractAt ? { lastExtractAt: doc.lastExtractAt } : {}),
-              },
-              patch,
-              extractedAt,
-            );
-            doc.people = next.people;
-            doc.lore = next.lore;
-            doc.cards = next.cards;
+            if (!isPatchEmpty(patch)) {
+              const pending = await tx.doc(MemoryPendingDoc, memoryKey, memoryKey);
+              pending.entries.push({ id: newPendingId(), patch, originChatKey, at: extractedAt });
+              // 待审淘汰：超上限挤掉最旧（观察期 MEMORY_PENDING_CAP=Infinity 不生效）。
+              // 只打 id 与人格名，被淘汰条目的内容不进日志（隐私）
+              while (pending.entries.length > MEMORY_PENDING_CAP) {
+                const evicted = pending.entries.shift();
+                if (evicted !== undefined) console.log(`[鱼缸] 记忆待审淘汰 ${evicted.id} ${memoryKey}`);
+              }
+            }
+            // 空 patch 不进待审，但 lastExtractAt 照样推进（待审写入即推进）
+            const doc = await tx.doc(MemoryDoc, memoryKey, memoryKey);
             doc.lastExtractAt = extractedAt;
           }, ctx);
         },
@@ -512,6 +559,59 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     }
   }
 
+  // 待审批的三件实现（返回对象的同名方法与 memoryCommandReply 共用）：全局单视图，
+  // 所有注册人格的待审 doc 都看；人格书被删后残留的待审 doc 这里看不到（用
+  // npm run memory -- --pending 查）。id 在生成时即跨人格唯一（72 位随机），
+  // /记忆 同意/拒绝按 id 全局定位。
+  const personaKeys = [DEFAULT_PERSONA, ...Object.keys(prompts.personas)];
+  async function pendingMemoriesLocal(): Promise<{ persona: string; entries: PendingMemoryEntry[] }[]> {
+    const views: { persona: string; entries: PendingMemoryEntry[] }[] = [];
+    for (const persona of personaKeys) {
+      const snapshot = await harness.snapshot(MemoryPendingDoc, persona, ctx);
+      const entries = [...(snapshot?.entries ?? [])].sort((a, b) => a.at - b.at);
+      if (entries.length > 0) views.push({ persona, entries });
+    }
+    return views;
+  }
+  async function approveMemoryLocal(id: string, track: "公共" | "私有") {
+    for (const persona of personaKeys) {
+      const snapshot = await harness.snapshot(MemoryPendingDoc, persona, ctx);
+      const entry = snapshot?.entries.find((item) => item.id === id);
+      if (!entry) continue;
+      if (track === "私有" && !entry.originChatKey) return { status: "no_origin" as const };
+      const targetKey = track === "私有" ? privateMemoryKeyOf(persona, entry.originChatKey) : persona;
+      const digest = summarizePatch(entry.patch);
+      const originChatKey = entry.originChatKey;
+      try {
+        await harness.commit(async (tx) => {
+          const pending = await tx.doc(MemoryPendingDoc, persona, persona);
+          const target = await tx.doc(track === "私有" ? MemoryPrivateDoc : MemoryDoc, targetKey, targetKey);
+          const result = approvePending(pending, id, target, now());
+          if (result.status === "missing") throw new Error("memory_pending_missing");
+        }, ctx);
+      } catch (error) {
+        // 并发下条目刚好被批掉：回 missing；其它错误照实抛给宿主日志
+        if (error instanceof Error && error.message === "memory_pending_missing") return { status: "missing" as const };
+        throw error;
+      }
+      return { status: "ok" as const, track, persona, originChatKey, digest };
+    }
+    return { status: "missing" as const };
+  }
+  async function rejectMemoryLocal(id: string | "all"): Promise<number> {
+    let removed = 0;
+    for (const persona of personaKeys) {
+      const snapshot = await harness.snapshot(MemoryPendingDoc, persona, ctx);
+      if (!snapshot || snapshot.entries.length === 0) continue;
+      if (id !== "all" && !snapshot.entries.some((item) => item.id === id)) continue;
+      await harness.commit(async (tx) => {
+        const pending = await tx.doc(MemoryPendingDoc, persona, persona);
+        removed += rejectPending(pending, id);
+      }, ctx);
+    }
+    return removed;
+  }
+
   return {
     harness,
     models,
@@ -523,6 +623,60 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     async compact(conversation, force) {
       if (!compactor) return { compacted: false, reason: "below_threshold" };
       return compactor.maybeCompact(conversation, force);
+    },
+    async pendingMemories() {
+      return pendingMemoriesLocal();
+    },
+    async approveMemory(id, track) {
+      return approveMemoryLocal(id, track);
+    },
+    async rejectMemory(id) {
+      return rejectMemoryLocal(id);
+    },
+    async memoryCommandReply(chatKey, command) {
+      const messages = prompts.messages;
+      // 群内 /记忆 一律只回引导语：无任何副作用（不预选、不过滤、不列部分内容）
+      if (chatKey.startsWith("qq:group:")) return messages["cmd_memory_group"] ?? "";
+      if (command.kind === "usage") return messages["cmd_memory_usage"] ?? "";
+      if (command.kind === "approve") {
+        const result = await approveMemoryLocal(command.id, command.track);
+        if (result.status === "missing") return renderTemplate(messages["cmd_memory_missing"] ?? "", { id: command.id });
+        if (result.status === "no_origin") return renderTemplate(messages["cmd_memory_no_origin"] ?? "", { id: command.id });
+        return renderTemplate(messages["cmd_memory_ok"] ?? "", { track: result.track, digest: result.digest });
+      }
+      if (command.kind === "reject") {
+        const removed = await rejectMemoryLocal(command.id);
+        if (removed === 0) return renderTemplate(messages["cmd_memory_missing"] ?? "", { id: command.id });
+        return command.all
+          ? renderTemplate(messages["cmd_memory_rejected_all"] ?? "", { count: String(removed) })
+          : renderTemplate(messages["cmd_memory_rejected"] ?? "", { id: command.id });
+      }
+      // 列表：全局单视图（所有人格），最旧在前——最先会被淘汰的排最前，头部给汇总行
+      const views = await pendingMemoriesLocal();
+      const entries = views
+        .flatMap((view) => view.entries.map((entry) => ({ entry, persona: view.persona })))
+        .sort((a, b) => a.entry.at - b.entry.at);
+      if (entries.length === 0) return messages["cmd_memory_empty"] ?? "";
+      const header = renderTemplate(messages["cmd_memory_list_header"] ?? "", {
+        count: String(entries.length),
+        age: formatAgeShort(now() - entries[0].entry.at),
+      });
+      const shown = entries.slice(0, 30);
+      const lines = shown.map(({ entry, persona }) =>
+        renderTemplate(messages["cmd_memory_entry"] ?? "", {
+          id: entry.id,
+          persona,
+          origin: entry.originChatKey || "-",
+          age: formatAgeShort(now() - entry.at),
+          digest: summarizePatch(entry.patch),
+        }),
+      );
+      const rest = entries.length - shown.length;
+      return [
+        header,
+        ...lines,
+        ...(rest > 0 ? [renderTemplate(messages["cmd_memory_more"] ?? "", { count: String(rest) })] : []),
+      ].join("\n");
     },
     async enqueue(conversationId, payload) {
       await harness.commit(async (tx) => {
@@ -603,8 +757,10 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         })().then((conversation) => {
           // 创建与复用两条路径都在这里登记：key 是映射键（chatKey 或 chatKey#人格），
           // memoryKeyOf 提取人格名（无后缀 = 默认）——同一个人格的所有会话
-          // （各群、私聊）都指向同一个 family member
+          // （各群、私聊）都指向同一个公共 family member；原始 chatKey 另存一份，
+          // 待审条目的来源会话与私有层 doc key（人格名@chatKey）都由它现算
           memoryKeyByConversation.set(String(conversation.id), memoryKeyOf(key));
+          chatKeyByConversation.set(String(conversation.id), groupKey);
           return conversation;
         });
         groups.set(key, existing);

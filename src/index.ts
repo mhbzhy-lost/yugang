@@ -43,7 +43,7 @@ import { createUsageLedger, sumUsage } from "./usage.ts";
 import { bypassAllowed, splitBypass, BYPASS_RE } from "./bypass.ts";
 import { ChatsDoc, WatchDoc } from "./store.ts";
 import { renderTemplate } from "./prompts.ts";
-import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, type MemoryInbound } from "./memory.ts";
+import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, type MemoryInbound, parseMemoryCommand } from "./memory.ts";
 import { pushScope, shiftScope } from "./memory-scope.ts";
 import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
@@ -831,7 +831,12 @@ async function handleCommand(msg: IncomingMessage): Promise<string | null> {
   let text: string;
   let media: string | undefined;
   let opener: string | undefined;
-  if (msg.text === "/查询可用人格") {
+  // /记忆 审批（闸前机械通道）：解析在 memory.ts 的 parseMemoryCommand，执行与文案装配
+  // 都在 harness 的 memoryCommandReply（群内只回引导语；私聊全局单视图列表/同意/拒绝）
+  const memoryCommand = parseMemoryCommand(msg.text);
+  if (memoryCommand) {
+    text = await fish.memoryCommandReply(msg.chatKey, memoryCommand);
+  } else if (msg.text === "/查询可用人格") {
     text = renderTemplate(fish.prompts.messages["cmd_personas"] ?? "", { list });
   } else if (msg.text === "/关看图") {
     setLookDisabled(true);

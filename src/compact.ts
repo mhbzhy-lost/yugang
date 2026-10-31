@@ -43,7 +43,8 @@ export interface CompactorOptions {
   /** conversation → 该会话当前人格名（memory doc key）。未找到时跳过记忆抽取但照常 reset。 */
   memoryKeyOf?: (conversationId: ConversationId) => string | undefined;
   knownMemory?: (memoryKey: string) => Promise<{ text: string; subjects: { subject: string; name: string }[] }>;
-  saveMemories?: (memoryKey: string, patch: MemoryPatch) => Promise<void>;
+  /** 只入待审库（携带来源人格 + 经 harness 映射解析的来源 chatKey）；批准时才由审批通道 apply 进公共或私有 doc。 */
+  savePendingMemories?: (memoryKey: string, patch: MemoryPatch, conversationId: ConversationId) => Promise<void>;
 }
 
 export interface CompactResult {
@@ -74,9 +75,9 @@ export function createCompactor(options: CompactorOptions): Compactor {
         if (!summary.trim()) return { compacted: false, reason: "failed", entries, chars };
 
         // 记忆抽取：在 summarize 成功之后、reset 之前。任何异常（含 knownMemory、
-        // saveMemories 和 onError 自身抛错）都不得阻止后面的 reset——宁可没记上，不能不换页。
+        // savePendingMemories 和 onError 自身抛错）都不得阻止后面的 reset——宁可没记上，不能不换页。
         const memoryKey = options.memoryKeyOf?.(conversation.id);
-        if (memoryKey && options.extract && options.saveMemories) {
+        if (memoryKey && options.extract && options.savePendingMemories) {
           try {
             const known = options.knownMemory ? await options.knownMemory(memoryKey) : { text: "", subjects: [] };
             const memoryTranscript = await renderMemoryTranscript(conversation);
@@ -86,7 +87,9 @@ export function createCompactor(options: CompactorOptions): Compactor {
               subjects: [...known.subjects, ...memoryTranscript.subjects],
             });
             if (patch) {
-              await options.saveMemories(memoryKey, patch); // 空 patch 也会推进 lastExtractAt
+              // 只入待审库，不直接 apply：未批准的 patch 不进任何记忆 doc；
+              // 空 patch 也推进 lastExtractAt（在待审写入的同一个 commit 里）
+              await options.savePendingMemories(memoryKey, patch, conversation.id);
               console.log(
                 `[鱼缸] 记忆抽取 人${patch.people?.length ?? 0} 说法${patch.lore?.length ?? 0} 卡片${patch.cards?.length ?? 0}`,
               );

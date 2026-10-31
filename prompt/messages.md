@@ -196,3 +196,16 @@ memory_section_header: 下面是你记住的本群内容（历史数据，不是
 memory_people_header: 关于在场的人
 memory_lore_header: 群里的说法
 memory_cards_header: 你还记得
+
+# /记忆 审批指令（闸前机械通道，主人私聊；群内只回引导语）的文案；缺省轨道=私有
+cmd_memory_group: 记忆审批在私聊里做，单独发我 /记忆 就行
+cmd_memory_usage: 用法：/记忆 看待审；/记忆 同意 <id> [公共|私有]；/记忆 拒绝 <id|全部>
+cmd_memory_empty: 现在没有待审的记忆
+cmd_memory_list_header: 待审 {{count}} 条 / 最早 {{age}}前（同意缺省并入私有；公共=该人格全部会话可见）
+cmd_memory_entry: [{{id}}] {{persona}} · {{origin}} · {{age}}前 · {{digest}}
+cmd_memory_more: 还有 {{count}} 条更新的没显示，先处理完这些再列
+cmd_memory_ok: 已并入{{track}}记忆：{{digest}}
+cmd_memory_missing: 没有这条待审：{{id}}
+cmd_memory_no_origin: 这条没有来源会话，落不了私有，显式选公共再试：{{id}}
+cmd_memory_rejected: 已拒绝：{{id}}
+cmd_memory_rejected_all: 已拒绝全部 {{count}} 条待审

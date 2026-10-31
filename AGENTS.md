@@ -220,36 +220,55 @@
 - 单次工具调用超时 30 秒（`fish.config` 的 `toolTimeoutSeconds`），超时以 tool 错误返回，
   **没有整轮超时**
 
-### 16. 长期记忆
+### 16. 长期记忆（审批闸 + 公共/私有双轨）
 
-- **按人格隔离**：记忆存在 session 级 keyed family `fish.memory` 里，key 是人格名
-  （默认人格 = `默认`；`memoryKeyOf()` 是唯一实现，谁也不许自己写一份）。每个人格是一个
-  独立个体：它的全部会话（各群、主人私聊、未来渠道）共享同一份记忆并互相合并；
-  **不同人格之间禁止共享**。既定语义：主人私聊里告诉某人格的事，可能经记忆在该人格
-  出现的其它群浮现——抽取提示词的隐私过滤与渲染时的在场/关键词门槛照常生效
-- **只在压缩时写**：写入入口只有压缩链路（`compact.ts` 的 `saveMemories`，同一 commit 内读改，
-  同一人格多个会话并发压缩不会互相覆盖）；没有 `remember` 工具、没有定时任务、没有主动回忆。
-  每次成功压缩都推进 `lastExtractAt`（空 patch 也算）；抽取失败不阻塞换页
+- **按人格隔离的双层结构**：公共层 `fish.memory`（key=人格名，默认人格 = `默认`；
+  `memoryKeyOf()` 是唯一实现，谁也不许自己写一份）与私有层 `fish.memory.private`
+  （key=`人格名@chatKey`，`privateMemoryKeyOf()` 是唯一实现）。每个人格是一个独立个体：
+  它的公共层在全部会话（各群、主人私聊、未来渠道）共享并互相合并；私有层只在该人格的
+  **来源会话**注入；**不同人格之间禁止共享**。既定语义：主人私聊里告诉某人格的事，
+  经批准为公共后可能在该人格出现的其它群浮现——抽取提示词的隐私过滤与渲染时的
+  在场/关键词门槛照常生效
+- **压缩只入待审（审批闸）**：写入入口只有压缩链路（`compact.ts` 的 `savePendingMemories`，
+  同一 commit 内读改，同一人格多个会话并发压缩不会互相覆盖），且只写进待审库
+  `fish.memory.pending`（key=人格名；条目 `{id, patch, originChatKey, at}`，id 由代码生成、
+  跨人格唯一）。**未批准的 patch 永不进任何记忆 doc、永不注入 section、永不被模型看见**。
+  待审上限 `MEMORY_PENDING_CAP`（观察期 2026-11 暂不设限，改小常量即恢复淘汰，
+  淘汰时打 `[鱼缸] 记忆待审淘汰 <id> <人格名>`，内容不进日志）；每次成功压缩都推进
+  `lastExtractAt`（待审写入即推进，空 patch 不进待审但也推进）；抽取失败不阻塞换页。
+  没有 `remember` 工具、没有定时任务、没有主动回忆
+- **批准双轨（写通道只有两处）**：主人私聊的 `/记忆` 机械指令（闸前通道，不进模型）与
+  `scripts/memory.ts` 的 `--approve` / `--reject`。私聊 `/记忆` 是**全局单视图**：列出所有
+  人格的待审（不按当前会话人格过滤），每条标签含来源人格 + 来源会话，最旧在前，
+  头部带 `待审 N 条 / 最早 Xh Ym前` 汇总；`/记忆 同意 <id> [公共|私有]`（**缺省=私有**，
+  最小可见面是默认，公开是主动决定；私有=并入来源会话私有 doc，公共=并入人格公共 doc）；
+  `/记忆 拒绝 <id|全部>`；id 不存在回错误。**群内 `/记忆` 只回引导语，无任何副作用**
+  （不按群预选/过滤）。批准时两层 doc 各自独立执行上限与淘汰（`applyPatch`，两个 doc 分别 apply）
 - **只经 system section 注入**：记忆文本只从 `memory` section 进模型，**绝不允许拼进 user
-  message**；渲染只读（不写 `lastUsedAt`）；无 scope 或无可渲染内容时不占位。抽取器只读结构化
+  message**；当前会话可见 = 公共 doc + 本会话私有 doc 现算 key 后合并渲染
+  （`mergeMemoryStates`，总预算 ≤900 字、排序规则不变），私有层绝不注入非来源会话；
+  渲染只读（不写 `lastUsedAt`）；无 scope 或无可渲染内容时不占位。抽取器只读结构化
   原始 entry（`fish.inbound` 的 data / `fish.outbound` 的 items），必须排除 `pi.system`、
-  宿主任务文案、工具结果与收图轮（`fish.gif_ingest`），否则「记忆→抽取→记忆」的自我污染闭环
-  会复活
+  宿主任务文案、工具结果与收图轮（`fish.gif_ingest`），否则「记忆→抽取→记忆」的自我污染闭环会复活
 - **上限写死在 `src/memory.ts` 的 `MEMORY_CAPS`**：人 ≤12、每人事实 ≤8 且总字数 ≤320、
   names ≤5、style ≤120 字、口头禅 ≤8 条且每条 ≤24 字、lore ≤40（key ≤5 个且每个 ≤10 字、
   text ≤60 字）、cards ≤60（text ≤80 字、keys ≤5、subjects ≤8）、单次 section 渲染 ≤900 字、
   已知记忆输入 ≤8000 字。冲突不删除：`supersede` 置 `invalidAt`，渲染只认有效事实
 - **模型输出全部当不可信数据**：`sanitizePatch` 对字段/主体/敏感模式/控制字符做机械过滤，
   主体再过一道本次允许集合白名单；fact id 一律代码生成（`f-`/`l-`/`c-` + ≥12 位），不采信模型 id
-- 查看只读脚本：
+- 查看与审批脚本：
   ```bash
-  npm run memory                                    # 列出所有人格的记忆条目数
-  npm run memory -- --persona 长征机                # 该人格记忆摘要
-  npm run memory -- --persona 长征机 --json         # 原始 JSON（含 memoryKey）
+  npm run memory                                    # 每人格：公共 doc + 各私有 doc 摘要
+  npm run memory -- --persona 长征机                # 该人格公共 doc 详情（含私有层列表）
+  npm run memory -- --persona 长征机 --json         # 原始 JSON（含 memoryKey 与私有层）
   npm run memory -- --chat qq:group:659976571       # 便捷入口：解析该会话当前人格再查
+  npm run memory -- --pending [--json]              # 待审队列（全人格，最旧在前，含来源与建议轨道）
+  npm run memory -- --approve <id> [公共|私有]       # 同意（缺省私有；写库）
+  npm run memory -- --reject <id|全部>               # 拒绝（写库）
   ```
-  脚本只读打开 `var/fish.db`，不实例化鱼、不写库；发现旧 chatKey 级 / 会话级
-  `fish.memory` 会明确报冲突，不静默择一
+  查看走只读连接；`--approve` / `--reject` 经 pi-durable `createSession` 在同一 `var/fish.db`
+  上写 doc，与线上进程同库时建议低峰执行（或直接私聊 `/记忆` 让线上进程自己写）；
+  发现旧 chatKey 级 / 会话级 `fish.memory` 会明确报冲突，不静默择一
 
 ## 命令
 
@@ -258,7 +277,7 @@ npm test           # 86 项，含上面每条约束的兜底
 npm run prompts    # 列出 prompt 文件 + sha256 + 19 个工具包（TOOL.md 摘要/Schema/eager/deferred）+ 内嵌扫描结果
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
-npm run memory     # 长期记忆只读查看（--persona <名> / --chat <chatKey> / --json，见第 16 节）
+npm run memory     # 长期记忆查看与审批（--persona / --chat / --json / --pending / --approve / --reject，见第 16 节）
 npm run creds show  # 凭据状态（只有长度）
 npm run ping        # 模型连通性 + 用量（不打印 key）
 npm start          # 真跑（自动读 .env）——只在 macmini 上

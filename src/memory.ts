@@ -1,10 +1,12 @@
 /**
  * 长期记忆的数据模型、上限与渲染。
  *
- * 记忆存成 session 级 keyed document family（fish.memory，见 store.ts），
- * key 是人格名（默认人格为「默认」，见 memory-scope.ts 的 memoryKeyOf）：
- * 一个人格的全部会话（各群、私聊）共享同一份，不同人格互不可见。
- * 写入入口只有压缩链路（compact.ts）；渲染入口只有 system section（harness.ts）。
+ * 记忆存成 session 级 keyed document family（见 store.ts）：公共层 fish.memory
+ * （key=人格名，默认人格为「默认」，见 memory-scope.ts 的 memoryKeyOf）与私有层
+ * fish.memory.private（key=人格名@chatKey，仅该人格在来源会话可见）。写入入口只有
+ * 审批通道（/记忆 指令与 scripts/memory.ts 的 --approve/--reject）：压缩链路只把
+ * 抽取 patch 写进待审库 fish.memory.pending，未批准内容不进任何记忆 doc。
+ * 渲染入口只有 system section（harness.ts）：公共 + 本会话私有两层合并渲染。
  *
  * 安全边界（改动 section 或 transcript 白名单前必读）：
  *   - 记忆只经 system section 注入，绝不进 user message；
@@ -148,8 +150,13 @@ export function emptyMemory(): MemoryState {
 }
 
 /** id 一律代码生成：模型提供的 id 一律不采信。 */
-function newId(prefix: "f" | "l" | "c"): string {
+function newId(prefix: "f" | "l" | "c" | "p"): string {
   return `${prefix}-${randomBytes(9).toString("hex")}`;
+}
+
+/** 待审条目 id：p- + 18 位十六进制（72 位随机），跨人格不撞；批准时全局队列内唯一定位。 */
+export function newPendingId(): string {
+  return newId("p");
 }
 
 function cleanText(value: string): string {
@@ -339,6 +346,214 @@ function evictList<T extends { at: number }>(items: T[], cap: number, score?: (i
     const victim = [...items].sort((a, b) => score(a) - score(b) || a.at - b.at)[0];
     items.splice(items.indexOf(victim), 1);
   }
+}
+
+/**
+ * 待审库的一条：压缩链路抽出的 patch，主人批准前只待在这里。
+ * 未批准的 patch 不得 apply、不得注入 section、不得被模型看见。
+ */
+export interface PendingMemoryEntry {
+  /** 代码生成的待审 id（p- + 18 位十六进制）：跨人格唯一，/记忆 同意/拒绝按它全局定位。 */
+  id: string;
+  /** 已 sanitize 的 patch 本体。 */
+  patch: MemoryPatch;
+  /** 来源会话的原始 chatKey（批准为「私有」时并入 人格名@该 chatKey 的私有 doc）。 */
+  originChatKey: string;
+  at: number;
+}
+
+/** 待审库（fish.memory.pending）的 doc 值：每人格一个 family member，条目按时间正序。 */
+export interface PendingMemoryState {
+  version: 1;
+  entries: PendingMemoryEntry[];
+}
+
+/**
+ * 待审队列每人格上限：淘汰逻辑与日志都在，改小即恢复淘汰。
+ * 观察期（2026-11）暂不设上限——先看积累速度，定了再改这个常量。
+ */
+export const MEMORY_PENDING_CAP: number = Infinity;
+
+export function emptyPendingMemory(): PendingMemoryState {
+  return { version: 1, entries: [] };
+}
+
+/** 四个候选数组全空 = 空 patch：不进待审库，但 lastExtractAt 照样推进。 */
+export function isPatchEmpty(patch: MemoryPatch): boolean {
+  return (
+    (patch.people?.length ?? 0) === 0 &&
+    (patch.lore?.length ?? 0) === 0 &&
+    (patch.cards?.length ?? 0) === 0 &&
+    (patch.supersede?.length ?? 0) === 0
+  );
+}
+
+/**
+ * 待审条目的内容摘要（给主人看的机械回执，不是模型文案）：
+ * 计数 + 首个样本，来源人格与来源会话由调用方另行标注。
+ */
+export function summarizePatch(patch: MemoryPatch): string {
+  const parts: string[] = [];
+  const people = patch.people ?? [];
+  const lore = patch.lore ?? [];
+  const cards = patch.cards ?? [];
+  if (people.length > 0) {
+    const who = people[0].names?.[0] ?? people[0].subject;
+    const sample = people[0].facts?.[0]?.text ?? people[0].style ?? "";
+    parts.push(`人${people.length}｜${who}${sample ? ` ${sample}` : ""}`);
+  }
+  if (lore.length > 0) parts.push(`说法${lore.length}｜${lore[0].keys.join("/")} ${lore[0].text}`);
+  if (cards.length > 0) parts.push(`卡片${cards.length}｜${cards[0].text}`);
+  if ((patch.supersede?.length ?? 0) > 0) parts.push(`取代${patch.supersede!.length}`);
+  return parts.length > 0 ? parts.join("；") : "空";
+}
+
+/** 年龄短格式（Xh Ym / Xd Yh / Xm）：/记忆 头部汇总与脚本 --pending 共用。 */
+export function formatAgeShort(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  if (minutes < 1) return "0m";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
+}
+
+/**
+ * 同意一条待审：从待审 doc 摘掉该条，把 patch apply 进目标 doc（公共或私有）。
+ * 直接改写两个 draft（pi-durable 的 tx.doc 返回值就是可写 draft）；找不到该 id 返回 missing。
+ */
+export function approvePending(
+  pending: PendingMemoryState,
+  id: string,
+  target: MemoryState,
+  at: number,
+): { status: "ok"; entry: PendingMemoryEntry } | { status: "missing" } {
+  const index = pending.entries.findIndex((entry) => entry.id === id);
+  if (index < 0) return { status: "missing" };
+  const [entry] = pending.entries.splice(index, 1);
+  const next = applyPatch(target, entry.patch, at);
+  target.people = next.people;
+  target.lore = next.lore;
+  target.cards = next.cards;
+  return { status: "ok", entry };
+}
+
+/** 拒绝待审：单条 id 或 "all"（该 doc 全部）；返回删掉的条数。 */
+export function rejectPending(pending: PendingMemoryState, id: string | "all"): number {
+  const before = pending.entries.length;
+  if (id === "all") pending.entries = [];
+  else pending.entries = pending.entries.filter((entry) => entry.id !== id);
+  return before - pending.entries.length;
+}
+
+export type MemoryCommand =
+  | { kind: "list" }
+  | { kind: "approve"; id: string; track: "公共" | "私有" }
+  | { kind: "reject"; id: string; all: boolean }
+  | { kind: "usage" };
+
+/**
+ * 解析 /记忆 指令（闸前机械通道，不进模型）：
+ * `/记忆` 列表；`/记忆 同意 <id> [公共|私有]`（缺省私有——默认最小可见面，公开是主动决定）；
+ * `/记忆 拒绝 <id|全部>`；其它 /记忆 开头的一律回用法。不是 /记忆 指令返回 undefined。
+ */
+export function parseMemoryCommand(text: string): MemoryCommand | undefined {
+  if (text === "/记忆") return { kind: "list" };
+  if (!text.startsWith("/记忆 ")) return undefined;
+  const rest = text.slice("/记忆 ".length).trim();
+  const approve = /^同意\s+(\S+)(?:\s+(公共|私有))?$/.exec(rest);
+  if (approve) return { kind: "approve", id: approve[1], track: approve[2] === "公共" ? "公共" : "私有" };
+  if (rest === "拒绝 全部") return { kind: "reject", id: "all", all: true };
+  const reject = /^拒绝\s+(\S+)$/.exec(rest);
+  if (reject) return { kind: "reject", id: reject[1], all: false };
+  return { kind: "usage" };
+}
+
+/**
+ * 渲染用两层合并（只读，不改任何 doc）：公共 doc + 本会话私有 doc 合成一个 MemoryState。
+ * 同主体事实/说法/卡片按归一化身份去重，重复时保留 hits/importance 更高（平手取更新）的
+ * 那条；style 私有层优先（更贴当前会话）。合并只服务 memory section 渲染，写路径仍是
+ * 两个 doc 各自 applyPatch、各自上限淘汰。
+ */
+export function mergeMemoryStates(
+  publicState: MemoryState | undefined,
+  privateState: MemoryState | undefined,
+): MemoryState {
+  const pub = publicState ?? emptyMemory();
+  const priv = privateState ?? emptyMemory();
+  const clone = (person: MemoryPerson): MemoryPerson => ({
+    ...person,
+    names: [...person.names],
+    facts: person.facts.map((fact) => ({ ...fact })),
+    catchphrases: [...person.catchphrases],
+  });
+
+  const people: Record<string, MemoryPerson> = {};
+  for (const person of Object.values(pub.people)) people[person.subject] = clone(person);
+  for (const person of Object.values(priv.people)) {
+    const existing = people[person.subject];
+    if (!existing) {
+      people[person.subject] = clone(person);
+      continue;
+    }
+    existing.names = [...new Set([...existing.names, ...person.names])].slice(-MEMORY_CAPS.namesPerPerson);
+    existing.facts = mergeFacts(existing.facts, person.facts);
+    if (person.style) existing.style = person.style;
+    existing.catchphrases = [...new Set([...existing.catchphrases, ...person.catchphrases])].slice(
+      -MEMORY_CAPS.catchphrasesPerPerson,
+    );
+    existing.updatedAt = Math.max(existing.updatedAt, person.updatedAt);
+  }
+
+  const lore = mergeByIdentity(pub.lore, priv.lore, (item) => loreSignature(item.keys), (a, b) => b.hits - a.hits || b.at - a.at);
+  const cards = mergeByIdentity(pub.cards, priv.cards, (card) => normalizeText(card.text), (a, b) => b.importance - a.importance || b.at - a.at);
+
+  return {
+    version: 1,
+    people,
+    lore,
+    cards,
+    lastExtractAt: [pub.lastExtractAt, priv.lastExtractAt].reduce<number | undefined>(
+      (newest, at) => (at === undefined ? newest : newest === undefined ? at : Math.max(newest, at)),
+      undefined,
+    ),
+  };
+}
+
+/** 有效事实按归一化文本去重：重复保留 hits 更高（平手取更新）的那条；失效事实原样保留。 */
+function mergeFacts(a: MemoryFact[], b: MemoryFact[]): MemoryFact[] {
+  const out = a.map((fact) => ({ ...fact }));
+  for (const fact of b) {
+    if (fact.invalidAt === undefined) {
+      const dup = out.find((item) => item.invalidAt === undefined && normalizeText(item.text) === normalizeText(fact.text));
+      if (dup) {
+        if (fact.hits > dup.hits || (fact.hits === dup.hits && fact.at > dup.at)) out[out.indexOf(dup)] = { ...fact };
+        continue;
+      }
+    }
+    out.push({ ...fact });
+  }
+  return out;
+}
+
+/** 按身份签名去重合并两个列表：重复保留 score 更高的那条（平手由 score 的次级键裁决）。 */
+function mergeByIdentity<T extends { at: number }>(
+  a: T[],
+  b: T[],
+  identity: (item: T) => string,
+  score: (x: T, y: T) => number,
+): T[] {
+  const out = a.map((item) => ({ ...item }));
+  for (const item of b) {
+    const dup = out.find((existing) => identity(existing) === identity(item));
+    if (dup) {
+      if (score(dup, item) > 0) out[out.indexOf(dup)] = { ...item };
+      continue;
+    }
+    out.push({ ...item });
+  }
+  return out;
 }
 
 /**

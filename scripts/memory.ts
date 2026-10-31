@@ -1,22 +1,34 @@
 /**
- * 长期记忆的只读查看脚本。给 .agents/skills/ops 里的 skill 用，也可以自己敲。
+ * 长期记忆的查看与审批脚本。给 .agents/skills/ops 里的 skill 用，也可以自己敲。
  *
- *   npm run memory                                  # 列出所有人格的记忆条目数
- *   npm run memory -- --persona 长征机              # 打印该人格记忆摘要
- *   npm run memory -- --persona 长征机 --json       # 打印原始 JSON
+ *   npm run memory                                  # 每人格：公共 doc + 各私有 doc 摘要
+ *   npm run memory -- --persona 长征机              # 该人格公共 doc 详情（--json 原始 JSON）
+ *   npm run memory -- --persona 长征机 --json
  *   npm run memory -- --chat qq:group:659976571     # 便捷入口：经 fish.chats 的
- *                                                   # personas 解析该会话当前人格再查
+ *                                                    # personas 解析该会话当前人格再查
+ *   npm run memory -- --pending [--json]            # 待审队列（全人格，最旧在前）
+ *   npm run memory -- --approve <id> [公共|私有]     # 同意一条（缺省私有；写库）
+ *   npm run memory -- --reject <id|全部>             # 拒绝（写库）
  *
- * 记忆按人格隔离（一个人格一份，跨群/私聊共享）；--json 输出的 memoryKey 就是人格名。
- * 只读打开数据库（node:sqlite readOnly），不实例化鱼、不写库、不调模型——
- * 避免与线上进程并发写。数据目录与 scripts/ops.ts 一致：YUGANG_HOME 可覆盖，
+ * 记忆双层 + 审批闸：公共层 fish.memory（key=人格名，跨会话共享）、私有层
+ * fish.memory.private（key=人格名@chatKey，仅来源会话）、待审库 fish.memory.pending
+ * （压缩链路只入待审，未批准内容不进任何记忆 doc）。写通道只有两处：本脚本的
+ * --approve/--reject 与主人私聊的 /记忆 指令；缺省轨道是私有（最小可见面）。
+ *
+ * 查看走 node:sqlite 只读连接（不实例化鱼）；--approve/--reject 经 pi-durable 的
+ * createSession 打开同一 fish.db 写 doc（与线上进程同库并发时建议低峰执行，或直接
+ * 私聊 /记忆 让线上进程自己写）。数据目录与 scripts/ops.ts 一致：YUGANG_HOME 可覆盖，
  * 缺省仓库内 var/。
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { DEFAULT_PERSONA_KEY, memoryKeyOf } from "../src/memory-scope.ts";
-import type { MemoryState } from "../src/memory.ts";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { createSession, type Session } from "@earendil-works/pi-durable";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { DEFAULT_PERSONA_KEY, memoryKeyOf, privateMemoryKeyOf } from "../src/memory-scope.ts";
+import { approvePending, rejectPending, summarizePatch, formatAgeShort, type MemoryState, type PendingMemoryState } from "../src/memory.ts";
+import { MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc } from "../src/store.ts";
 
 const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
 const DB_PATH = join(HOME, "fish.db");
@@ -29,10 +41,28 @@ const valueOf = (flag: string): string | undefined => {
 };
 const rawPersona = valueOf("--persona");
 const rawChat = valueOf("--chat");
+const pending = args.includes("--pending");
+const rawApproveId = valueOf("--approve");
+const rawRejectId = valueOf("--reject");
+if ((args.includes("--approve") && rawApproveId === undefined) || (args.includes("--reject") && rawRejectId === undefined)) {
+  console.error("--approve 需要 <id> [公共|私有]；--reject 需要 <id|全部>");
+  process.exit(1);
+}
+// 同意的轨道：显式「公共」才公共，缺省私有（与 /记忆 同意 一致）
+const approveTrack: "公共" | "私有" = (() => {
+  const index = args.indexOf("--approve");
+  const track = index >= 0 ? args[index + 2] : undefined;
+  return track === "公共" ? "公共" : "私有";
+})();
 
-if (rawPersona === undefined && rawChat === undefined) {
+const writeMode = rawApproveId !== undefined || rawRejectId !== undefined;
+if (writeMode && (rawPersona !== undefined || rawChat !== undefined || pending)) {
+  console.error("--approve / --reject 是独立的写操作，不与 --persona / --chat / --pending 组合");
+  process.exit(1);
+}
+if (!writeMode && rawPersona === undefined && rawChat === undefined && !pending) {
   if (json) {
-    console.error("--json 需要配合 --persona <名> 或 --chat <chatKey>");
+    console.error("--json 需要配合 --persona <名> / --chat <chatKey> / --pending");
     process.exit(1);
   }
 } else if (rawPersona !== undefined && rawChat !== undefined) {
@@ -44,14 +74,17 @@ if (!existsSync(DB_PATH)) {
   process.exit(1);
 }
 
-const db = new DatabaseSync(DB_PATH, { readOnly: true });
+/** 只读查看：审批写操作之外的一切都走这条通道。 */
+function readDb(): DatabaseSync {
+  return new DatabaseSync(DB_PATH, { readOnly: true });
+}
 
 /**
  * session 级文档的当前值：documents 表的最新 incarnation join 最新 base 版本。
  * kind / key_value 都是 JSON 编码存储（encodeIndexedString），session 的 owner 是 0；
  * checkpointWhen 恒真，最新 base 就是完整值，不需要回放 delta。
  */
-function sessionDocs(kind: string, family: number): { key: string; value: unknown }[] {
+function sessionDocs(db: DatabaseSync, kind: string, family: number): { key: string; value: unknown }[] {
   const rows = db
     .prepare(
       `SELECT d.key_value AS key_value, r.content AS content
@@ -76,87 +109,228 @@ const baseChatKeyOf = (mappingKey: string): string => {
   return hash > 0 ? mappingKey.slice(0, hash) : mappingKey;
 };
 
-// 会话映射：chats 的键是映射键（chatKey 或 chatKey#人格，同群多人格会有多个），
-// personas 的键是原始 chatKey → 当前人格名。记忆 key 与两者都无关，这里只用于
-// 「该人格当前在哪些会话活跃」的展示与 --chat 解析。
-const chatsDoc = sessionDocs("fish.chats", 0).map((doc) => doc.value as { chats?: Record<string, number>; personas?: Record<string, string> }).at(0);
-const personas: Record<string, string> = chatsDoc?.personas ?? {};
-const personaOfChat = (chatKey: string): string => personas[chatKey] ?? DEFAULT_PERSONA_KEY;
+// ---------------------------------------------------------------- 写通道（--approve / --reject）
 
-// 人格 → 当前活跃的会话（原始 chatKey，按字母序）
-const chatsByPersona = new Map<string, string[]>();
-for (const mappingKey of Object.keys(chatsDoc?.chats ?? {})) {
-  const base = baseChatKeyOf(mappingKey);
-  const persona = personaOfChat(base);
-  const list = chatsByPersona.get(persona) ?? [];
-  if (!list.includes(base)) list.push(base);
-  chatsByPersona.set(persona, list);
-}
-for (const list of chatsByPersona.values()) list.sort();
-
-const memories = sessionDocs("fish.memory", 1).map((doc) => ({
-  persona: doc.key,
-  state: doc.value as MemoryState,
-}));
-
-// 旧版按 chatKey 隔离的 fish.memory（session family 的 key 是 chatKey 形状）与更早的
-// 会话级（conversation scope）fish.memory：明确报迁移/冲突，本脚本不静默选择任何一份
-const legacyKeys = memories.filter((m) => CHAT_KEY_RE.test(m.persona));
-const legacyConversation = db
-  .prepare(`SELECT COUNT(*) AS n FROM documents WHERE kind = ? AND scope_kind = 'conversation' AND retired_at IS NULL`)
-  .get(JSON.stringify("fish.memory")) as { n: number };
-if (legacyKeys.length > 0 || legacyConversation.n > 0) {
-  const parts = [
-    ...(legacyKeys.length > 0 ? [`${legacyKeys.length} 个 chatKey 级 fish.memory（${legacyKeys.map((m) => m.persona).slice(0, 3).join("、")}${legacyKeys.length > 3 ? " 等" : ""}）`] : []),
-    ...(legacyConversation.n > 0 ? [`${legacyConversation.n} 个会话级 fish.memory`] : []),
-  ];
-  console.error(`发现旧版${parts.join("、")}，与当前按人格隔离的语义不兼容，本脚本不读取；如需合并请按 ops 文档停机备份后人工迁移`);
-}
-
-const formatTime = (t: number | undefined) => (t === undefined ? "-" : new Date(t).toISOString());
-const summaryLine = (persona: string, state: MemoryState) => {
-  const chats = chatsByPersona.get(persona) ?? [];
-  const chatNote = chats.length > 0 ? `  会话：${chats.join("、")}` : "  会话：（当前没有活跃会话）";
-  return `${persona}  people=${Object.keys(state.people).length} lore=${state.lore.length} cards=${state.cards.length} lastExtractAt=${formatTime(state.lastExtractAt)}${chatNote}`;
-};
-
-if (rawPersona === undefined && rawChat === undefined) {
-  if (memories.length === 0) {
-    console.log("还没有任何人格的记忆（发生过一次成功压缩才会写入第一条）");
+/**
+ * 审批写操作：经 pi-durable 的 createSession 在同一 fish.db 上 commit doc。
+ * id 先用只读连接在全人格待审 doc 里定位（含人格书已删的残留 doc），随后在 commit 内
+ * 重读该 doc 再按 id 找条目（写侧原子），条目被并发批掉时按 not found 处理。
+ */
+async function runApproval(): Promise<void> {
+  const db = readDb();
+  let persona: string | undefined;
+  try {
+    const docs = sessionDocs(db, "fish.memory.pending", 1) as { key: string; value: PendingMemoryState }[];
+    const id = rawApproveId ?? rawRejectId;
+    if (rawRejectId === "全部") {
+      persona = docs.find((doc) => doc.value.entries.length > 0)?.key;
+    } else {
+      persona = docs.find((doc) => doc.value.entries.some((entry) => entry.id === id))?.key;
+    }
+  } finally {
+    db.close();
   }
-  for (const { persona, state } of memories) console.log(summaryLine(persona, state));
-} else {
-  // --persona 直接是 memory doc key（人格名）；--chat 先剥 #人格 后缀，再经
-  // fish.chats 的 personas 解析该会话当前人格（缺省「默认」）
-  const chatKey = rawChat === undefined ? undefined : baseChatKeyOf(rawChat);
-  const persona = rawPersona !== undefined ? memoryKeyOf(rawPersona) : personaOfChat(chatKey as string);
-  if (rawChat !== undefined) console.log(`${chatKey} 当前人格：${persona}`);
-  const entry = memories.find((m) => m.persona === persona);
-  if (!entry) {
-    console.log(`人格「${persona}」没有记忆（该人格发生过一次成功压缩才会写入）`);
-    const chats = chatsByPersona.get(persona) ?? [];
-    if (chats.length > 0) console.log(`该人格当前活跃会话：${chats.join("、")}`);
-  } else if (json) {
-    console.log(JSON.stringify({ memoryKey: entry.persona, ...entry.state }, null, 2));
-  } else {
-    console.log(summaryLine(persona, entry.state));
-    for (const person of Object.values(entry.state.people)) {
-      console.log(`  ${person.subject}  ${person.names.join("/") || "（无别名）"}`);
-      for (const fact of person.facts) {
-        const status = fact.invalidAt === undefined ? "有效" : `失效@${formatTime(fact.invalidAt)}`;
-        console.log(`    [${fact.id}] ${fact.text}（来源 ${fact.source}${fact.by ? `，转述人 ${fact.by}` : ""}，${status}，命中 ${fact.hits}）`);
+
+  const storage = await openNodeSqliteStorage(DB_PATH);
+  const session: Session = createSession(storage);
+  const context = BACKGROUND_CONTEXT;
+  try {
+    if (rawApproveId !== undefined) {
+      const target = persona === undefined
+        ? { status: "missing" as const }
+        : await session.commit(async (tx) => {
+            const pendingDoc = await tx.doc(MemoryPendingDoc, persona, persona);
+            const entry = pendingDoc.entries.find((item) => item.id === rawApproveId);
+            if (!entry) return { status: "missing" as const };
+            if (approveTrack === "私有" && !entry.originChatKey) return { status: "no_origin" as const, id: rawApproveId };
+            const targetKey = approveTrack === "私有" ? privateMemoryKeyOf(persona, entry.originChatKey) : persona;
+            const targetDoc = await tx.doc(approveTrack === "私有" ? MemoryPrivateDoc : MemoryDoc, targetKey, targetKey);
+            const applied = approvePending(pendingDoc, rawApproveId, targetDoc, Date.now());
+            if (applied.status === "missing") return { status: "missing" as const };
+            // draft 代理在事务 settle 后不可读：要带出事务的数据先拷成纯值
+            return { status: "ok" as const, originChatKey: String(applied.entry.originChatKey), digest: summarizePatch(applied.entry.patch) };
+          }, context);
+      if (target.status === "missing") {
+        console.error(`没有这条待审：${rawApproveId}`);
+        process.exitCode = 1;
+      } else if (target.status === "no_origin") {
+        console.error(`这条没有来源会话，落不了私有，显式加「公共」再试：${target.id}`);
+        process.exitCode = 1;
+      } else {
+        const where = approveTrack === "私有" ? `私有 ${privateMemoryKeyOf(persona!, target.originChatKey)}` : `公共 ${persona}`;
+        console.log(`已并入${approveTrack}记忆（${where}）：${target.digest}`);
       }
-      if (person.style) console.log(`    风格：${person.style}`);
-      if (person.catchphrases.length > 0) console.log(`    口头禅：${person.catchphrases.join(" / ")}`);
+      return;
     }
-    for (const lore of entry.state.lore) {
-      console.log(`  说法 [${lore.kind}] ${lore.keys.join("/")} → ${lore.text}（命中 ${lore.hits}）`);
+
+    // --reject <id|全部>：单条按 id 全局定位，全部扫掉每个人格的待审 doc
+    const rejectId = rawRejectId === "全部" ? "all" : rawRejectId!;
+    let removed = 0;
+    const db2 = readDb();
+    let personas: string[];
+    try {
+      personas = rejectId === "all"
+        ? sessionDocs(db2, "fish.memory.pending", 1).map((doc) => doc.key)
+        : [persona!].filter(Boolean);
+    } finally {
+      db2.close();
     }
-    for (const card of entry.state.cards) {
-      const subjects = card.subjects.length > 0 ? `；subjects: ${card.subjects.join("/")}` : "";
-      console.log(`  卡片 [${card.importance}] ${card.text}（keys: ${card.keys.join("/")}${subjects}）`);
+    for (const key of personas) {
+      removed += await session.commit(async (tx) => {
+        const pendingDoc = await tx.doc(MemoryPendingDoc, key, key);
+        return rejectPending(pendingDoc, rejectId);
+      }, context);
     }
+    if (removed === 0) {
+      console.error(`没有这条待审：${rejectId}`);
+      process.exitCode = 1;
+    } else {
+      console.log(`已拒绝 ${removed} 条待审`);
+    }
+  } finally {
+    await session.close(context);
   }
 }
 
-db.close();
+if (writeMode) {
+  await runApproval();
+} else {
+  // ---------------------------------------------------------------- 只读查看
+  const db = readDb();
+
+  // 会话映射：chats 的键是映射键（chatKey 或 chatKey#人格，同群多人格会有多个），
+  // personas 的键是原始 chatKey → 当前人格名。记忆 key 与两者都无关，这里只用于
+  // 「该人格当前在哪些会话活跃」的展示与 --chat 解析。
+  const chatsDoc = sessionDocs(db, "fish.chats", 0).map((doc) => doc.value as { chats?: Record<string, number>; personas?: Record<string, string> }).at(0);
+  const personas: Record<string, string> = chatsDoc?.personas ?? {};
+  const personaOfChat = (chatKey: string): string => personas[chatKey] ?? DEFAULT_PERSONA_KEY;
+
+  // 人格 → 当前活跃的会话（原始 chatKey，按字母序）
+  const chatsByPersona = new Map<string, string[]>();
+  for (const mappingKey of Object.keys(chatsDoc?.chats ?? {})) {
+    const base = baseChatKeyOf(mappingKey);
+    const persona = personaOfChat(base);
+    const list = chatsByPersona.get(persona) ?? [];
+    if (!list.includes(base)) list.push(base);
+    chatsByPersona.set(persona, list);
+  }
+  for (const list of chatsByPersona.values()) list.sort();
+
+  const publicMemories = sessionDocs(db, "fish.memory", 1).map((doc) => ({
+    persona: doc.key,
+    state: doc.value as MemoryState,
+  }));
+  // 私有层 doc：key = 人格名@chatKey（从最后一个 @ 拆；人格名含 @ 会拆错，起人格名时避开）
+  const privateMemories = sessionDocs(db, "fish.memory.private", 1).map((doc) => {
+    const at = doc.key.lastIndexOf("@");
+    return { persona: doc.key.slice(0, at), chatKey: doc.key.slice(at + 1), key: doc.key, state: doc.value as MemoryState };
+  });
+
+  // 旧版按 chatKey 隔离的 fish.memory（session family 的 key 是 chatKey 形状）与更早的
+  // 会话级（conversation scope）fish.memory：明确报迁移/冲突，本脚本不静默选择任何一份
+  const legacyKeys = publicMemories.filter((m) => CHAT_KEY_RE.test(m.persona));
+  const legacyConversation = db
+    .prepare(`SELECT COUNT(*) AS n FROM documents WHERE kind = ? AND scope_kind = 'conversation' AND retired_at IS NULL`)
+    .get(JSON.stringify("fish.memory")) as { n: number };
+  if (legacyKeys.length > 0 || legacyConversation.n > 0) {
+    const parts = [
+      ...(legacyKeys.length > 0 ? [`${legacyKeys.length} 个 chatKey 级 fish.memory（${legacyKeys.map((m) => m.persona).slice(0, 3).join("、")}${legacyKeys.length > 3 ? " 等" : ""}）`] : []),
+      ...(legacyConversation.n > 0 ? [`${legacyConversation.n} 个会话级 fish.memory`] : []),
+    ];
+    console.error(`发现旧版${parts.join("、")}，与当前按人格隔离的语义不兼容，本脚本不读取；如需合并请按 ops 文档停机备份后人工迁移`);
+  }
+
+  const formatTime = (t: number | undefined) => (t === undefined ? "-" : new Date(t).toISOString());
+  const summaryLine = (persona: string, state: MemoryState) => {
+    const chats = chatsByPersona.get(persona) ?? [];
+    const chatNote = chats.length > 0 ? `  会话：${chats.join("、")}` : "  会话：（当前没有活跃会话）";
+    return `${persona}  people=${Object.keys(state.people).length} lore=${state.lore.length} cards=${state.cards.length} lastExtractAt=${formatTime(state.lastExtractAt)}${chatNote}`;
+  };
+
+  if (pending) {
+    // 待审队列（fish.memory.pending）：全人格单视图，最旧在前；--json 时输出原始 doc
+    const docs = sessionDocs(db, "fish.memory.pending", 1)
+      .map((doc) => ({ persona: doc.key, state: doc.value as PendingMemoryState }))
+      .filter((doc) => doc.state.entries.length > 0);
+    if (json) {
+      console.log(JSON.stringify(docs.map((doc) => ({ persona: doc.persona, ...doc.state })), null, 2));
+    } else if (docs.length === 0) {
+      console.log("还没有任何待审记忆（发生过一次有内容的成功压缩才会进待审）");
+    } else {
+      console.log(`待审队列（上限 MEMORY_PENDING_CAP，当前观察期不设限）：`);
+      for (const { persona, state } of docs) {
+        const entries = [...state.entries].sort((a, b) => a.at - b.at);
+        console.log(`${persona}  ${entries.length} 条  最早 ${formatAgeShort(Date.now() - entries[0].at)}前`);
+        for (const entry of entries) {
+          // 建议轨道只看来源：私聊来的最小可见面默认私有，群聊来的公共也合理（最终由主人定）
+          const suggest = entry.originChatKey.startsWith("qq:private:") ? "私有" : "公共或私有";
+          console.log(`  [${entry.id}] ${entry.originChatKey || "（无来源）"} · ${formatAgeShort(Date.now() - entry.at)}前 · ${summarizePatch(entry.patch)} · 建议 ${suggest}`);
+        }
+      }
+    }
+  } else if (rawPersona === undefined && rawChat === undefined) {
+    if (publicMemories.length === 0 && privateMemories.length === 0) {
+      console.log("还没有任何人格的记忆（待审被批准后才会写入记忆 doc）");
+    }
+    for (const { persona, state } of publicMemories) {
+      console.log(summaryLine(persona, state));
+      for (const priv of privateMemories.filter((item) => item.persona === persona)) {
+        console.log(`  私有 ${priv.chatKey}  people=${Object.keys(priv.state.people).length} lore=${priv.state.lore.length} cards=${priv.state.cards.length}`);
+      }
+    }
+    const knownPersonas = new Set(publicMemories.map((m) => m.persona));
+    for (const priv of privateMemories) {
+      if (!knownPersonas.has(priv.persona)) {
+        console.log(`${priv.persona}（只有私有层）`);
+        console.log(`  私有 ${priv.chatKey}  people=${Object.keys(priv.state.people).length} lore=${priv.state.lore.length} cards=${priv.state.cards.length}`);
+      }
+    }
+  } else {
+    // --persona 直接是 memory doc key（人格名）；--chat 先剥 #人格 后缀，再经
+    // fish.chats 的 personas 解析该会话当前人格（缺省「默认」）
+    const chatKey = rawChat === undefined ? undefined : baseChatKeyOf(rawChat);
+    const persona = rawPersona !== undefined ? memoryKeyOf(rawPersona) : personaOfChat(chatKey as string);
+    if (rawChat !== undefined) console.log(`${chatKey} 当前人格：${persona}`);
+    const entry = publicMemories.find((m) => m.persona === persona);
+    const privs = privateMemories.filter((item) => item.persona === persona);
+    if (!entry && privs.length === 0) {
+      console.log(`人格「${persona}」没有记忆（待审被批准后才会写入）`);
+      const chats = chatsByPersona.get(persona) ?? [];
+      if (chats.length > 0) console.log(`该人格当前活跃会话：${chats.join("、")}`);
+    } else if (json) {
+      console.log(JSON.stringify({ memoryKey: persona, ...(entry?.state ?? { version: 1, people: {}, lore: [], cards: [] } as MemoryState), private: privs.map((priv) => ({ key: priv.key, ...priv.state })) }, null, 2));
+    } else {
+      if (entry) {
+        console.log(summaryLine(persona, entry.state));
+        for (const person of Object.values(entry.state.people)) {
+          console.log(`  ${person.subject}  ${person.names.join("/") || "（无别名）"}`);
+          for (const fact of person.facts) {
+            const status = fact.invalidAt === undefined ? "有效" : `失效@${formatTime(fact.invalidAt)}`;
+            console.log(`    [${fact.id}] ${fact.text}（来源 ${fact.source}${fact.by ? `，转述人 ${fact.by}` : ""}，${status}，命中 ${fact.hits}）`);
+          }
+          if (person.style) console.log(`    风格：${person.style}`);
+          if (person.catchphrases.length > 0) console.log(`    口头禅：${person.catchphrases.join(" / ")}`);
+        }
+        for (const lore of entry.state.lore) {
+          console.log(`  说法 [${lore.kind}] ${lore.keys.join("/")} → ${lore.text}（命中 ${lore.hits}）`);
+        }
+        for (const card of entry.state.cards) {
+          const subjects = card.subjects.length > 0 ? `；subjects: ${card.subjects.join("/")}` : "";
+          console.log(`  卡片 [${card.importance}] ${card.text}（keys: ${card.keys.join("/")}${subjects}）`);
+        }
+      } else {
+        console.log(`${persona}  （公共层还没有内容）`);
+      }
+      for (const priv of privs) {
+        console.log(`  私有 ${priv.chatKey}  people=${Object.keys(priv.state.people).length} lore=${priv.state.lore.length} cards=${priv.state.cards.length}`);
+        for (const lore of priv.state.lore) {
+          console.log(`    说法 [${lore.kind}] ${lore.keys.join("/")} → ${lore.text}（命中 ${lore.hits}）`);
+        }
+        for (const card of priv.state.cards) {
+          console.log(`    卡片 [${card.importance}] ${card.text}（keys: ${card.keys.join("/")}）`);
+        }
+      }
+    }
+  }
+  db.close();
+}

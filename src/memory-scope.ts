@@ -36,6 +36,11 @@ export function memoryKeyOf(input: string): string {
   return input;
 }
 
+/** 私有层 memory doc key：人格名@chatKey——仅该人格在来源会话可见的私有记忆。 */
+export function privateMemoryKeyOf(persona: string, chatKey: string): string {
+  return `${persona}@${chatKey}`;
+}
+
 /** 压入一轮的 scope；队列满时返回 undefined，该轮不注入记忆。 */
 export function pushScope(conversationId: string, scope: RoundScope): string | undefined {
   const queue = scopes.get(conversationId) ?? [];
