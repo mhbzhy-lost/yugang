@@ -33,8 +33,10 @@ import type { ToolManifest, ToolPackageDeps } from "./tools/types.ts";
 import { withToolTimeout } from "./tools/timeout.ts";
 import { loadMemeIndex, countMoods } from "./tools/meme/shared.ts";
 import { WatchDoc } from "./store.ts";
-import { createCompactor, type CompactResult, type Compactor } from "./compact.ts";
-import { ChatsDoc, OutboxDoc } from "./store.ts";
+import { createCompactor, MemoryExtractError, type CompactResult, type Compactor } from "./compact.ts";
+import { ChatsDoc, MemoryDoc, OutboxDoc } from "./store.ts";
+import { applyPatch, MEMORY_CAPS } from "./memory.ts";
+import { memoryKeyOf } from "./memory-scope.ts";
 
 /** 群档案作为一条 system 消息放进 transcript，只在建会话时写一次。 */
 export const GroupProfileEntry = defineEntry("fish.group-profile");
@@ -166,6 +168,8 @@ export interface FishOptions {
   /** 上下文压缩：攒到阈值就 reset + handoff。不给就不压。 */
   compact?: {
     model?: ModelRef;
+    /** 记忆抽取用的模型；缺省与 handoff 同一个。 */
+    memoryModel?: ModelRef;
     maxEntries?: number;
     maxChars?: number;
     /** 现取的阈值（热更新用）：改配置后下一轮压缩就按新值判断。 */
@@ -342,6 +346,11 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     }
   }
 
+  // conversationId → 原始 chatKey（人格后缀已去掉）：压缩链路找记忆 doc、memory
+  // section 找渲染对象都靠它。同一原始 chatKey 的所有人格指向同一个 family member；
+  // root conversation 没有映射，记忆相关的一切都返回 undefined（不注入、不抽取）。
+  const memoryKeyByConversation = new Map<string, string>();
+
   const compactor: Compactor | undefined = options.compact
     ? createCompactor({
         models,
@@ -350,7 +359,59 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         maxEntries: options.compact.maxEntries ?? 80,
         maxChars: options.compact.maxChars ?? 12_000,
         ...(options.compact.limits ? { limits: options.compact.limits } : {}),
-        onError: (error) => console.error("[鱼缸] 压缩失败", error instanceof Error ? error.message : error),
+        onError: (error) => {
+          if (error instanceof MemoryExtractError) console.error("[鱼缸] 记忆抽取失败", error.message);
+          else console.error("[鱼缸] 压缩失败", error instanceof Error ? error.message : error);
+        },
+        // 记忆抽取与 handoff 各自的模型；缺省都落在 handoff 模型上（比主模型便宜一档即可）
+        extract: {
+          models,
+          model: options.compact.memoryModel ?? options.compact.model ?? options.model,
+          prompts,
+        },
+        memoryKeyOf: (conversationId) => memoryKeyByConversation.get(String(conversationId)),
+        knownMemory: async (memoryKey) => {
+          const snapshot = await harness.snapshot(MemoryDoc, memoryKey, ctx);
+          if (!snapshot) return { text: "", subjects: [] };
+          const subjects = Object.values(snapshot.people).map((person) => ({
+            subject: person.subject,
+            name: person.names[0] ?? person.subject,
+          }));
+          // 已知记忆只喂给一次内部抽取请求：行格式「subject 名单」与「factId 事实」，
+          // 总长封顶 knownChars；不写入 conversation、pi.user 或 handoff
+          const lines = Object.values(snapshot.people).flatMap((person) => [
+            `${person.subject} ${person.names.join("/")}`,
+            ...person.facts.filter((fact) => fact.invalidAt === undefined).map((fact) => `${fact.id} ${fact.text}`),
+          ]);
+          const text = lines.reduce(
+            (out, line) => (out.length + line.length + 1 <= MEMORY_CAPS.knownChars ? `${out}${out ? "\n" : ""}${line}` : out),
+            "",
+          );
+          return { text, subjects };
+        },
+        saveMemories: async (memoryKey, patch) => {
+          // 同一 commit 内读改同一 family member：同一群不同人格可能同时压缩，
+          // 不能先在 commit 外 snapshot 再整份覆盖（后写会把先写的 patch 吃掉）
+          await harness.commit(async (tx) => {
+            const doc = await tx.doc(MemoryDoc, memoryKey, memoryKey);
+            const extractedAt = now();
+            const next = applyPatch(
+              {
+                people: doc.people,
+                lore: doc.lore,
+                cards: doc.cards,
+                version: 1,
+                ...(doc.lastExtractAt ? { lastExtractAt: doc.lastExtractAt } : {}),
+              },
+              patch,
+              extractedAt,
+            );
+            doc.people = next.people;
+            doc.lore = next.lore;
+            doc.cards = next.cards;
+            doc.lastExtractAt = extractedAt;
+          }, ctx);
+        },
       })
     : undefined;
 
@@ -475,7 +536,6 @@ export async function openFish(options: FishOptions): Promise<Fish> {
             const reused = await harness.conversation(known, ctx);
             if (reused) return reused;
           }
-
           const extension = effective === DEFAULT_PERSONA ? undefined : personaExtensions.get(effective);
           const cwd = join(workspaceRoot, safeName(groupKey) + (extension ? `#${effective}` : ""));
           mkdirSync(cwd, { recursive: true });
@@ -512,7 +572,11 @@ export async function openFish(options: FishOptions): Promise<Fish> {
             chats.chats[key] = created.id;
           }, ctx);
           return created;
-        })();
+        })().then((conversation) => {
+          // 创建与复用两条路径都在这里登记：同群不同人格指向同一个 family member
+          memoryKeyByConversation.set(String(conversation.id), memoryKeyOf(groupKey));
+          return conversation;
+        });
         groups.set(key, existing);
       }
       return existing;

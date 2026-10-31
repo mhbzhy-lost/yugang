@@ -9,10 +9,22 @@
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
-import type { Conversation } from "@earendil-works/pi-durable";
+import type { Conversation, ConversationId } from "@earendil-works/pi-durable";
 import { renderTemplate, type PromptSet } from "./prompts.ts";
+import { extractMemories } from "./memory-extract.ts";
+import { MEMORY_INBOUND_KIND, type MemoryInbound, type MemoryPatch } from "./memory.ts";
 
 const ctx = BACKGROUND_CONTEXT;
+
+/** 记忆抽取阶段的失败标记：onError 据此区分换页失败与抽取失败，只携带安全的错误摘要。 */
+export class MemoryExtractError extends Error {
+  constructor(cause: unknown) {
+    const name = cause instanceof Error ? cause.constructor.name : typeof cause;
+    const detail = cause instanceof Error ? String(cause.message).replace(/[\r\n\u0000-\u001F]/g, " ").slice(0, 120) : "";
+    super(detail ? `${name}: ${detail}` : name);
+    this.name = "MemoryExtractError";
+  }
+}
 
 export interface CompactorOptions {
   models: Models;
@@ -26,6 +38,12 @@ export interface CompactorOptions {
   /** 或者攒够多少字就压。 */
   maxChars: number;
   onError?: (error: unknown) => void;
+  /** 记忆抽取用的模型与提示词；不给就不拍取。 */
+  extract?: { models: Models; model: { provider: string; modelId: string }; prompts: PromptSet };
+  /** conversation → 原始 chatKey（人格后缀已去掉）。未找到时跳过记忆抽取但照常 reset。 */
+  memoryKeyOf?: (conversationId: ConversationId) => string | undefined;
+  knownMemory?: (memoryKey: string) => Promise<{ text: string; subjects: { subject: string; name: string }[] }>;
+  saveMemories?: (memoryKey: string, patch: MemoryPatch) => Promise<void>;
 }
 
 export interface CompactResult {
@@ -54,6 +72,34 @@ export function createCompactor(options: CompactorOptions): Compactor {
       try {
         const summary = await summarize(options, transcript);
         if (!summary.trim()) return { compacted: false, reason: "failed", entries, chars };
+
+        // 记忆抽取：在 summarize 成功之后、reset 之前。任何异常（含 knownMemory、
+        // saveMemories 和 onError 自身抛错）都不得阻止后面的 reset——宁可没记上，不能不换页。
+        const memoryKey = options.memoryKeyOf?.(conversation.id);
+        if (memoryKey && options.extract && options.saveMemories) {
+          try {
+            const known = options.knownMemory ? await options.knownMemory(memoryKey) : { text: "", subjects: [] };
+            const memoryTranscript = await renderMemoryTranscript(conversation);
+            const patch = await extractMemories(options.extract, {
+              transcript: memoryTranscript.transcript,
+              known: known.text,
+              subjects: [...known.subjects, ...memoryTranscript.subjects],
+            });
+            if (patch) {
+              await options.saveMemories(memoryKey, patch); // 空 patch 也会推进 lastExtractAt
+              console.log(
+                `[鱼缸] 记忆抽取 人${patch.people?.length ?? 0} 说法${patch.lore?.length ?? 0} 卡片${patch.cards?.length ?? 0}`,
+              );
+            } else throw new Error("memory_extract_unavailable");
+          } catch (error) {
+            try {
+              options.onError?.(new MemoryExtractError(error));
+            } catch {
+              /* 记录失败不能阻止 reset */
+            }
+          }
+        }
+
         await conversation.reset(summary.trim(), ctx);
         return { compacted: true, entries, chars };
       } catch (error) {
@@ -92,6 +138,9 @@ export interface RenderedTranscript {
 /**
  * 只把「谁说了什么」摊平：群消息 + 鱼真正发出去的话。
  * thinking、tool 调用、tool 结果、系统提示一律不进去——它们不进摘要，也就不进下一轮的上下文。
+ * 群消息的 entry 有两种 kind：存量 pi.user，以及带结构化原始数据的 fish.inbound
+ * （记忆入口）；两者部读 entry.model（宿主拼装的 user message），handoff 行为不变。
+ * fish.gif_ingest（收图任务）不是群友原话，不进摘要。
  */
 export async function renderTranscript(conversation: Conversation): Promise<RenderedTranscript> {
   const view = await conversation.viewState(ctx);
@@ -100,7 +149,7 @@ export async function renderTranscript(conversation: Conversation): Promise<Rend
 
   try {
     for (const entry of view.value.entries) {
-      if (entry.kind === "pi.user") {
+      if (entry.kind === "pi.user" || entry.kind === MEMORY_INBOUND_KIND) {
         const text = entryText(entry.model);
         if (text) lines.push(`群友: ${text}`);
         entries++;
@@ -132,4 +181,48 @@ function entryText(model: unknown): string {
     })
     .filter(Boolean)
     .join("\n");
+}
+
+export interface MemoryTranscript {
+  transcript: string;
+  subjects: { subject: string; name: string }[];
+}
+
+/**
+ * 记忆抽取专用的原始转录：只读结构化原始 entry（fish.inbound 的 data 与
+ * fish.outbound 的 items），带结构化说话人元数据；不读 pi.user / pi.system /
+ * fish.gif_ingest / 工具结果 / thinking，也不复用上面宿主拼装文案的 renderTranscript。
+ * 改动这个白名单前必读 src/memory.ts 的安全边界注释：混入任何宿主文案都会
+ * 让「记忆 → 抽取 → 记忆」的自我污染闭环复活。
+ */
+export async function renderMemoryTranscript(conversation: Conversation): Promise<MemoryTranscript> {
+  const view = await conversation.viewState(ctx);
+  const lines: string[] = [];
+  const subjects = new Map<string, string>();
+
+  try {
+    for (const entry of view.value.entries) {
+      if (entry.kind === MEMORY_INBOUND_KIND) {
+        const data = entry.data as Partial<MemoryInbound> | undefined;
+        const text = typeof data?.text === "string" ? data.text.trim() : "";
+        const nickname = typeof data?.nickname === "string" && data.nickname.trim() ? data.nickname.trim() : String(data?.userId ?? "");
+        const userId = typeof data?.userId === "string" ? data.userId.trim() : "";
+        const subject = /^\d{4,12}$/.test(userId) ? `qq:${userId}` : `name:${nickname.slice(0, 20)}`;
+        if (!subjects.has(subject)) subjects.set(subject, nickname);
+        if (text) lines.push(`${nickname}(${subject}): ${text}`);
+      } else if (entry.kind === "fish.outbound") {
+        const data = entry.data as { items?: string[] } | undefined;
+        for (const text of data?.items ?? []) {
+          if (text.trim()) lines.push(`鱼: ${text}`);
+        }
+      }
+    }
+  } finally {
+    view.dispose();
+  }
+
+  return {
+    transcript: lines.join("\n"),
+    subjects: [...subjects.entries()].map(([subject, name]) => ({ subject, name })),
+  };
 }
