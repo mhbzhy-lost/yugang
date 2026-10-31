@@ -15,7 +15,7 @@ import { addFishProvider, createFishModels } from "./models.ts";
 import { describeModel, loadFishModels } from "./model-config.ts";
 import { cleanupStaleVideoTemps } from "./tools/video/tool.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { Conversation } from "@earendil-works/pi-durable";
+import type { Conversation, SettledSubmissionRecord } from "@earendil-works/pi-durable";
 import { openFish, type GroupProfile } from "./harness.ts";
 import { OneBot, orderByArrival, type IncomingMessage } from "./qq/onebot.ts";
 import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "./voice-route.ts";
@@ -40,11 +40,29 @@ import { createChatlog } from "./chatlog.ts";
 import { localDay } from "./usage.ts";
 import { weeklyStats, renderWeekly } from "./stats.ts";
 import { createUsageLedger, sumUsage } from "./usage.ts";
-import { bypassAllowed, splitBypass } from "./bypass.ts";
+import { bypassAllowed, splitBypass, BYPASS_RE } from "./bypass.ts";
 import { ChatsDoc, WatchDoc } from "./store.ts";
 import { renderTemplate } from "./prompts.ts";
+import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, type MemoryInbound } from "./memory.ts";
+import { pushScope, shiftScope } from "./memory-scope.ts";
 import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
+
+// 每条入站消息的原始文本（卡片渲染 / bypass 剥离之前取）：记忆 entry 只存群友原话，
+// 不把 card_bilibili / ctx_header 等宿主文案写进 fish.inbound。WeakMap 键是消息对象，
+// flush 时按 anchor 取回，消息对象丢弃后条目自动回收。
+const rawMemoryText = new WeakMap<IncomingMessage, string>();
+
+/** 记忆用原始文本：去掉 [卡片#N] 占位与 bypass 指令，只留普通群友原话。 */
+function memoryTextOf(text: string): string {
+  const noCards = text.replace(/\[卡片#\d+\]/g, "");
+  const m = BYPASS_RE.exec(noCards);
+  return (m ? noCards.slice(0, m.index) : noCards).trim();
+}
+
+// chatKey → 昵称 → QQ 号：memory scope 要把背景里最近发言的人映射成 subject。
+// 每条入站消息（含被闸挡掉的）都登记，登记得越全，映射越准。
+const nameToQq = new Map<string, Map<string, string>>();
 
 // 日志一行一个时间戳：gate 判定与发送记录以前没有时间，排查只能靠原话簿对齐
 {
@@ -408,7 +426,9 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
     try {
       // 留痕：这一轮是收图轮，起止都打日志，否则「为什么不收」永远查不到
       console.log(`[鱼缸] 收图轮开始 ${gif.ref} md5=${md5.slice(0, 10)}`);
-      const submission = await conv.submit({ type: "input", content }, ctx);
+      // 收图任务不是群友原话：专用 entry kind（fish.gif_ingest），不 pushScope，
+      // 也不进 renderMemoryTranscript——不能触发记忆召回或抽取
+      const submission = await conv.submit({ type: "input", content, entry: { kind: MEMORY_GIF_KIND } }, ctx);
       const roundId = String(submission.id);
       silentRounds.add(roundId);
       try {
@@ -467,6 +487,8 @@ async function submitRound(input: {
   reply: boolean;
   /** bypass 段（画图指令）；只在这一轮可见，轮 settle 即删 */
   bypass?: string;
+  /** 记忆：结构化入站 entry（fish.inbound，原始文本）与本轮在场人物（memory scope） */
+  memory: { inbound: MemoryInbound; speakers: { subject: string; name: string }[] };
 }): Promise<void> {
   const { chatKey, conv, trigger } = input;
   await absorbSecrets(conv);
@@ -490,38 +512,52 @@ async function submitRound(input: {
     }
   }
 
-  // 触发消息绑在 submission 上：轮在跑时新消息进来也不会把引用目标顶掉
-  // （否则回复会串到别人的消息上）
-  const submission = await conv.submit({ type: "input", content }, ctx);
-  triggerOf.set(String(submission.id), {
-    messageId: trigger.messageId,
-    mentionsBot: trigger.mentionsBot,
-    userId: trigger.userId,
-  });
-  if (input.bypass !== undefined) bypassOf.set(String(submission.id), input.bypass);
-  // 零出口轮观测：本轮出口计数清零登记，与 triggerOf 同生命周期（见下方 finally）
-  sayCalled.set(String(submission.id), 0);
+  // 记忆只经 system section 注入：提交前压入本轮 scope（在场人物 + 原始正文），
+  // 轮结束（成功/失败/抛错/被中止）都在 finally 弹出；队列满时本轮不注入记忆。
+  // 记忆抽取只读结构化原始 entry（fish.inbound），不读上面这个 host 拼装的 content；
+  // 改动这条边界前必读 src/memory.ts 的安全边界注释（自我污染闭环）。
+  const scopeToken = pushScope(String(conv.id), { speakers: input.memory.speakers, text: input.memory.inbound.text });
+  let settled: SettledSubmissionRecord;
+  try {
+    // 触发消息绑在 submission 上：轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）。
+    // entry 是记忆的唯一原始输入：chatKey / QQ / 昵称 / 原话，不带任何宿主文案
+    const submission = await conv.submit(
+      { type: "input", content, entry: { kind: MEMORY_INBOUND_KIND, data: input.memory.inbound } },
+      ctx,
+    );
+    triggerOf.set(String(submission.id), {
+      messageId: trigger.messageId,
+      mentionsBot: trigger.mentionsBot,
+      userId: trigger.userId,
+    });
+    if (input.bypass !== undefined) bypassOf.set(String(submission.id), input.bypass);
+    // 零出口轮观测：本轮出口计数清零登记，与 triggerOf 同生命周期（见下方 finally）
+    sayCalled.set(String(submission.id), 0);
 
-  // 成功、失败、抛错都要把这一轮的绑定清掉
-  const settled = await (async () => {
-    try {
-      const result = await submission.wait(ctx);
-      // 正常结束却一次 say 都没调：模型裸文本回复不出口，聊天对象什么都看不到——
-      // 打一行宿主日志让这类轮立刻可见（收图轮不经 submitRound，天然不在观测范围）；
-      // 文案固定含「零出口轮」供 grep，完整解释在 .agents/skills/ops/SKILL.md
-      if (result.status === "done" && (sayCalled.get(String(submission.id)) ?? 0) === 0) {
-        console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say`);
+    // 成功、失败、抛错都要把这一轮的绑定清掉
+    settled = await (async () => {
+      try {
+        const result = await submission.wait(ctx);
+        // 正常结束却一次 say 都没调：模型裸文本回复不出口，聊天对象什么都看不到——
+        // 打一行宿主日志让这类轮立刻可见（收图轮不经 submitRound，天然不在观测范围）；
+        // 文案固定含「零出口轮」供 grep，完整解释在 .agents/skills/ops/SKILL.md
+        if (result.status === "done" && (sayCalled.get(String(submission.id)) ?? 0) === 0) {
+          console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say`);
+        }
+        return result;
+      } finally {
+        triggerOf.delete(String(submission.id));
+        bypassOf.delete(String(submission.id));
+        // 导入清单只属于这一轮：成功、失败、抛错都在这里清掉
+        clearMemeImportRound(String(submission.id));
+        // 出口计数同样只活这一轮：done、没答上来、wait 抛错都不残留
+        sayCalled.delete(String(submission.id));
       }
-      return result;
-    } finally {
-      triggerOf.delete(String(submission.id));
-      bypassOf.delete(String(submission.id));
-      // 导入清单只属于这一轮：成功、失败、抛错都在这里清掉
-      clearMemeImportRound(String(submission.id));
-      // 出口计数同样只活这一轮：done、没答上来、wait 抛错都不残留
-      sayCalled.delete(String(submission.id));
-    }
-  })();
+    })();
+  } finally {
+    // scope 队列满（scopeToken undefined）时本轮没压过 scope，不能弹掉别人的队首
+    if (scopeToken !== undefined) shiftScope(String(conv.id), scopeToken);
+  }
   if (settled.status !== "done") {
     const why = [settled.status, (settled as { reason?: string }).reason, (settled as { detail?: string }).detail]
       .filter(Boolean)
@@ -606,6 +642,20 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
 
   // 整组里最近一条非空 bypass 段：指令后面又跟了两句普通闲聊时，只取最后一条会让 draw 静默失效
   const payload = lastPayload(burst.messages);
+  // 记忆的原始输入与在场人物：entry 只存卡片渲染 / bypass 剥离之前的群友原话，
+  // scope 带锚点 + 背景里最近发言的人（昵称经 nameToQq 映射回 QQ）
+  const bucket = recent.get(anchor.chatKey) ?? [];
+  const memoryInbound: MemoryInbound = {
+    chatKey: anchor.chatKey,
+    userId: String(anchor.userId),
+    nickname: anchor.nickname,
+    text: rawMemoryText.get(anchor) ?? memoryTextOf(anchor.text),
+  };
+  const speakers = [{ subject: `qq:${anchor.userId}`, name: anchor.nickname }];
+  for (const name of bucket.slice(-4).map((m) => m.nickname)) {
+    const qq = nameToQq.get(anchor.chatKey)?.get(name);
+    if (qq && !speakers.some((s) => s.subject === `qq:${qq}`)) speakers.push({ subject: `qq:${qq}`, name });
+  }
   await submitRound({
     chatKey: anchor.chatKey,
     conv,
@@ -614,6 +664,7 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     trigger: { messageId: anchor.messageId, mentionsBot: burst.mustAnswer, userId: anchor.userId },
     reply: burst.quoteFromReply,
     ...(payload !== undefined ? { bypass: payload } : {}),
+    memory: { inbound: memoryInbound, speakers },
   });
 }
 
@@ -775,6 +826,9 @@ const debouncer = createDebouncer({
 onebot.onMessage((raw) => {
   void (async () => {
     const msg = raw;
+    // 记忆 entry 的原始文本：必须在卡片渲染（就地改写 msg.text）与 bypass 剥离之前取，
+    // 只去掉 [卡片#N] 占位与 bypass 指令，不携带任何宿主渲染文案
+    rawMemoryText.set(msg, memoryTextOf(msg.text));
     // 分享卡片：文本里只有 [卡片#N] 占位，这里按卡片内容渲染成可读文本
     // （B 站小程序卡片带 b23.tv 短链，鱼据此就能调 video 去看那条视频）
     if (msg.cards && msg.cards.length > 0) {
@@ -803,6 +857,14 @@ onebot.onMessage((raw) => {
     ]);
     if (bucket.length > 30) bucket.splice(0, bucket.length - 30);
     recent.set(msg.chatKey, bucket);
+
+    // 昵称 → QQ 映射：每条入站消息（含被闸挡掉的）都登记，memory scope 靠它把背景
+    // 里最近发言的人映射成 subject（Later 从 name: 得到 QQ 时也靠它对齐）
+    if (msg.nickname) {
+      const names = nameToQq.get(msg.chatKey) ?? new Map<string, string>();
+      names.set(msg.nickname, String(msg.userId));
+      nameToQq.set(msg.chatKey, names);
+    }
 
     chatlog.append({ at: Date.now(), chat: msg.chatKey, from: msg.nickname, text: msg.text, kind: "in" });
 
@@ -869,6 +931,18 @@ onebot.onMessage((raw) => {
       return;
     }
 
+    const memoryInbound: MemoryInbound = {
+      chatKey: msg.chatKey,
+      userId: String(msg.userId),
+      nickname: msg.nickname,
+      text: rawMemoryText.get(msg) ?? memoryTextOf(msg.text),
+    };
+    const speakers = [{ subject: `qq:${msg.userId}`, name: msg.nickname }];
+    for (const name of bucket.slice(-4).map((m) => m.nickname)) {
+      const qq = nameToQq.get(msg.chatKey)?.get(name);
+      if (qq && !speakers.some((s) => s.subject === `qq:${qq}`)) speakers.push({ subject: `qq:${qq}`, name });
+    }
+
     await submitRound({
       chatKey: msg.chatKey,
       conv,
@@ -877,6 +951,7 @@ onebot.onMessage((raw) => {
       // 回复链：本轮触发本身是在回复某条消息，鱼的回应应引用触发那条
       reply: (msg.replyIds?.length ?? 0) > 0,
       ...(bypass ? { bypass: bypass.stash } : {}),
+      memory: { inbound: memoryInbound, speakers },
     });
   })().catch((error: unknown) => {
     console.error("[鱼缸] 处理消息失败", error instanceof Error ? error.message : error);

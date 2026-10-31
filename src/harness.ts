@@ -35,8 +35,8 @@ import { loadMemeIndex, countMoods } from "./tools/meme/shared.ts";
 import { WatchDoc } from "./store.ts";
 import { createCompactor, MemoryExtractError, type CompactResult, type Compactor } from "./compact.ts";
 import { ChatsDoc, MemoryDoc, OutboxDoc } from "./store.ts";
-import { applyPatch, MEMORY_CAPS } from "./memory.ts";
-import { memoryKeyOf } from "./memory-scope.ts";
+import { applyPatch, MEMORY_CAPS, renderMemorySection } from "./memory.ts";
+import { memoryKeyOf, peekScope } from "./memory-scope.ts";
 
 /** 群档案作为一条 system 消息放进 transcript，只在建会话时写一次。 */
 export const GroupProfileEntry = defineEntry("fish.group-profile");
@@ -49,12 +49,19 @@ export const DEFAULT_PERSONA = "默认";
  * 其余叫 `fish:<名>`（人格 = 人格书全文）。工具实例共享，会话只选其中一个。
  *
  * sections 顺序固定：runtime（人格无关的运行时协议）→ persona（人格）→ tool_catalog
- * （已启用工具目录，只用于发现）→ ops / people / watched / meme_tags。
+ * （已启用工具目录，只用于发现）→ ops / people / watched / meme_tags / memory。
  */
 function makeFishExtension(
   name: string,
   persona: string,
-  parts: { tools: readonly ToolRegistration[]; prompts: PromptSet; mediaRoot: string; manifests: readonly ToolManifest[] },
+  parts: {
+    tools: readonly ToolRegistration[];
+    prompts: PromptSet;
+    mediaRoot: string;
+    manifests: readonly ToolManifest[];
+    /** conversationId → 原始 chatKey（人格后缀已去掉）；root 会话没有记忆，返回 undefined */
+    memoryKeyOf: (conversationId: string) => string | undefined;
+  },
 ): Extension {
   return defineExtension({
     name,
@@ -88,6 +95,18 @@ function makeFishExtension(
         const header = parts.prompts.messages["meme_section_header"] ?? "";
         const line = rows.map((x) => `${x.mood}${x.count}`).join(" · ");
         return [header, `${line}（共 ${entries.length} 张）`].filter((s) => s.length > 0).join("\n");
+      }, { tag: true }),
+      // 长期记忆：只经这一个 system section 注入，绝不进 user message。只读 session
+      // family（不 commit、不写 lastUsedAt）；没有 scope 或没有可渲染内容时不占位。
+      // 改动这里或 renderMemoryTranscript 的白名单前必读 src/memory.ts 的安全边界注释：
+      // 记忆抽取只读结构化原始 entry，必须继续排除 pi.system、宿主任务文案和工具结果，
+      // 否则「记忆 → 抽取 → 记忆」的自我污染闭环会复活。
+      section("memory", async (input, context) => {
+        const memoryKey = parts.memoryKeyOf(String(input.conversationId));
+        if (!memoryKey) return undefined;
+        const snapshot = await input.read.snapshot(MemoryDoc, memoryKey, context);
+        if (!snapshot) return undefined;
+        return renderMemorySection(snapshot, peekScope(String(input.conversationId)), parts.prompts.messages);
       }, { tag: true }),
     ],
   });
@@ -225,9 +244,19 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     "tool_search_none",
     "tool_search_empty",
     "tool_search_bad_limit",
+    "memory_section_header",
+    "memory_people_header",
+    "memory_lore_header",
+    "memory_cards_header",
   ]) {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
+
+  // conversationId → 原始 chatKey（人格后缀已去掉）：压缩链路找记忆 doc、memory
+  // section 找渲染对象都靠它。同一原始 chatKey 的所有人格指向同一个 family member；
+  // root conversation 没有映射，记忆相关的一切都返回 undefined（不注入、不抽取）。
+  const memoryKeyByConversation = new Map<string, string>();
+  const memoryKeyOfConversation = (conversationId: string): string | undefined => memoryKeyByConversation.get(conversationId);
 
   // 最终 loader：扫描 src/tools/<name>/TOOL.md + tool.ts，严格一一对应后调 factory 注册；
   // say / react / tool_search eager，其余已启用工具 deferred。依赖不满足（无 master、
@@ -274,11 +303,11 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     const override = options.toolTimeoutOverrides?.[tool.name];
     return withToolTimeout(tool, override === undefined ? toolTimeoutMs : override * 1000, toolTimeoutMessage);
   });
-  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests });
+  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation });
   const personaExtensions = new Map<string, Extension>();
   const openers: Record<string, string> = {};
   for (const [name, book] of Object.entries(prompts.personas)) {
-    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests }));
+    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation }));
     if (book.opener) openers[name] = book.opener;
   }
 
@@ -345,11 +374,6 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       }, ctx);
     }
   }
-
-  // conversationId → 原始 chatKey（人格后缀已去掉）：压缩链路找记忆 doc、memory
-  // section 找渲染对象都靠它。同一原始 chatKey 的所有人格指向同一个 family member；
-  // root conversation 没有映射，记忆相关的一切都返回 undefined（不注入、不抽取）。
-  const memoryKeyByConversation = new Map<string, string>();
 
   const compactor: Compactor | undefined = options.compact
     ? createCompactor({
