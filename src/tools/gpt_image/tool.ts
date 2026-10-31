@@ -15,6 +15,7 @@ import { renderTemplate } from "../../prompts.ts";
 import { generateGptImages } from "../../media/gpt-image.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
+import { fenceReadablePath } from "../fs-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface GptImageArgs {
@@ -65,6 +66,10 @@ export function createGptImageTool(manifest: ToolManifest, deps: ToolPackageDeps
         const ref = raw.trim().replace(/^\[|\]$/g, "");
         const full = resolve(root, ref);
         if (full !== root && !full.startsWith(root + sep)) {
+          throw new Error(renderTemplate(deps.prompts.messages["gpt_image_bad_ref"] ?? "{{ref}}", { ref }));
+        }
+        // 符号链接围栏：最终分量是链接、realpath 越界或不存在都按 bad_ref 拒（fail-closed）
+        if (!fenceReadablePath(root, full).ok) {
           throw new Error(renderTemplate(deps.prompts.messages["gpt_image_bad_ref"] ?? "{{ref}}", { ref }));
         }
         const mime = MIME[extname(full).toLowerCase()];

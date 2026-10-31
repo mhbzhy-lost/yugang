@@ -8,8 +8,8 @@
  * 文件（含 config/models.json）由专门的管理工具改，不提供通用写入能力。
  * .env、config/auth.json、.git/、node_modules/、.trash/、.pi/ 一律硬封禁。全部操作打审计日志。
  */
-import { mkdirSync } from "node:fs";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { LiveDoc } from "@earendil-works/pi-durable";
 import type { ToolPackageDeps } from "./types.ts";
 
@@ -41,6 +41,82 @@ export function withinSand(raw: string): string | null {
   const full = resolve(raw);
   if (full === SAND_ROOT || full.startsWith(SAND_ROOT + sep)) return full;
   return null;
+}
+
+/** 符号链接围栏的结果：ok 时 real 是解算后的真实路径，调用方应尽量以它继续读写。 */
+export type LinkFenceResult = { ok: true; real: string } | { ok: false; reason: "missing" | "link" | "outside" };
+
+function realRootOf(root: string): string | null {
+  try {
+    return realpathSync(root);
+  } catch {
+    return null; // 根本身不可解算：fail-closed
+  }
+}
+
+function insideRealRoot(realRoot: string, real: string): boolean {
+  return real === realRoot || real.startsWith(realRoot + sep);
+}
+
+/**
+ * 已存在目标的符号链接围栏（read / grep / tree 与媒体链共用，fail-closed）：
+ * - 目标不存在 → missing；
+ * - 最终分量本身是符号链接 → link（一律不跟随，哪怕指向允许根内）；
+ * - realpath（中间目录链接一并解算）落在允许根之外 → outside。
+ * 比较用 realpath(root)：macOS 的 /tmp、/var 本身就是符号链接，lexical 比较会误判。
+ */
+export function fenceReadablePath(root: string, full: string): LinkFenceResult {
+  const realRoot = realRootOf(root);
+  if (!realRoot) return { ok: false, reason: "outside" };
+  let st;
+  try {
+    st = lstatSync(full);
+  } catch {
+    return { ok: false, reason: "missing" };
+  }
+  if (st.isSymbolicLink()) return { ok: false, reason: "link" };
+  let real: string;
+  try {
+    real = realpathSync(full);
+  } catch {
+    return { ok: false, reason: "missing" };
+  }
+  if (!insideRealRoot(realRoot, real)) return { ok: false, reason: "outside" };
+  return { ok: true, real };
+}
+
+/**
+ * 新建路径的符号链接围栏（write 草稿区）：目标可能尚不存在，不能直接 realpath。
+ * - 路径上任何已存在的分量是符号链接 → link（不跟随）；
+ * - 最近的已存在祖先的 realpath 落在允许根之外 → outside（新建件会落进链接指向的位置）；
+ * - 最终分量已存在时同样被 walk 覆盖：是链接 → link，realpath 越界 → outside。
+ */
+export function fenceWritablePath(root: string, full: string): LinkFenceResult {
+  const realRoot = realRootOf(root);
+  if (!realRoot) return { ok: false, reason: "outside" };
+  const rel = relative(root, full);
+  if (rel === "") return { ok: false, reason: "outside" };
+  let deepest = root; // 最近的已存在祖先；目标不存在时以它的 realpath 作落点校验
+  let cur = root;
+  for (const part of rel.split(sep)) {
+    cur = join(cur, part);
+    let st;
+    try {
+      st = lstatSync(cur);
+    } catch {
+      break; // 不存在：更深的分量必然也不存在，deepest 就是最近的已存在祖先
+    }
+    if (st.isSymbolicLink()) return { ok: false, reason: "link" };
+    deepest = cur;
+  }
+  let real: string;
+  try {
+    real = realpathSync(deepest);
+  } catch {
+    return { ok: false, reason: "outside" };
+  }
+  if (!insideRealRoot(realRoot, real)) return { ok: false, reason: "outside" };
+  return { ok: true, real };
 }
 
 export interface ResolvedPath {

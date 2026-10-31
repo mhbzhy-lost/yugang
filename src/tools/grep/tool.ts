@@ -12,7 +12,7 @@ import { extname, isAbsolute, join, resolve, sep } from "node:path";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { assertTriggeredByMaster, audited, BIN_EXT, ensureSandRoot, resolveInside, withinSand } from "../fs-shared.ts";
+import { assertTriggeredByMaster, audited, BIN_EXT, ensureSandRoot, fenceReadablePath, resolveInside, SAND_ROOT, withinSand } from "../fs-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface GrepArgs {
@@ -40,6 +40,13 @@ export function createGrepTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const wanted = args.path ?? ".";
       const base = isAbsolute(wanted) ? withinSand(wanted) : wanted === "." || wanted === "" ? root : resolveInside(root, wanted);
       if (!base) throw new Error(p.messages["fs_outside"] ?? "fs_outside");
+      // 起点本身过符号链接围栏：目录链接逃逸会让整个 walk 落到允许范围外（walk 内部本就跳过链接项）
+      const fence = fenceReadablePath(isAbsolute(wanted) ? SAND_ROOT : root, base);
+      if (!fence.ok) {
+        if (fence.reason === "missing") throw new Error(p.messages["fs_missing"] ?? "fs_missing");
+        if (fence.reason === "link") throw new Error(p.messages["fs_link"] ?? "fs_link");
+        throw new Error(p.messages["fs_outside"] ?? "fs_outside");
+      }
       let re: RegExp;
       try {
         re = new RegExp(args.pattern, args.ignoreCase ? "i" : "");

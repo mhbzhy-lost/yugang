@@ -29,6 +29,7 @@ import { checkMemeSource } from "../../media/meme-store.ts";
 import { DEFAULT_LIMITS } from "../../egress/policy.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
+import { fenceReadablePath } from "../fs-shared.ts";
 import { MEME_IMPORT_MAX, memeImportHas, memeImportLookLimit, memeImportLooked, memeImportLookedCount, memeImportMarkLooked } from "../meme_import/shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
@@ -81,13 +82,22 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const outside = full !== root && !full.startsWith(root + sep);
       if (outside) throw new Error(renderTemplate(deps.prompts.messages["look_outside"] ?? "{{ref}}", { ref }));
 
+      const localRef = relative(root, full).split(sep).join("/");
+      const inInbox = full === inboxDir || full.startsWith(inboxDir + sep);
+      // 符号链接围栏：最终分量是链接或 realpath 越界都拒。inbox 图不在这查——下面的
+      // checkMemeSource（lstat/realpath）已按同一语义 fail-closed，拒绝文案走 look_missing。
+      if (!inInbox) {
+        const fence = fenceReadablePath(root, full);
+        if (!fence.ok && fence.reason !== "missing") {
+          throw new Error(renderTemplate(deps.prompts.messages["look_outside"] ?? "{{ref}}", { ref }));
+        }
+      }
+
       const mime = MIME[extname(full).toLowerCase()];
       if (!mime) throw new Error(renderTemplate(deps.prompts.messages["look_type"] ?? "{{ref}}", { ref }));
 
       // 导入轮：只认本轮 meme_import 清单里、且本轮触发是主人的 inbox 图，额度按清单张数（上限 50）；
       // 其余一律按普通轮 2 张。inbox 不是普通媒体，那两张额度不能拿来授权读它。
-      const localRef = relative(root, full).split(sep).join("/");
-      const inInbox = full === inboxDir || full.startsWith(inboxDir + sep);
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
       const roundId = round === undefined ? undefined : String(round);

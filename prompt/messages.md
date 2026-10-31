@@ -53,6 +53,7 @@ fs_outside: 路径不在可读范围内（仓库或 /tmp/yugang）
 fs_write_outside: write 只能写 /tmp/yugang 里的文件
 fs_missing: 找不到这个文件
 fs_binary: 二进制文件不读
+fs_link: 路径里有符号链接，不跟（链接可能指到允许范围外），换成真实文件的路径再试
 grep_bad_regex: 正则写错了，检查一下括号和转义
 grep_none: 没搜到
 fs_too_big: 文件太大

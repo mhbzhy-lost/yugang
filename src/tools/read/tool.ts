@@ -12,7 +12,7 @@ import { extname, resolve } from "node:path";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { assertTriggeredByMaster, audited, BIN_EXT, ensureSandRoot, READ_CAP, resolveReadable } from "../fs-shared.ts";
+import { assertTriggeredByMaster, audited, BIN_EXT, ensureSandRoot, fenceReadablePath, READ_CAP, resolveReadable } from "../fs-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface ReadArgs {
@@ -37,6 +37,13 @@ export function createReadTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       await assertTriggeredByMaster(deps, api as never, context, p.messages["fs_locked"] ?? "fs_locked");
       const target = resolveReadable(root, args.path);
       if (!target) throw new Error(p.messages["fs_outside"] ?? "fs_outside");
+      // 符号链接围栏：最终分量是链接或 realpath 越界都拒，防止越界读凭据或仓库外文件
+      const fence = fenceReadablePath(root, target.full);
+      if (!fence.ok) {
+        if (fence.reason === "missing") throw new Error(p.messages["fs_missing"] ?? "fs_missing");
+        if (fence.reason === "link") throw new Error(p.messages["fs_link"] ?? "fs_link");
+        throw new Error(p.messages["fs_outside"] ?? "fs_outside");
+      }
       let st;
       try {
         st = statSync(target.full);

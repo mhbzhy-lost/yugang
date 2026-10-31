@@ -12,7 +12,7 @@ import { dirname } from "node:path";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { assertTriggeredByMaster, audited, ensureSandRoot, resolveWritable, WRITE_CAP } from "../fs-shared.ts";
+import { assertTriggeredByMaster, audited, ensureSandRoot, fenceWritablePath, resolveWritable, SAND_ROOT, WRITE_CAP } from "../fs-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface WriteArgs {
@@ -35,6 +35,12 @@ export function createWriteTool(manifest: ToolManifest, deps: ToolPackageDeps): 
       await assertTriggeredByMaster(deps, api as never, context, p.messages["fs_locked"] ?? "fs_locked");
       const target = resolveWritable(args.path);
       if (!target) throw new Error(p.messages["fs_write_outside"] ?? "fs_write_outside");
+      // 符号链接围栏：路径上任何链接分量或已存在祖先 realpath 越界都拒（覆盖与新建两种情形）
+      const fence = fenceWritablePath(SAND_ROOT, target.full);
+      if (!fence.ok) {
+        if (fence.reason === "link") throw new Error(p.messages["fs_link"] ?? "fs_link");
+        throw new Error(p.messages["fs_write_outside"] ?? "fs_write_outside");
+      }
       if (args.content.length > WRITE_CAP) throw new Error(p.messages["fs_too_big"] ?? "fs_too_big");
       const existed = existsSync(target.full);
       mkdirSync(dirname(target.full), { recursive: true });

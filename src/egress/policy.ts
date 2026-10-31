@@ -6,6 +6,7 @@
  */
 import { statSync, readFileSync } from "node:fs";
 import { resolve, sep, extname } from "node:path";
+import { fenceReadablePath } from "../tools/fs-shared.ts";
 
 export interface EgressLimits {
   maxChars: number;
@@ -163,11 +164,18 @@ const MAGIC: readonly Buffer[] = [
   Buffer.from("GIF8"),
 ];
 
+/** lexical 围栏之后的符号链接复检：链接分量或 realpath 越界都按越界拒；不存在交给调用方的存在性检查。 */
+function fencedMediaOrOutside(root: string, full: string): boolean {
+  const fence = fenceReadablePath(root, full);
+  return !fence.ok && fence.reason !== "missing";
+}
+
 /** 判断一个媒体路径能否发出去；look 工具也复用它。 */
 export function validateMedia(rawPath: string, limits: EgressLimits): Rejection | null {
   const root = resolve(limits.mediaRoot);
   const full = resolve(root, rawPath);
   if (full !== root && !full.startsWith(root + sep)) return { code: "media_outside" };
+  if (fencedMediaOrOutside(root, full)) return { code: "media_outside" };
 
   const ext = extname(full).toLowerCase();
   if (!IMAGE_EXT.has(ext)) return { code: "media_type", vars: { ext: ext || "(无)" } };
@@ -194,6 +202,7 @@ export function validateVoice(rawPath: string, limits: EgressLimits): Rejection 
   const root = resolve(limits.mediaRoot);
   const full = resolve(root, rawPath);
   if (full !== root && !full.startsWith(root + sep)) return { code: "media_outside" };
+  if (fencedMediaOrOutside(root, full)) return { code: "media_outside" };
   const ext = extname(full).toLowerCase();
   if (!VOICE_EXT.has(ext)) return { code: "media_type", vars: { ext: ext || "(无)" } };
   try {

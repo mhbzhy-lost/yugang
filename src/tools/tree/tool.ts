@@ -12,7 +12,7 @@ import { join, resolve, sep } from "node:path";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { assertTriggeredByMaster } from "../fs-shared.ts";
+import { assertTriggeredByMaster, fenceReadablePath } from "../fs-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface TreeArgs {
@@ -39,6 +39,12 @@ export function createTreeTool(manifest: ToolManifest, deps: ToolPackageDeps): T
 
       const start = resolve(root, args.path ?? ".");
       if (start !== root && !start.startsWith(root + sep)) {
+        throw new Error(deps.prompts.messages["fs_outside"] ?? "fs_outside");
+      }
+      // 起点过符号链接围栏：目录链接逃逸不许整个 tree 落到仓库外；不存在的起点维持旧行为（空清单）
+      const fence = fenceReadablePath(root, start);
+      if (!fence.ok && fence.reason !== "missing") {
+        if (fence.reason === "link") throw new Error(deps.prompts.messages["fs_link"] ?? "fs_link");
         throw new Error(deps.prompts.messages["fs_outside"] ?? "fs_outside");
       }
       const maxDepth = Math.min(Math.max(args.depth ?? 2, 1), 4);
