@@ -10,10 +10,9 @@
  */
 import { spawn } from "node:child_process";
 import { writeFileSync, existsSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
-const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
+const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
 const PID_FILE = join(HOME, "up.pid");
 const wsUrl = process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001";
 

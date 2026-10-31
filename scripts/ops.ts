@@ -7,12 +7,11 @@
  *   node scripts/ops.ts probe
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { withAccessToken } from "../src/qq/onebot.ts";
 import { localDay } from "../src/usage.ts";
 
-const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
+const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
 const CHATLOG = join(HOME, "chatlog");
 
 const [command = "status", ...args] = process.argv.slice(2);

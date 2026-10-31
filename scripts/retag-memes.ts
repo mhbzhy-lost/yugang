@@ -15,7 +15,6 @@
  * 环境变量可覆盖：INDEX / AUTH / PROMPT / TAGS
  */
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadFishModels } from "../src/model-config.ts";
 
@@ -31,7 +30,7 @@ const limitArg = args.indexOf("--limit");
 const limit = limitArg >= 0 ? Number(args[limitArg + 1] ?? "0") : 0;
 
 const root = join(import.meta.dirname, "..");
-const indexPath = process.env["INDEX"] ?? join(homedir(), "鱼缸", "var", "media", "memes", "index.json");
+const indexPath = process.env["INDEX"] ?? join(import.meta.dirname, "..", "var", "media", "memes", "index.json");
 const authPath = process.env["AUTH"] ?? join(root, "config", "auth.json");
 const modelsPath = join(root, "config", "models.json");
 const promptPath = process.env["PROMPT"] ?? join(root, "prompt", "meme-retag.md");

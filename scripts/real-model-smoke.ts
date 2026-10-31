@@ -222,7 +222,7 @@ try {
   try { ffmpegOk = spawnSync("ffmpeg", ["-version"], { timeout: 5000 }).status === 0; } catch {}
   const videoFramesReady = existsSync(videoPython) && existsSync(join(ROOT, "scripts", "video-frames.py")) && ffmpegOk;
   const sdConfigured = Boolean(process.env.SD_WEBUI_URL);
-  const tagsCsvPath = process.env.TAGS_CSV ?? join(homedir(), "鱼缸", "var", "danbooru.csv");
+  const tagsCsvPath = process.env.TAGS_CSV ?? join(import.meta.dirname, "..", "var", "danbooru.csv");
   const tagsReady = existsSync(tagsCsvPath);
   ev({
     stage: "setup",

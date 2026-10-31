@@ -30,7 +30,7 @@ console.log(`✓ 已写入 .env（${token.length} 字符，未打印内容）`);
 const protocolDir =
   process.platform === "darwin"
     ? join(homedir(), "Library", "Containers", "com.tencent.qq", "Data", "Documents", "napcat")
-    : join(process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var"), "protocol", "napcat");
+    : join(process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var"), "protocol", "napcat");
 if (existsSync(protocolDir)) {
   const wsUrl = process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001";
   const port = Number(new URL(wsUrl).port || 3001);

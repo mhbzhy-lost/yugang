@@ -3,10 +3,9 @@
  *   npm run doctor
  */
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
+const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
 const rows: [boolean, string, string][] = [];
 
 function check(ok: boolean, label: string, fix: string): void {

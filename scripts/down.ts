@@ -3,10 +3,9 @@
  *   npm run down
  */
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
-const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
+const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
 const pidFile = join(HOME, "up.pid");
 
 if (!existsSync(pidFile)) {

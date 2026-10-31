@@ -13,10 +13,9 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { discoverUin, napcatConfigDir, writeOneBotConfig as writeConfig } from "./lib/onebot-config.ts";
 import { withAccessToken } from "../src/qq/onebot.ts";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
-const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
+const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
 const QQ_BIN = "/Applications/QQ.app/Contents/MacOS/QQ";
 
 /**

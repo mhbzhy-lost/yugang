@@ -9,7 +9,6 @@
  * 模型的正文、思考、tool 调用文本都不在这条链上。
  */
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { addFishProvider, createFishModels } from "./models.ts";
@@ -108,7 +107,8 @@ function applyWatched(chatKey: string, people: { userId: string; name?: string; 
   replaceWatched(watchedByChat, baseChatKey(chatKey), people);
 }
 
-const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
+// 运行时数据目录：默认仓库 var/（按本文件位置解析，不依赖 cwd）；YUGANG_HOME 设置时完全胜出
+const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
 mkdirSync(HOME, { recursive: true });
 
 cleanupStaleVideoTemps(); // 清掉上次被打断的抽帧临时目录（正常路径在 finally 里删）

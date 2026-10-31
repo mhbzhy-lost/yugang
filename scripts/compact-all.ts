@@ -10,7 +10,6 @@
  * 实现：以极小阈值（1 条即触发）打开一个临时 fish 实例，对 chats 映射
  * 里的每个会话调 fish.compact（含摘要模型调用），然后关闭。
  */
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadFishModels } from "../src/model-config.ts";
 import { createFishModels } from "../src/models.ts";
@@ -18,7 +17,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { openFish } from "../src/harness.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 
-const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
+const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
 const selection = loadFishModels();
 // 压缩固定用主模型：models.json 没有单独的摘要角色
 const mainModel = { provider: selection.main.providerId, modelId: selection.main.modelId };

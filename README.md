@@ -184,7 +184,8 @@ config/auth.example.json   模板，说明格式                                
 首次使用 `cp config/models.example.json config/models.json`，之后只编辑这份被 gitignore 的本机文件；
 换机器时各自维护一份，互不覆盖。
 
-`var/` 只放运行时生成的东西（数据库、原话簿、媒体、幂等表），不放凭据。
+数据目录默认是仓库 `var/`（鱼活动产生的数据，可用 `YUGANG_HOME` 整体搬走），只放运行时生成的东西
+（数据库、原话簿、媒体、幂等表），不放凭据。
 
 模型选择只有一个入口：`config/models.json` 的 `models` 角色表。没有环境变量，也没有启动参数。
 
@@ -306,7 +307,7 @@ export ONEBOT_TOKEN=...            # 没有就不填
 npm start
 ```
 
-数据落在 `var/`（SQLite + 幂等表），人格书在 `prompt/persona.md`（多人格在 `prompt/personas/`），
+数据落在仓库 `var/`（SQLite + 幂等表），人格书在 `prompt/persona.md`（多人格在 `prompt/personas/`），
 发图必须放在 `MEDIA_ROOT` 里；本地表情包待收目录是 `MEDIA_ROOT/meme-inbox/`。
 
 ## 已验证

@@ -8,10 +8,9 @@
  * 本脚本只读索引，不做任何入库、不扫待收目录。库是生成数据，在 <HOME>/media/memes/ 下，不进 git。
  */
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
+const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
 const MEDIA = resolve(process.env.MEDIA_ROOT ?? join(HOME, "media"));
 const MEMES = join(MEDIA, "memes");
 const INDEX = join(MEMES, "index.json");

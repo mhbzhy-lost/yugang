@@ -10,10 +10,9 @@
  *   3. 仍推不出来 → 不硬塞，留在 untagged 列表里，等鱼以后重新打标
  *
  * 用法：node scripts/migrate-memes.ts [--dry]
- * 索引路径默认 ~/鱼缸/var/media/memes/index.json，可用 MEME_INDEX 覆盖。
+ * 索引路径默认仓库 var/media/memes/index.json，可用 MEME_INDEX 覆盖。
  */
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 interface Entry {
@@ -64,7 +63,7 @@ const moods = promptTags
   .map((l) => l.trim())
   .filter((l) => l.length > 0 && !l.startsWith("#"));
 
-const indexUrl = process.env["MEME_INDEX"] ?? join(homedir(), "鱼缸", "var", "media", "memes", "index.json");
+const indexUrl = process.env["MEME_INDEX"] ?? join(import.meta.dirname, "..", "var", "media", "memes", "index.json");
 if (!existsSync(indexUrl)) {
   console.error(`找不到索引：${indexUrl}`);
   process.exit(1);
