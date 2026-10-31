@@ -2,7 +2,8 @@
  * 长期记忆的数据模型、上限与渲染。
  *
  * 记忆存成 session 级 keyed document family（fish.memory，见 store.ts），
- * key 是去掉人格后缀的原始 chatKey（见 memory-scope.ts 的 memoryKeyOf）。
+ * key 是人格名（默认人格为「默认」，见 memory-scope.ts 的 memoryKeyOf）：
+ * 一个人格的全部会话（各群、私聊）共享同一份，不同人格互不可见。
  * 写入入口只有压缩链路（compact.ts）；渲染入口只有 system section（harness.ts）。
  *
  * 安全边界（改动 section 或 transcript 白名单前必读）：

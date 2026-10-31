@@ -161,22 +161,25 @@ node scripts/ops.ts probe
 
 ## 鱼记不住 / 记错了怎么查
 
-长期记忆（`fish.memory`，按去人格后缀的原始 chatKey 隔离，同群人格共享）只在压缩时写入，
-只经 system `memory` section 注入。排查用只读脚本，不实例化鱼、不写库：
+长期记忆（`fish.memory`，按人格隔离：一个人格一个个体，各群与主人私聊共享同一份；
+不同人格互不可见）只在压缩时写入，只经 system `memory` section 注入。排查用只读脚本，
+不实例化鱼、不写库：
 
 ```bash
-npm run memory                                # 所有会话的记忆条目数
-npm run memory -- --chat qq:group:659976571   # 该群记忆摘要（带 #人格 后缀会自动归一）
-npm run memory -- --chat qq:group:659976571 --json   # 原始 JSON
+npm run memory                                    # 所有人格的记忆条目数
+npm run memory -- --persona 长征机                # 该人格记忆摘要
+npm run memory -- --persona 长征机 --json         # 原始 JSON
+npm run memory -- --chat qq:group:659976571       # 便捷入口：解析该会话当前人格再查
 ```
 
 1. **「没记上」**：看 `lastExtractAt` 有没有随 `/压缩` 前进。没前进 = 那次压缩没成功或
    抽取链路失败（日志 grep `记忆抽取失败`，只有错误类型不带原文）；`lastExtractAt` 前进了但条目为 0，
    是模型判定这段对话没有值得记的（正常，不是 bug）。日志成功时会打 `记忆抽取 人N 说法N 卡片N`
-2. **「记歪了」**：`--chat` 摘要里看该 subject 的 facts 与来源（stated = 本人明说、
+2. **「记歪了」**：`--persona` 摘要里看该 subject 的 facts 与来源（stated = 本人明说、
    observed = 鱼看到、reported = 转述且带转述人）；渲染侧旧事实被 `supersede` 后带 `失效@时间`，
    不再注入但条目保留（可追溯，不静默删除）
-3. **「另一群 / 私聊看不到」**：设计如此，禁止共享；`--chat` 查不到就是没有那份记忆
+3. **「为什么那个群知道私聊里的事」**：设计如此（个体记忆）——主人私聊里告诉某人格的事，
+   可能经记忆在该人格出现的其它会话浮现；不同人格之间互不可见
 4. **发现记忆里有敏感信息**：不要在线上改库。按本文档停机 → 备份 `var/fish.db` → 人工处理；
    `scripts/memory.ts` 永远只读，不要给它加写入口
 

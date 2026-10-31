@@ -40,7 +40,7 @@ export interface CompactorOptions {
   onError?: (error: unknown) => void;
   /** 记忆抽取用的模型与提示词；不给就不拍取。 */
   extract?: { models: Models; model: { provider: string; modelId: string }; prompts: PromptSet };
-  /** conversation → 原始 chatKey（人格后缀已去掉）。未找到时跳过记忆抽取但照常 reset。 */
+  /** conversation → 该会话当前人格名（memory doc key）。未找到时跳过记忆抽取但照常 reset。 */
   memoryKeyOf?: (conversationId: ConversationId) => string | undefined;
   knownMemory?: (memoryKey: string) => Promise<{ text: string; subjects: { subject: string; name: string }[] }>;
   saveMemories?: (memoryKey: string, patch: MemoryPatch) => Promise<void>;

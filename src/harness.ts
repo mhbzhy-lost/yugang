@@ -252,9 +252,10 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
 
-  // conversationId → 原始 chatKey（人格后缀已去掉）：压缩链路找记忆 doc、memory
-  // section 找渲染对象都靠它。同一原始 chatKey 的所有人格指向同一个 family member；
-  // root conversation 没有映射，记忆相关的一切都返回 undefined（不注入、不抽取）。
+  // conversationId → 该会话当前人格名（memory doc key）：压缩链路找记忆 doc、
+  // memory section 找渲染对象都靠它。一个人格在所有会话（各群、私聊）指向同一个
+  // family member；root conversation 没有映射，记忆相关的一切都返回 undefined
+  // （不注入、不抽取）。
   const memoryKeyByConversation = new Map<string, string>();
   const memoryKeyOfConversation = (conversationId: string): string | undefined => memoryKeyByConversation.get(conversationId);
 
@@ -597,8 +598,10 @@ export async function openFish(options: FishOptions): Promise<Fish> {
           }, ctx);
           return created;
         })().then((conversation) => {
-          // 创建与复用两条路径都在这里登记：同群不同人格指向同一个 family member
-          memoryKeyByConversation.set(String(conversation.id), memoryKeyOf(groupKey));
+          // 创建与复用两条路径都在这里登记：key 是映射键（chatKey 或 chatKey#人格），
+          // memoryKeyOf 提取人格名（无后缀 = 默认）——同一个人格的所有会话
+          // （各群、私聊）都指向同一个 family member
+          memoryKeyByConversation.set(String(conversation.id), memoryKeyOf(key));
           return conversation;
         });
         groups.set(key, existing);
