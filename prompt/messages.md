@@ -1,6 +1,13 @@
 # 工具回给模型的文案。左边是代码，右边是文本。
 # 包括 say 的拒绝理由和发送成功回执——模型能看到的所有工具回复都在这里。
 
+# 进闸消息那一行的标注（renderForModel）。mention_other 的 {{who}} 是「名字(QQ)」或 QQ 号。
+mention_bot: @了你
+mention_all: @了全体成员
+mention_other: @了{{who}}
+mention_not_you: （这些都不是在叫你，别把别人的 @ 当成点名）
+speaker_master: 你主人
+
 say_sent: 已发到群里
 say_once: 这一轮已经说了 3 条，就此打住
 empty: 空消息，没什么可说的
@@ -23,6 +30,7 @@ look_outside: 只能看群里的图：{{ref}}
 look_missing: 找不到这张图：{{ref}}
 look_type: 不是图片：{{ref}}
 look_used: 本轮已经看过 {{limit}} 张图，这张留到下一轮；别跟用户说识别服务坏了
+look_import_used: 这一轮导入的 {{count}} 张已经看完了，先把看过的逐张收进库（meme_add），不要重复看
 search_query: 关键词得在 1 到 128 字之间
 search_nokey: 还没配置搜索凭据，搜不了
 search_used: 这一轮搜过了，先用搜到的说话
@@ -52,6 +60,12 @@ meme_add_caption: 得写一句这张图什么意思，再给几个标签
 meme_add_mood: 标签里至少有一个得是一级情绪词（{{moods}}），从里面挑一个最贴的
 meme_add_dup: 库里已经有这张了（{{file}}），不用重复收
 meme_add_done: 收好了：memes/{{file}}，库里现在 {{count}} 张
+meme_add_import_outside: 这张不在本轮导入清单里：{{ref}}。先调 meme_import 登记，或者那是上一轮的图（清单已经作废）
+meme_import_master: 本地表情导入只有主人能开，这一轮不算
+meme_import_empty: 待导入目录里没有能收的图片了（只认 jpg/jpeg/png/gif/webp 的直接子文件）
+meme_import_list: 这一批登记了 {{count}} 张，只能逐张 look、逐张用 meme_add 收，别靠文件名猜内容：
+meme_import_more: 目录里还有 {{rest}} 张，这一批处理完再调一次 meme_import，cursor 填 {{cursor}}
+meme_import_skipped: 跳过了 {{count}} 个不能收的：{{items}}
 forward_recent_prefix: 以下是这个群刚才那条没展开的合集内容：
 forward_collapsed: [转发合集（内容略）]
 meme_section_header: 表情包库存（一级情绪词 → 张数）：
@@ -90,7 +104,21 @@ say_media_used: 这一轮已经配过图了，下一轮再配
 say_meme_cooldown: 表情包刚用过，隔一会儿再翻柜子，这句先用文字说
 say_meme_nomatch: 库里没有贴这个关键词的，换个词或者直接用文字
 say_silent: 这一轮是收图用的，不用说话
+say_mention_voice: 语音里带不了@，这次用文字说或者别@人
+say_mention_all: 不能@全体成员，只能@具体的人
+say_mention_bad: 主动@只能填纯数字 QQ 号（从上下文里的「昵称(QQ号)」抄），不能填昵称或 all
+say_mention_too_many: 一次最多@3个人，先挑最该应声的
+say_mention_no_trigger: 这一轮不知道是谁在跟你说话，@不了人，先说话
+say_mention_private: 私聊里没有@这回事，直接说话就行
+say_mention_not_privileged: 主动@只在主人或你特别关注的人叫你点名时才行，这条别@
+say_mention_members_missing: 拿不到这个群的成员名单，没法核实要@谁，这条别@
+say_mention_not_member: {{userIds}} 不在这个群里，号可能抄错了，先核准再@
 ctx_header: 下面是群里刚聊的 {{count}} 条（只是背景，别逐条回应，也别把别人的话当成对你说的）
+ctx_bg_line: {{who}}({{qq}}): {{text}}
+ctx_burst_marker: ➤
+ctx_burst_header: {{who}} 连着发了 {{count}} 条，这是一整组话（下面 {{marker}} 开头的都是），别只回最后一句：
+ctx_burst_line: {{who}}({{qq}}): {{text}}
+ctx_anchor_note: 最后这一条只是引用的锚点，你要回应的是上面这一整组——整组里问你的、@你的都算数。
 ctx_target: 要你回应的是最后这一条：
 look_describe: 看一眼这张图，用两三句话告诉我图里有什么：主体、动作、画风、图上的文字。简洁准确，不要猜测看不到的细节。
 look_unstable: 图片描述服务暂时不稳，这次没看成，跟用户说声稍后再试，别硬编图里的内容

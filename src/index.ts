@@ -8,7 +8,6 @@
  *
  * 模型的正文、思考、tool 调用文本都不在这条链上。
  */
-import { createHash } from "node:crypto";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -19,10 +18,19 @@ import { cleanupStaleVideoTemps } from "./tools/video.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { Conversation } from "@earendil-works/pi-durable";
 import { openFish, type GroupProfile } from "./harness.ts";
-import { OneBot, type IncomingMessage } from "./qq/onebot.ts";
+import { OneBot, orderByArrival, type IncomingMessage } from "./qq/onebot.ts";
 import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "./voice-route.ts";
-import { createGate, renderForModel } from "./qq/gate.ts";
+import { createGate } from "./qq/gate.ts";
+import {
+  createDebouncer,
+  withContext,
+  DEBOUNCE_WINDOW_MS,
+  type PendingBurst,
+  type RecentChatMessage,
+} from "./qq/debounce.ts";
 import { setLookDisabled } from "./tools/look.ts";
+import { clearMemeImportRound } from "./tools/meme-import.ts";
+import { hasMemeMd5, md5OfFile } from "./media/meme-store.ts";
 import { absorbSecrets } from "./egress/absorb.ts";
 import { resetRun, resetLook, ledgerOf } from "./egress/ledger.ts";
 import { validateOutbound, DEFAULT_LIMITS } from "./egress/policy.ts";
@@ -72,10 +80,11 @@ function collapseForward(text: string): string {
   return marker.length > 0 ? marker : "[收集]";
 }
 
-/** 主人或本会话特别关注的人？ */
-function isVoiceVip(msg: IncomingMessage): boolean {
-  if (String(msg.userId) === config.master) return true;
-  return watchedByChat.get(msg.chatKey)?.has(String(msg.userId)) ?? false;
+/** 主人或这个群特别关注的人？（机械匹配 QQ 号，不看模型怎么说） */
+function isVoiceVip(chatKey: string, userId: number | undefined): boolean {
+  if (userId === undefined) return false;
+  if (String(userId) === config.master) return true;
+  return watchedByChat.get(baseChatKey(chatKey))?.has(String(userId)) ?? false;
 }
 
 /**
@@ -147,15 +156,16 @@ function markSent(key: string): boolean {
 }
 
 // conversationId → 最近一条触发消息 + 所在会话，用来做引用和贴表情
-const chatKeys = new Map<string, string>();
+const chatKeys = new Map<string | number, string>();
 const lastMessageId = new Map<string, number | string>();
 // 压缩进行中的会话：期间不受理新提交，被@只回机械忙碌语
 const compacting = new Set<string>();
 const lastMention = new Map<string, boolean>();
 // 本轮触发是否是回复某条消息：是则鱼的回应强制引用（回复链可读性）
 const lastReply = new Map<string, boolean>(); // 最近一次触发是否@了鱼：被@必回引用，让群里看得出鱼在回谁
-// submissionId → 本轮触发消息：把引用目标绑在轮上，不被后续消息顶掉
-const triggerOf = new Map<string, { messageId?: number | string; mentionsBot: boolean }>();
+// submissionId → 本轮触发消息：把引用目标绑在轮上，不被后续消息顶掉；
+// userId 是主动 @ 身份闸的唯一依据（不靠模型文本推断关系）。
+const triggerOf = new Map<string, { messageId?: number | string; mentionsBot: boolean; userId?: number }>();
 // submissionId → 本轮触发消息自带的 bypass 段；仅该轮 draw 可见，轮 settle 即删
 const bypassOf = new Map<string, string>();
 const conversations = new Map<string, Conversation>();
@@ -206,7 +216,7 @@ const fish = await openFish({
   silentOf: (roundId) => silentRounds.has(String(roundId)),
   // watch 的号码校验：从会话映射回群号，再拉全量成员（不要 limit，要能校验到每个人）
   onWatchChanged: (conversationId, userIds) => {
-    const chatKey = chatKeys.get(String(conversationId));
+    const chatKey = chatKeyFor(conversationId);
     if (!chatKey) return;
     // 只带了 id，备注靠重新读文档太绕：这里增量维护，新 id 先占位，备注由下次启动装载补齐
     const key = baseChatKey(chatKey);
@@ -214,8 +224,18 @@ const fish = await openFish({
     for (const id of userIds) if (!map.has(id)) map.set(id, { note: "" });
     watchedByChat.set(key, map);
   },
+  // 主动 @ 的身份闸（机械判定）：私聊没有 @ 这回事；群内只有主人或本群特别关注者能点名别人。
+  // 成员名单必须从 chatKeys 映射回当前群号再拉，绝不采信模型给的号码。
+  mentionPolicyOf: (conversationId, triggerUserId) => {
+    const chatKey = chatKeyFor(conversationId);
+    if (!chatKey || !chatKey.startsWith("qq:group:")) return "not_group";
+    if (triggerUserId === undefined) return "not_privileged";
+    const userId = String(triggerUserId);
+    if (config.master && userId === config.master) return "allow";
+    return watchedByChat.get(baseChatKey(chatKey))?.has(userId) ? "allow" : "not_privileged";
+  },
   groupMembersOf: async (conversationId) => {
-    const chatKey = chatKeys.get(String(conversationId));
+    const chatKey = chatKeyFor(conversationId);
     if (!chatKey || !chatKey.startsWith("qq:group:")) return [];
     const groupId = Number(chatKey.slice("qq:group:".length));
     if (!Number.isFinite(groupId)) return [];
@@ -243,7 +263,7 @@ const fish = await openFish({
       const quote = (payload.quote || payload.quoteForce === true || lastMention.get(conversationId) === true || lastReply.get(conversationId) === true)
         ? payload.quoteId
         : undefined;
-      await onebot.sendGroup(groupId, payload.items, { quote });
+      await onebot.sendGroup(groupId, payload.items, { quote, ...(payload.mentions && payload.mentions.length > 0 ? { mentions: payload.mentions } : {}) });
       if (payload.media) await onebot.sendImageGroup(groupId, resolve(config.mediaRoot, payload.media));
       if (payload.voice) {
         await onebot.sendVoiceGroup(groupId, readFileSync(resolve(config.mediaRoot, payload.voice)));
@@ -290,6 +310,15 @@ function baseChatKey(key: string): string {
   return at > 0 ? key.slice(0, at) : key;
 }
 
+/**
+ * conversationId → 原始 chatKey。
+ * chatKeys 的键历史上两种写法都有（conversationFor 用数字 id，重启装载用字符串），两种都认，
+ * 否则主动 @ 与 watch 的成员校验在未重启的会话上会永远拿不到群号。
+ */
+function chatKeyFor(conversationId: string | number): string | undefined {
+  return chatKeys.get(String(conversationId)) ?? chatKeys.get(conversationId);
+}
+
 async function conversationFor(chatKey: string): Promise<Conversation> {
   // 当前人格：非变更式读取（严禁对 snapshot() 结果赋值）
   const snapshot = await fish.harness.snapshot(ChatsDoc, ctx);
@@ -317,13 +346,8 @@ async function conversationFor(chatKey: string): Promise<Conversation> {
  * 惰性建默认会话，属可接受副作用）；切换动作本身绝不预建目标人格会话。
  */
 /**
- * 群消息进模型前的上下文拼装。
- *
- * 随机门会丢掉绝大多数闲聊，只把抽中的那条送进 loop——鱼的视野里就只剩一句话，
- * 答起来自然呆。这里把抽中那条**前面 10 条**当背景补进去，并明确标出要回的是最后一条：
- * 否则一次读 6 条，它分不清该接哪句。
- *
- * 只补背景，不改判定：进不进 loop 仍然只由闸门决定，补的这几条不进历史累计。
+ * 上下文拼装与 5 秒连续发言合并都不在这里：状态机与 withContext 在 src/qq/debounce.ts，
+ * 这里只负责把 flush / submit 接上，并做轮级清账与记账。
  */
 /**
  * 动图自动收：gif 进群时起一个静默轮，把前 10 条上下文一起给鱼，
@@ -341,17 +365,12 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
     const full = resolve(config.mediaRoot, gif.ref);
     let md5: string;
     try {
-      md5 = createHash("md5").update(readFileSync(full)).digest("hex");
+      md5 = md5OfFile(full);
     } catch {
       continue;
     }
-    // 库里已有同一张（按 md5）就不再跑模型
-    try {
-      const index = JSON.parse(readFileSync(join(config.mediaRoot, "memes", "index.json"), "utf8")) as { md5?: string }[];
-      if (index.some((e) => e.md5 === md5)) return;
-    } catch {
-      /* 没有索引就当空库 */
-    }
+    // 库里已有同一张（按 md5）就不再跑模型（读索引与 meme_add 共用同一个 helper）
+    if (hasMemeMd5(config.mediaRoot, md5)) return;
 
     const conv = await conversationFor(msg.chatKey);
     const prior = bucket.slice(0, -1).slice(-10);
@@ -370,17 +389,12 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
       silentRounds.add(roundId);
       try {
         const settled = await submission.wait(ctx);
-        let added = false;
-        try {
-          const index = JSON.parse(readFileSync(join(config.mediaRoot, "memes", "index.json"), "utf8")) as { md5?: string }[];
-          added = index.some((e) => e.md5 === md5);
-        } catch {
-          /* 没有索引就当没加 */
-        }
+        const added = hasMemeMd5(config.mediaRoot, md5);
         const reason = settled.status === "done" ? (added ? "已入库" : "鱼判断不值得收") : `${settled.status}`;
         console.log(`[鱼缸] 收图轮结束 ${gif.ref} → ${reason}`);
       } finally {
         silentRounds.delete(roundId);
+        clearMemeImportRound(roundId);
       }
     } catch (error) {
       console.error("[鱼缸] 收图轮失败", error instanceof Error ? error.message : error);
@@ -392,20 +406,169 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
 }
 
 
-function withContext(msg: IncomingMessage, bucket: readonly { nickname: string; text: string }[]): string {
-  const base = renderForModel(msg, config.master);
-  if (!msg.chatKey.startsWith("qq:group:")) return base;
-  const prior = bucket.slice(0, -1).slice(-10);
-  if (prior.length === 0) return base;
-  const header = renderTemplate(fish.prompts.messages["ctx_header"] ?? "", { count: String(prior.length) });
-  const marker = fish.prompts.messages["ctx_target"] ?? "";
-  const context = prior.map((m) => `${m.nickname}: ${m.text}`).join("\n");
+/** 压缩进行中：被@的给一句机械回复（同样走 outbox 唯一出口），其余直接等下一轮。 */
+async function sendBusyReplies(conv: Conversation, messageIds: readonly (number | string | undefined)[]): Promise<void> {
+  const items = [String(fish.prompts.messages["busy_reply"] ?? "[busy]")];
+  let queued = false;
+  for (const messageId of messageIds) {
+    if (messageId === undefined) continue;
+    await fish.enqueue(conv.id, {
+      items,
+      quote: true,
+      quoteId: messageId,
+      quoteForce: true,
+      at: Date.now(),
+      key: `busy:${messageId}`, // 幂等键：崩溃重放不重复发
+    });
+    queued = true;
+  }
+  if (queued) await drainLoop();
+}
+
+/**
+ * 提交一轮，等它跑完，再记账与换页。
+ *
+ * 轮级清账（resetRun / resetLook / lastMessageId / lastMention / lastReply / 语音计数）
+ * 全部挪到这里、在真正 submit 之前做：以前是 gate 放行那一刻就清，同一组连续发言的
+ * follow-up 进来会把这一轮的引用目标和记账提前抹掉。
+ */
+async function submitRound(input: {
+  chatKey: string;
+  conv: Conversation;
+  content: string;
+  /** 本轮触发消息：引用目标与主动 @ 的身份闸都只认它 */
+  trigger: { messageId?: number | string; mentionsBot: boolean; userId?: number };
+  /** 本轮是不是在回复别人（回复链要引用） */
+  reply: boolean;
+  /** bypass 段（画图指令）；只在这一轮可见，轮 settle 即删 */
+  bypass?: string;
+}): Promise<void> {
+  const { chatKey, conv, trigger } = input;
+  await absorbSecrets(conv);
+  resetRun(conv.id);
+  resetLook(conv.id);
+  if (trigger.messageId !== undefined) lastMessageId.set(conv.id, trigger.messageId);
+  // 被@必回引用，让群里看得出鱼在回谁
+  lastMention.set(conv.id, trigger.mentionsBot);
+  lastReply.set(conv.id, input.reply);
+
+  let content = input.content;
+  // 每第 3 条（主人/关注对象，且过了闸门）追加一行提示，让鱼知道这条可以用语音。
+  // 计数按「轮」加，不按消息加：同一组连续发言只算一次。
+  if (voiceConfigFor(mappingKeys.get(String(conv.id)) ?? chatKey) && isVoiceVip(chatKey, trigger.userId)) {
+    const perUser = voiceCredits.get(chatKey) ?? new Map<string, number>();
+    const count = (perUser.get(String(trigger.userId)) ?? 0) + 1;
+    perUser.set(String(trigger.userId), count);
+    voiceCredits.set(chatKey, perUser);
+    if (count % 3 === 0) {
+      const hint = fish.prompts.messages["voice_hint"] ?? "";
+      if (hint) content = content + "\n" + hint;
+    }
+  }
+
+  // 触发消息绑在 submission 上：轮在跑时新消息进来也不会把引用目标顶掉
+  // （否则回复会串到别人的消息上）
+  const submission = await conv.submit({ type: "input", content }, ctx);
+  triggerOf.set(String(submission.id), {
+    messageId: trigger.messageId,
+    mentionsBot: trigger.mentionsBot,
+    userId: trigger.userId,
+  });
+  if (input.bypass !== undefined) bypassOf.set(String(submission.id), input.bypass);
+
+  // 成功、失败、抛错都要把这一轮的绑定清掉
+  const settled = await (async () => {
+    try {
+      return await submission.wait(ctx);
+    } finally {
+      triggerOf.delete(String(submission.id));
+      bypassOf.delete(String(submission.id));
+      // 导入清单只属于这一轮：成功、失败、抛错都在这里清掉
+      clearMemeImportRound(String(submission.id));
+    }
+  })();
+  if (settled.status !== "done") {
+    const why = [settled.status, (settled as { reason?: string }).reason, (settled as { detail?: string }).detail]
+      .filter(Boolean)
+      .join(" · ");
+    console.error(`[鱼缸] ${chatKey} 这一轮没答上来：${why}`);
+    return;
+  }
+
+  await drainLoop();
+
+  // 记账：pi-durable 的 pi.usage 是累计值，这里取差落盘
+  const spent = await fish.harness.snapshot(UsageDoc, conv.id, ctx);
+  const delta = usage.append(chatKey, sumUsage(spent), Date.now());
+  if (delta) {
+    console.log(`[鱼缸] ${chatKey} +${delta.total} tokens / ${delta.cost}`);
+  }
+
+  const compacted = await (async () => {
+    compacting.add(String(conv.id));
+    try {
+      return await fish.compact(conv);
+    } finally {
+      compacting.delete(String(conv.id));
+    }
+  })();
+  if (compacted.compacted) {
+    console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
+  }
+}
+
+/**
+ * 5 秒静默到期：整组一起进模型。
+ *
+ * 锚点 = 这一组最后一条（A-B-A 里 B 只出现在背景，不可能顶掉 A）；整组里任意一条 @鱼
+ * 就整组必答；引用只看锚点。提交前重新检查 compacting：换页期间不提交旧上下文，
+ * 被@的按既有 busy 语义回执，pending 已由状态机先摘掉，不会留下陈年 burst。
+ */
+async function flushBurst(burst: PendingBurst): Promise<void> {
+  const anchor = burst.anchor;
+  const conv = await conversationFor(anchor.chatKey);
+
+  // 压缩进行中：不再受理新提交（根治换页竞态把活跃轮吃掉的问题）
+  if (compacting.has(String(conv.id))) {
+    console.log(`[鱼缸] ${anchor.chatKey} 换页中，丢弃待定组 ${burst.messages.length}`);
+    await sendBusyReplies(conv, burst.messages.filter((m) => m.mentionsBot).map((m) => m.messageId));
+    return;
+  }
+
   // 命中特别关注：在要回的那一行前面打标（机械匹配 QQ 号，不靠模型回忆）
-  const watched = watchedByChat.get(msg.chatKey)?.get(String(msg.userId));
-  const watchNote = watched
-    ? renderTemplate(fish.prompts.messages["watch_inline"] ?? "", { who: msg.nickname, note: watched.note })
+  const watched = watchedByChat.get(anchor.chatKey)?.get(String(anchor.userId));
+  const watchedNote = watched
+    ? renderTemplate(fish.prompts.messages["watch_inline"] ?? "", { who: anchor.nickname, note: watched.note })
     : "";
-  return [header, context, marker, watchNote, base].filter((line) => line.length > 0).join("\n");
+  let content = withContext(anchor, recent.get(anchor.chatKey) ?? [], burst.messages, {
+    master: config.master,
+    messages: fish.prompts.messages,
+    ...(watchedNote ? { watchedNote } : {}),
+  });
+
+  // @ 鱼 + 文字里提到合集/转发：把这个群最近一条没展开的合集拉出来（10 分钟内有效）。
+  // 场景：先发合集（不 @，被闸丢弃）→ 再 @ 问「上面那个能看吗」。合集记录里明确标了它是什么。
+  if (burst.messages.some((m) => m.mentionsBot && /合集|转发/.test(m.text))) {
+    const pending = onebot.recentForward(anchor.chatKey, 10 * 60_000);
+    if (pending) {
+      const expanded = await onebot.expandForwardById(pending, anchor);
+      if (expanded) {
+        content = `${fish.prompts.messages["forward_recent_prefix"] ?? ""}\n${expanded}\n${content}`;
+        console.log(`[鱼缸] ${anchor.chatKey} 补展开最近合集`);
+      }
+    }
+  }
+
+  const payload = burst.messages[burst.messages.length - 1]?.payload;
+  await submitRound({
+    chatKey: anchor.chatKey,
+    conv,
+    content,
+    // 引用锚点与主动 @ 的身份闸都只认锚点；但整组里任意一条 @鱼，整组都必答
+    trigger: { messageId: anchor.messageId, mentionsBot: burst.mustAnswer, userId: anchor.userId },
+    reply: burst.quoteFromReply,
+    ...(payload !== undefined ? { bypass: payload } : {}),
+  });
 }
 
 async function handleCommand(msg: IncomingMessage): Promise<string | null> {
@@ -544,11 +707,23 @@ function startWeekly(): void {
 }
 startWeekly();
 
-// 每个群的运行态：最近流水、上次开口时间、今天开口次数
-const recent = new Map<string, { nickname: string; text: string }[]>();
+// 每个群的最近流水：背景栏与连续发言都从这里取。
+// 流水带 userId / messageId / arrivalSeq：入站补充（查名片/下头像/拉合集）是异步的，
+// 处理完成顺序可能倒过来，消费侧按收到顺序排（orderByArrival），模型才能看到自然的对话；
+// 旧构造没有 arrivalSeq 时原地不动（即改版前的到达顺序）。
+// userId 是背景行里「昵称(QQ号)」的来源，模型主动 @ 只从可信上下文抄号码。
+const recent = new Map<string, RecentChatMessage[]>();
 const lastSpoke = new Map<string, number>();
 const spokenToday = new Map<string, { day: string; count: number }>();
 const today = () => new Date().toISOString().slice(0, 10);
+
+// 群消息按「群 + 发送者」攒 5 秒：同一个人还在打字就一直往后延，静默满 5 秒才整组提交。
+// 窗口固定 5000ms，不设环境变量也不设最长等待；重启时没 flush 的窗口直接丢弃。
+const debouncer = createDebouncer({
+  windowMs: DEBOUNCE_WINDOW_MS,
+  onFlush: (burst) => flushBurst(burst),
+  onError: (error) => console.error("[鱼缸] 待定消息提交失败", error instanceof Error ? error.message : error),
+});
 
 onebot.onMessage((raw) => {
   void (async () => {
@@ -568,8 +743,17 @@ onebot.onMessage((raw) => {
       }
     }
 
-    const bucket = recent.get(msg.chatKey) ?? [];
-    bucket.push({ nickname: msg.nickname, text: collapseForward(msg.text) });
+    const bucket = orderByArrival([
+      ...(recent.get(msg.chatKey) ?? []),
+      {
+        userId: msg.userId,
+        nickname: msg.nickname,
+        text: collapseForward(msg.text),
+        at: Date.now(),
+        ...(msg.messageId !== undefined ? { messageId: msg.messageId } : {}),
+        ...(msg.arrivalSeq !== undefined ? { arrivalSeq: msg.arrivalSeq } : {}),
+      },
+    ]);
     if (bucket.length > 30) bucket.splice(0, bucket.length - 30);
     recent.set(msg.chatKey, bucket);
 
@@ -603,103 +787,48 @@ onebot.onMessage((raw) => {
     const verdict = (decision.enter ? "enter:" : "skip:") + decision.reason;
     const score = decision.enter && decision.score !== undefined ? " score=" + decision.score : "";
     console.log("[fish] gate " + msg.chatKey + " " + msg.nickname.slice(0, 12) + " -> " + verdict + score);
-    if (!decision.enter) return;
 
+    // 连续发言窗口的输入：这条消息给模型看的文本（合集已折叠、bypass 已换成占位），
+    // bypass 段作为 opaque 载荷跟着走，flush 时只取锚点那份。
+    const burstText = collapseForward(msg.text);
+    const push = () => debouncer.push({
+      msg,
+      text: burstText,
+      ...(bypass ? { payload: bypass.stash } : {}),
+    });
+
+    if (!decision.enter) {
+      // 被闸拦下的同发送者 follow-up 也要并进已有窗口：一组话不能被拆成两轮。
+      // 不同发送者不碰别人的窗口，也就不会重置别人的计时。
+      if (msg.chatKey.startsWith("qq:group:") && debouncer.pending(msg.chatKey, msg.userId)) push();
+      return;
+    }
+
+    // 群消息：gate 放行不立即提交，等 5 秒静默把整组一起送进 loop（flushBurst）
+    if (msg.chatKey.startsWith("qq:group:")) {
+      push();
+      return;
+    }
+
+    // 私聊：保持既有即时语义，不进 debounce
     const conv = await conversationFor(msg.chatKey);
 
     // 压缩进行中：不再受理新提交（根治换页竞态把活跃轮吃掉的问题）。
     // 被 @ 的给一句机械回复（同样走 outbox 唯一出口），其余直接等下一轮。
     if (compacting.has(String(conv.id))) {
-      if (msg.mentionsBot && msg.messageId !== undefined) {
-        await fish.enqueue(conv.id, {
-          items: [String(fish.prompts.messages["busy_reply"] ?? "[busy]")],
-          quote: true,
-          quoteId: msg.messageId,
-          quoteForce: true,
-          at: Date.now(),
-          key: `busy:${msg.messageId}`,
-        });
-        await drainLoop();
-      }
+      if (msg.mentionsBot) await sendBusyReplies(conv, [msg.messageId]);
       return;
     }
 
-    await absorbSecrets(conv);
-    resetRun(conv.id);
-    resetLook(conv.id);
-    if (msg.messageId !== undefined) lastMessageId.set(conv.id, msg.messageId);
-    lastMention.set(conv.id, msg.mentionsBot);
-    // 回复链：本轮触发本身是在回复某条消息，鱼的回应应引用触发那条（对方能看到在回谁）
-    lastReply.set(conv.id, (msg.replyIds?.length ?? 0) > 0);
-
-    // 群员插话走 follow-up：不打断正在跑的那一轮。
-    // 把触发消息绑到 submission 上：鱼的回复引用本轮自己的触发消息，
-    // 轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）
-    // 每第 3 条（主人/关注对象，且过了闸门）追加一行提示，让鱼知道这条可以用语音
-    let content = withContext(msg, bucket);
-    // @ 鱼 + 文字里提到合集/转发：把这个群最近一条没展开的合集拉出来（10 分钟内有效）。
-    // 场景：先发合集（不 @，被闸丢弃）→ 再 @ 问「上面那个能看吗」。合集记录里明确标了它是什么。
-    if (msg.mentionsBot && /合集|转发/.test(msg.text)) {
-      const pending = onebot.recentForward(msg.chatKey, 10 * 60_000);
-      if (pending) {
-        const expanded = await onebot.expandForwardById(pending, msg);
-        if (expanded) {
-          content = `${fish.prompts.messages["forward_recent_prefix"] ?? ""}\n${expanded}\n${content}`;
-          console.log(`[鱼缸] ${msg.chatKey} 补展开最近合集`);
-        }
-      }
-    }
-    const voiceOwner = String(conv.id);
-    if (voiceConfigFor(mappingKeys.get(voiceOwner) ?? msg.chatKey) && isVoiceVip(msg)) {
-      const perUser = voiceCredits.get(msg.chatKey) ?? new Map<string, number>();
-      const count = (perUser.get(String(msg.userId)) ?? 0) + 1;
-      perUser.set(String(msg.userId), count);
-      voiceCredits.set(msg.chatKey, perUser);
-      if (count % 3 === 0) {
-        const hint = fish.prompts.messages["voice_hint"] ?? "";
-        if (hint) content = content + "\n" + hint;
-      }
-    }
-
-    const submission = await conv.submit({ type: "input", content }, ctx);
-    triggerOf.set(String(submission.id), {
-      messageId: msg.messageId,
-      mentionsBot: msg.mentionsBot,
-      userId: msg.userId,
+    await submitRound({
+      chatKey: msg.chatKey,
+      conv,
+      content: withContext(msg, bucket, [], { master: config.master, messages: fish.prompts.messages }),
+      trigger: { messageId: msg.messageId, mentionsBot: msg.mentionsBot, userId: msg.userId },
+      // 回复链：本轮触发本身是在回复某条消息，鱼的回应应引用触发那条
+      reply: (msg.replyIds?.length ?? 0) > 0,
+      ...(bypass ? { bypass: bypass.stash } : {}),
     });
-    if (bypass) bypassOf.set(String(submission.id), bypass.stash);
-
-    const settled = await submission.wait(ctx);
-    triggerOf.delete(String(submission.id));
-    bypassOf.delete(String(submission.id));
-    if (settled.status !== "done") {
-      const why = [settled.status, (settled as { reason?: string }).reason, (settled as { detail?: string }).detail]
-        .filter(Boolean)
-        .join(" · ");
-      console.error(`[鱼缸] ${msg.chatKey} 这一轮没答上来：${why}`);
-      return;
-    }
-
-    await drainLoop();
-
-    // 记账：pi-durable 的 pi.usage 是累计值，这里取差落盘
-    const spent = await fish.harness.snapshot(UsageDoc, conv.id, ctx);
-    const delta = usage.append(msg.chatKey, sumUsage(spent), Date.now());
-    if (delta) {
-      console.log(`[鱼缸] ${msg.chatKey} +${delta.total} tokens / ${delta.cost}`);
-    }
-
-    const compacted = await (async () => {
-      compacting.add(String(conv.id));
-      try {
-        return await fish.compact(conv);
-      } finally {
-        compacting.delete(String(conv.id));
-      }
-    })();
-    if (compacted.compacted) {
-      console.log(`[鱼缸] ${msg.chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
-    }
   })().catch((error: unknown) => {
     console.error("[鱼缸] 处理消息失败", error instanceof Error ? error.message : error);
   });

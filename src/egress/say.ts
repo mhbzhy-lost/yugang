@@ -29,6 +29,8 @@ export interface OutboundPayload {
   voice?: string;
   /** 是否引用触发这一轮的那条消息。 */
   quote: boolean;
+  /** 主动 @ 的 QQ 号（已去重的纯数字，出口层验过身份与群成员）；只挂在第一条文本上。 */
+  mentions?: string[];
   at: number;
   /** 幂等键：重放时用同一个，发送侧据此去重。 */
   key: string;
@@ -54,6 +56,14 @@ export interface SayDeps {
   ttsSynthesize?: (config: import("../tts.ts").TtsConfig, text: string, mediaRoot: string) => Promise<{ ref: string; bytes: Buffer }>;
   /** 收图轮之类的静默轮：这一轮不许说话。 */
   silentOf?: (roundId: unknown) => boolean;
+  /**
+   * 主动 @ 的身份闸：机械判定本轮触发者能不能点名别人。
+   * allow = 可以；not_group = 不在群聊（私聊）；not_privileged = 群友但不是主人/特别关注者。
+   * 未提供回调时一律按 not_privileged fail closed。
+   */
+  mentionPolicyOf?: (conversationId: string, triggerUserId: number | undefined) => "allow" | "not_group" | "not_privileged";
+  /** 会话所在群的成员名单（宿主从当前群号现拉）；回调缺失或空名单时主动 @ 一律 fail closed。 */
+  membersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
 }
 
 export function createSayTool(deps: SayDeps) {
@@ -79,14 +89,44 @@ export function createSayTool(deps: SayDeps) {
       meme: Type.Optional(Type.String({ description: prompt.params["meme"] ?? "" })),
       voice: Type.Optional(Type.Boolean({ description: prompt.params["voice"] ?? "" })),
       quote: Type.Optional(Type.Boolean({ description: prompt.params["quote"] ?? "" })),
+      // 上限在代码里按「去重后的号码数」判：schema 若也写 maxItems，4 个含重复就被 schema 先挡掉
+      mentions: Type.Optional(Type.Array(Type.String(), { description: prompt.params["mentions"] ?? "" })),
     }),
     execute: async (args, api, context) => {
       // 静默轮（自动收表情包）只允许调工具，不许冒话
-      {
-        const live = await api.snapshot(LiveDoc, api.conversationId, context);
-        const round = live?.run?.inputs?.[0];
-        if (round !== undefined && deps.silentOf?.(round)) {
-          throw new Error(deps.prompts.messages["say_silent"] ?? "say_silent");
+      const live = await api.snapshot(LiveDoc, api.conversationId, context);
+      const round = live?.run?.inputs?.[0];
+      if (round !== undefined && deps.silentOf?.(round)) {
+        throw new Error(deps.prompts.messages["say_silent"] ?? "say_silent");
+      }
+
+      // 本轮触发消息：主动 @ 的身份闸和引用目标都钉在它上面
+      const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
+
+      // 主动 @：去重 → 禁 all/非数字 → 身份闸 → 群成员核对，全程机械判定，任何一环缺失都 fail closed。
+      // 语音 payload 没有文本 item，带 @ 等于静默丢人，所以这里直接拒。
+      const mentions = [...new Set((args.mentions ?? []).map((qq) => qq.trim()))];
+      if (mentions.length > 0) {
+        if (args.voice === true) throw new Error(deps.prompts.messages["say_mention_voice"] ?? "say_mention_voice");
+        if (mentions.includes("all")) throw new Error(deps.prompts.messages["say_mention_all"] ?? "say_mention_all");
+        if (mentions.some((qq) => !/^\d+$/.test(qq))) {
+          throw new Error(deps.prompts.messages["say_mention_bad"] ?? "say_mention_bad");
+        }
+        if (mentions.length > 3) throw new Error(deps.prompts.messages["say_mention_too_many"] ?? "say_mention_too_many");
+        if (trigger === undefined) throw new Error(deps.prompts.messages["say_mention_no_trigger"] ?? "say_mention_no_trigger");
+        const policy = deps.mentionPolicyOf?.(String(api.conversationId), trigger.userId);
+        if (policy === "not_group") throw new Error(deps.prompts.messages["say_mention_private"] ?? "say_mention_private");
+        if (policy !== "allow") {
+          throw new Error(deps.prompts.messages["say_mention_not_privileged"] ?? "say_mention_not_privileged");
+        }
+        const members = deps.membersOf ? await deps.membersOf(String(api.conversationId)) : undefined;
+        if (!members || members.length === 0) {
+          throw new Error(deps.prompts.messages["say_mention_members_missing"] ?? "say_mention_members_missing");
+        }
+        const known = new Set(members.map((member) => member.userId));
+        const missing = mentions.filter((qq) => !known.has(qq));
+        if (missing.length > 0) {
+          throw new Error(renderTemplate(deps.prompts.messages["say_mention_not_member"] ?? "", { userIds: missing.join("、") }));
         }
       }
 
@@ -155,8 +195,6 @@ export function createSayTool(deps: SayDeps) {
       // 带 media 的发送豁免：不检查也不消耗额度（画完的图必须能发出去），纯文字照旧一轮一条。
       // 轮标识用 run.inputs[0]（本轮要 settle 的输入任务）：整轮跨 generation 不变；
       // run.taskId 每代都会换，不能用。轮结束后 run 整个移除，下一轮自然换新标识。
-      const live = await api.snapshot(LiveDoc, api.conversationId, context);
-      const round = live?.run?.inputs?.[0];
       if (round !== undefined && media === undefined && voice === undefined) {
         const said = saidIn.get(api.conversationId);
         if (said?.round === round && said.count >= 3) {
@@ -165,13 +203,12 @@ export function createSayTool(deps: SayDeps) {
         saidIn.set(api.conversationId, { round, count: said?.round === round ? said.count + 1 : 1 });
       }
       // 把本轮触发消息钉进 payload：出口层引用/强制引用都用它，不会被后续消息顶掉
-      const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
-
       const payload: OutboundPayload = {
         // 语音消息只发语音，不再重复发一条文字（说了什么全在音频里）
         items: voice !== undefined ? [] : args.messages.map((m) => m.trim()),
         ...(media === undefined ? {} : { media }),
         ...(voice === undefined ? {} : { voice }),
+        ...(mentions.length === 0 ? {} : { mentions }),
         quote: args.quote === true,
         ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
         ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),

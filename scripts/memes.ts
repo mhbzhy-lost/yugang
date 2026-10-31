@@ -3,8 +3,9 @@
  *
  *   npm run memes status
  *
- * 入库不再走批处理：鱼在对话里判断「这张动图值不值得收」，用 meme_add 带着语境打标；
- * 主人指名要收的其它图片也走同一个工具。库是生成数据，在 <HOME>/media/memes/ 下，不进 git。
+ * 入库有两条路：群里来动图时，鱼在静默轮里自己判断要不要收；主人批量导入本地图时，走
+ * meme_import（固定扫 <mediaRoot>/meme-inbox/，逐批登记本轮清单）→ 逐张 look → 逐张 meme_add。
+ * 本脚本只读索引，不做任何入库、不扫待收目录。库是生成数据，在 <HOME>/media/memes/ 下，不进 git。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";

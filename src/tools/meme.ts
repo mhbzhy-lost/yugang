@@ -9,35 +9,21 @@
  * 为什么这么改：库里 478 个自由 tag 里一半是画面描述（粉毛、猫耳），
  * 拿群聊话题（社保补缴、显卡）去子串匹配必然 0 命中。
  */
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
+import { loadMemeIndex, type MemeEntry } from "../media/meme-store.ts";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
+
+export { loadMemeIndex };
 
 export interface MemeDeps {
   prompts: PromptSet;
   mediaRoot: string;
 }
 
-interface Entry {
-  file: string;
-  caption: string;
-  tags: string[];
-}
+type Entry = MemeEntry;
 
 const USED = new Map<string, unknown>();
-
-/** 读索引（每次现读：索引就几 KB，带缓存会让刚收的图最多晚 60 秒才可搜）。 */
-export function loadMemeIndex(mediaRoot: string): Entry[] {
-  const indexUrl = join(mediaRoot, "memes", "index.json");
-  if (!existsSync(indexUrl)) return [];
-  try {
-    return JSON.parse(readFileSync(indexUrl, "utf8")) as Entry[];
-  } catch {
-    return [];
-  }
-}
 
 /** 每个一级情绪词各有几张（给 prompt section 用，让鱼一眼看到库存）。 */
 export function countMoods(entries: readonly Entry[], memeTags: readonly string[]): { mood: string; count: number }[] {

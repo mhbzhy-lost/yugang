@@ -1,8 +1,11 @@
 /**
  * look —— 看群里的一张图。
  *
- * 没有通用 read：只能看媒体目录里的图片，而且一轮最多两次。
+ * 没有通用 read：只能看媒体目录里的图片，而且一轮最多两张。
  * 图是被 QQ 适配器落到 <mediaRoot>/inbound/ 的，进站文本里会带 inbound/xxx.png 这个引用。
+ *
+ * 例外：主人本轮用 meme_import 登记过一批本地待收图时，本轮额度放宽到清单数量
+ * （上限 50），可以逐张看——但仍只限媒体目录内的图片，不是任意文件读取。
  *
  * 图不进主会话：look 内部用独立请求让视觉模型把图描述成文字，只把描述返回给主会话，
  * 主会话 transcript 从头到尾都是纯文本（缓存前缀稳定，也不反复撞网关的视觉管线）。
@@ -10,12 +13,13 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, sep, extname } from "node:path";
+import { join, resolve, sep, extname, relative } from "node:path";
 import { Type, type Models } from "@earendil-works/pi-ai";
-import { defineTool } from "@earendil-works/pi-durable";
+import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
 import { ledgerOf, recordLook } from "../egress/ledger.ts";
 import { describeImage } from "../media/describe.ts";
+import { MEME_IMPORT_MAX, memeImportHas, memeImportLookLimit } from "./meme-import.ts";
 
 export interface LookDeps {
   mediaRoot: string;
@@ -63,7 +67,7 @@ export function createLookTool(deps: LookDeps) {
     parameters: Type.Object({
       ref: Type.String({ description: prompt.params["ref"] ?? "" }),
     }),
-    execute: async (args, api) => {
+    execute: async (args, api, context) => {
       if (lookDisabled) {
         return { output: [{ type: "text", text: deps.prompts.messages["look_cmd_off"] ?? "看图已关" }] };
       }
@@ -74,6 +78,15 @@ export function createLookTool(deps: LookDeps) {
 
       const mime = MIME[extname(full).toLowerCase()];
       if (!mime) throw new Error(renderTemplate(deps.prompts.messages["look_type"] ?? "{{ref}}", { ref }));
+
+      // 导入轮：这张在本轮 meme_import 清单里，额度才放宽（上限 50）；其余一律按普通轮 2 张。
+      const localRef = relative(root, full).split(sep).join("/");
+      const live = await api.snapshot(LiveDoc, api.conversationId, context);
+      const round = live?.run?.inputs?.[0];
+      const importing = round !== undefined && memeImportHas(String(round), localRef);
+      const importLimit = round === undefined ? undefined : memeImportLookLimit(String(round));
+      const effectiveLimit =
+        importing && importLimit !== undefined ? Math.max(limit, Math.min(importLimit, MEME_IMPORT_MAX)) : limit;
 
       let data: string;
       let outMime = mime;
@@ -97,8 +110,11 @@ export function createLookTool(deps: LookDeps) {
         throw new Error(renderTemplate(deps.prompts.messages["look_missing"] ?? "{{ref}}", { ref }));
       }
 
-      if (ledgerOf(api.conversationId).lookedThisRun >= limit) {
-        throw new Error(renderTemplate(deps.prompts.messages["look_used"] ?? "{{limit}}", { limit: String(limit) }));
+      if (ledgerOf(api.conversationId).lookedThisRun >= effectiveLimit) {
+        const template = importing
+          ? (deps.prompts.messages["look_import_used"] ?? "{{count}}")
+          : (deps.prompts.messages["look_used"] ?? "{{limit}}");
+        throw new Error(renderTemplate(template, { limit: String(effectiveLimit), count: String(effectiveLimit), ref }));
       }
       recordLook(api.conversationId);
 

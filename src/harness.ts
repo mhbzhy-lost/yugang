@@ -122,6 +122,18 @@ export interface FishOptions {
   master?: string;
   /** submissionId → 本轮触发消息；把回复引用绑在轮上，防串线。 */
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
+  /**
+   * 主动 @ 的身份闸：由宿主机械提供（私聊 = not_group；群内主人/特别关注者 = allow）。
+   * 同时交给 say（出口校验）使用；不提供时主动 @ 一律 fail closed。
+   */
+  mentionPolicyOf?: (conversationId: string, triggerUserId: number | undefined) => "allow" | "not_group" | "not_privileged";
+  /**
+   * 会话 → 当前群成员名单：say（主动 @ 目标校验）与 watch（关注对象校验）共用同一条链路。
+   * 群号必须由宿主自己从映射键解析，不能采信模型给的号码。
+   */
+  groupMembersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
+  /** 特别关注名单变更后通知宿主（宿主据此调整随机门与上下文标注）。 */
+  onWatchChanged?: (conversationId: string, userIds: string[]) => void;
   /** 表情包跨轮冷却（毫秒）；传函数则每次现取，改配置立即生效。 */
   memeCooldownMs?: number | (() => number);
   /** 单次工具调用超时（秒），缺省 30。 */
@@ -194,9 +206,9 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
 
-  const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf, ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}),   ...(options.silentOf ? { silentOf: options.silentOf } : {}), ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}) });
+  const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf, ...(options.mentionPolicyOf ? { mentionPolicyOf: options.mentionPolicyOf } : {}), ...(options.groupMembersOf ? { membersOf: options.groupMembersOf } : {}), ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}),   ...(options.silentOf ? { silentOf: options.silentOf } : {}), ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}) });
   const react = createReactTool({ prompts, react: options.react, now });
-  const tools = createTools({ mediaRoot, prompts, models, visionModel: options.visionModel ?? options.model, searchKey: options.searchKey, ...(options.gptImage ? { gptImage: options.gptImage } : {}), ...(options.modelsPath ? { modelsPath: options.modelsPath } : {}), sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, bypassOf: options.bypassOf });
+  const tools = createTools({ mediaRoot, prompts, models, visionModel: options.visionModel ?? options.model, searchKey: options.searchKey, ...(options.gptImage ? { gptImage: options.gptImage } : {}), ...(options.modelsPath ? { modelsPath: options.modelsPath } : {}), sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, ...(options.groupMembersOf ? { groupMembersOf: options.groupMembersOf } : {}), ...(options.onWatchChanged ? { onWatchChanged: options.onWatchChanged } : {}), bypassOf: options.bypassOf });
 
   // 启动即校验：每个工具都必须有一份 prompt/tools/<name>.md，缺了就起不来
   for (const tool of [say, react, ...tools]) {
@@ -333,6 +345,8 @@ export async function openFish(options: FishOptions): Promise<Fish> {
           ...(next.media === undefined ? {} : { media: next.media }),
           // voice 也要透传：和 quoteId 一样，漏一个字段就等于整条消息丢一半
           ...(next.voice === undefined ? {} : { voice: next.voice }),
+          // 主动 @ 跟 outbox 一起持久化：重启后补发必须还是同一条 @，不能静默降级成裸消息
+          ...(next.mentions === undefined ? {} : { mentions: next.mentions }),
           quote: next.quote,
           // 引用绑定全链路贯通：早期漏传这两个字段，靠 lastMessageId 回退掩盖（会错位）；
           // 回退删除后 @ 场景全部裸发——不传，引用的真实修复在这里

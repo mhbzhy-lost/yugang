@@ -13,7 +13,7 @@ scripts/fish.sh digest [日期] [群号] # 复盘某天某个群
 scripts/fish.sh probe                # QQ 侧验收
 scripts/fish.sh log 60               # 鱼日志尾部
 scripts/fish.sh deploy               # git pull + 平滑重启（标准部署入口）
-scripts/fish.sh memes                # 表情包库状态（收图已改为鱼在对话里 meme_add，没有批量导入）
+scripts/fish.sh memes                # 表情包库状态（本地批量导入：主人把图放进 media/meme-inbox/ 再让鱼逐批登记）
 scripts/fish.sh help                 # 全部子命令（其它命令原样透传）
 ```
 
@@ -104,10 +104,11 @@ node scripts/ops.ts probe
 1. `node scripts/ops.ts digest <今天>` —— 群里有没有消息进来。没有 → 协议端或 WS 断了。
 2. 有消息但没出站 —— 看进程日志里的 `[鱼缸]` 行；`这一轮没答上来` 表示模型调用失败。
 3. 有 `这一轮没答上来` —— 检查模型 key / 余额 / base_url。
-4. 都正常但话少 —— 是闸挡的：看 `[fish] gate <chatKey> <昵称> -> skip:sampled_out`（日志现在带 `HH:MM:SS`）。
+4. 都正常但话少 —— 是闸挡的：看 `[fish] gate <chatKey> <昵称> -> skip:<原因>`（日志带 `HH:MM:SS`）。
    `rate_limited` = 限流挡的：同一群两条被处理消息之间至少隔 `ambientMinIntervalSeconds`（默认 60s，热加载）；
-   `watched_rate_pass` = 特别关注者安静够久，直接放行；`watched` = 冷却没到但随机门抽中；
-   `watched_sampled_out` = 关注者冷却没到且没抽中（`watchAmbientChance`）。
+   `watched_sampled_out` = 关注者冷却没到且随机门没抽中（`watchAmbientChance`）；
+   `forward_ignored` = 没 @ 的合集被丢弃；`group_not_allowed` = 群不在 `GROUPS`；`stranger_private` = 陌生人私聊。
+   放行是 `enter:`，常见值 `mentioned` / `replied_forward` / `rate_pass` / `watched` / `watched_rate_pass` / `private`。
 5. 私聊没反应 —— 只认 `MASTER_QQ`，陌生人一律不回。这是设计，不是 bug。
 
 ## 语音没声音怎么查
@@ -124,6 +125,37 @@ node scripts/ops.ts probe
 - `skip:forward_ignored` = 没 @ 的合集被丢弃（设计如此，只缓存 id 10 分钟）
 - 鱼说「看不了」但日志有 `补展开最近合集` = 展开了，内容在 user 消息最前面
 - 背景栏里的合集永远是 `[转发合集（内容略）]`：防止连发十条把上下文撑爆，**这是设计**
+
+## 答非所问怎么排查（5 秒合并相关）
+
+闸放行的群消息不会立刻进模型，而是按「群 + 发送者」攒 5 秒静默（窗口固定 5000ms），静默满了才整组提交。
+排查时按这几点看：
+
+1. **它回得太快**：如果这轮没经过 5 秒延迟，可能是三条例外路径——主人的 `/` 指令（闸前机械回执）、私聊、
+   群里 GIF 的静默收图轮。其余群消息都应该走窗口。
+2. **话被拆成两轮 / 只回了半句**：同一发送者 5 秒内的新消息会并进同一窗口，整组一起提交；不同发送者各自独立窗口。
+   日志里同一发送者短时间出现两次完整轮次，才是真的异常。
+3. **回了 A 却引用到 B**：锚点固定是整组最后一条（`flushBurst` 的 `anchor`），A-B-A 里 B 只作背景，
+   不同发送者碰不到锚点；引用错人应查 `fish.outbox` 里的 `quoteId` 与本轮触发消息是否一致。
+4. **只回了最后一句、前面几句当没看见**：背景栏最多取锚点之前 10 条，更早的不进上下文（设计如此）。
+5. **完全没回**：待定窗口只在内存里。日志 `[鱼缸] ... 换页中，丢弃待定组 N` = 撞上换页被主动丢弃；
+   重启时没 flush 的窗口也会丢——宁可少答一句，不要补一句陈年旧话。
+
+## 表情包导入排查
+
+主人把一批图放进 `<MEDIA_ROOT>/meme-inbox/`（固定目录，不接受其它路径），然后让鱼导入。流程是
+`meme_import` 登记 → 逐张 `look` → 结合群聊逐张 `meme_add`。出问题按顺序查：
+
+1. `fish.sh memes` 看库存和索引路径；目录只看 `meme-inbox/` 的**直接子文件**，放进子目录不会扫到。
+2. 日志 `[鱼缸] meme_import round=… 登记 N 张，跳过 M 个`：M > 0 时逐项原因由 tool 返回给模型
+   （符号链接 / 不是文件 / 不是图片 / 太大 / 越界 / 读不到），也可以 `fish.sh log 60` 看上下文。
+3. tool 报 `meme_import_master` = 这一轮不是主人触发的，导入只给主人；群友不能借这条路径收本地图。
+4. `meme_add` 报 `meme_add_import_outside` = 这张不在**本轮**清单里。清单只活当前 round（换轮、异常、中断都清），
+   要重新 `meme_import`；每批最多 50 张，`cursor` 续批，同一轮的清单会合并保留。
+5. 看图额度：普通轮 `look` 最多 2 张，导入轮才按清单放宽（上限 50）。被 `/关看图` 关掉时连导入轮也看不了。
+6. 重复图按 md5 去重，库里已有同一张就不会再入——这是预期行为，不是丢失。
+7. 群里来的 `.gif` 走静默收图轮（日志 `[鱼缸] 收图轮开始/结束 … → 已入库 / 鱼判断不值得收`），这条豁免只限 `inbound/`；
+   `meme-inbox/` 里的动图必须走清单，绕不过去。
 
 ## 重启 / 补发
 

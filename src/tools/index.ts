@@ -11,6 +11,7 @@ import { createSearchTool } from "./search.ts";
 import { createVideoTool } from "./video.ts";
 import { createMemeTool } from "./meme.ts";
 import { createMemeAddTool } from "./meme-add.ts";
+import { createMemeImportTool } from "./meme-import.ts";
 import { createFsTools } from "./fs.ts";
 import { createRestartTool } from "./restart.ts";
 import { createTreeTool } from "./tree.ts";
@@ -72,6 +73,8 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     }),
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
     ...(deps.master ? [createMemeAddTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, master: deps.master, triggerOf: deps.triggerOf })] : []),
+    // 本地表情导入：只给主人，只扫固定 meme-inbox，登记本轮可看的清单
+    ...(deps.master ? [createMemeImportTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, master: deps.master, triggerOf: deps.triggerOf })] : []),
     ...fsTools,
     createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl, bypassOf: deps.bypassOf }),
     createGptImageTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, ...(deps.gptImage ? { gptImage: deps.gptImage } : {}) }),

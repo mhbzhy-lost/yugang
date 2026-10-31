@@ -40,6 +40,16 @@ export interface ShareCard {
   preview?: string;
 }
 
+/** 一处 @ 在入站消息里的结构化形态；兼容字段（mentionsBot / atOthers）仍保留给老消费方。 */
+export interface IncomingMention {
+  /** @ 的 QQ 号；@全体成员 时是 "all"。 */
+  qq: string;
+  /** 显示名：能拿到就用名片/昵称，拿不到就是 QQ 号；@全体成员 固定「全体成员」。 */
+  name: string;
+  /** bot = 鱼自己；other = 别人；all = @全体成员（不是点名鱼）。 */
+  kind: "bot" | "other" | "all";
+}
+
 export type IncomingMessage = {
   chatKey: string; // qq:group:<id> | qq:private:<id>
   groupId?: number;
@@ -47,6 +57,10 @@ export type IncomingMessage = {
   nickname: string;
   text: string;
   mentionsBot: boolean;
+  /** 所有 @ 目标的结构化形态（含 @鱼 与 @全体）；判定仍只认 mentionsBot。 */
+  mentions?: IncomingMention[];
+  /** 收到这条消息帧时分配的单调序号；入站补充是异步的，消费侧按它恢复收到顺序。 */
+  arrivalSeq?: number;
   /** 消息里 @ 了别人（或 @全体）的 QQ 号；与 mentionsBot 互不排斥，用来防「把别人的话当叫自己」。 */
   atOthers?: string[];
   /** 与 atOthers 对齐的显示名（群里查到的名片/昵称）；查不到时是 QQ 号。 */
@@ -68,6 +82,11 @@ export type IncomingMessage = {
 
 export interface SendOptions {
   quote?: number | string;
+  /**
+   * 主动 @ 的 QQ 号：只挂在第一条文本上（顺序 quote → at → text）。
+   * 号码合法性、身份闸与群成员校验都在出口层（say）做完，这里只负责拼段。
+   */
+  mentions?: readonly string[];
   /** 每条之间的抖动延迟，由宿主决定，模型管不着。 */
   delayMs?: () => number;
 }
@@ -85,6 +104,8 @@ export class OneBot {
   #pending = new Map<string, Pending>();
   #handlers: ((msg: IncomingMessage) => void)[] = [];
   #selfId = 0;
+  /** 收到消息帧即自增：入站补充（查名片/下头像/拉合集）是异步的，完成顺序可能倒过来。 */
+  #arrivalSeq = 0;
 
   #mediaRoot?: string;
 
@@ -136,8 +157,11 @@ export class OneBot {
       return;
     }
     if (frame.post_type !== "message") return;
+    // 消息帧自己带 self_id：先落缓存，parseEvent 也优先认它（刚连上时缓存还是 0）
+    if (frame.self_id) this.#selfId = frame.self_id;
     const parsed = parseEvent(frame, this.#selfId);
     if (!parsed) return;
+    parsed.arrivalSeq = ++this.#arrivalSeq;
 
     // @ 别人的名字：段里往往只有 QQ 号，这里用群成员名单补成「昵称(QQ)」，
     // 让模型看得出这句话是对谁说的（进而知道不是在叫自己）。
@@ -152,6 +176,9 @@ export class OneBot {
         if (!name) continue;
         names[index] = name;
         parsed.text = parsed.text.replace(`@${qq}`, `@${name}(${qq})`);
+        // 结构化 mentions 与兼容字段同步：模型可见的标注只认 mentions
+        const mention = parsed.mentions?.find((m) => m.kind === "other" && m.qq === qq);
+        if (mention) mention.name = name;
       }
       parsed.atOtherNames = names;
     }
@@ -317,9 +344,13 @@ export class OneBot {
   async sendGroup(groupId: number, texts: readonly string[], options: SendOptions = {}): Promise<void> {
     const delay = options.delayMs ?? (() => 700 + Math.floor(Math.random() * 1200));
     for (const [index, text] of texts.entries()) {
+      // 段顺序固定：quote → at → text。@ 只挂在第一条：连说几句时每句都带一遍 @ 会刷屏
       const segments: OneBotSegment[] = [];
       if (options.quote !== undefined && index === 0) {
         segments.push({ type: "reply", data: { id: String(options.quote) } });
+      }
+      if (index === 0) {
+        for (const qq of options.mentions ?? []) segments.push({ type: "at", data: { qq } });
       }
       segments.push({ type: "text", data: { text } });
       await this.call("send_group_msg", { group_id: groupId, message: segments });
@@ -327,6 +358,7 @@ export class OneBot {
     }
   }
 
+  /** 私聊不接收 mentions：私聊里没有「@谁」这回事，出口层已经拒绝带 @ 的私聊发送。 */
   async sendPrivate(userId: number, texts: readonly string[]): Promise<void> {
     for (const text of texts) {
       await this.call("send_private_msg", { user_id: userId, message: text });
@@ -600,14 +632,113 @@ export function parseShareCard(raw: unknown): ShareCard | null {
   };
 }
 
+interface MentionAccumulator {
+  mentions: IncomingMention[];
+  atOthers: string[];
+  atOtherNames: string[];
+}
+
+/**
+ * 归一化一处 @：结构化 mentions 与兼容字段一起推进，返回要追加到正文的文本。
+ * 三种 kind 的正文策略与旧实现一致：@鱼 不留字、@全体 留标记、@别人 留名字。
+ */
+function applyMention(
+  qq: string,
+  rawName: string,
+  selfId: number,
+  acc: MentionAccumulator,
+): { text: string; kind: IncomingMention["kind"] } {
+  const name = rawName.trim();
+  if (qq === String(selfId)) {
+    acc.mentions.push({ qq, name: name || qq, kind: "bot" });
+    return { text: "", kind: "bot" };
+  }
+  if (qq === "all") {
+    // @全体：说的是所有人，不是点名鱼；保留标记，别当「叫自己」
+    acc.mentions.push({ qq, name: "全体成员", kind: "all" });
+    acc.atOthers.push("all");
+    acc.atOtherNames.push("全体成员");
+    return { text: " @全体成员 ", kind: "all" };
+  }
+  // 昵称能拿到就用昵称，拿不到用 QQ 号：模型要能看出这句是 @ 别人的
+  acc.mentions.push({ qq, name: name || qq, kind: "other" });
+  acc.atOthers.push(qq);
+  acc.atOtherNames.push(name || qq);
+  return { text: ` @${name || qq} `, kind: "other" };
+}
+
+/** CQ 码的转义实体（规范里就这四个）；只还原文本，不去猜码。 */
+const CQ_ENTITIES: Record<string, string> = { "&#91;": "[", "&#93;": "]", "&#44;": ",", "&amp;": "&" };
+
+function unescapeCq(text: string): string {
+  return text.replace(/&#91;|&#93;|&#44;|&amp;/g, (entity) => CQ_ENTITIES[entity] ?? entity);
+}
+
+/** CQ 码里的 `k=v,k=v` 参数；逗号在值里是转义的，所以按裸逗号切安全。 */
+function parseCqParams(raw: string): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const pair of raw.split(",")) {
+    const cut = pair.indexOf("=");
+    if (cut <= 0) continue;
+    params[pair.slice(0, cut).trim()] = unescapeCq(pair.slice(cut + 1));
+  }
+  return params;
+}
+
+/**
+ * CQ 字符串形态的消息：只机械解析 at（message_format=string 时 @ 只在这里），
+ * 其它 CQ 码原样留在正文里（与旧行为一致），普通文本做规范要求的反转义。
+ */
+function parseCqMessage(raw: string, selfId: number, acc: MentionAccumulator): { text: string; mentionsBot: boolean } {
+  let text = "";
+  let mentionsBot = false;
+  let cursor = 0;
+  const code = /\[CQ:at((?:,[^\]]*)?)\]/g;
+  for (let hit = code.exec(raw); hit !== null; hit = code.exec(raw)) {
+    text += unescapeCq(raw.slice(cursor, hit.index));
+    cursor = hit.index + hit[0].length;
+    const params = parseCqParams(hit[1] ?? "");
+    const applied = applyMention(String(params["qq"] ?? ""), String(params["name"] ?? ""), selfId, acc);
+    if (applied.kind === "bot") mentionsBot = true;
+    text += applied.text;
+  }
+  text += unescapeCq(raw.slice(cursor));
+  return { text, mentionsBot };
+}
+
+/**
+ * 消费侧排序：按 arrivalSeq 升序重排；没有 arrivalSeq 的旧构造（fixture / 外部构造）
+ * 原地不动，保留既有顺序。入站补充（查名片/下头像/拉合集）是异步的，
+ * 处理完成顺序可能与收到顺序相反，流水必须按收到顺序给模型看。
+ */
+export function orderByArrival<T extends { arrivalSeq?: number }>(items: readonly T[]): T[] {
+  const slots = items
+    .map((item, index) => ({ item, index }))
+    .filter((slot) => slot.item.arrivalSeq !== undefined);
+  const result = [...items];
+  if (slots.length < 2) return result;
+  const ordered = slots
+    .slice()
+    .sort((a, b) => (a.item.arrivalSeq ?? 0) - (b.item.arrivalSeq ?? 0) || a.index - b.index)
+    .map((slot) => slot.item);
+  // 只回填原本有 seq 的槽位：缺失的条目留在原位置，不会被挤走
+  for (const [position, slot] of slots.entries()) result[slot.index] = ordered[position];
+  return result;
+}
+
 export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage | null {
   const userId = frame.user_id ?? 0;
   if (!userId) return null;
+  // 鱼是谁：这一帧的 self_id 是权威值，缺了才退回缓存
+  const self = frame.self_id || selfId;
 
   let text = "";
   let mentionsBot = false;
+  const mentions: IncomingMention[] = [];
   const atOthers: string[] = [];
   const atOtherNames: string[] = [];
+  // 结构化 @ 与兼容字段一起推进
+  const atTargets: MentionAccumulator = { mentions, atOthers, atOtherNames };
   const images: IncomingImage[] = [];
   const segments: OneBotSegment[] = [];
   const replyIds: string[] = [];
@@ -616,26 +747,17 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
   const message = frame.message;
 
   if (typeof message === "string") {
-    text = message;
+    // message_format=string：@ 只存在于 CQ 码里，与段路径走同一套归一逻辑
+    const cq = parseCqMessage(message, self, atTargets);
+    text = cq.text;
+    mentionsBot = cq.mentionsBot;
   } else if (Array.isArray(message)) {
     for (const seg of message) {
       if (seg.type === "text") text += String(seg.data?.["text"] ?? "");
       else if (seg.type === "at") {
-        const qq = String(seg.data?.["qq"] ?? "");
-        if (qq === String(selfId)) {
-          mentionsBot = true;
-        } else if (qq === "all") {
-          // @全体：说的是所有人，不是点名鱼；保留标记，别当「叫自己」
-          atOthers.push("all");
-          atOtherNames.push("全体成员");
-          text += " @全体成员 ";
-        } else {
-          atOthers.push(qq);
-          // 昵称能拿到就用昵称，拿不到用 QQ 号：模型要能看出这句是 @ 别人的
-          const name = String(seg.data?.["name"] ?? "").trim();
-          atOtherNames.push(name || qq);
-          text += ` @${name || qq} `;
-        }
+        const applied = applyMention(String(seg.data?.["qq"] ?? ""), String(seg.data?.["name"] ?? ""), self, atTargets);
+        if (applied.kind === "bot") mentionsBot = true;
+        text += applied.text;
       } else if (seg.type === "image") {
         text += ` [图片#${images.length}] `;
         segments.push(seg);
@@ -673,7 +795,7 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
   if (!text) return null;
 
   const nickname = frame.sender?.card || frame.sender?.nickname || String(userId);
-  const base = { userId, nickname, text, mentionsBot, ...(atOthers.length > 0 ? { atOthers, atOtherNames } : {}), messageId: frame.message_id, images, imageSegments: segments, replyIds, forwardIds, ...(cards.length > 0 ? { cards } : {}) };
+  const base = { userId, nickname, text, mentionsBot, ...(mentions.length > 0 ? { mentions } : {}), ...(atOthers.length > 0 ? { atOthers, atOtherNames } : {}), messageId: frame.message_id, images, imageSegments: segments, replyIds, forwardIds, ...(cards.length > 0 ? { cards } : {}) };
 
   if (frame.message_type === "group" && frame.group_id) {
     return { ...base, chatKey: `qq:group:${frame.group_id}`, groupId: frame.group_id };

@@ -8,12 +8,17 @@
  *
  * 隐私：只允许**主人**触发，且只收本轮消息里出现过的图（inbound/…）。
  * 群友随手发的截图不会被自动收进库。
+ *
+ * 本地导入例外：ref 落在 meme-inbox/ 时，必须同时满足「主人触发」与
+ * 「当前轮 meme_import 清单里有这张」；动图的既有豁免只适用于 inbound/ 自动收图，
+ * 不能用来绕开本地清单。
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { extname, join, resolve, sep } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { extname, join, relative, resolve, sep } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
+import { addMeme, MEME_EXT } from "../media/meme-store.ts";
+import { memeImportHas } from "./meme-import.ts";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
 
 export interface MemeAddDeps {
@@ -23,30 +28,12 @@ export interface MemeAddDeps {
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
 }
 
-const EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
-
-interface Entry {
-  file: string;
-  md5: string;
-  caption: string;
-  tags: string[];
-  at: number;
-}
+const EXT = MEME_EXT;
 
 export function createMemeAddTool(deps: MemeAddDeps) {
   const prompt = requireTool(deps.prompts, "meme_add");
   const root = resolve(deps.mediaRoot);
-  const memesDir = join(root, "memes");
-  const indexUrl = join(memesDir, "index.json");
-
-  const loadIndex = (): Entry[] => {
-    if (!existsSync(indexUrl)) return [];
-    try {
-      return JSON.parse(readFileSync(indexUrl, "utf8")) as Entry[];
-    } catch {
-      return [];
-    }
-  };
+  const inboxDir = join(root, "meme-inbox");
 
   return defineTool({
     name: "meme_add",
@@ -59,19 +46,38 @@ export function createMemeAddTool(deps: MemeAddDeps) {
     }),
     execute: async (args, api, context) => {
       const ref = args.ref.trim().replace(/^\[|\]$/g, "");
+      const full = resolve(root, ref);
+      // 越界先否掉，后面的目录判断只认真实的落点
+      if (full !== root && !full.startsWith(root + sep)) {
+        throw new Error(renderTemplate(deps.prompts.messages["meme_add_missing"] ?? "{{ref}}", { ref }));
+      }
+      const localRef = relative(root, full).split(sep).join("/");
+      const fromInbox = full.startsWith(inboxDir + sep);
 
-      // 收录规则：动图（.gif）允许鱼自己判断入库；其他格式必须主人点头。
-      // 截图/照片多为 png/jpg/heic，统一留在主人指定这一侧。
-      const isGif = ref.toLowerCase().endsWith(".gif");
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
+      const roundId = round === undefined ? undefined : String(round);
       const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
       const byMaster = deps.master !== "" && String(trigger?.userId ?? "") === deps.master;
-      if (!isGif && !byMaster) {
-        throw new Error(deps.prompts.messages["meme_add_master"] ?? "meme_add_master");
+
+      // 本地导入：主人 + 本轮 meme_import 清单，两条都要；动图豁免在这里不适用
+      if (fromInbox) {
+        if (!byMaster) throw new Error(deps.prompts.messages["meme_add_master"] ?? "meme_add_master");
+        if (roundId === undefined || !memeImportHas(roundId, localRef)) {
+          throw new Error(
+            renderTemplate(deps.prompts.messages["meme_add_import_outside"] ?? "{{ref}}", { ref: localRef }),
+          );
+        }
+      } else {
+        // 收录规则：动图（.gif）允许鱼自己判断入库；其他格式必须主人点头。
+        // 截图/照片多为 png/jpg/heic，统一留在主人指定这一侧。
+        const isGif = ref.toLowerCase().endsWith(".gif");
+        if (!isGif && !byMaster) {
+          throw new Error(deps.prompts.messages["meme_add_master"] ?? "meme_add_master");
+        }
       }
-      const full = resolve(root, ref);
-      if (!full.startsWith(root + sep) || !existsSync(full)) {
+
+      if (!existsSync(full)) {
         throw new Error(renderTemplate(deps.prompts.messages["meme_add_missing"] ?? "{{ref}}", { ref }));
       }
       const ext = extname(full).toLowerCase();
@@ -91,30 +97,21 @@ export function createMemeAddTool(deps: MemeAddDeps) {
         );
       }
 
-      const bytes = readFileSync(full);
-      const md5 = createHash("md5").update(bytes).digest("hex");
-      const index = loadIndex();
-      const existing = index.find((e) => e.md5 === md5);
-      if (existing) {
+      const result = await addMeme({ mediaRoot: root, source: full, caption, tags });
+      if (result.status === "duplicate") {
         return {
-          output: [{ type: "text", text: renderTemplate(deps.prompts.messages["meme_add_dup"] ?? "", { file: existing.file }) }],
+          output: [{ type: "text", text: renderTemplate(deps.prompts.messages["meme_add_dup"] ?? "", { file: result.entry.file }) }],
         };
       }
 
-      mkdirSync(memesDir, { recursive: true });
-      const file = `${md5.slice(0, 10)}${ext}`;
-      copyFileSync(full, join(memesDir, file));
-      index.push({ file, md5, caption, tags, at: Date.now() });
-      writeFileSync(indexUrl, `${JSON.stringify(index, null, 1)}\n`);
-
-      console.log(`[鱼缸] meme_add ${file} ${caption} [${tags.join(" ")}]`);
+      console.log(`[鱼缸] meme_add ${result.entry.file} ${caption} [${tags.join(" ")}]`);
       return {
         output: [
           {
             type: "text",
             text: renderTemplate(deps.prompts.messages["meme_add_done"] ?? "memes/{{file}}", {
-              file,
-              count: String(index.length),
+              file: result.entry.file,
+              count: String(result.count),
             }),
           },
         ],

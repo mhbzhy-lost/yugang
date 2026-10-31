@@ -16,7 +16,11 @@
  *
  * 旧的作息/配额/冷却/抽样不再参与判定，字段仅兼容保留。
  */
-import type { IncomingMessage } from "./onebot.ts";
+import type { IncomingMention, IncomingMessage } from "./onebot.ts";
+import { renderTemplate } from "../prompts.ts";
+
+/** renderForModel 的文案表 = PromptSet.messages；模型可见的字全部从这里来。 */
+export type MessageTable = Record<string, string>;
 
 export interface GateOptions {
   /** 主人 QQ；私聊只认他。 */
@@ -124,21 +128,53 @@ export function createGate(options: GateOptions): Gate {
   };
 }
 
-/** 进闸消息渲染成模型的 user 文本：带群/人/是否@/是否主人的标注。 */
-export function renderForModel(msg: IncomingMessage, master: string): string {
+/**
+ * 这条消息 @ 了谁：结构化 mentions 是权威值；旧 fixture / 外部构造只有兼容字段时
+ * 按 mentionsBot + atOthers 退回，行为与改版前一致。
+ */
+function mentionTargets(msg: IncomingMessage): IncomingMention[] {
+  if (msg.mentions && msg.mentions.length > 0) return msg.mentions;
+  const list: IncomingMention[] = [];
+  if (msg.mentionsBot) list.push({ qq: "self", name: "", kind: "bot" });
+  for (const [index, qq] of (msg.atOthers ?? []).entries()) {
+    const name = msg.atOtherNames?.[index] ?? qq;
+    list.push({ qq, name, kind: qq === "all" ? "all" : "other" });
+  }
+  return list;
+}
+
+/** 「名字(QQ)」；名字就是 QQ 号时不再重复写一遍。 */
+function mentionLabel(mention: IncomingMention): string {
+  if (!mention.name || mention.name === mention.qq) return mention.qq;
+  return `${mention.name}(${mention.qq})`;
+}
+
+/**
+ * 把这条消息的 @ 目标逐个列出成一句标注。
+ * 只 @ 了别人（或 @全体）时明确写「不是在叫你」——否则模型会把别人的对话当成叫自己。
+ */
+function renderMentions(msg: IncomingMessage, messages: MessageTable): string {
+  const targets = mentionTargets(msg);
+  const parts: string[] = [];
+  for (const target of targets) {
+    if (target.kind === "bot") parts.push(messages["mention_bot"] ?? "");
+    else if (target.kind === "all") parts.push(messages["mention_all"] ?? "");
+    else parts.push(renderTemplate(messages["mention_other"] ?? "", { who: mentionLabel(target) }));
+  }
+  const listed = parts.filter((part) => part.length > 0).join(" ");
+  if (!listed) return "";
+  const callsBot = targets.some((target) => target.kind === "bot");
+  return callsBot ? listed : `${listed}${messages["mention_not_you"] ?? ""}`;
+}
+
+/** 进闸消息渲染成模型的 user 文本：群/人/是否@/是否主人，文案全部来自 prompt/messages.md。 */
+export function renderForModel(msg: IncomingMessage, master: string, messages: MessageTable): string {
   const where = msg.groupId ? `群${msg.groupId}` : `私聊`;
   const reply = msg.messageId ? ` 回复msg:${msg.messageId}` : "";
   const tags: string[] = [];
-  if (msg.mentionsBot) tags.push("对你说话");
-  if ((msg.atOthers?.length ?? 0) > 0 && !msg.mentionsBot) {
-    const who = (msg.atOthers ?? [])
-      .map((qq, index) => {
-        const name = msg.atOtherNames?.[index];
-        return name && name !== qq && qq !== "all" ? `${name}(${qq})` : name || qq;
-      })
-      .join("、");
-    tags.push(`在@${who}（不是在叫你）`);
-  }
-  if (String(msg.userId) === master) tags.push("你主人");
-  return `[${where} | ${msg.nickname}(${msg.userId})${reply}${tags.length > 0 ? ` ${tags.join(" ")}` : ""}] ${msg.text}`;
+  const mentions = renderMentions(msg, messages);
+  if (mentions) tags.push(mentions);
+  if (String(msg.userId) === master) tags.push(messages["speaker_master"] ?? "");
+  const visible = tags.filter((tag) => tag.length > 0);
+  return `[${where} | ${msg.nickname}(${msg.userId})${reply}${visible.length > 0 ? ` ${visible.join(" ")}` : ""}] ${msg.text}`;
 }

@@ -5,19 +5,22 @@
 一个 Conversation = 一个群。agent 有工具、有记忆、有崩溃恢复，但**唯一的出口是一个工具调用**。
 
 ```
-群消息 ──► 规则闸（零 LLM）──► conversation.submit()
-                                      │
-                                pi-durable 跑 agent loop
-                                ├── thinking          ✗ 不出境
-                                ├── tool calls        ✗ 不出境
-                                ├── 正文              ✗ 不出境
-                                └── say(text, media)  ✓ 硬校验 → fish.outbound → QQ
+群消息 ──► 规则闸（零 LLM）──► 按发送者静默 5 秒合并 ──► conversation.submit()
+                                                              │
+                                                        pi-durable 跑 agent loop
+                                                        ├── thinking          ✗ 不出境
+                                                        ├── tool calls        ✗ 不出境
+                                                        ├── 正文              ✗ 不出境
+                                                        └── say(..., mentions) ✓ 硬校验 → fish.outbound → QQ
 
-鱼身上只有三个工具：
-  say     出口：可拆条、可引用、可带图，硬校验
+鱼身上真正能把东西送出境的只有两个工具：
+  say     出口：可拆条、可引用、可带图/表情包/语音，能点名 @ 群友，硬校验
   react   只贴表情，不说话
-  look    看群里的图（唯一能读文件的东西，只能读媒体目录的图片）
 ```
+
+其余是可枚举的能力工具（`look` / `meme` / `search` / `video` / `draw` / `gpt_image` / `tags`）
+和主人专属的工具（`meme_add` / `meme_import` / `read` / `grep` / `write` / `tree` / `model` / `restart` / `watch`）。
+完整清单就是 `src/tools/index.ts` 里那几行。
 
 ## 为什么出口是一个 tool
 
@@ -49,7 +52,10 @@
   改模型配置用 `model` 管理工具，改完靠 `restart` 生效。
 - **`prompt` 仍然全在 `prompt/tools/<name>.md`**：加一个工具 = 一个 `.ts` + 一个 `.md`，没有第三种位置。
 
-**唯一能读媒体图片的是 `look`**，它只能读 `MEDIA_ROOT` 里的图片，一轮最多两次。
+**唯一能读媒体图片的是 `look`**，它只能读 `MEDIA_ROOT` 里的图片，**普通一轮最多 2 张**。
+唯一的受控例外是**导入轮**：主人调 `meme_import` 登记过的本地待收图，本轮额度按清单数量放宽（硬上限 50 张），
+可以逐张看、逐张用 `meme_add` 收；清单只活当前这一轮，换轮即失效。
+这不是通用文件读取的回归——目录固定、身份固定（主人）、清单只一轮、图仍然只从 `MEDIA_ROOT` 里读。
 要加别读文件的能力，正确做法是写一个「读某个确定目录下的某个确定文件」的工具，
 而不是把任意路径的通用读取放回来。
 
@@ -59,25 +65,40 @@
 ## 工具注册表
 
 ```ts
-// src/tools/index.ts
+// src/tools/index.ts（节选）
 export function createTools(deps) {
-  return [createLookTool(deps)];   // 加一项能力就是往这里加一行
+  return [
+    createLookTool(deps),
+    createMemeAddTool(deps),
+    // 本地表情导入：只给主人，只扫固定 meme-inbox，登记本轮可看的清单
+    ...(deps.master ? [createMemeImportTool(deps)] : []),
+    // 加一项能力就是往这里加一行
+  ];
 }
 ```
 
-`say` 和 `react` 属于出口，注册在 `src/egress/`；`look` 是普通能力，在 `src/tools/`。
+`say` 和 `react` 属于出口，注册在 `src/egress/`；其余都是普通能力，在 `src/tools/`。
 
 ## 什么时候开口
 
-三层，从便宜到贵：
+门外三道机械规则，零模型调用：
 
 ```
-1. 规则（零成本）  私聊只认主人；@ 必答；作息；每群日配额；冷却
-2. 抽样（零成本）  AMBIENT_CHANCE，绝大多数消息到这就被丢掉了
-3. 打分（一次便宜模型调用） prompt/gate.md：该不该接这句，score ≥ 0.5 才进
+1. 私聊只认主人（MASTER_QQ），陌生人一律不回
+2. 群里任何人 @（含裸 @）必答；回复合并转发合集也必答
+3. 特别关注者：先掷随机门（watchAmbientChance，中了直接回），没中再过 60s 门（冷却够也回）
+   其余消息（含主人的非 @）：限流，同群两条被处理消息之间至少隔 ambientMinIntervalSeconds
 ```
 
-门内还有第四层：模型可以选择不调用 `say`——沉默是合法终态。
+入站 @ 是结构化的：`@鱼` / `@别人` / `@全体成员` 分开标注，只 @ 别人时会明确告诉模型「这些不是在叫你」。
+
+放行之后还有两层：
+
+- **5 秒静默合并**：放行的群消息不立刻提交，先按「群 + 发送者」攒 5 秒。同一发送者的新消息重置计时、整组继续加长，
+  不同发送者互不干扰；静默满 5 秒才把整组提交一次。整组**最后一条是引用锚点**（A-B-A 里 B 只作背景），
+  整组里任意一条 @鱼都算点名，锚点之前最多 10 条群消息进背景栏。
+  主人 `/` 指令、私聊、群里 GIF 的静默收图轮都不走这条回复延时。
+- **门内还可以沉默**：模型可以选择不调用 `say`——沉默是合法终态。
 
 ## 记性
 
@@ -136,10 +157,14 @@ src/
   chatlog.ts        原话簿：按群按天写流水（只给运维 skill 看，鱼看不到）
   tools/
     index.ts        注册表：加一项能力就是往这里加一行
-    look.ts         看群里的图（唯一能读文件的工具，只读媒体目录）
+    look.ts         看群里的图（唯一能读图片的工具，只读媒体目录；普通轮 2 张，导入轮按清单放宽）
+    meme-import.ts  本地表情导入：固定扫 meme-inbox，登记本轮可看的清单
+  media/
+    meme-store.ts   表情包库（索引、md5 去重、入库）
   qq/
     onebot.ts       零依赖 OneBot v11 客户端（Node 内置 WebSocket）
-    gate.ts         门外规则闸 + 群消息结构化包装
+    gate.ts         门外规则闸 + 群消息结构化包装（@ 目标 / 背景行渲染）
+    debounce.ts     5 秒静默合并状态机 + 整组上下文渲染（背景 / 锚点 / 整组标记）
 prompt/             模型能看到的一切文字（见 prompt/README.md）
 test/               node --test，不需要网络和 API key
 ```
@@ -218,11 +243,14 @@ npm run token             # 生成 OneBot token，同步到 .env 和 NapCat 配�
 |---|---|
 | `ONEBOT_WS_URL` | 协议端 OneBot v11 正向 WS 地址，例如 `ws://127.0.0.1:3001` |
 | `ONEBOT_TOKEN` | `npm run token` 生成（32 字节 base64url），别手写 |
-| `MASTER_QQ` | 你的 QQ 号。私聊只认它，群里它免检 |
+| `MASTER_QQ` | 你的 QQ 号。私聊只认它；群里它的非 @ 消息同样走限流，只有它可以主动 @ 人 |
 | `GROUPS` | 允许说话的群号，逗号分隔 |
 
-其余都有默认值：`AMBIENT_CHANCE=0.08`（多嘴概率）、`COOLDOWN_MS=120000`、`DAILY_QUOTA=40`、
-`QUIET_HOURS=1-8`（安静时段）。**建议第一次先设 `GROUPS` 只放一个测试群。**
+其余行为参数不在 `.env` 里，在 `fish.config.json`（模板 `fish.config.example`，mtime 热加载）：
+`ambientMinIntervalSeconds` / `watchAmbientChance` / `thinkingLevel` / `compact` / `memeCooldownMinutes` /
+`toolTimeoutSeconds` / `voices`。**旧的 `AMBIENT_CHANCE` / `COOLDOWN_MS` / `DAILY_QUOTA` / `QUIET_HOURS` / `KEYWORDS`
+已经下线，写进 `.env` 也不会生效**（旧 `AMBIENT_MIN_INTERVAL_SECONDS` / `WATCH_AMBIENT_CHANCE` 仍作为兜底，
+但请改 `fish.config.json`）。**建议第一次先设 `GROUPS` 只放一个测试群。**
 
 `npm start` / `probe` / `ops` / `ping` 都会自动读 `.env`（`--env-file-if-exists`），不用手动 export。
 
@@ -267,22 +295,23 @@ npm test                 # 用 faux provider 跑，不需要 key
 export ONEBOT_WS_URL=ws://127.0.0.1:3001
 export ONEBOT_TOKEN=...            # 没有就不填
 # 模型在 config/models.json 的 models.main 里配，没有环境变量
-export AMBIENT_CHANCE=0.06         # 不带 @ 时进 loop 的概率
-export COOLDOWN_MS=90000           # 同群两次进 loop 的最小间隔
-export KEYWORDS=阿鱼,鱼缸           # 命中就进 loop
+# 说话频率在 fish.config.json 里调（ambientMinIntervalSeconds / watchAmbientChance），没有对应的 env 开关
 npm start
 ```
 
-数据落在 `var/`（SQLite + 幂等表），人格书在 `persona/fish.md`，发图必须放在 `MEDIA_ROOT` 里。
+数据落在 `var/`（SQLite + 幂等表），人格书在 `prompt/persona.md`（多人格在 `prompt/personas/`），
+发图必须放在 `MEDIA_ROOT` 里；本地表情包待收目录是 `MEDIA_ROOT/meme-inbox/`。
 
 ## 已验证
 
-`npm test` 33 项，其中四条是设计约束：
+`npm test` 62 项，其中四条是设计约束：
 
 1. **正文不出境**：脚本化的模型先 `say("在的")` 再输出长段正文，断言群里只收到前者。
 2. **抄写被拦**：`say` 里塞入本轮 thinking 的片段，断言被拒、原因为 tool 错误、重说的那句才放行。
-3. **工具面固定**：agent 的工具恰好是 `["say", "react", "look"]`，且断言 `bash`、`read` 都不存在。
-4. **看图全链路**：模型调 `look` 拿到 image block，越界路径（`/etc/passwd`）被拦。
+3. **工具面可枚举**：agent 的工具恰好是 `test/tools.test.ts` 里那份清单（含 `meme_import`），
+   且断言 `bash`、`shell` 都不存在。
+4. **看图全链路**：模型调 `look` 拿到逐张文字视觉描述，图片不进入主会话；普通轮最多 2 张，
+   导入轮仅对本轮 manifest 里的图片受控放宽到最多 50 张；越界路径（`/etc/passwd`）和非媒体路径被拦。
 
 ## 重启之后
 
@@ -333,6 +362,4 @@ node scripts/ops.ts probe      # QQ 侧连通性
   并让适配器从 `fish.outbound` 条目补齐未发送的消息（现在只在进程内存里 emit 一次）。
 - **改写成话**：`say` 之前加一次无工具、无 transcript 的 speaker 调用，把工具结果压成一句人话。
 - **审批通道**：L2 工具（发文件、改配置）走管理员私聊审批，群里默认 deny。
-- **多群路由持久化**：`chatKeys` 在内存里，重启后靠 `createConversation` 重建；应持久化 group → conversationId。
-- **上下文压缩**：群聊无限流，需要 `Conversation.compact()` 的触发策略。
 - **协议端掉线告警**：`/api/healthz` 式的发送探针。
