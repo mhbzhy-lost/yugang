@@ -1,8 +1,8 @@
 {
   "models": {
     "main": {
-      "provider": "openai-codex",
-      "model": "gpt-6.1-terra"
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3-flash"
     },
     "vision": {
       "provider": "zai-coding-cn",
@@ -142,58 +142,8 @@
       "auth": "oauth",
       "baseUrl": "https://chatgpt.com/backend-api",
       "transport": "sse",
-      "proxy": "http://127.0.0.1:7897",
+      "proxy": "http://127.0.0.1:7890",
       "models": [
-        {
-          "id": "gpt-6.1-sol",
-          "name": "GPT-6.1-Sol",
-          "api": "openai-codex-responses",
-          "baseUrl": "https://chatgpt.com/backend-api",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 500000,
-          "maxTokens": 128000,
-          "thinkingLevelMap": {
-            "minimal": "low"
-          },
-          "compat": {
-            "supportsOpenAIGrammarTools": true,
-            "supportsToolSearch": true
-          }
-        },
-        {
-          "id": "gpt-6-astra",
-          "name": "GPT-6-Astra",
-          "api": "openai-codex-responses",
-          "baseUrl": "https://chatgpt.com/backend-api",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 272000,
-          "maxTokens": 128000,
-          "thinkingLevelMap": {
-            "minimal": "low"
-          },
-          "compat": {
-            "supportsOpenAIGrammarTools": true,
-            "supportsToolSearch": true
-          }
-        },
         {
           "id": "gpt-6.1-terra",
           "name": "GPT-6.1-Terra",
@@ -220,133 +170,8 @@
           }
         },
         {
-          "id": "gpt-6-sol",
-          "name": "GPT-6-Sol",
-          "api": "openai-codex-responses",
-          "baseUrl": "https://chatgpt.com/backend-api",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 272000,
-          "maxTokens": 128000,
-          "thinkingLevelMap": {
-            "minimal": "low"
-          },
-          "compat": {
-            "supportsOpenAIGrammarTools": true,
-            "supportsToolSearch": true
-          }
-        },
-        {
-          "id": "gpt-reserve",
-          "name": "GPT-Reserve",
-          "api": "openai-codex-responses",
-          "baseUrl": "https://chatgpt.com/backend-api",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 272000,
-          "maxTokens": 128000,
-          "thinkingLevelMap": {
-            "minimal": "low"
-          },
-          "compat": {
-            "supportsOpenAIGrammarTools": true,
-            "supportsToolSearch": true
-          }
-        },
-        {
-          "id": "gpt-6-luna",
-          "name": "GPT-6-Luna",
-          "api": "openai-codex-responses",
-          "baseUrl": "https://chatgpt.com/backend-api",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 272000,
-          "maxTokens": 128000,
-          "thinkingLevelMap": {
-            "minimal": "low"
-          },
-          "compat": {
-            "supportsOpenAIGrammarTools": true,
-            "supportsToolSearch": true
-          }
-        },
-        {
-          "id": "gpt-5.6-sol",
-          "name": "GPT-5.6-Sol",
-          "api": "openai-codex-responses",
-          "baseUrl": "https://chatgpt.com/backend-api",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 272000,
-          "maxTokens": 128000,
-          "thinkingLevelMap": {
-            "minimal": "low"
-          },
-          "compat": {
-            "supportsOpenAIGrammarTools": true,
-            "supportsToolSearch": true
-          }
-        },
-        {
-          "id": "gpt-5.6-terra",
-          "name": "GPT-5.6-Terra",
-          "api": "openai-codex-responses",
-          "baseUrl": "https://chatgpt.com/backend-api",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 272000,
-          "maxTokens": 128000,
-          "thinkingLevelMap": {
-            "minimal": "low"
-          },
-          "compat": {
-            "supportsOpenAIGrammarTools": true,
-            "supportsToolSearch": true
-          }
-        },
-        {
-          "id": "gpt-5.6-luna",
-          "name": "GPT-5.6-Luna",
+          "id": "gpt-6-astra",
+          "name": "GPT-6-Astra",
           "api": "openai-codex-responses",
           "baseUrl": "https://chatgpt.com/backend-api",
           "reasoning": true,

@@ -20,7 +20,8 @@
 git clone <repo> && cd yugang
 npm install                     # 项目 .npmrc 钉的是官方源
 
-# 1. 重建凭据（不进仓库，必须重新导）
+# 1. 重建模型配置与凭据（都是本机文件，不进仓库，必须重新建）
+cp config/models.example.json config/models.json   # 模板进仓库；按本机改角色/provider/代理
 npm run creds import            # 从 ~/pi-config/pi/auth.json 导
 #   或手写 config/auth.json：{ "qoder-pool": { "key": "..." } }
 
@@ -77,8 +78,8 @@ Linux 机器上协议端更简单：`npm run protocol install` 会下载 NapCat 
 
 ## 绝不要提交的东西
 
-`.env`（含 ONEBOT_TOKEN）、`config/auth.json`（含模型 key）、`var/`（数据库、原话簿、媒体）。
-前两个在 `.gitignore` 里，且 `npm test` 有一条测试盯着 `config/auth.json` 是否被忽略。
+`.env`（含 ONEBOT_TOKEN）、`config/auth.json`（含模型 key）、`config/models.json`（本机模型配置）、`var/`（数据库、原话簿、媒体）。
+前三个在 `.gitignore` 里，且 `npm test` 有测试盯着 `config/auth.json` 与 `config/models.json` 是否被忽略。
 
 ## 关键文件
 
@@ -91,4 +92,4 @@ Linux 机器上协议端更简单：`npm run protocol install` 会下载 NapCat 
 | `src/compact.ts` | 换页 + handoff |
 | `src/tools/<name>/` | 工具包：TOOL.md（模型侧说明与 Schema）+ tool.ts，`src/tools/loader.ts` 统一注册 |
 | `prompt/` | 模型能看到的一切文字，改行为改这里 |
-| `config/models.json` | provider 地址与模型清单（不含 key） |
+| `config/models.json` | provider 地址与模型清单（不含 key；本机文件，模板 `config/models.example.json` 进仓库） |

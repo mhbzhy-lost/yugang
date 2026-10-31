@@ -23,7 +23,7 @@ for (const name of required) {
 check(Boolean(process.env.ONEBOT_TOKEN), "env ONEBOT_TOKEN", "没设 token 也能跑，但本机其它进程能连进来");
 
 const models = resolve("config/models.json");
-check(existsSync(models), "config/models.json", "仓库里应该有；是不是在别的目录跑的？");
+check(existsSync(models), "config/models.json", "cp config/models.example.json config/models.json（本机配置，gitignore）");
 check(existsSync(resolve("config/auth.json")), "config/auth.json", "npm run creds import");
 
 const protocol = join(HOME, "protocol", "napcat");

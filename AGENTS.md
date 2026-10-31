@@ -112,11 +112,12 @@
 
 - **模型选择只有一个入口**：`config/models.json` 的 `models` 角色表（`main` / `vision` / `image`）。
   不允许用环境变量或启动参数选模型；旧 `default` 键会直接报错
-- **配置在仓库里**：`config/models.json` 写 models 角色表、provider 地址、模型清单、网关兼容值，可以 diff、可以 review
-- **凭据在仓库外**：`config/auth.json`（gitignore，权限 600），只由 `npm run creds import` 写入；运行时**不读** `~/pi-config`
+- **配置是本机文件**：`config/models.json`（gitignore，每台机器一份）写 models 角色表、provider 地址、模型清单、
+  网关兼容值；模板是 `config/models.example.json`（进仓库），首次使用 `cp config/models.example.json config/models.json`
+- **凭据也是本机文件**：`config/auth.json`（gitignore，权限 600），只由 `npm run creds import` 写入；运行时**不读** `~/pi-config`
 - `var/` 只放运行时产物（`fish.db` / `chatlog` / `media` / `sent.json`），不放凭据、不放配置
 - 协议端配置由 `scripts/protocol.ts` 生成，**路径随平台**：macOS 在 QQ 容器目录，其它在 `var/protocol/napcat`
-- 不要在 `config/models.json` 里写 key，`npm test` 会扫
+- 不要在 `config/models.json` / `config/models.example.json` 里写 key，`npm test` 会扫模板
 - **key 只在内存里**：不进 prompt、不进 transcript、不进日志。`describeModel()` 只报"已加载 / N 字符"和来源路径
 - 网关兼容值（`maxTokensField: max_tokens`）由 `src/model-config.ts` 的 `withCompat()` 兜底，模型自带 compat 可覆盖
 - 换模型：编辑 `config/models.json` 的 `models.main` / `models.vision` / `models.image`（`vision` 省略 = main，

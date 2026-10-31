@@ -1,8 +1,8 @@
 /**
  * write —— 整文件写入 /tmp/yugang 草稿区（新建或覆盖，仅主人）。
  *
- * 只能写 /tmp/yugang——仓库里的文件（含 config/models.json）写不进去，改仓库由专门的管理
- * 工具负责。内容超上限直接拒绝。路径围栏、封禁、审计与主人身份闸集中在 ../fs-shared.ts，
+ * 只能写 /tmp/yugang——仓库与本机配置的文件（含 config/models.json）都写不进去，改动由专门的
+ * 管理工具负责。内容超上限直接拒绝。路径围栏、封禁、审计与主人身份闸集中在 ../fs-shared.ts，
  * 这里不恢复任何 shell / MCP / 通用文件写入能力。
  *
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest（factory 只消费它，不再有第二份运行时定义）。

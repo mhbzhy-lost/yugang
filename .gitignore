@@ -3,8 +3,9 @@ var/
 *.log
 .DS_Store
 config/auth.json
+config/models.json
 .env
 .pi/
 .trash/
-# 运行时行为配置（每台机器一份，模板是 fish.config.example）
+# 模型配置与运行时行为配置都是每台机器一份；模板分别是 config/models.example.json 与 fish.config.example
 fish.config.json

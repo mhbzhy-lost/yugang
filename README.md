@@ -172,13 +172,17 @@ test/               node --test，不需要网络和 API key
 
 ## 模型与凭据
 
-**配置在仓库里，凭据在仓库外。**
+**配置和凭据都是本机文件，模板进仓库。**
 
 ```
-config/models.json       models 角色表 + provider 地址 + 模型清单 + 兼容值  ← 进仓库，可 diff 可 review
-config/auth.json         只有 key                                      ← gitignore，权限 600
-config/auth.example.json 模板，说明格式                                 ← 进仓库
+config/models.json         models 角色表 + provider 地址 + 模型清单 + 兼容值  ← gitignore，每台机器一份
+config/models.example.json 模板，说明完整语法                              ← 进仓库
+config/auth.json           只有 key                                        ← gitignore，权限 600
+config/auth.example.json   模板，说明格式                                   ← 进仓库
 ```
+
+首次使用 `cp config/models.example.json config/models.json`，之后只编辑这份被 gitignore 的本机文件；
+换机器时各自维护一份，互不覆盖。
 
 `var/` 只放运行时生成的东西（数据库、原话簿、媒体、幂等表），不放凭据。
 
@@ -214,6 +218,8 @@ config/auth.example.json 模板，说明格式                                 �
 
 `providers.<name>.transport: "sse"` 是进程级流式传输设置（只取 `main` 的 provider）：
 Node 的 WS 不吃 `--use-env-proxy`，过代理时必须写 `"sse"`。
+`providers.<name>.proxy`（只认 http/https）让这一个 provider 的全部请求走隧道（模型流 / 生图 / token 刷新），
+其它 provider 仍直连；codex 过代理必须同时写 `transport: "sse"`。
 
 鱼自己能 `read` 这个文件；主人可以让它用 `model` 工具切换三个角色，改完用 `restart` 生效。
 
@@ -226,8 +232,8 @@ npm run creds clear      # 删掉
 npm run ping             # 读 models.json → 最小补全 → 打印三角色/耗时/用量
 ```
 
-加模型：往对应 `providers.<name>.models[]` 里加一条，再把 `models.<角色>` 指过去。
-换机器只要重新导一次凭据。
+加模型：往本机 `config/models.json` 对应的 `providers.<name>.models[]` 里加一条，再把 `models.<角色>` 指过去。
+换机器时重新 cp 一份模板、重新导一次凭据，各自维护。
 
 `key` 只在内存里：不写 env、不进 prompt、不进 transcript，`describeModel()` 只报「已加载 / N 字符」和来源路径。
 

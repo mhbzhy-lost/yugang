@@ -1,9 +1,10 @@
 /**
- * 模型配置（仓库里，可审查）+ 凭据（仓库外，不进记录）。
+ * 模型配置与凭据都是本机文件（gitignore，不进 git），模板进仓库。
  *
  * 两件事分开：
- *   config/models.json      provider 地址、角色（main / vision / image）、模型清单、兼容值
- *   config/auth.json        只有 key —— gitignore，由 `npm run creds` 写，权限 0600
+ *   config/models.json           provider 地址、角色（main / vision / image）、模型清单、兼容值；
+ *                                模板是 config/models.example.json（进仓库），首次使用 cp 一份再改
+ *   config/auth.json             只有 key —— gitignore，由 `npm run creds` 写，权限 0600
  *
  * 模型选择只有一个入口：config/models.json 的 models 角色表。没有环境变量、没有启动参数，
  * 鱼自己（read / edit）也能看到并修改；改完用 restart 工具生效。
@@ -112,7 +113,9 @@ function defaultAuthPath(configSource: string): string {
 
 function readModelsFile(path: string): { file: ModelsFile; configSource: string } {
   const configSource = resolve(path);
-  if (!existsSync(configSource)) throw new Error(`找不到模型配置：${configSource}`);
+  if (!existsSync(configSource)) {
+    throw new Error(`找不到模型配置：${configSource}（先 cp 一份 config/models.example.json）`);
+  }
   const file = JSON.parse(readFileSync(configSource, "utf8")) as ModelsFile;
   if (!file || typeof file !== "object") throw new Error("models.json 不是对象");
   if (!file.providers || typeof file.providers !== "object") throw new Error("models.json 缺少 providers");

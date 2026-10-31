@@ -1,6 +1,7 @@
 /**
  * 模型配置与凭据是两件事：
- *  - config/models.json 在仓库里（角色表 + provider 地址 + 模型清单 + 兼容值），能 review
+ *  - config/models.json 是本机文件（gitignore）；进仓库的是模板 config/models.example.json
+ *    （角色表 + provider 地址 + 模型清单 + 兼容值），下面的结构断言都读模板
  *  - 凭据在 config/auth.json（gitignore），loadFishModels 只读它，不依赖 ~/pi-config
  *  - 模型选择只认 models.main / models.vision / models.image，没有环境变量与启动参数
  *  - describeModel 永远不吐 key
@@ -14,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { describeModel, loadFishModels, loadProviderConfig } from "../src/model-config.ts";
 import { assertModelExists, createFishModels } from "../src/models.ts";
 
-const REPO_MODELS = fileURLToPath(new URL("../config/models.json", import.meta.url));
+const EXAMPLE_MODELS = fileURLToPath(new URL("../config/models.example.json", import.meta.url));
 const FAKE_KEY = "test-key-0123456789abcdef";
 
 function scratch(): { modelsPath: string; credentialsPath: string } {
@@ -44,15 +45,15 @@ function scratch(): { modelsPath: string; credentialsPath: string } {
   return { modelsPath, credentialsPath };
 }
 
-test("仓库里的 config/models.json 能按角色解析", () => {
-  const selection = loadFishModels({ modelsPath: REPO_MODELS, credentialsPath: "/nonexistent" });
+test("config/models.example.json 模板能按角色解析", () => {
+  const selection = loadFishModels({ modelsPath: EXAMPLE_MODELS, credentialsPath: "/nonexistent" });
   assert.ok(selection.main.providerId && selection.main.modelId, "models.main 必须能解析");
   assert.ok(selection.vision.providerId && selection.vision.modelId, "models.vision 必须能解析");
   assert.ok(selection.image, "models.image 必须能解析");
-  const raw = JSON.parse(readFileSync(REPO_MODELS, "utf8")) as Record<string, unknown>;
+  const raw = JSON.parse(readFileSync(EXAMPLE_MODELS, "utf8")) as Record<string, unknown>;
   assert.equal("default" in raw, false, "models.json 不该再有 default：模型选择只走 models 角色表");
 
-  const providerOnly = loadProviderConfig("qoder-pool", { modelsPath: REPO_MODELS, credentialsPath: "/nonexistent" });
+  const providerOnly = loadProviderConfig("qoder-pool", { modelsPath: EXAMPLE_MODELS, credentialsPath: "/nonexistent" });
   assert.equal(providerOnly.providerId, "qoder-pool");
   assert.equal(providerOnly.modelId, "DeepSeek-Flash");
   assert.match(providerOnly.baseUrl, /^http/);
@@ -60,11 +61,11 @@ test("仓库里的 config/models.json 能按角色解析", () => {
 });
 
 test("glm-5.3-flash：reasoning 保持 true，thinkingLevelMap 六档全 null（思考永久关闭）", () => {
-  const config = JSON.parse(readFileSync(REPO_MODELS, "utf8")) as {
+  const config = JSON.parse(readFileSync(EXAMPLE_MODELS, "utf8")) as {
     providers: Record<string, { models: { id: string; reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> }[] }>;
   };
   const entry = config.providers["zai-coding-cn"].models.find((m) => m.id === "glm-5.3-flash");
-  assert.ok(entry, "仓库配置里必须有 glm-5.3-flash");
+  assert.ok(entry, "模板里必须有 glm-5.3-flash");
   assert.equal(entry.reasoning, true, "reasoning 不能改 false：不发 thinking 参数，GLM 服务端会默认开思考");
   assert.deepEqual(
     Object.keys(entry.thinkingLevelMap ?? {}).sort(),
@@ -78,14 +79,15 @@ test("glm-5.3-flash：reasoning 保持 true，thinkingLevelMap 六档全 null（
   );
 });
 
-test("config/auth.json 必须在 gitignore 里", () => {
+test("config/auth.json 与 config/models.json 必须在 gitignore 里", () => {
   const ignore = readFileSync(fileURLToPath(new URL("../.gitignore", import.meta.url)), "utf8");
   assert.match(ignore, /^config\/auth\.json$/m, "凭据文件没被忽略，一次 git add 就进仓库了");
+  assert.match(ignore, /^config\/models\.json$/m, "模型配置是本机文件，没被忽略就会把机器专属配置带进仓库");
 });
 
-test("仓库配置里不能有 key", () => {
-  const raw = JSON.stringify(loadFishModels({ modelsPath: REPO_MODELS, credentialsPath: "/nonexistent" }));
-  assert.ok(!/sk-|api_key|"key":\s*"[^"]{20,}/.test(raw), "config/models.json 里疑似写了凭据");
+test("模板里不能有 key", () => {
+  const raw = JSON.stringify(loadFishModels({ modelsPath: EXAMPLE_MODELS, credentialsPath: "/nonexistent" }));
+  assert.ok(!/sk-|api_key|"key":\s*"[^"]{20,}/.test(raw), "config/models.example.json 里疑似写了凭据");
 });
 
 test("凭据默认和 models.json 同目录（config/auth.json），缺了就报缺失而不是崩", () => {

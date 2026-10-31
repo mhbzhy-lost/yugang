@@ -4,7 +4,7 @@
  * read / grep / write 三个主人专属工具（各自 src/tools/<name>/tool.ts）共用这里；
  * 围栏与封禁只有这一份实现，三个工具不得各自漂移。这里不暴露任何模型可调的工具。
  *
- * 可读范围 = 仓库工作区 + /tmp/yugang（鱼的草稿区）；write 只能写 /tmp/yugang——仓库里的
+ * 可读范围 = 仓库工作区 + /tmp/yugang（鱼的草稿区）；write 只能写 /tmp/yugang——仓库与本机配置的
  * 文件（含 config/models.json）由专门的管理工具改，不提供通用写入能力。
  * .env、config/auth.json、.git/、node_modules/、.trash/、.pi/ 一律硬封禁。全部操作打审计日志。
  */
