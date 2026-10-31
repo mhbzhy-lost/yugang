@@ -5,7 +5,7 @@
 mention_bot: @了你
 mention_all: @了全体成员
 mention_other: @了{{who}}
-mention_not_you: （这些都不是在叫你，别把别人的 @ 当成点名）
+mention_not_you: （这些 @ 是在叫他们，不是在叫你，也不是在说你；没被点名。要不要接话你自己看场合，觉得合适就自然插一句，不合适安静听也正常）
 speaker_master: 你主人
 
 say_sent: 已发到群里

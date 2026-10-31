@@ -151,7 +151,7 @@ function mentionLabel(mention: IncomingMention): string {
 
 /**
  * 把这条消息的 @ 目标逐个列出成一句标注。
- * 只 @ 了别人（或 @全体）时明确写「不是在叫你」——否则模型会把别人的对话当成叫自己。
+ * 只 @ 了别人（或 @全体）时补指向澄清——告诉模型别人的对话不是在叫它，接不接话由它自己判断。
  */
 function renderMentions(msg: IncomingMessage, messages: MessageTable): string {
   // 私聊没有「@谁」这回事：入站把 mentionsBot 恒置 true 只是内部标记（私聊就是叫你），
