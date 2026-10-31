@@ -174,6 +174,10 @@ const lastReply = new Map<string, boolean>(); // 最近一次触发是否@了鱼
 const triggerOf = new Map<string, { messageId?: number | string; mentionsBot: boolean; userId?: number }>();
 // submissionId → 本轮触发消息自带的 bypass 段；仅该轮 draw 可见，轮 settle 即删
 const bypassOf = new Map<string, string>();
+// submissionId → 本轮 say 被调用的次数：识别「零出口轮」（模型裸文本回复，正文不出境，聊天对象零输出）。
+// 与 triggerOf 同生命周期：submit 后置 0，settle 的 finally 里删，成功/失败/抛错都不泄漏；
+// 只累计已登记的轮，收图轮等不经 submitRound 的提交不会留下孤儿条目。
+const sayCalled = new Map<string, number>();
 const conversations = new Map<string, Conversation>();
 
 const fish = await openFish({
@@ -221,6 +225,12 @@ const fish = await openFish({
   master: config.master,
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
   silentOf: (roundId) => silentRounds.has(String(roundId)),
+  // 出口计数：say 的 execute 进入即回调；未登记的轮（收图轮）直接忽略，不留孤儿计数
+  onSayCall: (roundId) => {
+    const key = String(roundId);
+    const count = sayCalled.get(key);
+    if (count !== undefined) sayCalled.set(key, count + 1);
+  },
   // watch 的号码校验：从会话映射回群号，再拉全量成员（不要 limit，要能校验到每个人）
   onWatchChanged: (conversationId, people) => {
     const chatKey = chatKeyFor(conversationId);
@@ -489,16 +499,27 @@ async function submitRound(input: {
     userId: trigger.userId,
   });
   if (input.bypass !== undefined) bypassOf.set(String(submission.id), input.bypass);
+  // 零出口轮观测：本轮出口计数清零登记，与 triggerOf 同生命周期（见下方 finally）
+  sayCalled.set(String(submission.id), 0);
 
   // 成功、失败、抛错都要把这一轮的绑定清掉
   const settled = await (async () => {
     try {
-      return await submission.wait(ctx);
+      const result = await submission.wait(ctx);
+      // 正常结束却一次 say 都没调：模型裸文本回复不出口，聊天对象什么都看不到——
+      // 打一行宿主日志让这类轮立刻可见（收图轮不经 submitRound，天然不在观测范围）；
+      // 文案固定含「零出口轮」供 grep，完整解释在 .agents/skills/ops/SKILL.md
+      if (result.status === "done" && (sayCalled.get(String(submission.id)) ?? 0) === 0) {
+        console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say`);
+      }
+      return result;
     } finally {
       triggerOf.delete(String(submission.id));
       bypassOf.delete(String(submission.id));
       // 导入清单只属于这一轮：成功、失败、抛错都在这里清掉
       clearMemeImportRound(String(submission.id));
+      // 出口计数同样只活这一轮：done、没答上来、wait 抛错都不残留
+      sayCalled.delete(String(submission.id));
     }
   })();
   if (settled.status !== "done") {

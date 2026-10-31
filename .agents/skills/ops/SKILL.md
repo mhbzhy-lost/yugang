@@ -110,6 +110,7 @@ node scripts/ops.ts probe
    `forward_ignored` = 没 @ 的合集被丢弃；`group_not_allowed` = 群不在 `GROUPS`；`stranger_private` = 陌生人私聊。
    放行是 `enter:`，常见值 `mentioned` / `replied_forward` / `rate_pass` / `watched` / `watched_rate_pass` / `private`。
 5. 私聊没反应 —— 只认 `MASTER_QQ`，陌生人一律不回。这是设计，不是 bug。
+6. 日志出现「零出口轮」= 模型没调 say（裸文本回复被丢弃），常见于极简人格，属 prompt 行为问题。
 
 ## 语音没声音怎么查
 

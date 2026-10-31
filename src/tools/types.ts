@@ -88,6 +88,8 @@ export interface ToolPackageDeps {
   ttsSynthesize?: (config: import("../tts.ts").TtsConfig, text: string, mediaRoot: string) => Promise<{ ref: string; bytes: Buffer }>;
   /** 静默轮（如收图轮）：这一轮不许说话。 */
   silentOf?: (roundId: unknown) => boolean;
+  /** 本轮 say 的 execute 被进入时回调（成败都算一次）；宿主据此识别「零出口轮」。 */
+  onSayCall?: (roundId: unknown) => void;
   /** 表情包跨轮冷却（毫秒）；给函数是每次现取。 */
   memeCooldownMs?: number | (() => number);
 }

@@ -83,6 +83,9 @@ export function createSayTool(manifest: ToolManifest, deps: ToolPackageDeps): To
       // 静默轮（自动收表情包）只允许调工具，不许冒话
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
+      // 出口计数：进了 execute 就算模型开了口（成败都算一次），宿主据此识别「零出口轮」。
+      // 未登记的轮（如收图轮）由宿主回调自行忽略，不产生孤儿计数；只加计数，不改校验与出口语义。
+      if (round !== undefined) deps.onSayCall?.(round);
       if (round !== undefined && deps.silentOf?.(round)) {
         throw new Error(deps.prompts.messages["say_silent"] ?? "say_silent");
       }
