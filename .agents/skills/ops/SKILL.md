@@ -118,7 +118,7 @@ node scripts/ops.ts probe
    `~/tts/GPT-SoVITS/.venv/bin/python -m nltk.downloader -d ~/nltk_data cmudict`
    （缺了会返回 200 + 0 字节空音频，日志里只有一行 `[鱼缸] 语音合成失败`）
 3. 鱼日志有 `voice_off` —— 这个会话的人格在 `fish.config.json` 的 `voices` 里没有条目（没配就是没语音，不是 bug）
-4. 鱼日志有 `voice_too_long` / `voice_with_media` / `say_media_used` —— 出口闸拦的，看 `prompt/tools/say.md`
+4. 鱼日志有 `voice_too_long` / `voice_with_media` / `say_media_used` —— 出口闸拦的，看 `src/tools/say/TOOL.md`
 
 ## 合集（合并转发）看不了怎么查
 
@@ -165,9 +165,9 @@ node scripts/ops.ts probe
 
 ## 改东西的规矩
 
-- 改 prompt：只动 `prompt/` 下的 md；改完 `npm run prompts` 确认清单，再 `npm test`。
-- 加能力：一个 `src/tools/<name>.ts` + 一个 `prompt/tools/<name>.md` + 注册一行，缺一个都起不来。
-- 改行为前先想清楚：**prompt 就是这条鱼的全部行为定义**，代码只是它的边界。
+- 改 prompt：人格与共享文案只动 `prompt/` 下的 md；工具说明动 `src/tools/<name>/TOOL.md`；改完 `npm run prompts` 确认清单（含 19 个工具包与 eager/deferred），再 `npm test`。
+- 加能力：`src/tools/<name>/` 放 `TOOL.md` + `tool.ts`，并在 `src/tools/loader.ts` 的 factory 名单加一行，缺一个都起不来；除 `say` / `react` / `tool_search` 外的新工具默认 deferred，模型先 `tool_search` 搜到才能用。
+- 改行为前先想清楚：**prompt（含 TOOL.md）就是这条鱼的全部行为定义**，代码只是它的边界。
 
 ## 不要做的事
 

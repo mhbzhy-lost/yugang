@@ -3,16 +3,13 @@
  *
  * 这样做的代价是多一层加载和一堆「文件不存在就报错」的分支，
  * 换来的是：改一句话不需要读代码，审查时 diff 一眼能看出来。
+ *
+ * 工具说明与参数 Schema 不在这里：它们唯一来自 src/tools/<name>/TOOL.md，
+ * 由 src/tools/loader.ts 的 manifest loader 读取（PromptSet 只保留共享文案与人格）。
  */
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
-
-/** 工具说明 + 参数说明；正文部分是 description。 */
-export interface ToolPrompt {
-  description: string;
-  params: Record<string, string>;
-}
 
 /** 人格书：frontmatter 属性 + 正文。frontmatter 只认单行 `key: value`（目前用 opener）。 */
 export interface PersonaBook {
@@ -24,6 +21,8 @@ export interface PersonaBook {
 
 export interface PromptSet {
   root: string;
+  /** 人格无关的运行时协议（输入信任边界、出口、渐进加载）；常驻 section，tag false。 */
+  runtime: string;
   persona: string;
   /** 上下文压缩用的备忘提示词，含 {{transcript}}。 */
   handoff: string;
@@ -36,8 +35,6 @@ export interface PromptSet {
   /** 表情包一级情绪词表（prompt/meme-tags.md 里一行一个词），打标与检索都只认这些。 */
   memeTags: string[];
   messages: Record<string, string>;
-  /** key 是工具名，来自 prompt/tools/<name>.md 的文件名。 */
-  tools: Record<string, ToolPrompt>;
   /** 人格书：key 是人格名（prompt/personas/<名>.md 的文件名）。目录缺失/为空 → 空。 */
   personas: Record<string, PersonaBook>;
 }
@@ -45,6 +42,7 @@ export interface PromptSet {
 export function loadPrompts(root: string): PromptSet {
   return {
     root,
+    runtime: read(join(root, "runtime.md")),
     persona: read(join(root, "persona.md")),
     handoff: read(join(root, "handoff.md")),
     groupProfile: read(join(root, "group-profile.md")),
@@ -52,7 +50,6 @@ export function loadPrompts(root: string): PromptSet {
     people: read(join(root, "people.md")),
     memeTags: loadWordList(join(root, "meme-tags.md")),
     messages: parseMessageTable(read(join(root, "messages.md")), join(root, "messages.md")),
-    tools: loadTools(join(root, "tools")),
     personas: loadPersonas(join(root, "personas")),
   };
 }
@@ -97,45 +94,11 @@ export function parsePersonaBook(text: string): PersonaBook {
   return { body: match[2].trim(), ...(meta.opener ? { opener: meta.opener } : {}) };
 }
 
-function loadTools(dir: string): Record<string, ToolPrompt> {
-  if (!existsSync(dir)) throw new Error(`缺少 prompt 目录：${dir}`);
-  const tools: Record<string, ToolPrompt> = {};
-  for (const entry of readdirSync(dir)) {
-    if (!entry.endsWith(".md")) continue;
-    tools[entry.slice(0, -3)] = parseToolPrompt(read(join(dir, entry)));
-  }
-  if (Object.keys(tools).length === 0) throw new Error(`prompt/tools 里一个工具说明都没有：${dir}`);
-  return tools;
-}
-
 function read(path: string): string {
   if (!existsSync(path)) throw new Error(`缺少 prompt 文件：${path}`);
   const text = readFileSync(path, "utf8").trim();
   if (text.length === 0) throw new Error(`prompt 文件是空的：${path}`);
   return text;
-}
-
-/**
- * 工具 prompt：可选 frontmatter 里的 `params:` 子块给参数写说明，正文是 description。
- */
-export function parseToolPrompt(text: string): ToolPrompt {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
-  if (!match) return { description: text.trim(), params: {} };
-
-  const params: Record<string, string> = {};
-  let inParams = false;
-  for (const raw of match[1].split(/\r?\n/)) {
-    if (/^params:\s*$/.test(raw)) {
-      inParams = true;
-      continue;
-    }
-    if (inParams) {
-      const kv = /^\s+([A-Za-z0-9_-]+):\s*(.+)$/.exec(raw);
-      if (kv) params[kv[1]] = kv[2].trim();
-      else if (!/^\s+\S/.test(raw)) inParams = false;
-    }
-  }
-  return { description: match[2].trim(), params };
 }
 
 /** `key: text` 一行一条，`#` 开头是注释。 */
@@ -159,19 +122,9 @@ export function renderTemplate(template: string, vars: Record<string, string>): 
   });
 }
 
-/** 取一个工具的说明；缺文件直接抛错，不允许空描述上线。 */
-export function requireTool(prompts: PromptSet, name: string): ToolPrompt {
-  const tool = prompts.tools[name];
-  if (!tool) throw new Error(`缺少 prompt/tools/${name}.md`);
-  return tool;
-}
-
-/** 审查用：列出所有 prompt 文件、大小与 sha256。 */
+/** 审查用：列出所有 prompt 文件、大小与 sha256。工具说明在 src/tools/<name>/TOOL.md，不在 prompt/ 下。 */
 export function auditPrompts(root: string): { file: string; bytes: number; sha256: string }[] {
-  const files = ["persona.md", "ops.md", "handoff.md", "group-profile.md", "people.md", "messages.md"];
-  for (const entry of readdirSync(join(root, "tools")).sort()) {
-    if (entry.endsWith(".md")) files.push(join("tools", entry));
-  }
+  const files = ["runtime.md", "persona.md", "ops.md", "handoff.md", "group-profile.md", "people.md", "messages.md"];
   const personasDir = join(root, "personas");
   if (existsSync(personasDir)) {
     for (const entry of readdirSync(personasDir).sort()) {

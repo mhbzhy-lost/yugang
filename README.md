@@ -20,7 +20,7 @@
 
 其余是可枚举的能力工具（`look` / `meme` / `search` / `video` / `draw` / `gpt_image` / `tags`）
 和主人专属的工具（`meme_add` / `meme_import` / `read` / `grep` / `write` / `tree` / `model` / `restart` / `watch`）。
-完整清单就是 `src/tools/index.ts` 里那几行。
+完整清单就是 `src/tools/loader.ts` 里那份 factory 名单。
 
 ## 为什么出口是一个 tool
 
@@ -43,14 +43,14 @@
 
 现在的规则：
 
-- **工具面 = 代码里的 `defineTool`**。`src/tools/` 下每个文件一个能力，注册在
-  `src/tools/index.ts`。没有 shell，没有脚本解释器，没有 MCP server。
+- **工具面 = `src/tools/<name>/` 工具包**。每个目录一份 `TOOL.md`（模型侧摘要 + 参数 Schema + 使用指南）
+  加一个 `tool.ts`（窄接口），`src/tools/loader.ts` 统一发现注册。没有 shell，没有脚本解释器，没有 MCP server。
 - **每个工具是一个狭窄的函数**：确定的入参、确定的路径、确定的副作用。想让它危险，
   得有人显式写一行危险的代码，而不是模型自己拼一条命令。
 - **`read` / `grep` 能读仓库和 `/tmp/yugang`**；`.env`、`config/auth.json`、`.git`、`node_modules`、`.trash` 硬封禁。
 - **`write` 只能写 `/tmp/yugang`**（鱼自己的草稿区），仓库文件写不进去；
   改模型配置用 `model` 管理工具，改完靠 `restart` 生效。
-- **`prompt` 仍然全在 `prompt/tools/<name>.md`**：加一个工具 = 一个 `.ts` + 一个 `.md`，没有第三种位置。
+- **工具说明全在 `src/tools/<name>/TOOL.md`**：加一个工具 = 一个工具包目录 + loader 名单一行，没有第三种位置。
 
 **唯一能读媒体图片的是 `look`**，它只能读 `MEDIA_ROOT` 里的图片，**普通一轮最多 2 张**。
 唯一的受控例外是**导入轮**：主人调 `meme_import` 登记过的本地待收图，本轮额度按清单数量放宽（硬上限 50 张），
@@ -65,19 +65,20 @@
 ## 工具注册表
 
 ```ts
-// src/tools/index.ts（节选）
-export function createTools(deps) {
-  return [
-    createLookTool(deps),
-    createMemeAddTool(deps),
-    // 本地表情导入：只给主人，只扫固定 meme-inbox，登记本轮可看的清单
-    ...(deps.master ? [createMemeImportTool(deps)] : []),
-    // 加一项能力就是往这里加一行
-  ];
-}
+// src/tools/loader.ts（节选）
+const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
+  draw: createDrawTool,
+  look: createLookTool,
+  // 加一项能力就是往这里加一行；manifest ↔ factory 双向一一对应，孤儿两边都算错
+};
 ```
 
-`say` 和 `react` 属于出口，注册在 `src/egress/`；其余都是普通能力，在 `src/tools/`。
+`say` / `react` / `tool_search` 初始可见（eager）；其余已启用工具统一 `deferred: true`，
+模型先用 `tool_search`（中文/英文都行）检索，命中后从下一次模型请求起才能调用。
+主人专属工具在没配 `MASTER_QQ` 时 factory 返回 `undefined`，不进任何工具面
+（`agent.tools` / `agent.deferred` / `tool_catalog` 都没有它）。
+每个工具的说明与参数 Schema 唯一来自它的 `TOOL.md`：顶部 frontmatter 摘要 +
+`---tool-schema` 严格 JSON 块 + 正文使用指南；`tool_catalog` section 只注入 `name + 摘要`。
 
 ## 什么时候开口
 
@@ -147,18 +148,18 @@ src/
   harness.ts        openFish()：storage + models + registry(persona + tools) + 每群一个 conversation
   index.ts          OneBot ⇄ pi-durable 的接线、幂等表、入口
   egress/
-    say.ts          唯一的出口工具；校验 → 落 fish.outbound 条目 → emit
     policy.ts       结构校验 + 溯源校验（纯函数，好测）
     ledger.ts       每群的出口账本：最近说了什么、本轮几条、secret 缓冲
     absorb.ts       把 transcript 里的 thinking / tool 结果喂给溯源校验
   prompt-lint.ts    扫描 src/ 里有没有内嵌 prompt（给审查用的护栏）
-  prompts.ts        加载 prompt/ 下的 md，严格模板替换
+  prompts.ts        加载 prompt/ 下的 md（runtime / 人格 / 共享文案），严格模板替换
   compact.ts        换页：摊平对话 → 写备忘 → conversation.reset()
   chatlog.ts        原话簿：按群按天写流水（只给运维 skill 看，鱼看不到）
   tools/
-    index.ts        注册表：加一项能力就是往这里加一行
-    look.ts         看群里的图（唯一能读图片的工具，只读媒体目录；普通轮 2 张，导入轮按清单放宽）
-    meme-import.ts  本地表情导入：固定扫 meme-inbox，登记本轮可看的清单
+    manifest.ts     TOOL.md 严格解析器（双元数据块 + 严格 JSON Schema + 动态词表）
+    loader.ts       工具包发现注册：manifest ↔ factory 一一对应，eager/deferred 在这里定
+    catalog.ts      tool_catalog section 渲染（只列 name + 顶部摘要）
+    <name>/         19 个工具包，一包一目录：TOOL.md + tool.ts（say 是唯一出口，也住这里）
   media/
     meme-store.ts   表情包库（索引、md5 去重、入库）
   qq/
@@ -304,12 +305,12 @@ npm start
 
 ## 已验证
 
-`npm test` 62 项，其中四条是设计约束：
+`npm test` 86 项，其中四条是设计约束：
 
 1. **正文不出境**：脚本化的模型先 `say("在的")` 再输出长段正文，断言群里只收到前者。
 2. **抄写被拦**：`say` 里塞入本轮 thinking 的片段，断言被拒、原因为 tool 错误、重说的那句才放行。
-3. **工具面可枚举**：agent 的工具恰好是 `test/tools.test.ts` 里那份清单（含 `meme_import`），
-   且断言 `bash`、`shell` 都不存在。
+3. **工具面可枚举**：初始 `agent.tools` 恰好是 say / react / tool_search，其余已启用工具
+   （含 `meme_import`）在 `agent.deferred` 里等 `tool_search` 加载；且断言 `bash`、`shell` 都不存在。
 4. **看图全链路**：模型调 `look` 拿到逐张文字视觉描述，图片不进入主会话；普通轮最多 2 张，
    导入轮仅对本轮 manifest 里的图片受控放宽到最多 50 张；越界路径（`/etc/passwd`）和非媒体路径被拦。
 

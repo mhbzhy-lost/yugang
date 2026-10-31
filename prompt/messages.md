@@ -81,6 +81,8 @@ forward_collapsed: [转发合集（内容略）]
 meme_section_header: 表情包库存（一级情绪词 → 张数）：
 meme_empty: 表情包库是空的，先用文字回
 meme_no_mood: 「{{mood}}」这一档还没有图。现有：{{inventory}}
+meme_no_tag: 「{{tags}}」在全库里没搜到图。现有：{{inventory}}
+meme_tag_required: mood 填「按标签」时 tags 得至少给一个自由词（具体事物、角色、场景都行），空手搜不了
 meme_pick: {{list}}
 meme_used: 这一轮挑过了，先用挑到的
 draw_prompt: 画面描述得有内容，1000 字以内
@@ -111,6 +113,17 @@ gif_ingest_header: 群里刚聊的是这 {{count}} 条（只是背景）：
 gif_ingest_task: 上面这段对话里，{{who}} 发了一张动图：{{ref}}。你这一轮只判断一件事——它值不值得进你的表情包库。值得就调 meme_add（caption 写它在聊天里是什么意思，tags 写你以后会用来找它的词）；不值得就什么都不做、别说话。
 voice_hint: （这一条必须用语音回：say 里传 voice: true，别用文字。这是规则，不是建议）
 tool_timeout: 这个工具卡住超过半分钟了，先别重试，换个办法或者说句话
+
+# 工具目录 section（tool_catalog）的渲染文案；行为说明在 prompt/runtime.md，这里只留标签与行格式
+tool_catalog_header: 当前可用的能力目录（按名字排序）：
+tool_catalog_line: - {{name}}：{{summary}}
+
+# tool_search 的模型可见文案；说明本体在 src/tools/tool_search/TOOL.md
+tool_search_ok: 搜到 {{count}} 个，从下一次模型请求起就能调用：
+tool_search_line: - {{name}}：{{summary}}
+tool_search_none: 没搜到这样的工具，换个说法再试；反复没有就直说做不到，别猜参数。
+tool_search_empty: 搜索词不能是空的，写个中文场景词或英文工具名
+tool_search_bad_limit: limit 得是不小于 1 的整数
 voice_off: 现在还没有语音能力
 voice_with_media: 语音不能和图片、表情包一起发，选一个
 voice_too_long: 这句话太长了（{{length}} 字），语音只适合短句，长的用文字说

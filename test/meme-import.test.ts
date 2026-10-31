@@ -19,21 +19,23 @@ import { fileURLToPath } from "node:url";
 import { LiveDoc } from "@earendil-works/pi-durable";
 import { loadPrompts } from "../src/prompts.ts";
 import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
-import { createSayTool } from "../src/egress/say.ts";
-import { createLookTool } from "../src/tools/look.ts";
-import { createMemeAddTool } from "../src/tools/meme-add.ts";
+import { createSayTool } from "../src/tools/say/tool.ts";
+import { loadToolManifests } from "../src/tools/manifest.ts";
+import { createLookTool } from "../src/tools/look/tool.ts";
+import { createMemeAddTool } from "../src/tools/meme_add/tool.ts";
+import { createMemeImportTool } from "../src/tools/meme_import/tool.ts";
 import {
   MEME_IMPORT_MAX,
   clearMemeImportRound,
-  createMemeImportTool,
   memeImportLookLimit,
   memeImportLooked,
   memeImportMarkLooked,
   memeImportRefs,
   registerMemeImportRound,
-} from "../src/tools/meme-import.ts";
+} from "../src/tools/meme_import/shared.ts";
 
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
+const TOOL_ROOT = fileURLToPath(new URL("../src/tools/", import.meta.url));
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 7)]);
 const GIF = Buffer.concat([Buffer.from("GIF89a"), Buffer.alloc(64, 3)]);
@@ -63,29 +65,34 @@ function setup(over: { master?: string; userId?: number; maxBytes?: number } = {
     getModel: () => ({ provider: "stub", modelId: "stub" }),
     streamSimple: () => ({ result: async () => ({ content: [{ type: "text", text: "一张图" }] }) }),
   } as never;
-  const look = createLookTool({
+  // 说明与参数 Schema 唯一来自 TOOL.md manifest（加载 src/tools/ 下的工具包清单）
+  const manifests = loadToolManifests(TOOL_ROOT, { memeTags: prompts.memeTags });
+  // look 的单张上限保持旧默认（不接 maxBytes 覆盖）；meme_add/meme_import 按用例取 maxBytes
+  const look = createLookTool(manifests.get("look")!, {
     mediaRoot,
     prompts,
     models,
     visionModel: { provider: "stub", modelId: "stub" },
     master,
     triggerOf,
+    limits: { ...DEFAULT_LIMITS, mediaRoot },
   });
-  const memeAdd = createMemeAddTool({
+  const cappedLimits = { ...DEFAULT_LIMITS, mediaRoot, ...(over.maxBytes === undefined ? {} : { maxMediaBytes: over.maxBytes }) };
+  const memeAdd = createMemeAddTool(manifests.get("meme_add")!, {
     mediaRoot,
     prompts,
     master,
     triggerOf,
-    ...(over.maxBytes === undefined ? {} : { maxBytes: over.maxBytes }),
-  });
-  const memeImport = createMemeImportTool({
+    limits: cappedLimits,
+  })!;
+  const memeImport = createMemeImportTool(manifests.get("meme_import")!, {
     mediaRoot,
     prompts,
     master,
     triggerOf,
-    ...(over.maxBytes === undefined ? {} : { maxBytes: over.maxBytes }),
-  });
-  const say = createSayTool({ limits: { ...DEFAULT_LIMITS, mediaRoot }, prompts });
+    limits: cappedLimits,
+  })!;
+  const say = createSayTool(manifests.get("say")!, { limits: { ...DEFAULT_LIMITS, mediaRoot }, prompts })!;
   const conversationId = `conv-${++seq}`;
 
   writeInbox(mediaRoot, "a.png", PNG);

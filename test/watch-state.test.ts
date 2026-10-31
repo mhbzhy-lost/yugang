@@ -95,6 +95,8 @@ test("watch add→remove：内存镜像立即撤权，退群的人也能被移�
     const root = await open.harness.root(ctx, { agent: { model } });
 
     faux.setResponses([
+      // watch 现在是按需提供：先 tool_search 加载，从下一次模型请求起才在工具列表里
+      fauxAssistantMessage([fauxToolCall("tool_search", { query: "特别关注" })], { stopReason: "toolUse" }),
       fauxAssistantMessage([fauxToolCall("watch", { action: "add", userId: "2000", note: "叫他宝宝" })], { stopReason: "toolUse" }),
       fauxAssistantMessage("记住了"),
     ]);
@@ -123,6 +125,8 @@ test("watch remove 不依赖群成员名单：退群的人照样能撤销", asyn
     const root = await open.harness.root(ctx, { agent: { model } });
     await open.group("qq:group:42");
     faux.setResponses([
+      // 同上：先加载 watch 再调用（渐进加载协议）
+      fauxAssistantMessage([fauxToolCall("tool_search", { query: "特别关注" })], { stopReason: "toolUse" }),
       fauxAssistantMessage([fauxToolCall("watch", { action: "add", userId: "2001", note: "留意" })], { stopReason: "toolUse" }),
       fauxAssistantMessage("好"),
     ]);

@@ -8,7 +8,7 @@
  * 文档都是小 JSON，checkpointWhen 一律返回 true：每次存整份，不做增量。
  */
 import { defineDoc } from "@earendil-works/pi-durable";
-import type { OutboundPayload } from "./egress/say.ts";
+import type { OutboundPayload } from "./tools/say/tool.ts";
 
 export interface ChatsState {
   /** chatKey（qq:group:123）→ conversationId；人格会话的键是 `chatKey#人格名` */

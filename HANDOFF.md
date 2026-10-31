@@ -4,7 +4,7 @@
 
 ## 现在在哪
 
-代码写完了，测试 48 项全绿（`npm test`，不需要网络和 key），模型链路已验证（`npm run ping` 通过）。
+代码写完了，测试 86 项全绿（`npm test`，不需要网络和 key），模型链路已验证（`npm run ping` 通过）。
 **唯一没通的是 QQ 侧**：协议端（NapCat）已下载、配置已写好，但还没登录——需要人扫码。
 
 ```
@@ -86,9 +86,9 @@ Linux 机器上协议端更简单：`npm run protocol install` 会下载 NapCat 
 |---|---|
 | `src/harness.ts` | 组装：storage + models + 工具注册表 + 群会话 + outbox drain |
 | `src/egress/policy.ts` | 出口校验（结构 + 溯源），返回错误码 |
-| `src/egress/say.ts` | 唯一出口，落 outbox |
+| `src/tools/say/tool.ts` | 唯一出口，落 outbox |
 | `src/qq/gate.ts` | 门口三层闸 |
 | `src/compact.ts` | 换页 + handoff |
-| `src/tools/` | 能力扩展点（现在只有 `look`） |
+| `src/tools/<name>/` | 工具包：TOOL.md（模型侧说明与 Schema）+ tool.ts，`src/tools/loader.ts` 统一注册 |
 | `prompt/` | 模型能看到的一切文字，改行为改这里 |
 | `config/models.json` | provider 地址与模型清单（不含 key） |

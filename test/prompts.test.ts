@@ -15,6 +15,7 @@ import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
 import { auditPrompts, loadPrompts, parseMessageTable, renderTemplate } from "../src/prompts.ts";
+import { loadToolManifests, toolFullDescription } from "../src/tools/manifest.ts";
 import { scanDir, scanSource } from "../src/prompt-lint.ts";
 import { REJECTION_CODES } from "../src/egress/policy.ts";
 import { mkdtempSync } from "node:fs";
@@ -22,6 +23,7 @@ import { tmpdir } from "node:os";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PROMPTS = join(ROOT, "prompt");
+const TOOL_ROOT = fileURLToPath(new URL("../src/tools/", import.meta.url));
 const ctx = BACKGROUND_CONTEXT;
 
 test("每个 prompt 文件都存在且非空", () => {
@@ -30,8 +32,9 @@ test("每个 prompt 文件都存在且非空", () => {
   for (const file of files) assert.ok(file.bytes > 0, `${file.file} 是空的`);
 });
 
-test("工具说明逐字来自 prompt/tools/*.md", async () => {
+test("工具说明逐字来自 src/tools/<name>/TOOL.md", async () => {
   const prompts = loadPrompts(PROMPTS);
+  const manifests = loadToolManifests(TOOL_ROOT, { memeTags: prompts.memeTags });
   const fish = await openFish({
     storage: new MemoryStorage(),
     models: (() => {
@@ -50,13 +53,14 @@ test("工具说明逐字来自 prompt/tools/*.md", async () => {
 
   try {
     const root = await fish.harness.root(ctx);
-    const tools = (await root.agent(ctx)).tools;
+    const agent = await root.agent(ctx);
+    const tools = [...agent.tools, ...agent.deferred];
     for (const name of ["say", "look", "react"] as const) {
       const tool = tools.find((t) => t.name === name);
       assert.ok(tool, `缺少工具 ${name}`);
-      assert.equal(tool.description, readFileSync(join(PROMPTS, "tools", `${name}.md`), "utf8")
-        .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
-        .trim(), `${name} 的说明不是文件里的原文`);
+      const manifest = manifests.get(name);
+      assert.ok(manifest, `src/tools/${name}/TOOL.md 不存在`);
+      assert.equal(tool.description, toolFullDescription(manifest), `${name} 的说明不是文件里的原文`);
     }
   } finally {
     await fish.close();
@@ -161,11 +165,12 @@ test("messages.md 里没有死文案，tools/ 里没有死文件", async () => {
     const defined = new Set(Object.keys(prompts.messages));
     assert.deepEqual([...defined].filter((k) => !referenced.has(k)), [], "messages.md 里有没人用的文案");
 
-    // 工具 prompt：每个文件都要对应一个真实注册的工具
+    // 工具包：每个 TOOL.md 都要对应一个真实注册的工具
     assert.deepEqual(
-      Object.keys(prompts.tools).filter((name) => !fish.toolNames.includes(name)),
+      [...loadToolManifests(TOOL_ROOT, { memeTags: prompts.memeTags }).keys()]
+        .filter((name) => !fish.toolNames.includes(name)),
       [],
-      "prompt/tools/ 里有不对应任何工具的文件",
+      "src/tools/ 里有不对应任何工具的 TOOL.md",
     );
   } finally {
     await fish.close();

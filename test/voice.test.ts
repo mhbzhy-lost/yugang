@@ -20,13 +20,15 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { LiveDoc } from "@earendil-works/pi-durable";
-import { createSayTool, OutboundEntry } from "../src/egress/say.ts";
+import { createSayTool, OutboundEntry } from "../src/tools/say/tool.ts";
+import { loadToolManifests } from "../src/tools/manifest.ts";
 import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
 import { loadPrompts } from "../src/prompts.ts";
 import { personaOf, pickVoice } from "../src/voice-route.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
+const TOOL_ROOT = fileURLToPath(new URL("../src/tools/", import.meta.url));
 
 interface Captured {
   items: string[];
@@ -41,18 +43,22 @@ function setup(over: { tts?: boolean } = {}) {
   // 出站队列：say 在 commit 里 push 进 OutboxDoc
   const outbox: { items: string[]; media?: string; voice?: string }[] = [];
 
-  const say = createSayTool({
-    limits: { ...DEFAULT_LIMITS, mediaRoot },
-    prompts,
-    now: () => 1_000,
-    ...(over.tts === false ? {} : { ttsOf: () => ({ url: "http://127.0.0.1:9/tts" }) }),
-    // 假合成：写一个真文件，返回相对引用
-    ttsSynthesize: async (_config, text, root) => {
-      const file = `voice/${text.length}-test.wav`;
-      writeFileSync(join(root, file), Buffer.alloc(4096, 1));
-      return { bytes: Buffer.alloc(4096, 1), ref: file };
+  const say = createSayTool(
+    // 说明与参数 Schema 唯一来自 TOOL.md manifest（加载 src/tools/ 下的工具包清单）
+    loadToolManifests(TOOL_ROOT, { memeTags: prompts.memeTags }).get("say")!,
+    {
+      limits: { ...DEFAULT_LIMITS, mediaRoot },
+      prompts,
+      now: () => 1_000,
+      ...(over.tts === false ? {} : { ttsOf: () => ({ url: "http://127.0.0.1:9/tts" }) }),
+      // 假合成：写一个真文件，返回相对引用
+      ttsSynthesize: async (_config, text, root) => {
+        const file = `voice/${text.length}-test.wav`;
+        writeFileSync(join(root, file), Buffer.alloc(4096, 1));
+        return { bytes: Buffer.alloc(4096, 1), ref: file };
+      },
     },
-  });
+  )!;
 
   const api = {
     conversationId: "1",

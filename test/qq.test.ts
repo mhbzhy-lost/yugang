@@ -93,6 +93,8 @@ test("look 能看图，越界和不存在都被拦", async () => {
     });
 
     faux.setResponses([
+      // look 现在是按需提供：先 tool_search 加载，从下一次模型请求起才在工具列表里
+      fauxAssistantMessage([fauxToolCall("tool_search", { query: "看图" })], { stopReason: "toolUse" }),
       fauxAssistantMessage([fauxToolCall("look", { ref: "inbound/a.png" })], { stopReason: "toolUse" }),
       fauxAssistantMessage("看到了"),
     ]);

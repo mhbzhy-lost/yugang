@@ -23,37 +23,47 @@
 
 ## 硬约束
 
-### 1. prompt 只能是 `prompt/` 下的 markdown
+### 1. 模型能看到的文字只有两个来源：`prompt/` 下的 markdown 与 `src/tools/<name>/TOOL.md`
 
-- 模型能看到的**每一个字**都在 `prompt/` 里：人格、每个工具的说明与参数说明、工具回给模型的所有文案、压缩用的 handoff 提示词
+- 人格、运行时协议、工具回给模型的所有文案、压缩用的 handoff 提示词全在 `prompt/` 里；
+  每个工具的说明、参数 Schema 和使用指南唯一来自 `src/tools/<name>/TOOL.md`（见第 2 条）
 - 5 秒合并与入站 @ 的标注也一样：背景栏（`ctx_*`）、整组标记、要回的那一行、`@了你 / @了别人 / @了全体成员`
   全在 `prompt/messages.md`；`src/qq/debounce.ts` / `src/qq/gate.ts` 只负责拼装，不写文案
-- `src/` 里不允许出现大段 prompt 字面量。`npm test` 会扫描（阈值：单条字面量 ≥ 12 个汉字）
+- `src/` 里不允许出现大段 prompt 字面量。`npm test` 会扫描（阈值：单条字面量 ≥ 12 个汉字）；
+  `TOOL.md` 是唯一例外——它本来就是模型侧文字，只是随工具包放在 `src/tools/<name>/` 里
 - 模板用 `{{name}}` 严格替换，缺变量直接抛错
 - 想加一段新文案，加进 `prompt/messages.md`；想加新 prompt，加新文件并接到 `src/prompts.ts`
 
-### 2. `prompt/tools/<name>.md` 与工具一一对应
+### 2. 工具 = `src/tools/<name>/TOOL.md + tool.ts` 工具包
 
-**这是本仓库最容易违反的规则，两个方向都管：**
+**这是本仓库最容易违反的规则：模型能看到的工具说明只来自 TOOL.md，代码里不写第二份。**
 
-- 每个注册的工具（含 `say`）**必须**有一份 `prompt/tools/<name>.md`，文件名 = 工具名。
-  缺了的话 `openFish()` 直接抛错，起不来。
-- `prompt/tools/` 里**不允许**有不对应任何工具的文件。删工具就要删 md，否则 `npm test` 红。
-
-加一个工具 = 三处改动，缺一不可：
+- 一个工具包 = `src/tools/<name>/` 下的 `TOOL.md` + `tool.ts`，目录名 = manifest `name` = 注册名。
+  缺块、重复名、目录对不上时 `openFish()` 直接抛错起不来；`src/tools/loader.ts` 启动时做
+  manifest ↔ factory 的双向一一对应校验，孤儿文档和没文档的实现都算错
+- `TOOL.md` 是**双元数据块**格式：顶部 frontmatter 只认 `name` + `description`（一句摘要）；
+  第二块 `---tool-schema` / `---end-tool-schema` 必须是**严格 JSON**（不许注释、尾逗号、远程 `$ref`），
+  里面的 `parameters` 是唯一参数 Schema；块之后的正文是非空使用指南，注册时与摘要拼成完整 description
+- 解析与动态词表在 `src/tools/manifest.ts`：唯一受控扩展是 `meme.mood` 的
+  `x-yugang-enum-from: "memeTags"`（启动时按 `prompt/meme-tags.md` 机械换成 enum），
+  其它运行时改写模型所见 Schema 的通道一律拒绝
+- 工具面分两层：`say` / `react` / `tool_search` 初始可见（eager），其余已启用工具统一 `deferred: true`；
+  模型先用中文/英文检索 `tool_search`，命中后从下一次模型请求起才能调用。`runtime` section
+  （`prompt/runtime.md`）负责这条渐进加载协议，`tool_catalog` section 只列已启用工具的 `name + 摘要`
+- 加一个工具 = 三处改动，缺一不可：
 
 ```
-1. src/tools/<name>.ts           defineTool，窄接口
-2. prompt/tools/<name>.md        description + frontmatter 的 params
-3. src/tools/index.ts            createTools() 里加一行
+1. src/tools/<name>/TOOL.md     摘要 + 严格 JSON Schema + 使用指南
+2. src/tools/<name>/tool.ts     defineTool，窄接口，Schema 只消费 manifest
+3. src/tools/loader.ts          FACTORIES 名单里加一行
 ```
 
-`say` 是例外里的一处：它住在 `src/egress/say.ts`（因为它属于出口，不属于能力），
-但**同样要**有 `prompt/tools/say.md`。
-
-主人专属工具（`read`/`grep`/`write`/`tree`/`model`/`restart`/`watch`/`meme_add`/`meme_import`）
-只在配了 `MASTER_QQ` 时注册，但 md 照样留在 `prompt/tools/`：`npm test` 按实际注册的工具名比对，
-所以「工具当前没注册」不等于可以留着孤儿 md。工具与它的 md 必须同一个 commit——缺 md 时 `openFish()` 直接起不来。
+- 主人专属工具（`read`/`grep`/`write`/`tree`/`model`/`restart`/`watch`/`meme_add`/`meme_import`）
+  没配 `MASTER_QQ` 时 factory 返回 `undefined`，不进 `agent.tools` / `agent.deferred` / `tool_catalog`；
+  `TOOL.md` 仍随包存在，注册与否由 loader 按依赖现判，执行内核里的二次身份校验不变
+- 旧 `prompt/tools/*.md` 平铺文档已删除，不要再建；工具回执/拒绝文案继续走 `prompt/messages.md` 的 key
+- 审查入口：`npm run prompts` 列出 prompt 文件、全部工具包（路径/sha256/摘要/Schema 属性/eager/deferred）、
+  runtime 与 tool_catalog section、源码内嵌扫描结果
 
 ### 3. 能力面必须是可枚举的窄接口（2026-10 修订：主人解锁下有限自改）
 
@@ -166,7 +176,9 @@
 
 - `prompt/meme-tags.md` 是**受控词表**（13 个情绪词），`src/prompts.ts` 读成 `memeTags`，代码里不写死
 - `meme_add` 打标**必须**含至少一个一级词（机械校验）；自由词随便加，但不参与一级检索
-- `meme` 工具参数是 `mood`（字面量联合，只能选词表里的词）+ 可选 `tags`（二级筛选，能力给到、不引导使用）
+- `meme` 工具参数是 `mood`（字面量联合：一级情绪词，或特殊分支「按标签」）+ 可选 `tags`（二级筛选，能力给到、不引导使用）；
+  「按标签」不属于一级词表，只用于目标不是情绪时按 tags/caption 全库检索，且必须至少一个 tags（缺失按 tool error 拒）；
+  一级词表本身与 `meme_add` 至少一个一级词的机械约束不变
 - 系统提示里的「表情包库存」section 每次请求现算（每个词几张），空库不占位
 - 一级词查空时退回字面匹配兜底——防止迁移没跑完就把功能变哑
 - **本地批量导入**（2026-10 新增）：主人把图放进 `<MEDIA_ROOT>/meme-inbox/`，在群里让鱼导入；
@@ -209,8 +221,8 @@
 ## 命令
 
 ```bash
-npm test           # 62 项，含上面每条约束的兜底
-npm run prompts    # 列出所有 prompt 文件 + sha256 + 工具说明 + 内嵌扫描结果
+npm test           # 86 项，含上面每条约束的兜底
+npm run prompts    # 列出 prompt 文件 + sha256 + 19 个工具包（TOOL.md 摘要/Schema/eager/deferred）+ 内嵌扫描结果
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
 npm run creds show  # 凭据状态（只有长度）

@@ -25,12 +25,13 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { DEFAULT_LIMITS, REJECTION_CODES, type EgressLimits } from "./egress/policy.ts";
-import { createSayTool, OutboundEntry, type OutboundPayload } from "./egress/say.ts";
-import { createReactTool } from "./egress/react.ts";
+import { OutboundEntry, type OutboundPayload } from "./tools/say/tool.ts";
 import { loadPrompts, renderTemplate, type PromptSet } from "./prompts.ts";
-import { createTools } from "./tools/index.ts";
+import { loadToolSurface } from "./tools/loader.ts";
+import { renderToolCatalog } from "./tools/catalog.ts";
+import type { ToolManifest, ToolPackageDeps } from "./tools/types.ts";
 import { withToolTimeout } from "./tools/timeout.ts";
-import { loadMemeIndex, countMoods } from "./tools/meme.ts";
+import { loadMemeIndex, countMoods } from "./tools/meme/shared.ts";
 import { WatchDoc } from "./store.ts";
 import { createCompactor, type CompactResult, type Compactor } from "./compact.ts";
 import { ChatsDoc, OutboxDoc } from "./store.ts";
@@ -44,17 +45,25 @@ export const DEFAULT_PERSONA = "默认";
 /**
  * 人格 = 一个 Fish 扩展实例：默认人格叫 `fish`（人格来自 prompt/persona.md），
  * 其余叫 `fish:<名>`（人格 = 人格书全文）。工具实例共享，会话只选其中一个。
+ *
+ * sections 顺序固定：runtime（人格无关的运行时协议）→ persona（人格）→ tool_catalog
+ * （已启用工具目录，只用于发现）→ ops / people / watched / meme_tags。
  */
 function makeFishExtension(
   name: string,
   persona: string,
-  parts: { tools: readonly ToolRegistration[]; prompts: PromptSet; mediaRoot: string },
+  parts: { tools: readonly ToolRegistration[]; prompts: PromptSet; mediaRoot: string; manifests: readonly ToolManifest[] },
 ): Extension {
   return defineExtension({
     name,
     tools: parts.tools,
     sections: [
+      // 运行时协议：能力边界、输入信任、出口、错误处理、渐进加载；人格无关，不随人格换页
+      section("runtime", () => parts.prompts.runtime, { tag: false }),
       section("persona", () => persona, { tag: false }),
+      // 工具目录：每次请求由 trusted manifest 现渲染，只列已启用工具的 name + 顶部摘要；
+      // 「目录 ≠ 已加载」的行为说明在 prompt/runtime.md，这里不内嵌提示词
+      section("tool_catalog", () => renderToolCatalog(parts.manifests, parts.prompts.messages), { tag: true }),
       // 运维书：只给主人用的管理工具怎么用（模型切换 + 重启）
       section("ops", () => parts.prompts.ops, { tag: true }),
       // 手工维护的人物档：比对话记忆更牢，和 handoff 互补
@@ -202,34 +211,71 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   const limits: EgressLimits = { ...DEFAULT_LIMITS, ...options.limits, mediaRoot };
 
   const prompts = loadPrompts(resolve(options.promptRoot));
-  for (const code of [...REJECTION_CODES, "say_sent", "say_once", "busy_reply"]) {
+  for (const code of [
+    ...REJECTION_CODES,
+    "say_sent",
+    "say_once",
+    "busy_reply",
+    "tool_catalog_header",
+    "tool_catalog_line",
+    "tool_search_ok",
+    "tool_search_line",
+    "tool_search_none",
+    "tool_search_empty",
+    "tool_search_bad_limit",
+  ]) {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
 
-  const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf, ...(options.mentionPolicyOf ? { mentionPolicyOf: options.mentionPolicyOf } : {}), ...(options.groupMembersOf ? { membersOf: options.groupMembersOf } : {}), ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}),   ...(options.silentOf ? { silentOf: options.silentOf } : {}), ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}) });
-  const react = createReactTool({ prompts, react: options.react, ...(options.triggerOf ? { triggerOf: options.triggerOf } : {}), now });
-  const tools = createTools({ mediaRoot, prompts, models, visionModel: options.visionModel ?? options.model, searchKey: options.searchKey, ...(options.gptImage ? { gptImage: options.gptImage } : {}), ...(options.modelsPath ? { modelsPath: options.modelsPath } : {}), sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, ...(options.groupMembersOf ? { groupMembersOf: options.groupMembersOf } : {}), ...(options.onWatchChanged ? { onWatchChanged: options.onWatchChanged } : {}), bypassOf: options.bypassOf, maxMediaBytes: limits.maxMediaBytes });
-
-  // 启动即校验：每个工具都必须有一份 prompt/tools/<name>.md，缺了就起不来
-  for (const tool of [say, react, ...tools]) {
-    if (!prompts.tools[tool.name]) {
-      throw new Error(`缺少 prompt/tools/${tool.name}.md`);
-    }
+  // 最终 loader：扫描 src/tools/<name>/TOOL.md + tool.ts，严格一一对应后调 factory 注册；
+  // say / react / tool_search eager，其余已启用工具 deferred。依赖不满足（无 master、
+  // 无出口限额等）的 factory 返回 undefined：不进 agent.tools、agent.deferred、tool_catalog。
+  const packageDeps: ToolPackageDeps = {
+    prompts,
+    mediaRoot,
+    limits,
+    now,
+    ...(models ? { models } : {}),
+    visionModel: options.visionModel ?? options.model,
+    ...(options.searchKey === undefined ? {} : { searchKey: options.searchKey }),
+    ...(options.master === undefined ? {} : { master: options.master }),
+    ...(options.modelsPath === undefined ? {} : { modelsPath: options.modelsPath }),
+    // 同一条链路两用：watch 校验关注对象、say 校验主动 @ 的目标
+    ...(options.groupMembersOf ? { groupMembersOf: options.groupMembersOf, membersOf: options.groupMembersOf } : {}),
+    ...(options.onWatchChanged ? { onWatchChanged: options.onWatchChanged } : {}),
+    ...(options.gptImage ? { gptImage: options.gptImage } : {}),
+    ...(options.sdUrl === undefined ? {} : { sdUrl: options.sdUrl }),
+    ...(options.tagsCsv === undefined ? {} : { tagsCsv: options.tagsCsv }),
+    ...(options.triggerOf ? { triggerOf: options.triggerOf } : {}),
+    ...(options.bypassOf ? { bypassOf: options.bypassOf } : {}),
+    ...(options.mentionPolicyOf ? { mentionPolicyOf: options.mentionPolicyOf } : {}),
+    ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}),
+    ...(options.silentOf ? { silentOf: options.silentOf } : {}),
+    ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}),
+    // 宿主侧 limits 与 react 是 FishOptions 硬性要求，这里只是统一交给 factory
+    react: options.react,
+  };
+  const surface = await loadToolSurface(packageDeps);
+  const registered = new Map(surface.tools.map((tool) => [tool.name, tool]));
+  for (const name of ["say", "react", "tool_search"]) {
+    if (!registered.has(name)) throw new Error(`核心工具未注册：${name}`);
+    if (registered.get(name)!.deferred === true) throw new Error(`核心工具必须是 eager：${name}`);
   }
 
   // 人格扩展：默认 fish + 每本人格书一个 fish:<名>；同一套工具实例，会话按名只选其一
-  // 单次工具调用超时（默认 30 秒）：卡住的通常是某一个工具，不是整轮
+  // 单次工具调用超时（默认 30 秒）：卡住的通常是某一个工具，不是整轮。
+  // withToolTimeout 用展开拷贝包装：deferred / callers / parameters / description 原样保留
   const toolTimeoutMs = (options.toolTimeoutSeconds ?? 30) * 1000;
   const toolTimeoutMessage = prompts.messages["tool_timeout"] ?? "tool_timeout";
-  const fishTools: readonly ToolRegistration[] = [say, react, ...tools].map((tool) => {
+  const fishTools: readonly ToolRegistration[] = surface.tools.map((tool) => {
     const override = options.toolTimeoutOverrides?.[tool.name];
     return withToolTimeout(tool, override === undefined ? toolTimeoutMs : override * 1000, toolTimeoutMessage);
   });
-  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, mediaRoot: options.mediaRoot });
+  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests });
   const personaExtensions = new Map<string, Extension>();
   const openers: Record<string, string> = {};
   for (const [name, book] of Object.entries(prompts.personas)) {
-    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, mediaRoot: options.mediaRoot }));
+    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests }));
     if (book.opener) openers[name] = book.opener;
   }
 
@@ -390,7 +436,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     settings,
     personas: [DEFAULT_PERSONA, ...Object.keys(prompts.personas)],
     openers,
-    toolNames: [say.name, react.name, ...tools.map((t) => t.name)],
+    toolNames: surface.tools.map((tool) => tool.name),
     async compact(conversation, force) {
       if (!compactor) return { compacted: false, reason: "below_threshold" };
       return compactor.maybeCompact(conversation, force);
