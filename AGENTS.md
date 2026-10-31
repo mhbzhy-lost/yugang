@@ -220,6 +220,37 @@
 - 单次工具调用超时 30 秒（`fish.config` 的 `toolTimeoutSeconds`），超时以 tool 错误返回，
   **没有整轮超时**
 
+### 16. 长期记忆
+
+- **按人格隔离**：记忆存在 session 级 keyed family `fish.memory` 里，key 是人格名
+  （默认人格 = `默认`；`memoryKeyOf()` 是唯一实现，谁也不许自己写一份）。每个人格是一个
+  独立个体：它的全部会话（各群、主人私聊、未来渠道）共享同一份记忆并互相合并；
+  **不同人格之间禁止共享**。既定语义：主人私聊里告诉某人格的事，可能经记忆在该人格
+  出现的其它群浮现——抽取提示词的隐私过滤与渲染时的在场/关键词门槛照常生效
+- **只在压缩时写**：写入入口只有压缩链路（`compact.ts` 的 `saveMemories`，同一 commit 内读改，
+  同一人格多个会话并发压缩不会互相覆盖）；没有 `remember` 工具、没有定时任务、没有主动回忆。
+  每次成功压缩都推进 `lastExtractAt`（空 patch 也算）；抽取失败不阻塞换页
+- **只经 system section 注入**：记忆文本只从 `memory` section 进模型，**绝不允许拼进 user
+  message**；渲染只读（不写 `lastUsedAt`）；无 scope 或无可渲染内容时不占位。抽取器只读结构化
+  原始 entry（`fish.inbound` 的 data / `fish.outbound` 的 items），必须排除 `pi.system`、
+  宿主任务文案、工具结果与收图轮（`fish.gif_ingest`），否则「记忆→抽取→记忆」的自我污染闭环
+  会复活
+- **上限写死在 `src/memory.ts` 的 `MEMORY_CAPS`**：人 ≤12、每人事实 ≤8 且总字数 ≤320、
+  names ≤5、style ≤120 字、口头禅 ≤8 条且每条 ≤24 字、lore ≤40（key ≤5 个且每个 ≤10 字、
+  text ≤60 字）、cards ≤60（text ≤80 字、keys ≤5、subjects ≤8）、单次 section 渲染 ≤900 字、
+  已知记忆输入 ≤8000 字。冲突不删除：`supersede` 置 `invalidAt`，渲染只认有效事实
+- **模型输出全部当不可信数据**：`sanitizePatch` 对字段/主体/敏感模式/控制字符做机械过滤，
+  主体再过一道本次允许集合白名单；fact id 一律代码生成（`f-`/`l-`/`c-` + ≥12 位），不采信模型 id
+- 查看只读脚本：
+  ```bash
+  npm run memory                                    # 列出所有人格的记忆条目数
+  npm run memory -- --persona 长征机                # 该人格记忆摘要
+  npm run memory -- --persona 长征机 --json         # 原始 JSON（含 memoryKey）
+  npm run memory -- --chat qq:group:659976571       # 便捷入口：解析该会话当前人格再查
+  ```
+  脚本只读打开 `var/fish.db`，不实例化鱼、不写库；发现旧 chatKey 级 / 会话级
+  `fish.memory` 会明确报冲突，不静默择一
+
 ## 命令
 
 ```bash
@@ -227,6 +258,7 @@ npm test           # 86 项，含上面每条约束的兜底
 npm run prompts    # 列出 prompt 文件 + sha256 + 19 个工具包（TOOL.md 摘要/Schema/eager/deferred）+ 内嵌扫描结果
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
+npm run memory     # 长期记忆只读查看（--persona <名> / --chat <chatKey> / --json，见第 16 节）
 npm run creds show  # 凭据状态（只有长度）
 npm run ping        # 模型连通性 + 用量（不打印 key）
 npm start          # 真跑（自动读 .env）——只在 macmini 上

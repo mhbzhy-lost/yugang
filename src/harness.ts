@@ -33,8 +33,10 @@ import type { ToolManifest, ToolPackageDeps } from "./tools/types.ts";
 import { withToolTimeout } from "./tools/timeout.ts";
 import { loadMemeIndex, countMoods } from "./tools/meme/shared.ts";
 import { WatchDoc } from "./store.ts";
-import { createCompactor, type CompactResult, type Compactor } from "./compact.ts";
-import { ChatsDoc, OutboxDoc } from "./store.ts";
+import { createCompactor, MemoryExtractError, type CompactResult, type Compactor } from "./compact.ts";
+import { ChatsDoc, MemoryDoc, OutboxDoc } from "./store.ts";
+import { applyPatch, MEMORY_CAPS, renderMemorySection } from "./memory.ts";
+import { memoryKeyOf, peekScope } from "./memory-scope.ts";
 
 /** 群档案作为一条 system 消息放进 transcript，只在建会话时写一次。 */
 export const GroupProfileEntry = defineEntry("fish.group-profile");
@@ -47,12 +49,19 @@ export const DEFAULT_PERSONA = "默认";
  * 其余叫 `fish:<名>`（人格 = 人格书全文）。工具实例共享，会话只选其中一个。
  *
  * sections 顺序固定：runtime（人格无关的运行时协议）→ persona（人格）→ tool_catalog
- * （已启用工具目录，只用于发现）→ ops / people / watched / meme_tags。
+ * （已启用工具目录，只用于发现）→ ops / people / watched / meme_tags / memory。
  */
 function makeFishExtension(
   name: string,
   persona: string,
-  parts: { tools: readonly ToolRegistration[]; prompts: PromptSet; mediaRoot: string; manifests: readonly ToolManifest[] },
+  parts: {
+    tools: readonly ToolRegistration[];
+    prompts: PromptSet;
+    mediaRoot: string;
+    manifests: readonly ToolManifest[];
+    /** conversationId → 原始 chatKey（人格后缀已去掉）；root 会话没有记忆，返回 undefined */
+    memoryKeyOf: (conversationId: string) => string | undefined;
+  },
 ): Extension {
   return defineExtension({
     name,
@@ -86,6 +95,18 @@ function makeFishExtension(
         const header = parts.prompts.messages["meme_section_header"] ?? "";
         const line = rows.map((x) => `${x.mood}${x.count}`).join(" · ");
         return [header, `${line}（共 ${entries.length} 张）`].filter((s) => s.length > 0).join("\n");
+      }, { tag: true }),
+      // 长期记忆：只经这一个 system section 注入，绝不进 user message。只读 session
+      // family（不 commit、不写 lastUsedAt）；没有 scope 或没有可渲染内容时不占位。
+      // 改动这里或 renderMemoryTranscript 的白名单前必读 src/memory.ts 的安全边界注释：
+      // 记忆抽取只读结构化原始 entry，必须继续排除 pi.system、宿主任务文案和工具结果，
+      // 否则「记忆 → 抽取 → 记忆」的自我污染闭环会复活。
+      section("memory", async (input, context) => {
+        const memoryKey = parts.memoryKeyOf(String(input.conversationId));
+        if (!memoryKey) return undefined;
+        const snapshot = await input.read.snapshot(MemoryDoc, memoryKey, context);
+        if (!snapshot) return undefined;
+        return renderMemorySection(snapshot, peekScope(String(input.conversationId)), parts.prompts.messages);
       }, { tag: true }),
     ],
   });
@@ -168,6 +189,8 @@ export interface FishOptions {
   /** 上下文压缩：攒到阈值就 reset + handoff。不给就不压。 */
   compact?: {
     model?: ModelRef;
+    /** 记忆抽取用的模型；缺省与 handoff 同一个。 */
+    memoryModel?: ModelRef;
     maxEntries?: number;
     maxChars?: number;
     /** 现取的阈值（热更新用）：改配置后下一轮压缩就按新值判断。 */
@@ -223,9 +246,20 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     "tool_search_none",
     "tool_search_empty",
     "tool_search_bad_limit",
+    "memory_section_header",
+    "memory_people_header",
+    "memory_lore_header",
+    "memory_cards_header",
   ]) {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
+
+  // conversationId → 该会话当前人格名（memory doc key）：压缩链路找记忆 doc、
+  // memory section 找渲染对象都靠它。一个人格在所有会话（各群、私聊）指向同一个
+  // family member；root conversation 没有映射，记忆相关的一切都返回 undefined
+  // （不注入、不抽取）。
+  const memoryKeyByConversation = new Map<string, string>();
+  const memoryKeyOfConversation = (conversationId: string): string | undefined => memoryKeyByConversation.get(conversationId);
 
   // 最终 loader：扫描 src/tools/<name>/TOOL.md + tool.ts，严格一一对应后调 factory 注册；
   // say / react / tool_search eager，其余已启用工具 deferred。依赖不满足（无 master、
@@ -273,11 +307,11 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     const override = options.toolTimeoutOverrides?.[tool.name];
     return withToolTimeout(tool, override === undefined ? toolTimeoutMs : override * 1000, toolTimeoutMessage);
   });
-  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests });
+  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation });
   const personaExtensions = new Map<string, Extension>();
   const openers: Record<string, string> = {};
   for (const [name, book] of Object.entries(prompts.personas)) {
-    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests }));
+    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, mediaRoot: options.mediaRoot, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation }));
     if (book.opener) openers[name] = book.opener;
   }
 
@@ -353,7 +387,59 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         maxEntries: options.compact.maxEntries ?? 80,
         maxChars: options.compact.maxChars ?? 12_000,
         ...(options.compact.limits ? { limits: options.compact.limits } : {}),
-        onError: (error) => console.error("[鱼缸] 压缩失败", error instanceof Error ? error.message : error),
+        onError: (error) => {
+          if (error instanceof MemoryExtractError) console.error("[鱼缸] 记忆抽取失败", error.message);
+          else console.error("[鱼缸] 压缩失败", error instanceof Error ? error.message : error);
+        },
+        // 记忆抽取与 handoff 各自的模型；缺省都落在 handoff 模型上（比主模型便宜一档即可）
+        extract: {
+          models,
+          model: options.compact.memoryModel ?? options.compact.model ?? options.model,
+          prompts,
+        },
+        memoryKeyOf: (conversationId) => memoryKeyByConversation.get(String(conversationId)),
+        knownMemory: async (memoryKey) => {
+          const snapshot = await harness.snapshot(MemoryDoc, memoryKey, ctx);
+          if (!snapshot) return { text: "", subjects: [] };
+          const subjects = Object.values(snapshot.people).map((person) => ({
+            subject: person.subject,
+            name: person.names[0] ?? person.subject,
+          }));
+          // 已知记忆只喂给一次内部抽取请求：行格式「subject 名单」与「factId 事实」，
+          // 总长封顶 knownChars；不写入 conversation、pi.user 或 handoff
+          const lines = Object.values(snapshot.people).flatMap((person) => [
+            `${person.subject} ${person.names.join("/")}`,
+            ...person.facts.filter((fact) => fact.invalidAt === undefined).map((fact) => `${fact.id} ${fact.text}`),
+          ]);
+          const text = lines.reduce(
+            (out, line) => (out.length + line.length + 1 <= MEMORY_CAPS.knownChars ? `${out}${out ? "\n" : ""}${line}` : out),
+            "",
+          );
+          return { text, subjects };
+        },
+        saveMemories: async (memoryKey, patch) => {
+          // 同一 commit 内读改同一 family member：同一群不同人格可能同时压缩，
+          // 不能先在 commit 外 snapshot 再整份覆盖（后写会把先写的 patch 吃掉）
+          await harness.commit(async (tx) => {
+            const doc = await tx.doc(MemoryDoc, memoryKey, memoryKey);
+            const extractedAt = now();
+            const next = applyPatch(
+              {
+                people: doc.people,
+                lore: doc.lore,
+                cards: doc.cards,
+                version: 1,
+                ...(doc.lastExtractAt ? { lastExtractAt: doc.lastExtractAt } : {}),
+              },
+              patch,
+              extractedAt,
+            );
+            doc.people = next.people;
+            doc.lore = next.lore;
+            doc.cards = next.cards;
+            doc.lastExtractAt = extractedAt;
+          }, ctx);
+        },
       })
     : undefined;
 
@@ -478,7 +564,6 @@ export async function openFish(options: FishOptions): Promise<Fish> {
             const reused = await harness.conversation(known, ctx);
             if (reused) return reused;
           }
-
           const extension = effective === DEFAULT_PERSONA ? undefined : personaExtensions.get(effective);
           const cwd = join(workspaceRoot, safeName(groupKey) + (extension ? `#${effective}` : ""));
           mkdirSync(cwd, { recursive: true });
@@ -515,7 +600,13 @@ export async function openFish(options: FishOptions): Promise<Fish> {
             chats.chats[key] = created.id;
           }, ctx);
           return created;
-        })();
+        })().then((conversation) => {
+          // 创建与复用两条路径都在这里登记：key 是映射键（chatKey 或 chatKey#人格），
+          // memoryKeyOf 提取人格名（无后缀 = 默认）——同一个人格的所有会话
+          // （各群、私聊）都指向同一个 family member
+          memoryKeyByConversation.set(String(conversation.id), memoryKeyOf(key));
+          return conversation;
+        });
         groups.set(key, existing);
       }
       return existing;
