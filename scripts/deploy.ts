@@ -34,7 +34,7 @@ await new Promise((r) => setTimeout(r, 3000));
 
 // 3. 起新鱼：日志追加到 var/fish-console.log，脱离本进程生命周期
 const log = openSync(LOG, "a");
-const fish = spawn(process.execPath, ["--use-env-proxy", "--env-file-if-exists=.env", "src/index.ts"], {
+const fish = spawn(process.execPath, ["--env-file-if-exists=.env", "src/index.ts"], {
   detached: true,
   stdio: ["ignore", log, log],
 });

@@ -110,8 +110,8 @@ export interface FishOptions {
   mediaRoot: string;
   /** DeepSeek Search API 的 key；给了才有联网搜索能力。 */
   searchKey?: string;
-  /** ChatGPT/Codex 图片通道（models.image）：authPath + provider 决定登录凭据，model 是默认模型名。 */
-  gptImage?: { authPath: string; provider: string; model: string };
+  /** ChatGPT/Codex 图片通道（models.image）：authPath + provider 决定登录凭据，model 是默认模型名；proxy 只给这条通道用。 */
+  gptImage?: { authPath: string; provider: string; model: string; proxy?: string };
   /** config/models.json 路径；model 管理工具写回时用。 */
   modelsPath?: string;
   /** SD WebUI（Windows 宿主机）的 baseUrl；给了才有本地画图。 */

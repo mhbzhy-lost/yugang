@@ -142,6 +142,7 @@
       "auth": "oauth",
       "baseUrl": "https://chatgpt.com/backend-api",
       "transport": "sse",
+      "proxy": "http://127.0.0.1:7897",
       "models": [
         {
           "id": "gpt-6.1-sol",

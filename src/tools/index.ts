@@ -37,8 +37,8 @@ export interface ToolDeps {
   /** 会话 → 群成员名单；watch 用它校验被关注人真的在群里。 */
   onWatchChanged?: (conversationId: string, userIds: string[]) => void;
   groupMembersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
-  /** ChatGPT/Codex 图片通道（models.image）：authPath 决定用哪份登录凭据，model 是默认模型名。 */
-  gptImage?: { authPath: string; provider: string; model: string };
+  /** ChatGPT/Codex 图片通道（models.image）：authPath 决定用哪份登录凭据，model 是默认模型名；proxy 只给这条通道用。 */
+  gptImage?: { authPath: string; provider: string; model: string; proxy?: string };
   /** SD WebUI（Windows 宿主机）的 baseUrl；给了才有本地画图。 */
   sdUrl?: string;
   /** danbooru.csv 路径；给了才能查 tag 词表。 */

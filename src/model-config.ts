@@ -36,6 +36,11 @@ export interface ProviderConfig {
    * Node 的 WS 不吃 --use-env-proxy，过代理时必须写 "sse"。
    */
   transport?: "sse";
+  /**
+   * provider 级代理：配了它就这一个 provider 的全部请求走代理（聊天 / 生图 / token 刷新），
+   * 其它 provider 仍直连。codex 记得同时写 transport: "sse"（WS 不吃 fetch 注入）。
+   */
+  proxy?: string;
   models: ProviderModelConfig[];
 }
 
@@ -68,6 +73,8 @@ export interface FishModelConfig {
   configSource: string;
   /** 凭据文件位置：oauth 刷新后要写回这里。 */
   credentialsPath: string;
+  /** provider 级代理；空 = 直连。只影响这个 provider 的域名（含 oauth token 主机）。 */
+  proxy?: string;
 }
 
 export interface FishModelsSelection {
@@ -76,7 +83,7 @@ export interface FishModelsSelection {
   /** 看图 / 看视频的模型；省略时与 main 完全相同。 */
   vision: FishModelConfig;
   /** gpt_image 通道：provider 决定用哪份 oauth，model 是默认模型名；省略 = 该工具不可用。 */
-  image?: { provider: string; modelId: string };
+  image?: { provider: string; modelId: string; proxy?: string };
   /** 进程级流式传输；取自 main provider 的 transport。 */
   transport?: "sse";
 }
@@ -146,11 +153,16 @@ export function loadFishModels(options: LoadOptions = {}): FishModelsSelection {
   let image: FishModelsSelection["image"];
   if (roles.image) {
     const imageRef = roleRef(roles, "image");
-    if (!file.providers[imageRef.provider]) throw new Error(`models.image 的 provider 不在 providers 里：${imageRef.provider}`);
-    image = { provider: imageRef.provider, modelId: imageRef.model };
+    const imageProvider = file.providers[imageRef.provider];
+    if (!imageProvider) throw new Error(`models.image 的 provider 不在 providers 里：${imageRef.provider}`);
+    image = { provider: imageRef.provider, modelId: imageRef.model, ...(imageProvider.proxy ? { proxy: imageProvider.proxy } : {}) };
   }
 
-  const transport = file.providers[mainRef.provider]?.transport === "sse" ? ("sse" as const) : undefined;
+  // 过代理 + codex：WS 不吃 fetch 注入，强制 SSE；provider 自己写了 transport 的照旧尊重
+  const mainProvider = file.providers[mainRef.provider];
+  const transport = mainProvider?.transport === "sse" || (Boolean(mainProvider?.proxy) && mainProvider?.api === "openai-codex-responses")
+    ? ("sse" as const)
+    : undefined;
   return { main, vision, ...(image ? { image } : {}), ...(transport ? { transport } : {}) };
 }
 
@@ -199,6 +211,7 @@ function buildConfig(
     keySource: credentialsPath,
     configSource,
     credentialsPath,
+    ...(provider.proxy ? { proxy: provider.proxy } : {}),
   };
 }
 

@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { fileCredentialStore, type OAuthCredential } from "../credential-store.ts";
 import { refreshTokens } from "../oauth-openai.ts";
+import { createProxyFetch } from "./proxy-fetch.ts";
 
 const GEN_ENDPOINT = "https://chatgpt.com/backend-api/codex/images/generations";
 const EDIT_ENDPOINT = "https://chatgpt.com/backend-api/codex/images/edits";
@@ -42,10 +43,14 @@ export interface GptImageRequest {
   /** 超时，默认 180 秒（实测单张 14–27 秒）。 */
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /** provider 级代理（只有 OpenAI 需要翻墙时才有意义）；非法值会回落到直连。 */
+  proxy?: string;
 }
 
 /** 出图成功返回相对 mediaRoot 的引用列表（gen/xxx.png）；失败抛错，错误里不带凭据。 */
 export async function generateGptImages(request: GptImageRequest): Promise<string[]> {
+  // provider 级代理：只影响这一次生图（含 token 刷新），不碰 globalThis.fetch
+  const doFetch = request.fetchImpl ?? (request.proxy ? createProxyFetch(request.proxy) : undefined) ?? fetch;
   const store = fileCredentialStore(request.authPath);
   const raw = await store.read(request.provider);
   if (!raw || raw.type !== "oauth") throw new Error("gpt_image_no_auth");
@@ -56,7 +61,7 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
 
   // 提前一分钟刷新：生图一次十几秒，别让 token 在请求途中过期
   if (Number(credential.expires) - Date.now() < 60_000) {
-    const refreshed = await refreshTokens(credential);
+    const refreshed = await refreshTokens(credential, undefined, doFetch);
     await store.modify(request.provider, async () => refreshed);
     credential = refreshed;
   }
@@ -75,7 +80,6 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
     body["images"] = request.images.map((image_url) => ({ image_url }));
   }
 
-  const doFetch = request.fetchImpl ?? fetch;
   const response = await doFetch(request.images && request.images.length > 0 ? EDIT_ENDPOINT : GEN_ENDPOINT, {
     method: "POST",
     headers: {
