@@ -9,17 +9,19 @@
  * 边界：目录是固定的 meme-inbox（不接受任何路径参数），只认图片直系子文件，
  * 拒绝目录、符号链接、非图片和超限文件；不开放任意读取，也不跑 shell。
  */
-import { lstatSync, readdirSync, statSync, type Dirent } from "node:fs";
-import { extname, join, resolve, sep } from "node:path";
+import { lstatSync, readdirSync, type Dirent } from "node:fs";
+import { join, resolve } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
 import { DEFAULT_LIMITS } from "../egress/policy.ts";
-import { MEME_EXT } from "../media/meme-store.ts";
+import { checkMemeSource, type MemeSourceCode } from "../media/meme-store.ts";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
 
 export interface MemeImportManifest {
   roundId: string;
   refs: string[];
+  /** 这一轮已经看过的 ref：逐张导入的机械凭据（没看过的不许 meme_add）。 */
+  lookedRefs: string[];
   createdAt: number;
 }
 
@@ -29,14 +31,19 @@ export const MEME_IMPORT_MAX = 50;
 /** 当前轮的导入清单：key 是 LiveDoc 的 round id（submission id），轮结束即删。 */
 const manifests = new Map<string, MemeImportManifest>();
 
-/** 登记（多批合并）：同一轮里继续拉下一批不会把上一批的授权作废。 */
+/** 登记（多批合并）：同一轮里继续拉下一批不会把上一批的授权作废，已经看过的记录也保留。 */
 export function registerMemeImportRound(roundId: string, refs: readonly string[]): void {
   const existing = manifests.get(roundId);
   const merged = existing ? [...existing.refs] : [];
   for (const ref of refs) {
     if (!merged.includes(ref)) merged.push(ref);
   }
-  manifests.set(roundId, { roundId, refs: merged, createdAt: existing?.createdAt ?? Date.now() });
+  manifests.set(roundId, {
+    roundId,
+    refs: merged,
+    lookedRefs: existing ? [...existing.lookedRefs] : [],
+    createdAt: existing?.createdAt ?? Date.now(),
+  });
 }
 
 export function memeImportManifestOf(roundId: string): MemeImportManifest | undefined {
@@ -52,14 +59,32 @@ export function memeImportHas(roundId: string, ref: string): boolean {
   return memeImportRefs(roundId).includes(ref);
 }
 
-/** 本轮 look 的额度：有清单才放宽，上限固定 50；没有清单返回 undefined（普通轮照旧 2 张）。 */
+/** 这张清单里的图这一轮看过没：只有看过的才允许 meme_add。 */
+export function memeImportLooked(roundId: string, ref: string): boolean {
+  return manifests.get(roundId)?.lookedRefs.includes(ref) ?? false;
+}
+
+/** 本轮已经看过几张清单里的图（重复看不重复计，不占额度）。 */
+export function memeImportLookedCount(roundId: string): number {
+  return manifests.get(roundId)?.lookedRefs.length ?? 0;
+}
+
+/** 记下「这张确实被 look 成功看过」；只在描述真的返回后才由 look 调用。 */
+export function memeImportMarkLooked(roundId: string, ref: string): void {
+  const manifest = manifests.get(roundId);
+  if (!manifest) return;
+  if (!manifest.refs.includes(ref)) return;
+  if (!manifest.lookedRefs.includes(ref)) manifest.lookedRefs.push(ref);
+}
+
+/** 本轮 look 的额度：有清单就按清单张数（上限 50），没有清单返回 undefined（普通轮照旧 2 张）。 */
 export function memeImportLookLimit(roundId: string): number | undefined {
   const manifest = manifests.get(roundId);
   if (!manifest) return undefined;
   return Math.min(manifest.refs.length, MEME_IMPORT_MAX);
 }
 
-/** round 结束 / 异常 / 中断都要清：清单绝不跨轮、跨群存活。 */
+/** round 结束 / 异常 / 中断都要清：清单（含已看记录）绝不跨轮、跨群存活。 */
 export function clearMemeImportRound(roundId: string): void {
   manifests.delete(roundId);
 }
@@ -96,7 +121,8 @@ export function createMemeImportTool(deps: MemeImportDeps) {
         throw new Error(deps.prompts.messages["meme_import_master"] ?? "meme_import_master");
       }
 
-      const { valid, skipped } = scanInbox(inboxDir, maxBytes);
+      const scan = scanInbox(inboxDir, maxBytes);
+      const { valid, skipped } = scan;
       const cursor = (args.cursor ?? "").trim();
       const rest = cursor.length > 0 ? valid.filter((name) => name > cursor) : valid;
       const batch = rest.slice(0, MEME_IMPORT_MAX);
@@ -105,7 +131,14 @@ export function createMemeImportTool(deps: MemeImportDeps) {
       if (refs.length > 0) registerMemeImportRound(String(round), refs);
 
       const lines: string[] = [];
-      if (refs.length === 0) {
+      // 目录本身的状态要先说清楚：不存在 / 打不开 / 是符号链接与「目录是空的」不是一回事
+      if (scan.status === "nodir") {
+        lines.push(deps.prompts.messages["meme_import_nodir"] ?? "meme_import_nodir");
+      } else if (scan.status === "denied") {
+        lines.push(deps.prompts.messages["meme_import_denied"] ?? "meme_import_denied");
+      } else if (scan.status === "linkdir") {
+        lines.push(deps.prompts.messages["meme_import_linkdir"] ?? "meme_import_linkdir");
+      } else if (refs.length === 0) {
         lines.push(deps.prompts.messages["meme_import_empty"] ?? "meme_import_empty");
       } else {
         lines.push(
@@ -141,65 +174,62 @@ export function createMemeImportTool(deps: MemeImportDeps) {
 
 /**
  * 只扫固定目录的直接子文件。返回稳定的文件名序（按名字排序，游标才靠得住）
- * 与被跳过的项（给模型看的逐项原因）。
+ * 与被跳过的项（给模型看的逐项原因，同样排序后才输出）。
+ *
+ * 「目录不在 / 打不开 / 本身是链接」单独报，不能和「目录是空的」搅成一个空清单：
+ * 否则主人放完图被告知「没有能收的」时，根本分不出是路径不对还是图不对。
  */
-function scanInbox(dir: string, maxBytes: number): { valid: string[]; skipped: string[] } {
+const SKIP_REASON: Record<Exclude<MemeSourceCode, "type">, string> = {
+  missing: "读不到",
+  outside: "越界",
+  link: "符号链接",
+  big: "太大",
+  magic: "文件头不是图片",
+};
+
+type ScanStatus = "ok" | "nodir" | "denied" | "linkdir";
+
+function scanInbox(dir: string, maxBytes: number): { status: ScanStatus; valid: string[]; skipped: string[] } {
   // 固定目录自身是符号链接就整个拒掉：否则「固定目录」可以被指到任意位置
   try {
-    if (lstatSync(dir).isSymbolicLink()) {
-      return { valid: [], skipped: [`meme-inbox（符号链接）`] };
-    }
+    const self = lstatSync(dir);
+    if (self.isSymbolicLink()) return { status: "linkdir", valid: [], skipped: [] };
   } catch {
-    return { valid: [], skipped: [] };
+    return { status: "nodir", valid: [], skipped: [] };
   }
 
   let entries: Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch {
-    return { valid: [], skipped: [] };
+    // 存在但读不了（权限 / 不是目录）与「不存在」分开报
+    return { status: "denied", valid: [], skipped: [] };
   }
 
   const valid: string[] = [];
   const skipped: string[] = [];
   for (const entry of entries) {
     const name = String(entry.name);
-    // 符号链接一律不收：固定目录不能被链接指到目录外面去
+    // 符号链接 / 目录先按 Dirent 判，给人话；剩下的交给统一的来源校验（lstat/realpath/大小/文件头）
     if (entry.isSymbolicLink()) {
-      skipped.push(`${name}（符号链接）`);
+      skipped.push(`${name}（${SKIP_REASON.link}）`);
       continue;
     }
     if (!entry.isFile()) {
       skipped.push(`${name}（不是文件）`);
       continue;
     }
-    if (!MEME_EXT.has(extname(name).toLowerCase())) {
-      skipped.push(`${name}（不是图片）`);
-      continue;
-    }
-    const full = resolve(dir, name);
-    if (!full.startsWith(dir + sep)) {
-      skipped.push(`${name}（越界）`);
-      continue;
-    }
-    try {
-      // Dirent 已排除链接，这里只确认大小；读不到也算跳过，不中断整批
-      const stat = statSync(full);
-      if (!stat.isFile()) {
-        skipped.push(`${name}（不是文件）`);
-        continue;
-      }
-      if (stat.size > maxBytes) {
-        skipped.push(`${name}（太大）`);
-        continue;
-      }
-    } catch {
-      skipped.push(`${name}（读不到）`);
+    const check = checkMemeSource(dir, name, maxBytes);
+    if (!check.ok) {
+      // 扩展名不对在 checkMemeSource 里报 type，这里给一句人话
+      skipped.push(`${name}（${check.code === "type" ? "不是图片" : SKIP_REASON[check.code]}）`);
       continue;
     }
     valid.push(name);
   }
-  // 不依赖 locale：按码位排序，游标比较才与目录里的稳定顺序一致
-  valid.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return { valid, skipped };
+  // 不依赖 locale：按码位排序，游标比较才与目录里的稳定顺序一致；skip 也排序，输出才稳定
+  const order = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+  valid.sort(order);
+  skipped.sort(order);
+  return { status: "ok", valid, skipped };
 }

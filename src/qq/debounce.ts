@@ -6,10 +6,10 @@
  * 会话级的 lastMessageId 会被后来那条顶掉，引用目标就串到别人身上。
  *
  * 现在是：gate 放行不提交，先按「群 + 发送者」攒 5 秒——同一发送者的新消息取消旧 timer
- * 重新计时，不同发送者互不干扰，5 秒没有新消息才把整组提交一次。整组最后一条是 quote
- * 锚点（A-B-A 里 B 只能出现在背景，不可能顶掉 A 的位置），整组里任意一条 @鱼，
- * 整组都算被点名（mustAnswer），回复引用语义同理。连续发言没有额外的最长等待：
- * 一直在说就一直往后延，静默 5 秒才 flush。
+ * 重新计时，不同发送者互不干扰，5 秒没有新消息才把整组提交一次。整组最后**收到**的那条
+ * （按 arrivalSeq，不是最后处理完的那条）是 quote 锚点（A-B-A 里 B 只能出现在背景，
+ * 不可能顶掉 A 的位置），整组里任意一条 @鱼，整组都算被点名（mustAnswer），
+ * 回复引用语义同理。连续发言没有额外的最长等待：一直在说就一直往后延，静默 5 秒才 flush。
  *
  * 这个文件只有状态机与上下文渲染：时钟、定时器、提交动作、压缩守卫、轮级清账都在
  * src/index.ts（便于注入假时钟验证）。pending 只活在内存里——重启时没 flush 的窗口
@@ -17,7 +17,7 @@
  */
 import { renderTemplate } from "../prompts.ts";
 import { renderForModel, type MessageTable } from "./gate.ts";
-import type { IncomingMessage } from "./onebot.ts";
+import { orderByArrival, type IncomingMessage } from "./onebot.ts";
 
 /** 最近流水里的一条（背景栏与 burst 共用同一套字段）。 */
 export interface RecentChatMessage {
@@ -52,16 +52,23 @@ export interface PendingBurst {
   quoteFromReply: boolean;
   /** 状态机持有的定时器；调用方不要动它。 */
   timer?: DebounceTimer;
-  /** quote 锚点：这一组里最后一条原始入站消息。 */
+  /** quote 锚点：这一组里按收到顺序最后一条原始入站消息。 */
   anchor: IncomingMessage;
+  /**
+   * 宿主首次 push 时绑定的不透明上下文（会话 / 人格）。flush 只认这一份：
+   * 5 秒窗口里主人 `/切换人格` 之后，这一组仍然落在切换前那个会话里。
+   */
+  binding?: unknown;
 }
 
 export interface BurstInput {
   msg: IncomingMessage;
   /** 模型可见文本（合集已折叠、bypass 已替换成占位）。 */
   text: string;
-  /** 宿主绑定的 opaque 载荷，flush 时按锚点取用。 */
+  /** 宿主绑定的 opaque 载荷（bypass 段），flush 时取整组里最近一条非空的。 */
   payload?: string;
+  /** 首次 push 时绑定的不透明上下文（会话 / 人格）；之后的 push 改不动它。 */
+  binding?: unknown;
 }
 
 export interface DebouncerOptions {
@@ -111,7 +118,7 @@ export function createDebouncer(options: DebouncerOptions): Debouncer {
   };
 
   return {
-    push({ msg, text, payload }) {
+    push({ msg, text, payload, binding }) {
       const key = burstKey(msg.chatKey, msg.userId);
       const existing = bursts.get(key);
       // 同一发送者的新消息：取消旧 timer，整组继续加长
@@ -125,6 +132,8 @@ export function createDebouncer(options: DebouncerOptions): Debouncer {
         mustAnswer: false,
         quoteFromReply: false,
         anchor: msg,
+        // 会话 / 人格只认首次 push 那一份：后续 push（包括不带 binding 的 follow-up）改不动它
+        ...(binding !== undefined ? { binding } : {}),
       };
 
       const line: BurstMessage = {
@@ -139,12 +148,15 @@ export function createDebouncer(options: DebouncerOptions): Debouncer {
         ...(payload !== undefined ? { payload } : {}),
       };
       burst.messages.push(line);
+      // 整组按「收到顺序」排：入站补充（查名片 / 下头像 / 拉合集）是异步的，
+      // 处理完成顺序可能倒过来，整组不能跟着乱。没序号的旧流水保持并入顺序。
+      burst.messages = orderByArrival(burst.messages);
       burst.lastReceivedAt = line.at;
       // 整组语义：任何一条 @鱼 / 任何一条是回复，都算整组
       burst.mustAnswer = burst.messages.some((m) => m.mentionsBot);
       burst.quoteFromReply = burst.messages.some((m) => m.replyIds.length > 0);
-      // 锚点永远是这一组最后收到的那条；不同发送者的新消息改动不了它
-      burst.anchor = msg;
+      // 锚点 = 按收到顺序最后一条；乱序完成时后 push 的那条不一定更晚
+      if (isLaterArrival(msg, burst.anchor)) burst.anchor = msg;
 
       burst.timer = setTimer(() => {
         // 先从表里摘掉再提交：submit/wait 抛错也不会留下一个陈年的 pending
@@ -183,6 +195,14 @@ export function createDebouncer(options: DebouncerOptions): Debouncer {
   };
 }
 
+/** 收到顺序：有 arrivalSeq 就按序号比，两者都缺才按并入顺序（后来 push 的算更晚）。 */
+function isLaterArrival(candidate: IncomingMessage, current: IncomingMessage): boolean {
+  const next = candidate.arrivalSeq;
+  const prev = current.arrivalSeq;
+  if (next !== undefined && prev !== undefined) return next >= prev;
+  return true;
+}
+
 /** 锚点在流水里的位置：优先到达序号，其次消息 id，最后同人同名的最后一条。 */
 function anchorIndex(anchor: IncomingMessage, bucket: readonly RecentChatMessage[]): number {
   if (anchor.arrivalSeq !== undefined) {
@@ -201,7 +221,7 @@ function anchorIndex(anchor: IncomingMessage, bucket: readonly RecentChatMessage
   return bucket.length;
 }
 
-/** 判断一条流水是不是已经在这组连续发言里：有 id/序号就精确，没有就按「同人同话」。 */
+/** 判断一条流水是不是已经在这组连续发言里：有 id/序号就精确，都没有才按「同人同话」。 */
 function burstMatcher(burst: readonly BurstMessage[]): (line: RecentChatMessage) => boolean {
   const ids = new Set<string>();
   const seqs = new Set<number>();
@@ -211,17 +231,25 @@ function burstMatcher(burst: readonly BurstMessage[]): (line: RecentChatMessage)
     if (message.arrivalSeq !== undefined) seqs.add(message.arrivalSeq);
     loose.add(`${message.userId}\u0000${message.text}`);
   }
+  // 旧流水（fixture / 外部构造）既没 id 也没序号，只能按「同人同话」回退；
+  // 有 id 或序号时绝不能走这条路：同一个人在不同时刻说同一句话是两件事，loose 会把真背景误删。
+  const legacyOnly = ids.size === 0 && seqs.size === 0;
   return (line) => {
-    if (line.messageId !== undefined && ids.has(String(line.messageId))) return true;
-    if (line.arrivalSeq !== undefined && seqs.has(line.arrivalSeq)) return true;
-    // 宁可少一条背景，也不要同一句话在背景和连续发言区各出现一次
-    return loose.has(`${line.userId}\u0000${line.text}`);
+    if (line.messageId !== undefined) {
+      if (ids.has(String(line.messageId))) return true;
+      return false;
+    }
+    if (line.arrivalSeq !== undefined) return seqs.has(line.arrivalSeq);
+    return legacyOnly && loose.has(`${line.userId}\u0000${line.text}`);
   };
 }
 
 /**
  * 锚点之前最多 `limit` 条群消息，按流水顺序（已经按 arrivalSeq 排好），撇掉整组自己。
- * 旧流水缺 arrivalSeq 时就是 bucket 顺序——与改版前一致。
+ *
+ * 背景优先按「收到序号小于锚点」取，而不是先在 recent 里找到锚点再切：锚点可能已经被
+ * 30 条 recent 裁掉（群里刷屏），那时不能拿整张流水当背景——那全是锚点之后的话，
+ * 模型会把后续对话当成「刚才说的」。只有旧流水没有序号时才按 bucket 位置回退。
  */
 export function backgroundFor(
   anchor: IncomingMessage,
@@ -229,10 +257,24 @@ export function backgroundFor(
   burst: readonly BurstMessage[],
   limit = 10,
 ): RecentChatMessage[] {
-  const index = anchorIndex(anchor, bucket);
-  if (index <= 0) return [];
+  const candidates =
+    anchor.arrivalSeq !== undefined && bucket.some((line) => line.arrivalSeq !== undefined)
+      ? bucket.filter((line) => line.arrivalSeq !== undefined && line.arrivalSeq < (anchor.arrivalSeq as number))
+      : bucket.slice(0, Math.max(0, anchorIndex(anchor, bucket)));
   const inBurst = burstMatcher(burst);
-  return bucket.slice(0, index).filter((line) => !inBurst(line)).slice(-limit);
+  return candidates.filter((line) => !inBurst(line)).slice(-limit);
+}
+
+/**
+ * 整组里最近一条非空载荷（bypass 段）：它可能落在中间（画图指令后面又跟了两句普通闲聊），
+ * 只取最后一条会当成没有指令，整个 draw 就静默失效了。
+ */
+export function lastPayload(burst: readonly BurstMessage[]): string | undefined {
+  for (let index = burst.length - 1; index >= 0; index -= 1) {
+    const payload = burst[index].payload;
+    if (payload !== undefined && payload.length > 0) return payload;
+  }
+  return undefined;
 }
 
 export interface ContextOptions {

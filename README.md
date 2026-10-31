@@ -243,7 +243,7 @@ npm run token             # 生成 OneBot token，同步到 .env 和 NapCat 配�
 |---|---|
 | `ONEBOT_WS_URL` | 协议端 OneBot v11 正向 WS 地址，例如 `ws://127.0.0.1:3001` |
 | `ONEBOT_TOKEN` | `npm run token` 生成（32 字节 base64url），别手写 |
-| `MASTER_QQ` | 你的 QQ 号。私聊只认它；群里它的非 @ 消息同样走限流，只有它可以主动 @ 人 |
+| `MASTER_QQ` | 你的 QQ 号。私聊只认它；群里它的非 @ 消息同样走限流，主人或当前群特别关注者可以主动 @ 人 |
 | `GROUPS` | 允许说话的群号，逗号分隔 |
 
 其余行为参数不在 `.env` 里，在 `fish.config.json`（模板 `fish.config.example`，mtime 热加载）：

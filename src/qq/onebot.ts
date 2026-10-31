@@ -165,23 +165,7 @@ export class OneBot {
 
     // @ 别人的名字：段里往往只有 QQ 号，这里用群成员名单补成「昵称(QQ)」，
     // 让模型看得出这句话是对谁说的（进而知道不是在叫自己）。
-    if (parsed.atOthers?.length) {
-      const names = parsed.atOtherNames ?? [];
-      for (const [index, qq] of parsed.atOthers.entries()) {
-        if (qq === "all" || !parsed.groupId) continue;
-        const known = names[index];
-        const looksLikeQq = !known || known === qq;
-        if (!looksLikeQq) continue;
-        const name = await this.#memberName(parsed.groupId, qq);
-        if (!name) continue;
-        names[index] = name;
-        parsed.text = parsed.text.replace(`@${qq}`, `@${name}(${qq})`);
-        // 结构化 mentions 与兼容字段同步：模型可见的标注只认 mentions
-        const mention = parsed.mentions?.find((m) => m.kind === "other" && m.qq === qq);
-        if (mention) mention.name = name;
-      }
-      parsed.atOtherNames = names;
-    }
+    await completeAtNames(parsed, (qq) => this.#memberName(parsed.groupId ?? 0, qq));
 
     // 合并转发：parseEvent 是同步纯函数、拿不到 OneBot 实例，异步拉取放在这里（同 replyIds 先例）。
     // 展开规则（主人定案）：无 @ 的合集零成本丢弃（gate 连打分都不进，不浪费 token）；
@@ -724,6 +708,44 @@ export function orderByArrival<T extends { arrivalSeq?: number }>(items: readonl
   // 只回填原本有 seq 的槽位：缺失的条目留在原位置，不会被挤走
   for (const [position, slot] of slots.entries()) result[slot.index] = ordered[position];
   return result;
+}
+
+/**
+ * 把正文里的 `@号码` 补成 `@昵称(号码)`。
+ *
+ * 只改这个号码自己的占位：号码后面紧跟数字的不动（`@12` 不能把 `@123` 改掉），
+ * 昵称里的 `$&`、`$1` 也不能被当成替换模式（用函数式 replacer，不做字符串模板拼装）。
+ */
+export function fillAtName(text: string, qq: string, name: string): string {
+  if (!/^\d+$/.test(qq) || !name) return text;
+  return text.replace(new RegExp(`@${qq}(?!\\d)`, "g"), () => `@${name}(${qq})`);
+}
+
+/**
+ * 用成员名单把入站消息里 `@别人` 的号码补成「昵称(QQ)」：状态、兼容字段、正文三处同步。
+ *
+ * 只补本群真实成员（lookup 拿不到就原样留着）；@全体、空名、非数字号码一律跳过，
+ * 否则会把 `@全体成员` 或异常段拼成奇怪的文字。
+ */
+export async function completeAtNames(
+  parsed: IncomingMessage,
+  lookup: (qq: string) => Promise<string | undefined> | string | undefined,
+): Promise<void> {
+  if (!parsed.atOthers?.length) return;
+  const names = parsed.atOtherNames ?? [];
+  for (const [index, qq] of parsed.atOthers.entries()) {
+    if (!/^\d+$/.test(qq) || parsed.groupId === undefined) continue;
+    const known = names[index];
+    if (known && known !== qq) continue;
+    const name = (await lookup(qq))?.trim();
+    if (!name || name === qq) continue;
+    names[index] = name;
+    // 结构化 mentions 与兼容字段同步：模型可见的标注只认 mentions
+    const mention = parsed.mentions?.find((m) => m.kind === "other" && m.qq === qq);
+    if (mention) mention.name = name;
+    parsed.text = fillAtName(parsed.text, qq, name);
+  }
+  parsed.atOtherNames = names;
 }
 
 export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage | null {

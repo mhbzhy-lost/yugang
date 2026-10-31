@@ -20,12 +20,12 @@ export interface WatchDeps {
   master: string;
   /** 查这个会话所在群的全部成员（用于校验 QQ 号真在群里）；undefined = 无从校验。 */
   membersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
-  /** 名单变更后通知宿主（宿主据此调整这些人的随机门概率）。 */
-  onChanged?: (conversationId: string, userIds: string[]) => void;
+  /** 名单变更后通知宿主（宿主据此**整份替换**内存镜像，包括撤销）。 */
+  onChanged?: (conversationId: string, people: WatchedPerson[]) => void;
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
 }
 
-/** 把该会话最新名单推给宿主（随机门与命中注入都要知道谁是特别关注）。 */
+/** 把该会话最新名单整份推给宿主（随机门、命中注入与主动 @ 闸都要知道谁是特别关注）。 */
 async function notify(
   deps: WatchDeps,
   conversationId: string,
@@ -34,7 +34,8 @@ async function notify(
 ): Promise<void> {
   if (!deps.onChanged) return;
   const snapshot = await read.snapshot(WatchDoc, conversationId, context);
-  deps.onChanged(conversationId, (snapshot?.people ?? []).map((p) => String(p.userId)));
+  // 传整份名单而不是 ids：宿主侧不能增量合并，否则 remove 撤不掉旧条目
+  deps.onChanged(conversationId, snapshot?.people ?? []);
 }
 
 export function createWatchTool(deps: WatchDeps) {
@@ -83,17 +84,8 @@ export function createWatchTool(deps: WatchDeps) {
         throw new Error(deps.prompts.messages["watch_need_id"] ?? "watch_need_id");
       }
 
-      // 号码校验：只能关注本群真实存在的人（模型偶尔会抄错号，抄错了永远命中不了）
-      const members = deps.membersOf ? await deps.membersOf(String(api.conversationId)) : undefined;
-      if (members !== undefined) {
-        if (members.length === 0) {
-          throw new Error(deps.prompts.messages["watch_no_members"] ?? "watch_no_members");
-        }
-        if (!members.some((m) => m.userId === userId)) {
-          throw new Error(renderTemplate(deps.prompts.messages["watch_unknown_member"] ?? "", { userId }));
-        }
-      }
-
+      // 撤销放在成员校验之前：退了群的人再也验不到，但撤销权限必须永远做得到
+      // （名单只活在内存镜像里，撤不掉就是同进程内持续有效）。
       if (args.action === "remove") {
         let removed = false;
         await api.commit(async (tx) => {
@@ -107,6 +99,17 @@ export function createWatchTool(deps: WatchDeps) {
           ? renderTemplate(deps.prompts.messages["watch_removed"] ?? "", { userId })
           : renderTemplate(deps.prompts.messages["watch_not_found"] ?? "", { userId });
         return { output: [{ type: "text", text }] };
+      }
+
+      // 号码校验（只约束 add）：只能关注本群真实存在的人（模型偶尔会抄错号，抄错了永远命中不了）
+      const members = deps.membersOf ? await deps.membersOf(String(api.conversationId)) : undefined;
+      if (members !== undefined) {
+        if (members.length === 0) {
+          throw new Error(deps.prompts.messages["watch_no_members"] ?? "watch_no_members");
+        }
+        if (!members.some((m) => m.userId === userId)) {
+          throw new Error(renderTemplate(deps.prompts.messages["watch_unknown_member"] ?? "", { userId }));
+        }
       }
 
       const note = (args.note ?? "").trim();

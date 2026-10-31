@@ -154,6 +154,9 @@ function mentionLabel(mention: IncomingMention): string {
  * 只 @ 了别人（或 @全体）时明确写「不是在叫你」——否则模型会把别人的对话当成叫自己。
  */
 function renderMentions(msg: IncomingMessage, messages: MessageTable): string {
+  // 私聊没有「@谁」这回事：入站把 mentionsBot 恒置 true 只是内部标记（私聊就是叫你），
+  // 渲染成「@了你」会让模型对着主人回一句“你@我干什么”。
+  if (!msg.chatKey.startsWith("qq:group:")) return "";
   const targets = mentionTargets(msg);
   const parts: string[] = [];
   for (const target of targets) {
@@ -164,7 +167,11 @@ function renderMentions(msg: IncomingMessage, messages: MessageTable): string {
   const listed = parts.filter((part) => part.length > 0).join(" ");
   if (!listed) return "";
   const callsBot = targets.some((target) => target.kind === "bot");
-  return callsBot ? listed : `${listed}${messages["mention_not_you"] ?? ""}`;
+  const callsOther = targets.some((target) => target.kind === "other");
+  // 只 @全体成员时它就是「叫所有人」，再用“不是叫你”去否定就自相矛盾了；
+  // 只有真的只 @了具体别人（且没叫鱼）才需要澄清。
+  if (callsBot || !callsOther) return listed;
+  return `${listed}${messages["mention_not_you"] ?? ""}`;
 }
 
 /** 进闸消息渲染成模型的 user 文本：群/人/是否@/是否主人，文案全部来自 prompt/messages.md。 */

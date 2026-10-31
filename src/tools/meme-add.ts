@@ -9,16 +9,16 @@
  * 隐私：只允许**主人**触发，且只收本轮消息里出现过的图（inbound/…）。
  * 群友随手发的截图不会被自动收进库。
  *
- * 本地导入例外：ref 落在 meme-inbox/ 时，必须同时满足「主人触发」与
- * 「当前轮 meme_import 清单里有这张」；动图的既有豁免只适用于 inbound/ 自动收图，
- * 不能用来绕开本地清单。
+ * 本地导入例外：ref 落在 meme-inbox/ 时，必须同时满足「主人触发」「当前轮 meme_import 清单里有这张」
+ * 「这一轮真的 look 过这张」；动图的既有豁免只适用于 inbound/ 自动收图，
+ * 不能用来绕开本地清单，也不能把其他目录的 gif 当成群图。
  */
-import { existsSync, statSync } from "node:fs";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { extname, relative, resolve, sep } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
-import { addMeme, MEME_EXT } from "../media/meme-store.ts";
-import { memeImportHas } from "./meme-import.ts";
+import { addMeme } from "../media/meme-store.ts";
+import { DEFAULT_LIMITS } from "../egress/policy.ts";
+import { memeImportHas, memeImportLooked } from "./meme-import.ts";
 import { renderTemplate, requireTool, type PromptSet } from "../prompts.ts";
 
 export interface MemeAddDeps {
@@ -26,14 +26,14 @@ export interface MemeAddDeps {
   mediaRoot: string;
   master: string;
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
+  /** 单张上限：与出口的 maxMediaBytes 同一个数，缺省取出口默认值。 */
+  maxBytes?: number;
 }
-
-const EXT = MEME_EXT;
 
 export function createMemeAddTool(deps: MemeAddDeps) {
   const prompt = requireTool(deps.prompts, "meme_add");
   const root = resolve(deps.mediaRoot);
-  const inboxDir = join(root, "meme-inbox");
+  const maxBytes = deps.maxBytes ?? DEFAULT_LIMITS.maxMediaBytes;
 
   return defineTool({
     name: "meme_add",
@@ -52,7 +52,9 @@ export function createMemeAddTool(deps: MemeAddDeps) {
         throw new Error(renderTemplate(deps.prompts.messages["meme_add_missing"] ?? "{{ref}}", { ref }));
       }
       const localRef = relative(root, full).split(sep).join("/");
-      const fromInbox = full.startsWith(inboxDir + sep);
+      const inInbox = localRef.startsWith("meme-inbox/");
+      const inInbound = localRef.startsWith("inbound/");
+      const isGif = extname(full).toLowerCase() === ".gif";
 
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
@@ -60,29 +62,23 @@ export function createMemeAddTool(deps: MemeAddDeps) {
       const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
       const byMaster = deps.master !== "" && String(trigger?.userId ?? "") === deps.master;
 
-      // 本地导入：主人 + 本轮 meme_import 清单，两条都要；动图豁免在这里不适用
-      if (fromInbox) {
+      // 本地导入：主人 + 本轮 meme_import 清单 + 这一轮真的看过它，三条都要；动图豁免在这里不适用
+      if (inInbox) {
         if (!byMaster) throw new Error(deps.prompts.messages["meme_add_master"] ?? "meme_add_master");
         if (roundId === undefined || !memeImportHas(roundId, localRef)) {
           throw new Error(
             renderTemplate(deps.prompts.messages["meme_add_import_outside"] ?? "{{ref}}", { ref: localRef }),
           );
         }
+        if (!memeImportLooked(roundId, localRef)) {
+          throw new Error(renderTemplate(deps.prompts.messages["meme_add_not_looked"] ?? "{{ref}}", { ref: localRef }));
+        }
       } else {
-        // 收录规则：动图（.gif）允许鱼自己判断入库；其他格式必须主人点头。
-        // 截图/照片多为 png/jpg/heic，统一留在主人指定这一侧。
-        const isGif = ref.toLowerCase().endsWith(".gif");
-        if (!isGif && !byMaster) {
+        // 收录规则：动图（.gif）允许鱼自己判断入库——但只限群里来的 inbound/ 图；
+        // 其他格式、以及其他目录的动图，都必须主人点头。
+        if (!byMaster && !(isGif && inInbound)) {
           throw new Error(deps.prompts.messages["meme_add_master"] ?? "meme_add_master");
         }
-      }
-
-      if (!existsSync(full)) {
-        throw new Error(renderTemplate(deps.prompts.messages["meme_add_missing"] ?? "{{ref}}", { ref }));
-      }
-      const ext = extname(full).toLowerCase();
-      if (!EXT.has(ext) || !statSync(full).isFile()) {
-        throw new Error(renderTemplate(deps.prompts.messages["meme_add_type"] ?? "{{ref}}", { ref }));
       }
 
       const caption = args.caption.trim().slice(0, 60);
@@ -97,7 +93,21 @@ export function createMemeAddTool(deps: MemeAddDeps) {
         );
       }
 
-      const result = await addMeme({ mediaRoot: root, source: full, caption, tags });
+      const result = await addMeme({ mediaRoot: root, source: full, caption, tags, maxBytes });
+      if (result.status === "rejected") {
+        // 来源校验在库里再做了一次（lstat/realpath/大小/文件头）：拒绝理由逐个翻成文案
+        const template =
+          result.code === "link"
+            ? deps.prompts.messages["meme_add_link"]
+            : result.code === "big"
+              ? deps.prompts.messages["meme_add_big"]
+              : result.code === "magic"
+                ? deps.prompts.messages["meme_add_magic"]
+                : result.code === "type"
+                  ? deps.prompts.messages["meme_add_type"]
+                  : deps.prompts.messages["meme_add_missing"];
+        throw new Error(renderTemplate(template ?? "{{ref}}", { ref: localRef }));
+      }
       if (result.status === "duplicate") {
         return {
           output: [{ type: "text", text: renderTemplate(deps.prompts.messages["meme_add_dup"] ?? "", { file: result.entry.file }) }],

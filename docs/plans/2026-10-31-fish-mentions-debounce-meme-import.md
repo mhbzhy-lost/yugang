@@ -569,3 +569,23 @@ T3、T4 ──> T5（prompt/项目/运维文档同步） ──> T6（全量验�
 | `git diff --check` | 0 | 无输出（无空白错误/冲突标记） |
 | `npm run prompts` | 0 | prompt 校验通过，源码内嵌扫描干净 |
 | `npm test` | 0 | 全部用例通过 |
+
+## 后置修复记录（2026-10-31）
+
+主计划 commit（`a99a628`）之后，对本功能做了一轮边界加固修复（未 amend 历史，叠加为后续 commit）。逐项验证结果：
+
+| 修复项 | 行为与验证证据 |
+| --- | --- |
+| watch 撤销 | `watch remove` 先于成员校验执行（退群的人照样能撤销）；`onChanged` 改传整份名单，宿主侧 `replaceWatched` 整份替换内存镜像，删掉的人立即失去随机门加权与主动 @ 权限。`test/watch-state.test.ts` 覆盖：整体替换、去重、add→remove 撤权、remove 不依赖成员名单 |
+| arrivalSeq | 整组消息与锚点按收到序号排序（`orderByArrival` / `isLaterArrival` / `anchorIndex`），异步补名片/合集/头像导致乱序完成时不再顶掉锚点；背景栏按「序号小于锚点」取，锚点被 30 条流水裁掉时不再把后续对话当背景。`test/debounce.test.ts` 覆盖 |
+| persona/bypass/react/compacting/outbox | burst 首次 push 绑定会话/人格，5 秒窗口内 `/切换人格` 不改组；bypass payload 取整组最近一条非空；`react` 只贴本轮触发那条消息（轮级绑定）；换页统一守卫 `compactWithGuard`，收图轮/换页互相让路（`conversationBusy`）；`emit` 记账移到真的发完之后（发送抛错可重试，不提前吃掉幂等键）。`test/qq.test.ts` 覆盖 |
+| meme-inbox 读取 | `look` 只认「本轮主人触发 + 这张在本轮 manifest 里」，其余 inbox 引用一律拒（`look_inbox_master` / `look_inbox_outside`）；inbox 读取不占用普通轮 2 张额度 |
+| 逐张 look | 清单内每张只看一次，成功描述后才 `memeImportMarkLooked`（失败不占额度也不算看过）；额度 = min(manifest 张数, 50)；`meme_add` 机械核对「本轮 manifest + 已成功 look」，没看成收不了 |
+| GIF inbound 围栏 | 动图豁免只适用于 `inbound/` 自动收图；`meme-inbox/` 一律走主人 + manifest + look 三条校验，其他目录 gif 也收不了 |
+| 来源校验 | `checkMemeSource`：媒体目录围栏 → 扩展名 → lstat 拒符号链接 → realpath 再围（防目录链接逃逸）→ 大小 → 图片文件头；校验在串行队列里做、写库内容以同一次读取的 bytes 为准（TOCTOU 无效） |
+| 主动 @ 来源 | 机械校验：去重 ≤3、禁 `all`、纯数字、`mentionPolicyOf`（主人或当前群特别关注者）、`groupMembersOf` 现拉成员核对、缺名单 fail closed；号码来源靠 prompt 引导从可信上下文抄写，代码不校验号码抄自哪句话 |
+| 测试 | 新增 `test/debounce.test.ts` / `test/meme-import.test.ts` / `test/watch-state.test.ts`，增补 `test/onebot.test.ts` / `test/qq.test.ts`；`npm test` 实测 **86 项全部通过** |
+
+同步修正的文档语义：`README.md`（主动 @ 主体改为「主人或当前群特别关注者」）、`AGENTS.md`（meme_add 流程明确 manifest + 已成功 look；主动 @ 号码改为「优先可信上下文 + 机械校验纯数字/成员」，不声称代码验证来源）、`prompt/tools/say.md`（纯文字一轮最多 3 条，与代码一致；mentions 说明对齐成员/权限校验）、`prompt/tools/meme_add.md`（tags 至少含一个一级情绪词；本地 inbox 必须 manifest + 成功 look）、`prompt/tools/meme_import.md`（同上 tags 口径）。
+
+本次后置修复**未 push、未部署**（也未启动生产鱼、未连接 QQ）。

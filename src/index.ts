@@ -25,9 +25,12 @@ import {
   createDebouncer,
   withContext,
   DEBOUNCE_WINDOW_MS,
+  lastPayload,
   type PendingBurst,
   type RecentChatMessage,
 } from "./qq/debounce.ts";
+import { replaceWatched, type WatchedMap } from "./qq/watch-state.ts";
+import type { CompactResult } from "./compact.ts";
 import { setLookDisabled } from "./tools/look.ts";
 import { clearMemeImportRound } from "./tools/meme-import.ts";
 import { hasMemeMd5, md5OfFile } from "./media/meme-store.ts";
@@ -97,15 +100,12 @@ function voiceConfigFor(chatKey: string): { url: string; referWav?: string; refe
 }
 
 // 特别关注：chatKey（不含人格后缀）→ userId → 备注。随机门用它提高被关注者的概率，
-// 进模型前用它在那个人说话的那一行打标记。启动时从文档装载，watch 工具变更后即时同步。
-const watchedByChat = new Map<string, Map<string, { name?: string; note: string }>>();
+// 进模型前用它在那个人说话的那一行打标记，主动 @ 的身份闸也读它。
+// 启动时从文档装载，watch 工具变更后即时**整份替换**（增量合并会让 remove 撤不掉）。
+const watchedByChat = new Map<string, WatchedMap>();
 function applyWatched(chatKey: string, people: { userId: string; name?: string; note: string }[]): void {
-  const key = baseChatKey(chatKey);
-  if (people.length === 0) {
-    watchedByChat.delete(key);
-    return;
-  }
-  watchedByChat.set(key, new Map(people.map((p) => [String(p.userId), { ...(p.name ? { name: p.name } : {}), note: p.note }])));
+  // 空名单会直接删 key：否则「这个群有特别关注」永远为真
+  replaceWatched(watchedByChat, baseChatKey(chatKey), people);
 }
 
 const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
@@ -155,11 +155,17 @@ function markSent(key: string): boolean {
   return true;
 }
 
-// conversationId → 最近一条触发消息 + 所在会话，用来做引用和贴表情
+// conversationId → 所在会话（剥离人格），用来做引用和贴表情
 const chatKeys = new Map<string | number, string>();
-const lastMessageId = new Map<string, number | string>();
-// 压缩进行中的会话：期间不受理新提交，被@只回机械忙碌语
+// 换页（自动 / 手动 `/压缩`）中的会话：期间不受理新提交，被@只回机械忙碌语
 const compacting = new Set<string>();
+// 静默收图轮在跑的会话：同一会话不许并发提交 / 不许换页（两条路径共用 conversationBusy）
+const ingestRounds = new Set<string>();
+/** 会话是不是正被换页或静默收图轮占着：起新提交与起换页前都要先看它。 */
+function conversationBusy(id: string | number): boolean {
+  const key = String(id);
+  return compacting.has(key) || ingestRounds.has(key);
+}
 const lastMention = new Map<string, boolean>();
 // 本轮触发是否是回复某条消息：是则鱼的回应强制引用（回复链可读性）
 const lastReply = new Map<string, boolean>(); // 最近一次触发是否@了鱼：被@必回引用，让群里看得出鱼在回谁
@@ -216,14 +222,11 @@ const fish = await openFish({
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
   silentOf: (roundId) => silentRounds.has(String(roundId)),
   // watch 的号码校验：从会话映射回群号，再拉全量成员（不要 limit，要能校验到每个人）
-  onWatchChanged: (conversationId, userIds) => {
+  onWatchChanged: (conversationId, people) => {
     const chatKey = chatKeyFor(conversationId);
     if (!chatKey) return;
-    // 只带了 id，备注靠重新读文档太绕：这里增量维护，新 id 先占位，备注由下次启动装载补齐
-    const key = baseChatKey(chatKey);
-    const map = watchedByChat.get(key) ?? new Map();
-    for (const id of userIds) if (!map.has(id)) map.set(id, { note: "" });
-    watchedByChat.set(key, map);
+    // 整份替换：删掉的人（含已退群、watch remove 掉的）立刻失去主动 @ 权限与随机门加权
+    applyWatched(chatKey, people);
   },
   // 主动 @ 的身份闸（机械判定）：私聊没有 @ 这回事；群内只有主人或本群特别关注者能点名别人。
   // 成员名单必须从 chatKeys 映射回当前群号再拉，绝不采信模型给的号码。
@@ -253,7 +256,7 @@ const fish = await openFish({
   // outbox 里的消息由 fish.drain() 逐条交给这里；幂等表再加一层保险
   emit: async (conversationId, payload) => {
     // 恢复轮强发：有意重启时还没真正发出的消息不走幂等去重（去重表可能已在崩溃前提前记了账）
-    if (!markSent(payload.key) && !recoveringDrain) return;
+    if (!recoveringDrain && sent.has(payload.key)) return;
     const chatKey = chatKeys.get(conversationId);
     if (!chatKey) return;
 
@@ -278,12 +281,18 @@ const fish = await openFish({
       }
     }
 
+    // 记账必须在真的发完之后：先记账后发，发送抛错时这一条就被当成已发，
+    // harness 把 outbox 放回 queued 也重试不出来（幂等表先把它拦了）。
+    // 紧接着发送就记，不等下面的日志：日志写失败不能让 drain 重发一遍（宁可少一条日志，不要重复发言）。
+    markSent(payload.key);
+
     for (const text of payload.items) {
       chatlog.append({ at: payload.at, chat: chatKey, from: "fish", text, kind: "out" });
     }
   },
-  react: async (conversationId, emoji) => {
-    const messageId = lastMessageId.get(conversationId);
+  react: async (conversationId, emoji, messageId) => {
+    // 轮级绑定：只贴本轮触发的那条。会话级 lastMessageId 会被后到的消息顶掉，
+    // 那一下就会贴到别人刚发的话上。本轮没绑到消息（例如静默轮）就不贴。
     if (messageId === undefined) return;
     await onebot.react(messageId, emoji);
   },
@@ -374,6 +383,11 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
     if (hasMemeMd5(config.mediaRoot, md5)) return;
 
     const conv = await conversationFor(msg.chatKey);
+    // 会话正被换页 / 另一轮收图占着：不提交（换页会把活跃轮吃掉，两轮抢同一个会话更糟）
+    if (conversationBusy(conv.id)) {
+      console.log(`[鱼缸] 收图轮跳过 ${gif.ref}：会话忙`);
+      return;
+    }
     const prior = bucket.slice(0, -1).slice(-10);
     const header = renderTemplate(fish.prompts.messages["gif_ingest_header"] ?? "", { count: String(prior.length) });
     const context = prior.map((m) => `${m.nickname}: ${m.text}`).join("\n");
@@ -382,6 +396,7 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
       who: msg.nickname,
     });
     const content = [header, context, task].filter((line) => line.length > 0).join("\n");
+    ingestRounds.add(String(conv.id));
     try {
       // 留痕：这一轮是收图轮，起止都打日志，否则「为什么不收」永远查不到
       console.log(`[鱼缸] 收图轮开始 ${gif.ref} md5=${md5.slice(0, 10)}`);
@@ -400,6 +415,7 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
     } catch (error) {
       console.error("[鱼缸] 收图轮失败", error instanceof Error ? error.message : error);
     } finally {
+      ingestRounds.delete(String(conv.id));
       await drainLoop();
     }
     return; // 一条消息只收一张
@@ -407,7 +423,7 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
 }
 
 
-/** 压缩进行中：被@的给一句机械回复（同样走 outbox 唯一出口），其余直接等下一轮。 */
+/** 会话忙（换页 / 收图轮）时：被@的给一句机械回复（同样走 outbox 唯一出口），其余直接等下一轮。 */
 async function sendBusyReplies(conv: Conversation, messageIds: readonly (number | string | undefined)[]): Promise<void> {
   const items = [String(fish.prompts.messages["busy_reply"] ?? "[busy]")];
   let queued = false;
@@ -429,7 +445,7 @@ async function sendBusyReplies(conv: Conversation, messageIds: readonly (number 
 /**
  * 提交一轮，等它跑完，再记账与换页。
  *
- * 轮级清账（resetRun / resetLook / lastMessageId / lastMention / lastReply / 语音计数）
+ * 轮级清账（resetRun / resetLook / lastMention / lastReply / 语音计数）
  * 全部挪到这里、在真正 submit 之前做：以前是 gate 放行那一刻就清，同一组连续发言的
  * follow-up 进来会把这一轮的引用目标和记账提前抹掉。
  */
@@ -448,7 +464,6 @@ async function submitRound(input: {
   await absorbSecrets(conv);
   resetRun(conv.id);
   resetLook(conv.id);
-  if (trigger.messageId !== undefined) lastMessageId.set(conv.id, trigger.messageId);
   // 被@必回引用，让群里看得出鱼在回谁
   lastMention.set(conv.id, trigger.mentionsBot);
   lastReply.set(conv.id, input.reply);
@@ -505,33 +520,42 @@ async function submitRound(input: {
     console.log(`[鱼缸] ${chatKey} +${delta.total} tokens / ${delta.cost}`);
   }
 
-  const compacted = await (async () => {
-    compacting.add(String(conv.id));
-    try {
-      return await fish.compact(conv);
-    } finally {
-      compacting.delete(String(conv.id));
-    }
-  })();
+  const compacted = await compactWithGuard(conv);
   if (compacted.compacted) {
     console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
   }
 }
 
 /**
+ * 换页的统一守卫：手动 `/压缩`、轮后自动换页共用，静默收图轮在跑时直接跳过
+ * （那一轮正在用这个会话，换页会把它吃掉；计账不受影响，下一轮再压）。
+ * 换页期间把 id 记进 compacting，flushBurst / 私聊据此回忙碌语而不是提交。
+ */
+async function compactWithGuard(conv: Conversation, force = false): Promise<CompactResult> {
+  if (ingestRounds.has(String(conv.id))) return { compacted: false };
+  compacting.add(String(conv.id));
+  try {
+    return await fish.compact(conv, force);
+  } finally {
+    compacting.delete(String(conv.id));
+  }
+}
+
+/**
  * 5 秒静默到期：整组一起进模型。
  *
- * 锚点 = 这一组最后一条（A-B-A 里 B 只出现在背景，不可能顶掉 A）；整组里任意一条 @鱼
- * 就整组必答；引用只看锚点。提交前重新检查 compacting：换页期间不提交旧上下文，
+ * 锚点 = 这一组按收到顺序最后一条（A-B-A 里 B 只出现在背景，不可能顶掉 A）；整组里任意一条 @鱼
+ * 就整组必答；引用只看锚点。提交前重新检查会话忙：换页 / 收图轮期间不提交旧上下文，
  * 被@的按既有 busy 语义回执，pending 已由状态机先摘掉，不会留下陈年 burst。
  */
 async function flushBurst(burst: PendingBurst): Promise<void> {
   const anchor = burst.anchor;
-  const conv = await conversationFor(anchor.chatKey);
+  // 会话/人格只认首次 push 那一份：5 秒窗口里主人 /切换人格 也改不了这一组的落点
+  const conv = (burst.binding as Conversation | undefined) ?? (await conversationFor(anchor.chatKey));
 
-  // 压缩进行中：不再受理新提交（根治换页竞态把活跃轮吃掉的问题）
-  if (compacting.has(String(conv.id))) {
-    console.log(`[鱼缸] ${anchor.chatKey} 换页中，丢弃待定组 ${burst.messages.length}`);
+  // 换页 / 收图轮进行中：不再受理新提交（根治换页竞态把活跃轮吃掉的问题）
+  if (conversationBusy(conv.id)) {
+    console.log(`[鱼缸] ${anchor.chatKey} 会话忙，丢弃待定组 ${burst.messages.length}`);
     await sendBusyReplies(conv, burst.messages.filter((m) => m.mentionsBot).map((m) => m.messageId));
     return;
   }
@@ -560,7 +584,8 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     }
   }
 
-  const payload = burst.messages[burst.messages.length - 1]?.payload;
+  // 整组里最近一条非空 bypass 段：指令后面又跟了两句普通闲聊时，只取最后一条会让 draw 静默失效
+  const payload = lastPayload(burst.messages);
   await submitRound({
     chatKey: anchor.chatKey,
     conv,
@@ -589,8 +614,9 @@ async function handleCommand(msg: IncomingMessage): Promise<string | null> {
     setLookDisabled(false);
     text = fish.prompts.messages["cmd_look_on"] ?? "";
   } else if (msg.text === "/压缩") {
-    // 强制换页当前会话（无视阈值）：混入的重内容（图块等）立即清掉
-    const result = await fish.compact(conv, true);
+    // 强制换页当前会话（无视阈值）：混入的重内容（图块等）立即清掉。
+    // 走统一守卫：换页期间到达的群消息/私聊会看到 compacting，不会与换页并发。
+    const result = await compactWithGuard(conv, true);
     text = result.compacted
       ? renderTemplate(fish.prompts.messages["cmd_compacted"] ?? "", { entries: String(result.entries), chars: String(result.chars) })
       : (fish.prompts.messages["cmd_compact_skip"] ?? "");
@@ -786,16 +812,17 @@ onebot.onMessage((raw) => {
     });
     // gate 判决留痕（不记正文）
     const verdict = (decision.enter ? "enter:" : "skip:") + decision.reason;
-    const score = decision.enter && decision.score !== undefined ? " score=" + decision.score : "";
-    console.log("[fish] gate " + msg.chatKey + " " + msg.nickname.slice(0, 12) + " -> " + verdict + score);
+    console.log("[fish] gate " + msg.chatKey + " " + msg.nickname.slice(0, 12) + " -> " + verdict);
 
     // 连续发言窗口的输入：这条消息给模型看的文本（合集已折叠、bypass 已换成占位），
-    // bypass 段作为 opaque 载荷跟着走，flush 时只取锚点那份。
+    // bypass 段作为 opaque 载荷跟着走。
     const burstText = collapseForward(msg.text);
-    const push = () => debouncer.push({
+    const push = (conv?: Conversation) => debouncer.push({
       msg,
       text: burstText,
       ...(bypass ? { payload: bypass.stash } : {}),
+      // 只在新窗口上生效：首次 push 把当时的会话（人格）钉住，后面的 follow-up 改不动
+      ...(conv ? { binding: conv } : {}),
     });
 
     if (!decision.enter) {
@@ -805,18 +832,19 @@ onebot.onMessage((raw) => {
       return;
     }
 
-    // 群消息：gate 放行不立即提交，等 5 秒静默把整组一起送进 loop（flushBurst）
+    // 群消息：gate 放行不立即提交，等 5 秒静默把整组一起送进 loop（flushBurst）。
+    // 会话在这里先定下来（人格按当下解析）并绑到窗口上：5 秒里 `/切换人格` 也改不了落点。
     if (msg.chatKey.startsWith("qq:group:")) {
-      push();
+      push(await conversationFor(msg.chatKey));
       return;
     }
 
     // 私聊：保持既有即时语义，不进 debounce
     const conv = await conversationFor(msg.chatKey);
 
-    // 压缩进行中：不再受理新提交（根治换页竞态把活跃轮吃掉的问题）。
+    // 换页 / 收图轮进行中：不再受理新提交（根治换页竞态把活跃轮吃掉的问题）。
     // 被 @ 的给一句机械回复（同样走 outbox 唯一出口），其余直接等下一轮。
-    if (compacting.has(String(conv.id))) {
+    if (conversationBusy(conv.id)) {
       if (msg.mentionsBot) await sendBusyReplies(conv, [msg.messageId]);
       return;
     }

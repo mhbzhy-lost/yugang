@@ -132,8 +132,8 @@ export interface FishOptions {
    * 群号必须由宿主自己从映射键解析，不能采信模型给的号码。
    */
   groupMembersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
-  /** 特别关注名单变更后通知宿主（宿主据此调整随机门与上下文标注）。 */
-  onWatchChanged?: (conversationId: string, userIds: string[]) => void;
+  /** 特别关注名单变更后通知宿主（整份新名单，宿主据此替换内存镜像与随机门概率）。 */
+  onWatchChanged?: (conversationId: string, people: import("./store.ts").WatchedPerson[]) => void;
   /** 表情包跨轮冷却（毫秒）；传函数则每次现取，改配置立即生效。 */
   memeCooldownMs?: number | (() => number);
   /** 单次工具调用超时（秒），缺省 30。 */
@@ -165,8 +165,8 @@ export interface FishOptions {
   /** look 的视觉描述模型；缺省用主模型。 */
   visionModel?: ModelRef;
   emit: (conversationId: ConversationId, payload: OutboundPayload) => void | Promise<void>;
-  /** 贴表情回应，只带表情编号；目标消息由宿主自己记。 */
-  react: (conversationId: ConversationId, emoji: string) => void | Promise<void>;
+  /** 贴表情回应，只带表情编号；目标消息由本轮触发绑定（不取会话级 lastMessageId）。 */
+  react: (conversationId: ConversationId, emoji: string, messageId?: number | string) => void | Promise<void>;
   now?: () => number;
 }
 
@@ -207,8 +207,8 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   }
 
   const say = createSayTool({ limits, prompts, now, triggerOf: options.triggerOf, ...(options.mentionPolicyOf ? { mentionPolicyOf: options.mentionPolicyOf } : {}), ...(options.groupMembersOf ? { membersOf: options.groupMembersOf } : {}), ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}),   ...(options.silentOf ? { silentOf: options.silentOf } : {}), ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}) });
-  const react = createReactTool({ prompts, react: options.react, now });
-  const tools = createTools({ mediaRoot, prompts, models, visionModel: options.visionModel ?? options.model, searchKey: options.searchKey, ...(options.gptImage ? { gptImage: options.gptImage } : {}), ...(options.modelsPath ? { modelsPath: options.modelsPath } : {}), sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, ...(options.groupMembersOf ? { groupMembersOf: options.groupMembersOf } : {}), ...(options.onWatchChanged ? { onWatchChanged: options.onWatchChanged } : {}), bypassOf: options.bypassOf });
+  const react = createReactTool({ prompts, react: options.react, ...(options.triggerOf ? { triggerOf: options.triggerOf } : {}), now });
+  const tools = createTools({ mediaRoot, prompts, models, visionModel: options.visionModel ?? options.model, searchKey: options.searchKey, ...(options.gptImage ? { gptImage: options.gptImage } : {}), ...(options.modelsPath ? { modelsPath: options.modelsPath } : {}), sdUrl: options.sdUrl, tagsCsv: options.tagsCsv, master: options.master, triggerOf: options.triggerOf, ...(options.groupMembersOf ? { groupMembersOf: options.groupMembersOf } : {}), ...(options.onWatchChanged ? { onWatchChanged: options.onWatchChanged } : {}), bypassOf: options.bypassOf, maxMediaBytes: limits.maxMediaBytes });
 
   // 启动即校验：每个工具都必须有一份 prompt/tools/<name>.md，缺了就起不来
   for (const tool of [say, react, ...tools]) {

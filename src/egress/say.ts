@@ -12,7 +12,7 @@
  * 模型的正文、思考、tool 调用文本，永远不进入 QQ。
  */
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineEntry, defineTool, type ConversationId } from "@earendil-works/pi-durable";
 import { validateOutbound, type EgressLimits } from "./policy.ts";
@@ -69,6 +69,14 @@ export interface SayDeps {
 export function createSayTool(deps: SayDeps) {
   const now = deps.now ?? Date.now;
   const prompt = requireTool(deps.prompts, "say");
+  // 本地待收目录（meme-inbox/）不是出口的图源：它里面的图必须先 look + meme_add 进库，
+  // 否则「主人把图放进目录」就成了一条绕过审核的直达出口。
+  const mediaRoot = resolve(deps.limits.mediaRoot);
+  const inboxDir = join(mediaRoot, "meme-inbox");
+  const inMemeInbox = (ref: string): boolean => {
+    const full = resolve(mediaRoot, ref);
+    return full === inboxDir || full.startsWith(inboxDir + sep);
+  };
 
   // 轮计数：会话 → { 轮标识, 已开口次数 }（pi.live.run.taskId，一次 agent loop 一个）。
   // 上限 3 次只是闸门：不鼓励多说，一句能说完的事别拆三条（人格书仍这么引导）。
@@ -169,6 +177,11 @@ export function createSayTool(deps: SayDeps) {
         sentMeme = true;
       } else if (media !== undefined && ledger.mediaThisRun >= 1) {
         throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
+      }
+      // meme-inbox/ 里的图不能直接当 media 发：先 look 看一眼、再用 meme_add 收进库，
+      // 之后从库里（memes/…）或 meme 参数发。正常媒体目录（inbound/、gen/、memes/）不受影响。
+      if (media !== undefined && inMemeInbox(media)) {
+        throw new Error(deps.prompts.messages["say_media_inbox"] ?? "say_media_inbox");
       }
 
       const rejection = validateOutbound(

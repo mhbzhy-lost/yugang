@@ -5,7 +5,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseEvent, type OneBotEvent } from "../src/qq/onebot.ts";
+import { parseEvent, completeAtNames, fillAtName, type OneBotEvent } from "../src/qq/onebot.ts";
 
 const SELF = 1000;
 
@@ -43,4 +43,37 @@ test("带正文的 @ 行为不变", () => {
   assert.ok(parsed);
   assert.equal(parsed.mentionsBot, true);
   assert.equal(parsed.text, "在吗");
+});
+
+test("@号码补昵称只改自己那个占位，不碰数字前缀相同的别人", () => {
+  // @12 的号码是 @123 的前缀：不能把 @123 也改成 @张三(12)3
+  assert.equal(fillAtName("@12 和 @123 都在", "12", "张三"), "@张三(12) 和 @123 都在");
+  // 昵称里带 $& / $1 不能被当成替换模式（字符串模板 replace 会吃掉它们）
+  assert.equal(fillAtName("@77 来", "77", "$&老哥"), "@$&老哥(77) 来");
+  // 非法号码原样返回
+  assert.equal(fillAtName("@all 集合", "all", "全体成员"), "@all 集合");
+});
+
+test("completeAtNames：名单里有的才补，空名 / @全体 / 非法号码跳过", async () => {
+  const parsed = parseEvent(
+    frame([
+      { type: "at", data: { qq: 12 } },
+      { type: "at", data: { qq: "all" } },
+      { type: "text", data: { text: " 看 @123" } },
+    ]),
+    SELF,
+  );
+  assert.ok(parsed);
+  await completeAtNames(parsed, (qq) => (qq === "12" ? " 张三 " : undefined));
+  assert.match(parsed.text, /@张三\(12\)/, "合法号码应该补上昵称");
+  assert.match(parsed.text, /@123/, "号码前缀相同的别人不能被改掉");
+  assert.match(parsed.text, /@全体成员/, "@全体 保持标记");
+  assert.equal(parsed.atOtherNames?.[0], "张三");
+  assert.equal(parsed.mentions?.find((m) => m.qq === "12")?.name, "张三");
+
+  const unknown = parseEvent(frame([{ type: "at", data: { qq: 12 } }, { type: "text", data: { text: " 你好" } }]), SELF);
+  assert.ok(unknown);
+  const before = unknown.text;
+  await completeAtNames(unknown, () => "   ");
+  assert.equal(unknown.text, before, "空名不能把正文改成 @(12)");
 });

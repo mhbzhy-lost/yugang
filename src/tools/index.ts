@@ -35,7 +35,7 @@ export interface ToolDeps {
   /** config/models.json 路径；model 管理工具写回时用。 */
   modelsPath?: string;
   /** 会话 → 群成员名单；watch 用它校验被关注人真的在群里。 */
-  onWatchChanged?: (conversationId: string, userIds: string[]) => void;
+  onWatchChanged?: (conversationId: string, people: import("../store.ts").WatchedPerson[]) => void;
   groupMembersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
   /** ChatGPT/Codex 图片通道（models.image）：authPath 决定用哪份登录凭据，model 是默认模型名；proxy 只给这条通道用。 */
   gptImage?: { authPath: string; provider: string; model: string; proxy?: string };
@@ -47,6 +47,8 @@ export interface ToolDeps {
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费。 */
   bypassOf?: (roundId: unknown) => string | undefined;
+  /** 媒体单张上限：与出口（say）同一个 maxMediaBytes，meme 导入/收图复核用。 */
+  maxMediaBytes?: number;
 }
 
 export function createTools(deps: ToolDeps): ToolRegistration[] {
@@ -64,7 +66,8 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     ? [createRestartTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf })]
     : [];
   return [
-    createLookTool(deps),
+    // look 也要吃同一个媒体上限：inbox 读取前的来源复核（符号链接/realpath/大小/文件头）用它
+    createLookTool({ ...deps, ...(deps.maxMediaBytes !== undefined ? { maxBytes: deps.maxMediaBytes } : {}) }),
     createSearchTool({ prompts: deps.prompts, key: deps.searchKey }),
     createVideoTool({
       prompts: deps.prompts,
@@ -72,9 +75,9 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
       ...(deps.visionModel ? { visionModel: deps.visionModel } : {}),
     }),
     createMemeTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot }),
-    ...(deps.master ? [createMemeAddTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, master: deps.master, triggerOf: deps.triggerOf })] : []),
+    ...(deps.master ? [createMemeAddTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, master: deps.master, triggerOf: deps.triggerOf, ...(deps.maxMediaBytes !== undefined ? { maxBytes: deps.maxMediaBytes } : {}) })] : []),
     // 本地表情导入：只给主人，只扫固定 meme-inbox，登记本轮可看的清单
-    ...(deps.master ? [createMemeImportTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, master: deps.master, triggerOf: deps.triggerOf })] : []),
+    ...(deps.master ? [createMemeImportTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, master: deps.master, triggerOf: deps.triggerOf, ...(deps.maxMediaBytes !== undefined ? { maxBytes: deps.maxMediaBytes } : {}) })] : []),
     ...fsTools,
     createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl, bypassOf: deps.bypassOf }),
     createGptImageTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, ...(deps.gptImage ? { gptImage: deps.gptImage } : {}) }),

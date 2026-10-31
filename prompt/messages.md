@@ -31,6 +31,9 @@ look_missing: 找不到这张图：{{ref}}
 look_type: 不是图片：{{ref}}
 look_used: 本轮已经看过 {{limit}} 张图，这张留到下一轮；别跟用户说识别服务坏了
 look_import_used: 这一轮导入的 {{count}} 张已经看完了，先把看过的逐张收进库（meme_add），不要重复看
+look_import_seen: 这一轮已经看过这张了，直接 meme_add 收它：{{ref}}
+look_inbox_master: 本地待收目录（meme-inbox/）里的图只有主人这一轮导入时才能看：{{ref}}
+look_inbox_outside: 这张不在本轮导入清单里，看不了：{{ref}}。先调 meme_import 登记，或者那是上一轮的图（清单已经作废）
 search_query: 关键词得在 1 到 128 字之间
 search_nokey: 还没配置搜索凭据，搜不了
 search_used: 这一轮搜过了，先用搜到的说话
@@ -61,8 +64,15 @@ meme_add_mood: 标签里至少有一个得是一级情绪词（{{moods}}），�
 meme_add_dup: 库里已经有这张了（{{file}}），不用重复收
 meme_add_done: 收好了：memes/{{file}}，库里现在 {{count}} 张
 meme_add_import_outside: 这张不在本轮导入清单里：{{ref}}。先调 meme_import 登记，或者那是上一轮的图（清单已经作废）
+meme_add_not_looked: 这张还没看过就先别收，先 look 看一眼再 meme_add：{{ref}}
+meme_add_link: 这是个符号链接，不收（把文件本身放进目录）：{{ref}}
+meme_add_big: 这张太大，收不进库：{{ref}}
+meme_add_magic: 文件头不是图片（改了扩展名也没用），不收：{{ref}}
 meme_import_master: 本地表情导入只有主人能开，这一轮不算
 meme_import_empty: 待导入目录里没有能收的图片了（只认 jpg/jpeg/png/gif/webp 的直接子文件）
+meme_import_nodir: 还没有 meme-inbox 这个待导入目录，先把图放进 <MEDIA_ROOT>/meme-inbox/
+meme_import_denied: meme-inbox 打不开（权限不对或者不是目录），先检查一下再导入
+meme_import_linkdir: meme-inbox 本身是个符号链接，那就不算固定目录了，先改成真目录
 meme_import_list: 这一批登记了 {{count}} 张，只能逐张 look、逐张用 meme_add 收，别靠文件名猜内容：
 meme_import_more: 目录里还有 {{rest}} 张，这一批处理完再调一次 meme_import，cursor 填 {{cursor}}
 meme_import_skipped: 跳过了 {{count}} 个不能收的：{{items}}
@@ -107,6 +117,7 @@ voice_too_long: 这句话太长了（{{length}} 字），语音只适合短句�
 voice_failed: 语音没合成出来，改用文字说吧
 say_one_media: media 和 meme 只能给一个
 say_media_used: 这一轮已经配过图了，下一轮再配
+say_media_inbox: meme-inbox 里的图不能直接发：先 look 看一眼，再用 meme_add 收进库，然后从库里发
 say_meme_cooldown: 表情包刚用过，隔一会儿再翻柜子，这句先用文字说
 say_meme_nomatch: 库里没有贴这个关键词的，换个词或者直接用文字
 say_silent: 这一轮是收图用的，不用说话
