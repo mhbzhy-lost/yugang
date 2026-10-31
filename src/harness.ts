@@ -94,10 +94,8 @@ function makeFishExtension(
 const ctx = BACKGROUND_CONTEXT;
 
 export interface GroupProfile {
-  name: string;
   groupId: string;
   count: number;
-  owner: string;
   master: string;
   members: { nickname: string; userId: string }[];
 }
@@ -491,12 +489,11 @@ export async function openFish(options: FishOptions): Promise<Fish> {
               init: profile
                 ? async (tx, conversationId) => {
                     const text = renderTemplate(prompts.groupProfile, {
-                      name: profile.name,
                       groupId: profile.groupId,
                       count: String(profile.count),
-                      owner: profile.owner,
                       master: profile.master,
-                      // 首次群档案 system prompt 只放 QQ 号：昵称是外部可变输入，实时消息里已有 昵称(QQ)
+                      // 首次群档案 system prompt 只放群号/人数/QQ 号：群名、群主、昵称都是外部可变输入，
+                      // 实时消息里已有 昵称(QQ) 背景行；master 是本地配置，可信
                       members: profile.members.map((m) => m.userId).join("\n") || "（拿不到名单）",
                     });
                     await tx.appendEntry(GroupProfileEntry, conversationId, {

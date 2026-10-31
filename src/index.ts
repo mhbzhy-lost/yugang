@@ -298,16 +298,14 @@ const fish = await openFish({
   },
 });
 
-/** 群档案：只在第一次见到这个群时抓一次，之后由 transcript 记着。 */
+/** 群档案：只在第一次见到这个群时抓一次，之后由 transcript 记着。不采信群名/群主等 OneBot 外部文本。 */
 async function profileFor(groupId: number): Promise<GroupProfile | undefined> {
   const info = await onebot.groupInfo(groupId);
   if (!info) return undefined;
   const members = await onebot.groupMembers(groupId);
   return {
-    name: info.name,
     groupId: String(groupId),
     count: info.count || members.length,
-    owner: info.owner,
     master: config.master,
     members,
   };

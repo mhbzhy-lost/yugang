@@ -1,6 +1,6 @@
 /**
  * QQ 侧三件事：
- *  - 群档案只在建会话时写一次，模型能看到群名和成员
+ *  - 群档案只在建会话时写一次，身份只用群号/人数/成员 QQ 号锚定（无群名/昵称）
  *  - look 只能看媒体目录里的图，且一轮最多两次
  *  - react 只贴表情，不产生文本，但会被限流
  */
@@ -55,15 +55,13 @@ function boot(overrides: BootOverrides = {}) {
   return { faux, mediaRoot, reacts, reactCalls, fish };
 }
 
-test("群档案写进 transcript，模型看得到群名和成员", async () => {
+test("群档案写进 transcript，身份只锚定群号与成员 QQ 号", async () => {
   const { fish } = boot();
   const open = await fish;
   try {
     const conv = await open.group("qq:group:42", {
-      name: "深夜钓鱼群",
       groupId: "42",
       count: 3,
-      owner: "1000",
       master: "1000",
       members: [
         { nickname: "张三", userId: "2000" },
@@ -74,7 +72,9 @@ test("群档案写进 transcript，模型看得到群名和成员", async () => 
     const entry = view.value.entries.find((e) => e.kind === "fish.group-profile");
     assert.ok(entry, "没有写群档案");
     const text = JSON.stringify(entry.model ?? "");
-    assert.match(text, /深夜钓鱼群/);
+    // 身份只用群号与人数锚定，不写群名/群主昵称等外部文本
+    assert.match(text, /群号 42/);
+    assert.match(text, /3 人/);
     // 群档案 system prompt 只放成员 QQ 号，昵称不再进入
     assert.match(text, /2000/);
     assert.match(text, /2001/);
