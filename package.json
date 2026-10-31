@@ -22,6 +22,7 @@
     "doctor": "node --env-file-if-exists=.env scripts/doctor.ts",
     "token": "node --env-file-if-exists=.env scripts/token.ts",
     "memes": "node --env-file-if-exists=.env scripts/memes.ts",
+    "memory": "node --env-file-if-exists=.env scripts/memory.ts",
     "login": "node --env-file-if-exists=.env scripts/login.ts"
   },
   "dependencies": {
