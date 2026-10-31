@@ -23,6 +23,8 @@ export interface UsageRecord extends UsageSnapshot {
   at: number;
   day: string;
   chat: string;
+  /** 产生这笔用量的 conversation id（可选）。旧记录没有该字段，按群聚合时直接忽略。 */
+  conv?: string;
 }
 
 const EMPTY: UsageSnapshot = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 };
@@ -71,28 +73,35 @@ export function localDay(at: number): string {
 }
 
 export function createUsageLedger(root: string) {
+  // 基线按「chat × conversation」记：人格切换（/切换人格）= 同一 chatKey 换新 conversation，
+  // 累计值从旧会话的高位回落到新会话的低位是新会话的正常现象；按 chat 单维记会把
+  // 回落全数钳零、整轮用量静默丢账（append 返回 null，usage.jsonl 和日志都不留痕）。
   const last = new Map<string, UsageSnapshot>();
 
   return {
-    /** 传入该会话的累计用量；只有增长时才落一行。返回写入的增量或 null。 */
-    append(chat: string, cumulative: UsageSnapshot, at: number): UsageRecord | null {
-      const previous = last.get(chat);
-      last.set(chat, cumulative);
+    /** 传入该会话的累计用量；只有增长时才落一行。返回写入的增量或 null。
+     *  conv 用来区分同一群的多个会话（人格切换后的新会话各自独立基线），不传则按 chat 记。 */
+    append(chat: string, cumulative: UsageSnapshot, at: number, conv?: string): UsageRecord | null {
+      const key = conv === undefined ? chat : `${chat}#${conv}`;
+      const previous = last.get(key);
+      last.set(key, cumulative);
       if (!previous) {
-        // 首次见到这个会话：把历史累计也记一笔，否则重启前花的钱会丢
+        // 首次见到这个会话：把它的历史累计也记一笔，否则重启前花的钱会丢
         if (cumulative.total === 0 && cumulative.cost === 0) return null;
-        return write(chat, cumulative, at);
+        return write(chat, cumulative, at, conv);
       }
 
       const delta = diffUsage(cumulative, previous);
       if (delta.total === 0 && delta.cost === 0) return null;
-      return write(chat, delta, at);
+      return write(chat, delta, at, conv);
     },
   };
 
-  function write(chat: string, snapshot: UsageSnapshot, at: number): UsageRecord {
+  function write(chat: string, snapshot: UsageSnapshot, at: number, conv?: string): UsageRecord {
     const day = localDay(at);
-    const record: UsageRecord = { ...snapshot, at, day, chat };
+    const record: UsageRecord = conv === undefined
+      ? { ...snapshot, at, day, chat }
+      : { ...snapshot, at, day, chat, conv };
     try {
       const dir = join(root, day);
       mkdirSync(dir, { recursive: true });

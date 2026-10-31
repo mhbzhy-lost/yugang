@@ -511,9 +511,10 @@ async function submitRound(input: {
 
   await drainLoop();
 
-  // 记账：pi-durable 的 pi.usage 是累计值，这里取差落盘
+  // 记账：pi-durable 的 pi.usage 是累计值，这里取差落盘；基线按会话维度记，
+  // 人格切换换了 conversation 后累计值回落不再被钳零丢账
   const spent = await fish.harness.snapshot(UsageDoc, conv.id, ctx);
-  const delta = usage.append(chatKey, sumUsage(spent), Date.now());
+  const delta = usage.append(chatKey, sumUsage(spent), Date.now(), String(conv.id));
   if (delta) {
     console.log(`[鱼缸] ${chatKey} +${delta.total} tokens / ${delta.cost}`);
   }
