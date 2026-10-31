@@ -1,17 +1,18 @@
 /**
  * draw —— 本地 Stable Diffusion 出图（Windows 宿主机上的 SD WebUI Forge Neo）。
  *
- * 只开放 positive / negative 两项注入，模型、采样器、步数、尺寸全是预设。
+ * 只开放 positive / negative 两项注入，模型、采样器、步数、尺寸全是预设；
+ * 带 ref 时改走 img2img（初图只认媒体目录 inbound/ 或 gen/ 下的图片），出口与限次不变。
  * 图落 <mediaRoot>/gen/，出口仍走 say.media。一轮最多画一次，失败不消耗次数。
  *
  * macOS 本地网络权限不认没有责任 App 的裸 node（孤儿进程无许可，
  * 连局域网 IP 必 EHOSTUNREACH），而 Apple 签名的 /usr/bin/ssh 豁免——
  * 所以真实地址经懒加载的环回隧道中转，鱼只连 127.0.0.1。
  */
-import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { userInfo } from "node:os";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, type Stats } from "node:fs";
+import { extname, join, relative, resolve, sep } from "node:path";
+import { tmpdir, userInfo } from "node:os";
 import { connect } from "node:net";
 import { Type } from "@earendil-works/pi-ai";
 import { LiveDoc, defineTool } from "@earendil-works/pi-durable";
@@ -44,6 +45,23 @@ const PRESETS: Record<string, string> = {
   secret: ", completely nude",
 };
 const PRIVATE_RE = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/;
+
+/** img2img 初图目录白名单：相对 root 归一成 POSIX 斜杠后只认这两个前缀。 */
+const REF_DIRS = ["inbound/", "gen/"];
+/** img2img 初图扩展名白名单。 */
+const REF_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic", ".heif"]);
+/** 初图原始文件大小上限。 */
+const REF_MAX_BYTES = 20 * 1024 * 1024;
+/** 重绘幅度：默认值与允许区间（越界/非有限数字按 tool 错误返回）。 */
+const STRENGTH_DEFAULT = 0.45;
+const STRENGTH_MIN = 0.1;
+const STRENGTH_MAX = 0.9;
+/** 初图目标像素预算与长边上限（与 PRESET 竖版同预算）；边长取 8 的倍数、最小 64。 */
+const INIT_BUDGET = 832 * 1216;
+const INIT_MAX_SIDE = 1216;
+const INIT_MIN_SIDE = 64;
+/** PNG 文件签名（8 字节），IHDR 宽高校验用。 */
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 let tunnelChild: ReturnType<typeof spawn> | null = null;
 const TUNNEL_PID = join(process.cwd(), "var", "sd-tunnel.pid");
@@ -93,6 +111,42 @@ export function createDrawTool(deps: DrawDeps) {
   const timeoutMs = deps.timeoutMs ?? 180_000;
   const doFetch = deps.fetchImpl ?? fetch;
   const outDir = join(deps.mediaRoot, "gen");
+  const root = resolve(deps.mediaRoot);
+  // 真实根：macOS 的 /var、/tmp 本身是符号链接（如 /var/folders 实为 /private/var/folders），realpath 比较必须用解过的根
+  const realRoot = (() => { try { return realpathSync(root); } catch { return root; } })();
+
+  /**
+   * 带 ref 的全部前置校验 + 初图归一化。所有失败都以 tool 错误返回（发生在 POST 之前，
+   * 不消耗本轮 draw 次数）；strength 只对改图生效，没带 ref 时静默忽略。
+   */
+  const prepareRef = (raw: string, requested?: number): { init: InitImage; strength: number } => {
+    const ref = raw.trim().replace(/^\[|\]$/g, "");
+    const full = resolve(root, ref);
+    const rel = relative(root, full).split(sep).join("/");
+    const refError = (template: string): Error => new Error(renderTemplate(template, { ref }));
+    // 必须落在 root 内，且归一后带白名单目录前缀；realpath 复核真实路径防符号链接逃逸
+    if (full !== root && !full.startsWith(root + sep)) throw refError(deps.prompts.messages["draw_ref_outside"] ?? "{{ref}}");
+    if (!REF_DIRS.some((d) => rel.startsWith(d))) throw refError(deps.prompts.messages["draw_ref_outside"] ?? "{{ref}}");
+    let real = "";
+    try { real = realpathSync(full); } catch { /* 读不到按不存在处理 */ }
+    if (!real) throw refError(deps.prompts.messages["draw_ref_missing"] ?? "{{ref}}");
+    if (real !== realRoot && !real.startsWith(realRoot + sep)) throw refError(deps.prompts.messages["draw_ref_outside"] ?? "{{ref}}");
+    let st: Stats | null = null;
+    try { st = statSync(full); } catch { /* 读不到按不存在处理 */ }
+    if (!st || !st.isFile()) throw refError(deps.prompts.messages["draw_ref_missing"] ?? "{{ref}}");
+    if (!REF_EXTS.has(extname(full).toLowerCase())) throw refError(deps.prompts.messages["draw_ref_type"] ?? "{{ref}}");
+    if (st.size > REF_MAX_BYTES) throw refError(deps.prompts.messages["draw_ref_big"] ?? "{{ref}}");
+    let strength = STRENGTH_DEFAULT;
+    if (requested !== undefined) {
+      if (!Number.isFinite(requested) || requested < STRENGTH_MIN || requested > STRENGTH_MAX) {
+        throw new Error(deps.prompts.messages["draw_strength"] ?? "draw_strength");
+      }
+      strength = requested;
+    }
+    const init = normalizeInitImage(full);
+    if (!init) throw refError(deps.prompts.messages["draw_ref_broken"] ?? "{{ref}}");
+    return { init, strength };
+  };
 
   return defineTool({
     name: "draw",
@@ -103,6 +157,8 @@ export function createDrawTool(deps: DrawDeps) {
       negative: Type.Optional(Type.String({ description: prompt.params["negative"] ?? "" })),
       preset: Type.Optional(Type.Union([Type.Literal("default"), Type.Literal("hsr"), Type.Literal("secret")], { description: prompt.params["preset"] ?? "" })),
       highres: Type.Optional(Type.Boolean({ description: prompt.params["highres"] ?? "" })),
+      ref: Type.Optional(Type.String({ description: prompt.params["ref"] ?? "" })),
+      strength: Type.Optional(Type.Number({ description: prompt.params["strength"] ?? "" })),
     }),
     execute: async (args, api, context) => {
       const positive = args.prompt.trim();
@@ -118,6 +174,13 @@ export function createDrawTool(deps: DrawDeps) {
       }
       const stash = round !== undefined ? deps.bypassOf?.(round) : undefined;
 
+      // 带 ref：校验与初图归一化都在 POST 之前完成，失败以 tool 错误返回，不消耗本轮次数；
+      // strength 只对改图生效，没带 ref 时静默忽略
+      const prepared = args.ref !== undefined ? prepareRef(args.ref, args.strength) : null;
+      const init = prepared?.init ?? null;
+      const strength = prepared?.strength ?? STRENGTH_DEFAULT;
+      if (init && args.highres) console.log("[fish] draw: ref given, highres ignored (txt2img only)");
+
       // 本地 SD 出图；没配地址、隧道不通、HTTP 非 2xx、无图都算失败，交给外层兜底
       const drawLocal = async (): Promise<string> => {
         if (!deps.baseUrl) throw new Error("no local sd url");
@@ -128,14 +191,38 @@ export function createDrawTool(deps: DrawDeps) {
         const localPort = Number(process.env.SD_TUNNEL_PORT ?? 7861);
         const useTunnel = PRIVATE_RE.test(realHost) && realHost !== "127.0.0.1";
         if (useTunnel) await ensureTunnel(realHost, realPort, localPort);
-        const target = useTunnel ? `http://127.0.0.1:${localPort}/sdapi/v1/txt2img` : `${deps.baseUrl}/sdapi/v1/txt2img`;
+        // 按端点拼一次：无 ref → txt2img，带 ref → img2img
+        const endpoint = init ? "img2img" : "txt2img";
+        const target = useTunnel ? `http://127.0.0.1:${localPort}/sdapi/v1/${endpoint}` : `${deps.baseUrl}/sdapi/v1/${endpoint}`;
 
-        const body = JSON.stringify({
-          prompt: PRESET_POSITIVE + positive + (PRESETS[args.preset ?? "default"] ?? "") + (stash ? `, ${stash}` : ""),
-          negative_prompt: PRESET_NEGATIVE + (args.negative ?? "").trim(),
-          ...PRESET,
-          ...(args.highres ? HIRES : {}),
-        });
+        const positivePrompt = PRESET_POSITIVE + positive + (PRESETS[args.preset ?? "default"] ?? "") + (stash ? `, ${stash}` : "");
+        const negativePrompt = PRESET_NEGATIVE + (args.negative ?? "").trim();
+        // 无 ref：与历史 txt2img 逐字段一致，highres 只在这一支生效；
+        // 有 ref：img2img 请求模型里没有 enable_hr/hr_* 字段（发了也被忽略），所以不带 HIRES；
+        // 先 ...PRESET 再覆盖宽高，别让预设的 832×1216 盖掉按初图算出的尺寸
+        const body = JSON.stringify(
+          init
+            ? {
+                init_images: [init.b64],
+                prompt: positivePrompt,
+                negative_prompt: negativePrompt,
+                ...PRESET,
+                width: init.width,
+                height: init.height,
+                denoising_strength: strength,
+                resize_mode: 1,
+                batch_size: 1,
+                n_iter: 1,
+                seed: -1,
+                send_images: true,
+              }
+            : {
+                prompt: positivePrompt,
+                negative_prompt: negativePrompt,
+                ...PRESET,
+                ...(args.highres ? HIRES : {}),
+              },
+        );
         const post = async (): Promise<string> => {
           let last: unknown;
           for (let i = 0; i < 3; i++) {
@@ -189,4 +276,49 @@ export function createDrawTool(deps: DrawDeps) {
       }
     },
   });
+}
+
+/** 初图归一化结果：纯 base64（不带 data: 前缀）+ 发给服务端的最终尺寸。 */
+interface InitImage {
+  b64: string;
+  width: number;
+  height: number;
+}
+
+/** 边长向下取到 8 的倍数、最小 64（服务端也会对尺寸向下取整，工具端自己算准）。 */
+function side8(n: number): number {
+  return Math.max(INIT_MIN_SIDE, Math.floor(n / 8) * 8);
+}
+
+/**
+ * 初图归一化：sips 两步——先读原始像素宽高（不依赖扩展名，HEIC/GIF 都认），
+ * 再按预算缩放并转 PNG 写临时文件（GIF 取首帧、HEIC/BMP 归一，透明底/EXIF 交给服务端处理），
+ * 最后从输出 PNG 的 IHDR 读真实宽高（sips 实际输出可能偏离请求值）。任何一步失败返回 null。
+ */
+function normalizeInitImage(full: string): InitImage | null {
+  try {
+    const probe = spawnSync("sips", ["-g", "pixelWidth", "-g", "pixelHeight", full], { timeout: 20_000 });
+    const out = probe.status === 0 ? probe.stdout.toString() : "";
+    const w = Number(/pixelWidth:\s*(\d+)/.exec(out)?.[1]);
+    const h = Number(/pixelHeight:\s*(\d+)/.exec(out)?.[1]);
+    if (!Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0) return null;
+    // 不放大：长边封顶、总像素不超预算；边长向下取到 8 的倍数、最小 64
+    const scale = Math.min(1, INIT_MAX_SIDE / Math.max(w, h), Math.sqrt(INIT_BUDGET / (w * h)));
+    const tw = side8(w * scale);
+    const th = side8(h * scale);
+    const tmp = join(tmpdir(), `draw-init-${Date.now()}-${Math.random().toString(16).slice(2, 8)}.png`);
+    let buf: Buffer;
+    try {
+      const conv = spawnSync("sips", ["-s", "format", "png", "-z", String(th), String(tw), full, "--out", tmp], { timeout: 30_000 });
+      if (conv.status !== 0) return null;
+      buf = readFileSync(tmp);
+    } finally {
+      try { rmSync(tmp, { force: true }); } catch { /* 读完即删，删不掉也无妨 */ }
+    }
+    if (buf.length < 24 || !buf.subarray(0, 8).equals(PNG_SIGNATURE)) return null;
+    // 8 字节签名后跳过 IHDR 的长度与类型，offset 16/20 是大端 uint32 的宽/高
+    return { b64: buf.toString("base64"), width: side8(buf.readUInt32BE(16)), height: side8(buf.readUInt32BE(20)) };
+  } catch {
+    return null;
+  }
 }
