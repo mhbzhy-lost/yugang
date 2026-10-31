@@ -22,7 +22,7 @@ for (const name of required) {
 }
 check(Boolean(process.env.ONEBOT_TOKEN), "env ONEBOT_TOKEN", "没设 token 也能跑，但本机其它进程能连进来");
 
-const models = resolve(process.env.YUGANG_MODELS ?? "config/models.json");
+const models = resolve("config/models.json");
 check(existsSync(models), "config/models.json", "仓库里应该有；是不是在别的目录跑的？");
 check(existsSync(resolve("config/auth.json")), "config/auth.json", "npm run creds import");
 

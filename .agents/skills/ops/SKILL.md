@@ -89,7 +89,7 @@ npm run ping
 
 - 报 `没有拿到 key` → 跑 `npm run creds show`；没有就 `npm run creds import`（写 `config/auth.json`，已被 gitignore）
 - 报 `400 ... unsupported field "max_completion_tokens"` → `config/models.json` 里这个 provider 缺 `compat.maxTokensField: "max_tokens"`
-- 换模型不改代码：`MODEL_PROVIDER` / `MODEL_ID`，或改 `config/models.json` 的 `default`
+- 换模型不改代码：编辑 `config/models.json` 的 `models.main` / `models.vision` / `models.image`，再让鱼 restart
 
 ## 诊断连不上 QQ
 

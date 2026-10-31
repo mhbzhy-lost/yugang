@@ -104,7 +104,7 @@ export function createTools(deps) {
 - **摘要失败就不换页**，宁可继续攒着——半截的换页比不换页危险。
 - 备忘会被当成鱼自己的记忆（第一行固定「（前情）」），不是别人对它说的话。
 
-配置：`COMPACT_PROVIDER` / `COMPACT_MODEL_ID`（默认用主模型）、`COMPACT_MAX_ENTRIES`、`COMPACT_MAX_CHARS`。
+配置：`fish.config.json` 的 `compact.maxEntries` / `compact.maxChars`；摘要固定用主模型（`models.main`）。
 
 ## 校验分两类
 
@@ -146,28 +146,47 @@ test/               node --test，不需要网络和 API key
 **配置在仓库里，凭据在仓库外。**
 
 ```
-config/models.json       provider 地址、模型清单、网关兼容值   ← 进仓库，可 diff 可 review
-config/auth.json         只有 key                              ← gitignore，权限 600
-config/auth.example.json 模板，说明格式                         ← 进仓库
+config/models.json       models 角色表 + provider 地址 + 模型清单 + 兼容值  ← 进仓库，可 diff 可 review
+config/auth.json         只有 key                                      ← gitignore，权限 600
+config/auth.example.json 模板，说明格式                                 ← 进仓库
 ```
 
 `var/` 只放运行时生成的东西（数据库、原话簿、媒体、幂等表），不放凭据。
 
-`config/models.json` 是自己的一份配置，不依赖 `~/pi-config` 是否存在：
+模型选择只有一个入口：`config/models.json` 的 `models` 角色表。没有环境变量，也没有启动参数。
 
 ```json
 {
-  "default": { "provider": "qoder-pool", "model": "DeepSeek-Flash" },
+  "models": {
+    "main":   { "provider": "zai-coding-cn", "model": "glm-5.3-flash" },
+    "vision": { "provider": "zai-coding-cn", "model": "glm-5.3-flash" },
+    "image":  { "provider": "openai-codex",  "model": "gpt-image-2" }
+  },
   "providers": {
-    "qoder-pool": {
+    "zai-coding-cn": {
       "api": "openai-completions",
-      "baseUrl": "http://classi.jini.zeroling.com:8080/qoder/v1",
+      "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
       "compat": { "maxTokensField": "max_tokens" },
-      "models": [ { "id": "DeepSeek-Flash", "contextWindow": 1000000, "maxTokens": 32000 } ]
+      "models": [ { "id": "glm-5.3-flash", "contextWindow": 1000000, "maxTokens": 131072 } ]
     }
   }
 }
 ```
+
+三个角色：
+
+| 角色 | 用途 | 省略时 |
+|---|---|---|
+| `main` | 主对话模型；压缩/备忘也用它 | 必填，缺了启动报错 |
+| `vision` | `look` / `video` 的识图模型 | 与 `main` 完全相同 |
+| `image` | `gpt_image` 透传通道：`provider` 决定用 `auth.json` 里哪条登录，`model` 是默认模型名 | `gpt_image` 不可用（不隐式兜底） |
+
+旧配置里的 `default` 键已废弃：留着会直接报错，改成 `models.main`。
+
+`providers.<name>.transport: "sse"` 是进程级流式传输设置（只取 `main` 的 provider）：
+Node 的 WS 不吃 `--use-env-proxy`，过代理时必须写 `"sse"`。
+
+鱼自己能 `read` / `edit` 这个文件（`config/auth.json` 在围栏外），改完用 `restart` 工具生效。
 
 凭据只导一次，之后运行时不碰任何外部配置：
 
@@ -175,13 +194,11 @@ config/auth.example.json 模板，说明格式                         ← 进�
 npm run creds import     # 从 ~/pi-config/pi/auth.json 导一次，写 config/auth.json（600）
 npm run creds show       # 每个 provider 有没有 key、多少字符
 npm run creds clear      # 删掉
-npm run ping             # 读凭据 → 最小补全 → 打印模型/耗时/用量
+npm run ping             # 读 models.json → 最小补全 → 打印三角色/耗时/用量
 ```
 
-只抄了 `DeepSeek-Flash` 一个模型。要加别的，往 `models[].` 里加一条即可——同网关下的
-`DeepSeek-V4-Pro`、`Kimi-K3.1-Pro` 都在 `~/pi-config` 里能查到参数。
-
-换机器只要重新导一次凭据；换模型改 `MODEL_PROVIDER` / `MODEL_ID`。
+加模型：往对应 `providers.<name>.models[]` 里加一条，再把 `models.<角色>` 指过去。
+换机器只要重新导一次凭据。
 
 `key` 只在内存里：不写 env、不进 prompt、不进 transcript，`describeModel()` 只报「已加载 / N 字符」和来源路径。
 
@@ -246,8 +263,7 @@ npm test                 # 用 faux provider 跑，不需要 key
 # 真跑：先有 NapCat / SnowLuma 的 OneBot v11 正向 WebSocket
 export ONEBOT_WS_URL=ws://127.0.0.1:3001
 export ONEBOT_TOKEN=...            # 没有就不填
-export MODEL_PROVIDER=deepseek     # 任意 pi-ai provider
-export MODEL_ID=deepseek-v4-flash
+# 模型在 config/models.json 的 models.main 里配，没有环境变量
 export AMBIENT_CHANCE=0.06         # 不带 @ 时进 loop 的概率
 export COOLDOWN_MS=90000           # 同群两次进 loop 的最小间隔
 export KEYWORDS=阿鱼,鱼缸           # 命中就进 loop

@@ -14,7 +14,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { addFishProvider, createFishModels } from "./models.ts";
-import { describeModel, loadModelConfig } from "./model-config.ts";
+import { describeModel, loadFishModels } from "./model-config.ts";
 import { cleanupStaleVideoTemps } from "./tools/video.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { Conversation } from "@earendil-works/pi-durable";
@@ -104,15 +104,13 @@ mkdirSync(HOME, { recursive: true });
 
 cleanupStaleVideoTemps(); // 清掉上次被打断的抽帧临时目录（正常路径在 finally 里删）
 
+const modelSelection = loadFishModels();
+
 const config = {
   onebotUrl: process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001",
   onebotToken: process.env.ONEBOT_TOKEN,
-  // 模型与凭据：从 ~/pi-config 抄（provider 条目 + auth.json 的 key），见 src/model-config.ts
-  modelConfig: loadModelConfig(),
-  gateModel: {
-    provider: process.env.GATE_PROVIDER ?? "",
-    modelId: process.env.GATE_MODEL_ID ?? "",
-  },
+  // 模型与凭据：只认 config/models.json 的 models 角色表 + 同目录 auth.json，见 src/model-config.ts
+  modelConfig: modelSelection.main,
   mediaRoot: resolve(process.env.MEDIA_ROOT ?? join(HOME, "media")),
   promptRoot: resolve(process.env.PROMPT_ROOT ?? join(process.cwd(), "prompt")),
   workspaceRoot: resolve(process.env.WORKSPACE_ROOT ?? join(HOME, "workspace")),
@@ -124,26 +122,15 @@ const config = {
 };
 mkdirSync(config.mediaRoot, { recursive: true });
 
-const models = createFishModels(config.modelConfig);
+const models = createFishModels(modelSelection.main);
 // 视觉模型可能是另一个 provider（例如主体走 codex 订阅、识图仍用 glm）：
 // 把它也挂进同一个 Models，否则 getModel 拿不到 → 看图直接判「服务不稳」
-if (process.env.VISION_MODEL_ID && process.env.VISION_PROVIDER && process.env.VISION_PROVIDER !== config.modelConfig.providerId) {
-  try {
-    const visionConfig = loadModelConfig({
-      providerId: process.env.VISION_PROVIDER,
-      modelId: process.env.VISION_MODEL_ID,
-    });
-    addFishProvider(models, visionConfig);
-    console.log("[鱼缸] 视觉模型 provider 已挂载:", process.env.VISION_PROVIDER, process.env.VISION_MODEL_ID);
-  } catch (error) {
-    console.warn("[鱼缸] 视觉模型 provider 挂载失败:", error instanceof Error ? error.message : error);
-  }
+if (modelSelection.vision.providerId !== modelSelection.main.providerId) {
+  addFishProvider(models, modelSelection.vision);
+  console.log(`[鱼缸] 视觉模型 provider 已挂载：${modelSelection.vision.providerId}/${modelSelection.vision.modelId}`);
 }
-const mainModel = { provider: config.modelConfig.providerId, modelId: config.modelConfig.modelId };
-const gateModel = {
-  provider: config.gateModel.provider || mainModel.provider,
-  modelId: config.gateModel.modelId || mainModel.modelId,
-};
+const mainModel = { provider: modelSelection.main.providerId, modelId: modelSelection.main.modelId };
+const visionModel = { provider: modelSelection.vision.providerId, modelId: modelSelection.vision.modelId };
 
 const onebot = new OneBot(config.onebotUrl, config.onebotToken, config.mediaRoot);
 const chatlog = createChatlog(join(HOME, "chatlog"));
@@ -183,16 +170,14 @@ const fish = await openFish({
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
   // 只有 video 单独放宽：要下视频、抽帧、逐帧过视觉模型
   toolTimeoutOverrides: { video: 90, gpt_image: 210 },
-  // codex 订阅走 WebSocket（Node 的 WS 不吃 --use-env-proxy），过代理时必须退回 sse
-  ...(process.env.MODEL_TRANSPORT === "sse" ? { streamTransport: "sse" as const } : {}),
+  // codex 订阅走 WebSocket（Node 的 WS 不吃 --use-env-proxy），过代理时在 main provider 写 transport: "sse"
+  ...(modelSelection.transport ? { streamTransport: modelSelection.transport } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时
   memeCooldownMs: () => Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
   // 语音：按会话所在人格取配置（只认 fish.config 的 voices，没配就是没有语音）
   ttsOf: (conversationId) => voiceConfigFor(mappingKeys.get(String(conversationId)) ?? ""),
-  // look / video 的视觉描述模型：缺省用主模型自身；可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型
-  visionModel: process.env.VISION_MODEL_ID
-    ? { provider: process.env.VISION_PROVIDER ?? config.modelConfig.providerId, modelId: process.env.VISION_MODEL_ID }
-    : undefined,
+  // look / video 的视觉描述模型：models.vision；省略时与 models.main 相同
+  visionModel,
   promptRoot: config.promptRoot,
   mediaRoot: config.mediaRoot,
   // 搜索凭据：与模型凭据同源（config/auth.json 的 deepseek 条目），缺了工具会以可读错误回应
@@ -203,7 +188,14 @@ const fish = await openFish({
       return undefined;
     }
   })(),
-  gptImageAuthPath: config.modelConfig.credentialsPath,
+  // gpt_image 通道：models.image 省略 = 该工具不可用（不隐式兜底模型名）
+  gptImage: modelSelection.image
+    ? {
+        authPath: modelSelection.main.credentialsPath,
+        provider: modelSelection.image.provider,
+        model: modelSelection.image.modelId,
+      }
+    : undefined,
   sdUrl: process.env.SD_WEBUI_URL,
   // （sdUrl 存在时见启动处的邻居保温定时器）
   tagsCsv: join(HOME, "danbooru.csv"),
@@ -230,7 +222,7 @@ const fish = await openFish({
   bypassOf: (roundId) => bypassOf.get(String(roundId)),
   workspaceRoot: config.workspaceRoot,
   compact: {
-    model: gateModel,
+    model: mainModel,
     maxEntries: fishConfig().config.compact.maxEntries,
     maxChars: fishConfig().config.compact.maxChars,
     limits: () => fishConfig().config.compact,
@@ -774,6 +766,7 @@ recoveringDrain = false;
 
 const shown = describeModel(config.modelConfig);
 console.log(`[鱼缸] 已连接，模型 ${shown.provider}/${shown.model}，工具 ${fish.toolNames.join("、")}`);
+console.log(`[鱼缸] 视觉 ${visionModel.provider}/${visionModel.modelId}，图片 ${modelSelection.image ? `${modelSelection.image.provider}/${modelSelection.image.modelId}` : "未配置"}`);
 console.log(`[鱼缸] 凭据 ${shown.key}（${shown.keySource}）`);
 
 // 优雅退出：deploy 发 SIGTERM 后先把 outbox 里已入队的消息发完再关——

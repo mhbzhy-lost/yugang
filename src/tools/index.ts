@@ -34,8 +34,8 @@ export interface ToolDeps {
   /** 会话 → 群成员名单；watch 用它校验被关注人真的在群里。 */
   onWatchChanged?: (conversationId: string, userIds: string[]) => void;
   groupMembersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
-  /** ChatGPT/Codex 凭据文件（config/auth.json）：缺省则 draw 只剩本地画图。 */
-  gptImageAuthPath?: string;
+  /** ChatGPT/Codex 图片通道（models.image）：authPath 决定用哪份登录凭据，model 是默认模型名。 */
+  gptImage?: { authPath: string; provider: string; model: string };
   /** SD WebUI（Windows 宿主机）的 baseUrl；给了才有本地画图。 */
   sdUrl?: string;
   /** danbooru.csv 路径；给了才能查 tag 词表。 */
@@ -70,7 +70,7 @@ export function createTools(deps: ToolDeps): ToolRegistration[] {
     ...(deps.master ? [createMemeAddTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, master: deps.master, triggerOf: deps.triggerOf })] : []),
     ...fsTools,
     createDrawTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, baseUrl: deps.sdUrl, bypassOf: deps.bypassOf }),
-    createGptImageTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, ...(deps.gptImageAuthPath ? { authPath: deps.gptImageAuthPath } : {}) }),
+    createGptImageTool({ prompts: deps.prompts, mediaRoot: deps.mediaRoot, ...(deps.gptImage ? { gptImage: deps.gptImage } : {}) }),
     ...(deps.master ? [createWatchTool({ prompts: deps.prompts, master: deps.master, triggerOf: deps.triggerOf, ...(deps.groupMembersOf ? { membersOf: deps.groupMembersOf } : {}), ...(deps.onWatchChanged ? { onChanged: deps.onWatchChanged } : {}) })] : []),
     createTagsTool({ prompts: deps.prompts, csvPath: deps.tagsCsv }),
     ...treeTool,

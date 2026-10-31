@@ -12,29 +12,27 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { loadModelConfig } from "../src/model-config.ts";
+import { loadFishModels } from "../src/model-config.ts";
 import { createFishModels } from "../src/models.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openFish } from "../src/harness.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 
 const HOME = process.env.YUGANG_HOME ?? join(homedir(), "鱼缸", "var");
-const cfg = loadModelConfig();
-const gateModel = {
-  provider: process.env.GATE_PROVIDER ?? cfg.providerId,
-  modelId: process.env.GATE_MODEL_ID ?? cfg.modelId,
-};
+const selection = loadFishModels();
+// 压缩固定用主模型：models.json 没有单独的摘要角色
+const mainModel = { provider: selection.main.providerId, modelId: selection.main.modelId };
 
 const fish = await openFish({
   storage: await openNodeSqliteStorage(join(HOME, "fish.db")),
-  models: createFishModels(cfg),
-  model: { provider: cfg.providerId, modelId: cfg.modelId },
+  models: createFishModels(selection.main),
+  model: mainModel,
   promptRoot: process.env.PROMPT_ROOT ?? "prompt",
   mediaRoot: join(HOME, "media"),
   workspaceRoot: join(HOME, "workspace"),
   master: process.env.MASTER_QQ ?? "",
   // 极小阈值：任何有内容的会话都会触发换页
-  compact: { model: gateModel, maxEntries: 1, maxChars: 1 },
+  compact: { model: mainModel, maxEntries: 1, maxChars: 1 },
   emit: () => {},
   react: () => {},
 });

@@ -108,5 +108,6 @@ cmd_unknown: 不认识的指令：{{cmd}}。可用：/查询可用人格、/切�
 
 gpt_image_prompt: 给我一句画面描述再画
 gpt_image_off: 在线生图没登录，先用 npm run login 登录
+gpt_image_unconfigured: 没配图片模型，去 config/models.json 的 models.image 里加一条
 gpt_image_bad_ref: 参考图 {{ref}} 用不了（要媒体目录里的图片）
 gpt_image_done: 画好了：{{files}} —— 用 say 的 media 参数发出去

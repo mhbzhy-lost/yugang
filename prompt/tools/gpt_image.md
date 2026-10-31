@@ -1,7 +1,7 @@
 ---
 params:
   prompt: 画面描述。写清主体、构图、风格；唯一必填项。想要竖版/横版就把构图写进去
-  model: 模型 id，不填就是 gpt-image-2；一般不用填
+  model: 模型 id，不填就用 config/models.json 的 models.image；一般不用填
   background: auto / transparent / opaque；不填就是 auto。要透明底就传 transparent
   images: 参考图列表，写媒体目录下的路径（如 inbound/xxx.jpg、gen/xxx.png），最多 5 张；传了就是改图，不传是纯文生图
 ---

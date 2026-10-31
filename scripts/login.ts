@@ -11,12 +11,12 @@
  */
 import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { loadModelConfig } from "../src/model-config.ts";
+import { loadProviderConfig } from "../src/model-config.ts";
 import { createFishModels } from "../src/models.ts";
 import { finishBrowserLogin, startBrowserLogin } from "../src/oauth-openai.ts";
 
 const args = process.argv.slice(2);
-const target = args.find((a) => !a.startsWith("--")) ?? process.env.MODEL_PROVIDER ?? "";
+const target = args.find((a) => !a.startsWith("--")) ?? "";
 const mode = args.includes("--browser") ? "browser" : args.includes("--finish") ? "finish" : "device";
 const finishIndex = args.indexOf("--finish");
 const finishInput = finishIndex >= 0 ? args[finishIndex + 1] : undefined;
@@ -30,7 +30,7 @@ if (target !== "openai-codex") {
   process.exit(1);
 }
 
-const config = loadModelConfig({ providerId: target, modelsPath: resolve(join(process.cwd(), "config", "models.json")) });
+const config = loadProviderConfig(target, { modelsPath: resolve(join(process.cwd(), "config", "models.json")) });
 const models = createFishModels(config);
 const statePath = join(dirname(config.credentialsPath), ".login-state.json");
 

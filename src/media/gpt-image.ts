@@ -29,8 +29,10 @@ const EDIT_ENDPOINT = "https://chatgpt.com/backend-api/codex/images/edits";
 const ORIGINATOR = "codex_cli_rs";
 
 export interface GptImageRequest {
-  /** config/auth.json 路径；里面必须有 openai-codex 的 OAuth 凭据。 */
+  /** config/auth.json 路径；里面必须有 provider 对应的 OAuth 凭据。 */
   authPath: string;
+  /** auth.json 里的凭据条目名（models.image.provider，默认 openai-codex）。 */
+  provider: string;
   prompt: string;
   /** 原样透传给图片 API 的字段（model / n / size / quality / background / output_format / …）。 */
   params?: Record<string, unknown>;
@@ -45,7 +47,7 @@ export interface GptImageRequest {
 /** 出图成功返回相对 mediaRoot 的引用列表（gen/xxx.png）；失败抛错，错误里不带凭据。 */
 export async function generateGptImages(request: GptImageRequest): Promise<string[]> {
   const store = fileCredentialStore(request.authPath);
-  const raw = await store.read("openai-codex");
+  const raw = await store.read(request.provider);
   if (!raw || raw.type !== "oauth") throw new Error("gpt_image_no_auth");
   let credential = raw as OAuthCredential;
   if (typeof credential.access !== "string" || typeof credential.accountId !== "string") {
@@ -55,17 +57,17 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
   // 提前一分钟刷新：生图一次十几秒，别让 token 在请求途中过期
   if (Number(credential.expires) - Date.now() < 60_000) {
     const refreshed = await refreshTokens(credential);
-    await store.modify("openai-codex", async () => refreshed);
+    await store.modify(request.provider, async () => refreshed);
     credential = refreshed;
   }
 
-  // prompt 以 request.prompt 为准；params 里其余字段原样透传
+  // prompt 以 request.prompt 为准；params 里其余字段原样透传（model 由调用方按 models.image 填）
   const { prompt: _ignored, model, ...rest } = (request.params ?? {}) as Record<string, unknown> & {
     prompt?: unknown;
     model?: unknown;
   };
   const body: Record<string, unknown> = {
-    model: typeof model === "string" && model.trim().length > 0 ? model.trim() : "gpt-image-2",
+    ...(typeof model === "string" && model.trim().length > 0 ? { model: model.trim() } : {}),
     prompt: request.prompt,
     ...rest,
   };

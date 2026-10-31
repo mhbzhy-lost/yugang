@@ -11,11 +11,13 @@
  *
  * 用法（默认在 mini 上跑）：
  *   node --experimental-strip-types scripts/retag-memes.ts [--dry] [--limit N]
- * 环境变量可覆盖：INDEX / AUTH / MODELS / PROMPT / MODEL
+ * 补标用 config/models.json 的 models.vision（flash 级文本模型，别用 main 的订阅模型）。
+ * 环境变量可覆盖：INDEX / AUTH / PROMPT / TAGS
  */
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { loadFishModels } from "../src/model-config.ts";
 
 interface Entry {
   file: string;
@@ -31,10 +33,9 @@ const limit = limitArg >= 0 ? Number(args[limitArg + 1] ?? "0") : 0;
 const root = join(import.meta.dirname, "..");
 const indexPath = process.env["INDEX"] ?? join(homedir(), "鱼缸", "var", "media", "memes", "index.json");
 const authPath = process.env["AUTH"] ?? join(root, "config", "auth.json");
-const modelsPath = process.env["MODELS"] ?? join(root, "config", "models.json");
+const modelsPath = join(root, "config", "models.json");
 const promptPath = process.env["PROMPT"] ?? join(root, "prompt", "meme-retag.md");
 const tagsPath = process.env["TAGS"] ?? join(root, "prompt", "meme-tags.md");
-const modelId = process.env["MODEL"] ?? "glm-5.3-flash";
 
 if (!existsSync(indexPath)) throw new Error(`找不到索引：${indexPath}`);
 if (!existsSync(authPath)) throw new Error(`找不到凭据：${authPath}`);
@@ -45,19 +46,12 @@ const moods = readFileSync(tagsPath, "utf8")
   .map((l) => l.trim())
   .filter((l) => l.length > 0 && !l.startsWith("#"));
 
-// 模型与凭据（key 只进请求头，不打印）
-const models = JSON.parse(readFileSync(modelsPath, "utf8")) as {
-  providers: Record<string, { baseUrl?: string; api?: string; models?: { id: string }[] }>;
-};
-const auth = JSON.parse(readFileSync(authPath, "utf8")) as Record<string, { key?: string; apiKey?: string }>;
-const providerName = Object.keys(models.providers).find((name) =>
-  models.providers[name]?.models?.some((m) => m.id === modelId),
-);
-if (!providerName) throw new Error(`models.json 里没有提供 ${modelId} 的 provider`);
-const provider = models.providers[providerName]!;
-const baseUrl = provider.baseUrl ?? "";
-const key = auth[providerName]?.key ?? auth[providerName]?.apiKey ?? "";
-if (!baseUrl || !key) throw new Error(`provider ${providerName} 缺 baseUrl 或凭据`);
+// 模型与凭据（key 只进请求头，不打印）：补标用 vision 角色
+const vision = loadFishModels({ modelsPath, credentialsPath: authPath }).vision;
+const modelId = vision.modelId;
+const baseUrl = vision.baseUrl;
+const key = vision.key;
+if (!baseUrl || !key) throw new Error(`provider ${vision.providerId} 缺 baseUrl 或凭据`);
 
 const entries = JSON.parse(readFileSync(indexPath, "utf8")) as Entry[];
 const hasMood = (e: Entry) => e.tags.some((t) => moods.some((m) => m.toLowerCase() === t.toLowerCase()));

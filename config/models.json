@@ -1,7 +1,17 @@
 {
-  "default": {
-    "provider": "zai-coding-cn",
-    "model": "glm-5.3-flash"
+  "models": {
+    "main": {
+      "provider": "openai-codex",
+      "model": "gpt-6.1-terra"
+    },
+    "vision": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3-flash"
+    },
+    "image": {
+      "provider": "openai-codex",
+      "model": "gpt-image-2"
+    }
   },
   "providers": {
     "deepseek": {
@@ -131,6 +141,7 @@
       "api": "openai-codex-responses",
       "auth": "oauth",
       "baseUrl": "https://chatgpt.com/backend-api",
+      "transport": "sse",
       "models": [
         {
           "id": "gpt-6.1-sol",

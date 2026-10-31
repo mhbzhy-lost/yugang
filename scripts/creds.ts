@@ -12,7 +12,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, w
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-const MODELS = resolve(process.env.YUGANG_MODELS ?? join(process.cwd(), "config", "models.json"));
+const MODELS = join(process.cwd(), "config", "models.json");
 const TARGET = join(dirname(MODELS), "auth.json");
 
 const [command = "show", ...rest] = process.argv.slice(2);

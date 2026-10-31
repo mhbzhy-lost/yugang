@@ -22,7 +22,7 @@ export interface LookDeps {
   prompts: PromptSet;
   /** 模型池：用独立请求把图描述成文字，图片从一开始就不进主会话。 */
   models?: Models;
-  /** 视觉描述用的模型；缺省用主模型自身（可看图），可经 VISION_PROVIDER/VISION_MODEL_ID 换专职视觉模型。 */
+  /** 视觉描述用的模型：config/models.json 的 models.vision；省略时与 main 相同。 */
   visionModel?: { provider: string; modelId: string };
   maxPerRun?: number;
 }

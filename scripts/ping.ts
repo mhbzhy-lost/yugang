@@ -1,24 +1,29 @@
 /**
- * 验模型：读凭据 → 跑一次最小补全 → 打印模型、耗时、用量。
+ * 验模型：读 config/models.json 的角色表 → 跑一次最小补全 → 打印模型、耗时、用量。
  *
  *   npm run ping
  *
- * 凭据只在进程内存里，输出里只有"已加载 / N 字符"和来源路径，没有 key 内容。
+ * 模型选择只认 config/models.json 的 models.main / models.vision / models.image，
+ * 没有环境变量、没有启动参数。凭据只在进程内存里，输出里只有"已加载 / N 字符"和来源路径。
  */
 import { createFishModels, assertModelExists } from "../src/models.ts";
-import { describeModel, loadModelConfig } from "../src/model-config.ts";
+import { describeModel, loadFishModels } from "../src/model-config.ts";
 
-const config = loadModelConfig();
-const shown = describeModel(config);
-console.log("provider :", shown.provider);
-console.log("model    :", shown.model);
+const selection = loadFishModels();
+const main = selection.main;
+const shown = describeModel(main);
+
+console.log("main     :", `${shown.provider}/${shown.model}`);
+console.log("vision   :", `${selection.vision.providerId}/${selection.vision.modelId}`);
+console.log("image    :", selection.image ? `${selection.image.provider}/${selection.image.modelId}` : "(未配置)");
 console.log("baseUrl  :", shown.baseUrl);
 console.log("key      :", shown.key, "←", shown.keySource);
+console.log("transport:", selection.transport ?? "默认");
 
-const models = createFishModels(config);
-assertModelExists(models, config.providerId, config.modelId);
+const models = createFishModels(main);
+assertModelExists(models, main.providerId, main.modelId);
 
-const model = models.getModel(config.providerId, config.modelId)!;
+const model = models.getModel(main.providerId, main.modelId)!;
 console.log("context  :", model.contextWindow, "| maxTokens:", model.maxTokens, "| input:", model.input.join("+"));
 
 const started = Date.now();

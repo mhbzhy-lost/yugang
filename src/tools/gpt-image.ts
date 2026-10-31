@@ -16,20 +16,19 @@ import { generateGptImages } from "../media/gpt-image.ts";
 export interface GptImageToolDeps {
   prompts: PromptSet;
   mediaRoot: string;
-  /** config/auth.json；缺省时工具直接报「没登录」，不做任何降级。 */
-  authPath?: string;
+  /** models.image：authPath 决定凭据文件，provider 决定 auth.json 里哪条登录，model 是默认模型名。 */
+  gptImage?: { authPath: string; provider: string; model: string };
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
 
 /**
- * 不传就用这些。只保留这条通道真正认的字段：
+ * 不传 model 就用 models.image.model。只保留这条通道真正认的字段：
  *   model / background / prompt（+ images 走 edits）
  * 实测被后端忽略或拒绝的都已从工具面移除：n、size、quality、moderation、
  * output_format、output_compression、seed、aspect_ratio、mask。
  */
 const DEFAULTS = {
-  model: "gpt-image-2",
   background: "auto",
 } as const;
 
@@ -71,7 +70,7 @@ export function createGptImageTool(deps: GptImageToolDeps) {
       if (!positive || positive.length > 4000) {
         throw new Error(deps.prompts.messages["gpt_image_prompt"] ?? "gpt_image_prompt");
       }
-      if (!deps.authPath) throw new Error(deps.prompts.messages["gpt_image_off"] ?? "gpt_image_off");
+      if (!deps.gptImage) throw new Error(deps.prompts.messages["gpt_image_unconfigured"] ?? "gpt_image_unconfigured");
 
       // 参考图：只允许 mediaRoot 内的图片，读成 data URL 交给 edits 端点
       const references: string[] = [];
@@ -90,8 +89,8 @@ export function createGptImageTool(deps: GptImageToolDeps) {
         references.push(`data:${mime};base64,${bytes.toString("base64")}`);
       }
 
-      // 先铺默认值，再用显式传进来的覆盖
-      const params: Record<string, unknown> = { prompt: positive, ...DEFAULTS };
+      // 先铺默认值，再用显式传进来的覆盖；model 默认取 models.image
+      const params: Record<string, unknown> = { prompt: positive, model: deps.gptImage.model, ...DEFAULTS };
       for (const key of ["model", "background"] as const) {
         const value = args[key];
         if (value !== undefined) params[key] = value;
@@ -99,13 +98,19 @@ export function createGptImageTool(deps: GptImageToolDeps) {
 
       const started = Date.now();
       const files = await generateGptImages({
-        authPath: deps.authPath,
+        authPath: deps.gptImage.authPath,
+        provider: deps.gptImage.provider,
         prompt: positive,
         params,
         ...(references.length > 0 ? { images: references } : {}),
         mediaRoot: deps.mediaRoot,
         ...(deps.timeoutMs === undefined ? {} : { timeoutMs: deps.timeoutMs }),
         ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
+      }).catch((error: unknown) => {
+        if (error instanceof Error && error.message === "gpt_image_no_auth") {
+          throw new Error(deps.prompts.messages["gpt_image_off"] ?? "gpt_image_off");
+        }
+        throw error;
       });
       const { prompt: _omit, ...effective } = params;
       console.log(
