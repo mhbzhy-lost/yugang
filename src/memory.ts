@@ -4,7 +4,7 @@
  * 记忆存成 session 级 keyed document family（见 store.ts）：公共层 fish.memory
  * （key=人格名，默认人格为「默认」，见 memory-scope.ts 的 memoryKeyOf）与私有层
  * fish.memory.private（key=人格名@chatKey，仅该人格在来源会话可见）。写入入口只有
- * 审批通道（/记忆 指令与 scripts/memory.ts 的 --approve/--reject）：压缩链路只把
+ * 审批通道（/记忆 指令与 scripts/memory.ts 的 --approve/--reject/--delete）：压缩链路只把
  * 抽取 patch 写进待审库 fish.memory.pending，未批准内容不进任何记忆 doc。
  * 渲染入口只有 system section（harness.ts）：公共 + 本会话私有两层合并渲染。
  *
@@ -28,9 +28,13 @@ export interface MemoryFact {
   at: number;
   /** 被 supersede 命中后的失效时间；有效事实没有这个字段。 */
   invalidAt?: number;
+  /** 审计链：取代它的那条新 fact 的 id（supersede 生效时由 applyPatch 回填）。 */
+  supersededBy?: string;
   source: FactSource;
   /** reported 来源的转述人 subject。 */
   by?: string;
+  /** 来源会话 chatKey：批准路径由宿主注入（待审条目的 originChatKey），不由模型决定。 */
+  fromChat?: string;
   hits: number;
 }
 
@@ -178,10 +182,12 @@ function personTextTotal(person: MemoryPerson): number {
 }
 
 /**
- * 施加一个（已 sanitize 的）patch，返回全新 state。
- * 顺序：先 supersede 失效，再合并 people / lore / cards，最后按上限淘汰。
+ * 施加一个（已 sanitize 的）patch，返回全新 state。fromChat 是来源会话 chatKey，
+ * 由审批路径注入（待审条目的 originChatKey），写进本 patch 新建的每条 fact——
+ * 来源不由模型决定。顺序：先 supersede 失效，再合并 people / lore / cards，
+ * 回填 supersededBy 审计链，最后按上限淘汰。
  */
-export function applyPatch(state: MemoryState, patch: MemoryPatch, now: number): MemoryState {
+export function applyPatch(state: MemoryState, patch: MemoryPatch, now: number, fromChat?: string): MemoryState {
   // 深拷贝：不原地改写 doc 或调用方状态
   const people: Record<string, MemoryPerson> = {};
   for (const person of Object.values(state.people)) {
@@ -195,15 +201,21 @@ export function applyPatch(state: MemoryState, patch: MemoryPatch, now: number):
   const lore: MemoryLore[] = state.lore.map((item) => ({ ...item, keys: [...item.keys] }));
   const cards: MemoryCard[] = state.cards.map((card) => ({ ...card, keys: [...card.keys], subjects: [...card.subjects] }));
 
-  // supersede：命中同 subject 的有效 fact 才失效；不存在、subject 不匹配或已失效则忽略
+  // supersede：命中同 subject 的有效 fact 才失效；不存在、subject 不匹配或已失效则忽略。
+  // 失效的 fact 暂存，等新 fact 落地后回填 supersededBy 审计链（见 people 循环之后）
+  const superseded: MemoryFact[] = [];
   for (const entry of patch.supersede ?? []) {
     const person = people[entry.subject];
     if (!person) continue;
     for (const fact of person.facts) {
-      if (fact.invalidAt === undefined && entry.ids.includes(fact.id)) fact.invalidAt = now;
+      if (fact.invalidAt === undefined && entry.ids.includes(fact.id)) {
+        fact.invalidAt = now;
+        superseded.push(fact);
+      }
     }
   }
 
+  const newFactIds = new Map<string, string>();
   for (const incoming of patch.people ?? []) {
     const person: MemoryPerson = people[incoming.subject] ?? {
       subject: incoming.subject,
@@ -230,13 +242,16 @@ export function applyPatch(state: MemoryState, patch: MemoryPatch, now: number):
         existing.hits += 1;
         continue;
       }
+      const id = newId("f");
+      if (!newFactIds.has(person.subject)) newFactIds.set(person.subject, id);
       person.facts.push({
-        id: newId("f"),
+        id,
         subject: person.subject,
         text,
         at: now,
         source: raw.source,
         ...(raw.by !== undefined ? { by: raw.by } : {}),
+        ...(fromChat !== undefined && fromChat.length > 0 ? { fromChat } : {}),
         hits: 0,
       });
     }
@@ -254,6 +269,13 @@ export function applyPatch(state: MemoryState, patch: MemoryPatch, now: number):
     person.catchphrases = person.catchphrases.slice(-MEMORY_CAPS.catchphrasesPerPerson);
 
     person.updatedAt = now;
+  }
+
+  // 审计链回填：被 supersede 的旧 fact 记下取代它的新 fact id（同 subject 首条新 fact）。
+  // patch 只 supersede 不新增时无链可记，invalidAt 照样生效。
+  for (const fact of superseded) {
+    const replacement = newFactIds.get(fact.subject);
+    if (replacement !== undefined) fact.supersededBy = replacement;
   }
 
   for (const incoming of patch.lore ?? []) {
@@ -292,11 +314,12 @@ export function applyPatch(state: MemoryState, patch: MemoryPatch, now: number):
     });
   }
 
-  // 上限淘汰：机械执行，宁丢旧的，不破上限
+  // 上限淘汰：机械执行，宁丢旧的，不破上限。时效口径：at + hits 组合——
+  // 零命中且更旧的优先淘汰；渲染期零写入（不记 lastUsedAt，渲染只读）
   evictPeople(people);
   for (const person of Object.values(people)) evictFacts(person);
-  evictList(lore, MEMORY_CAPS.lore);
-  evictList(cards, MEMORY_CAPS.cards);
+  evictList(lore, MEMORY_CAPS.lore, byAgeHits);
+  evictList(cards, MEMORY_CAPS.cards, (a, b) => a.importance - b.importance || a.at - b.at);
 
   return {
     version: 1,
@@ -315,11 +338,20 @@ function evictPeople(people: Record<string, MemoryPerson>): void {
   for (const subject of ordered.slice(0, subjects.length - MEMORY_CAPS.people)) delete people[subject];
 }
 
-/** 每人 facts 超 8 条或总字数超 320：先淘汰已失效且 at 最旧，再淘汰有效且 at 最旧。 */
+/**
+ * 时效组合因子：零命中的优先沉底/淘汰，同层更旧优先，再按命中数低者优先。
+ * 只用 at（入库时间）与 hits，纯机械；不引入任何渲染期写入。
+ */
+function byAgeHits<T extends { at: number; hits?: number }>(a: T, b: T): number {
+  const zero = (item: T): number => ((item.hits ?? 0) === 0 ? 0 : 1);
+  return zero(a) - zero(b) || a.at - b.at || (a.hits ?? 0) - (b.hits ?? 0);
+}
+
+/** 每人 facts 超 8 条或总字数超 320：先淘汰已失效的，再淘汰有效里的；两层内都按 at+hits 组合（零命中更旧优先）。 */
 function evictFacts(person: MemoryPerson): void {
   const victim = (): MemoryFact | undefined => {
-    const invalid = person.facts.filter((fact) => fact.invalidAt !== undefined).sort((a, b) => a.at - b.at)[0];
-    return invalid ?? person.facts.filter((fact) => fact.invalidAt === undefined).sort((a, b) => a.at - b.at)[0];
+    const invalid = person.facts.filter((fact) => fact.invalidAt !== undefined).sort(byAgeHits)[0];
+    return invalid ?? person.facts.filter((fact) => fact.invalidAt === undefined).sort(byAgeHits)[0];
   };
   while (person.facts.length > MEMORY_CAPS.factsPerPerson) {
     const drop = victim();
@@ -333,17 +365,10 @@ function evictFacts(person: MemoryPerson): void {
   }
 }
 
-/** lore 按 hits 最低再按 at 最旧；cards 按 importance 最低再按 at 最旧。 */
-function evictList<T extends { at: number }>(items: T[], cap: number, score?: (item: T) => number): void {
-  if (score === undefined) {
-    while (items.length > cap) {
-      const victim = [...items].sort((a, b) => a.at - b.at)[0];
-      items.splice(items.indexOf(victim), 1);
-    }
-    return;
-  }
+/** 超限淘汰：victim 由 compare 排出（升序 = 最先淘汰）。lore 用 at+hits 组合，cards 按 importance 再 at。 */
+function evictList<T extends { at: number }>(items: T[], cap: number, compare: (a: T, b: T) => number): void {
   while (items.length > cap) {
-    const victim = [...items].sort((a, b) => score(a) - score(b) || a.at - b.at)[0];
+    const victim = [...items].sort(compare)[0];
     items.splice(items.indexOf(victim), 1);
   }
 }
@@ -421,6 +446,7 @@ export function formatAgeShort(ms: number): string {
 
 /**
  * 同意一条待审：从待审 doc 摘掉该条，把 patch apply 进目标 doc（公共或私有）。
+ * 来源会话（entry.originChatKey）作为 fromChat 注入，写进新 fact——溯源字段不由模型决定。
  * 直接改写两个 draft（pi-durable 的 tx.doc 返回值就是可写 draft）；找不到该 id 返回 missing。
  */
 export function approvePending(
@@ -432,7 +458,7 @@ export function approvePending(
   const index = pending.entries.findIndex((entry) => entry.id === id);
   if (index < 0) return { status: "missing" };
   const [entry] = pending.entries.splice(index, 1);
-  const next = applyPatch(target, entry.patch, at);
+  const next = applyPatch(target, entry.patch, at, entry.originChatKey || undefined);
   target.people = next.people;
   target.lore = next.lore;
   target.cards = next.cards;
@@ -447,16 +473,39 @@ export function rejectPending(pending: PendingMemoryState, id: string | "all"): 
   return before - pending.entries.length;
 }
 
+/** 定位：该 fact id 是否在 state 里（遍历每个人物的 facts）。 */
+export function hasFact(state: MemoryState, id: string): boolean {
+  return Object.values(state.people).some((person) => person.facts.some((fact) => fact.id === id));
+}
+
+/**
+ * 真删除一条 fact（从数组移除，区别于 supersede 的 invalidAt 失效——那条审计链保留
+ * 历史，这里是彻底清除）。删除通道只有主人的私聊 /记忆 删除 与 scripts/memory.ts 的
+ * --delete；命中返回 true。调用方负责打日志（只带 id 与所在 doc，不打印内容）。
+ */
+export function deleteFactById(state: MemoryState, id: string): boolean {
+  for (const person of Object.values(state.people)) {
+    const index = person.facts.findIndex((fact) => fact.id === id);
+    if (index >= 0) {
+      person.facts.splice(index, 1);
+      return true;
+    }
+  }
+  return false;
+}
+
 export type MemoryCommand =
   | { kind: "list" }
   | { kind: "approve"; id: string; track: "公共" | "私有" }
   | { kind: "reject"; id: string; all: boolean }
+  | { kind: "delete"; id: string }
   | { kind: "usage" };
 
 /**
  * 解析 /记忆 指令（闸前机械通道，不进模型）：
  * `/记忆` 列表；`/记忆 同意 <id> [公共|私有]`（缺省私有——默认最小可见面，公开是主动决定）；
- * `/记忆 拒绝 <id|全部>`；其它 /记忆 开头的一律回用法。不是 /记忆 指令返回 undefined。
+ * `/记忆 拒绝 <id|全部>`；`/记忆 删除 <fact-id>`（真删除已入库的 fact，仅主人私聊通道生效）；
+ * 其它 /记忆 开头的一律回用法。不是 /记忆 指令返回 undefined。
  */
 export function parseMemoryCommand(text: string): MemoryCommand | undefined {
   if (text === "/记忆") return { kind: "list" };
@@ -467,6 +516,8 @@ export function parseMemoryCommand(text: string): MemoryCommand | undefined {
   if (rest === "拒绝 全部") return { kind: "reject", id: "all", all: true };
   const reject = /^拒绝\s+(\S+)$/.exec(rest);
   if (reject) return { kind: "reject", id: reject[1], all: false };
+  const del = /^删除\s+(\S+)$/.exec(rest);
+  if (del) return { kind: "delete", id: del[1] };
   return { kind: "usage" };
 }
 
@@ -568,12 +619,13 @@ export function renderMemory(state: MemoryState, scope: RoundScope | undefined, 
 
   const blocks: string[][] = [];
 
-  // 群里的说法：scope.text 命中任一 keys，最多 5 条，≤200 字
+  // 群里的说法：scope.text 命中任一 keys，最多 5 条，≤200 字。排序与淘汰同口径：
+  // 零命中的沉底（at+hits 组合），其余更新在前
   const loreLines: string[] = [];
   if (loreHeader) loreLines.push(loreHeader);
   const hitLore = state.lore
     .filter((item) => item.keys.some((key) => hit(scope.text, key)))
-    .sort((a, b) => b.hits - a.hits || b.at - a.at)
+    .sort((a, b) => recencyRank(b) - recencyRank(a) || b.at - a.at || b.hits - a.hits)
     .slice(0, 5);
   for (const item of hitLore) {
     const line = `- ${item.keys.map(sectionSafe).join("/")}：${sectionSafe(item.text)}`;
@@ -605,7 +657,7 @@ export function renderMemory(state: MemoryState, scope: RoundScope | undefined, 
     .sort((a, b) => b.importance - a.importance || b.at - a.at)
     .slice(0, 2);
   for (const card of hitCards) {
-    const line = `- ${sectionSafe(card.text)}`;
+    const line = `- （${monthAnchor(card.at)}）${sectionSafe(card.text)}`;
     if (cardLines.join("\n").length + line.length + 1 > CARDS_BUDGET) break;
     cardLines.push(line);
   }
@@ -630,14 +682,28 @@ function matchPerson(people: Record<string, MemoryPerson>, speaker: { subject: s
   return byName.length === 1 ? byName[0] : undefined;
 }
 
-/** 单人一行：事实在前，风格与口头禅在后；超预算时从后往前丢整段。 */
+/** 渲染排序的时效因子：零命中沉底（与淘汰方向相反），其余更新在前。 */
+function recencyRank(item: { hits: number }): number {
+  return item.hits === 0 ? 0 : 1;
+}
+
+/** 时间锚点：YYYY-MM（本地时区）。渲染 fact/卡片时附带，让模型分得清陈年旧事与近况。 */
+function monthAnchor(at: number): string {
+  const date = new Date(at);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/** 单人一行：事实在前（带 YYYY-MM 锚点），风格与口头禅在后；超预算时从后往前丢整段。 */
 function personBlock(person: MemoryPerson, display: string): string | undefined {
   const facts = person.facts
     .filter((fact) => fact.invalidAt === undefined)
     .sort((a, b) => b.at - a.at)
     .slice(0, 3);
   const segments: string[] = [];
-  const factText = facts.map((fact) => sectionSafe(fact.text)).filter(Boolean).join("；");
+  const factText = facts
+    .filter((fact) => sectionSafe(fact.text).length > 0)
+    .map((fact) => `${sectionSafe(fact.text)}（${monthAnchor(fact.at)}）`)
+    .join("；");
   if (factText) segments.push(factText);
   if (person.style) segments.push(`风格：${sectionSafe(person.style)}`);
   if (person.catchphrases.length > 0) segments.push(`口头禅：${person.catchphrases.map(sectionSafe).join(" / ")}`);

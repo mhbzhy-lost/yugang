@@ -9,13 +9,16 @@
  *   npm run memory -- --pending [--json]            # 待审队列（全人格，最旧在前）
  *   npm run memory -- --approve <id> [公共|私有]     # 同意一条（缺省私有；写库）
  *   npm run memory -- --reject <id|全部>             # 拒绝（写库）
+ *   npm run memory -- --delete <fact-id>              # 真删除一条已入库 fact（写库）
  *
  * 记忆双层 + 审批闸：公共层 fish.memory（key=人格名，跨会话共享）、私有层
  * fish.memory.private（key=人格名@chatKey，仅来源会话）、待审库 fish.memory.pending
  * （压缩链路只入待审，未批准内容不进任何记忆 doc）。写通道只有两处：本脚本的
- * --approve/--reject 与主人私聊的 /记忆 指令；缺省轨道是私有（最小可见面）。
+ * --approve/--reject/--delete 与主人私聊的 /记忆 指令；缺省轨道是私有（最小可见面）。
+ * --delete 与私聊 /记忆 删除 同语义：在该人格公共层与全部私有层 doc 里按全局唯一
+ * id 定位，从数组真删除（区别于 supersede 的 invalidAt 失效），日志只带 id 与所在 doc。
  *
- * 查看走 node:sqlite 只读连接（不实例化鱼）；--approve/--reject 经 pi-durable 的
+ * 查看走 node:sqlite 只读连接（不实例化鱼）；--approve/--reject/--delete 经 pi-durable 的
  * createSession 打开同一 fish.db 写 doc（与线上进程同库并发时建议低峰执行，或直接
  * 私聊 /记忆 让线上进程自己写）。数据目录与 scripts/ops.ts 一致：YUGANG_HOME 可覆盖，
  * 缺省仓库内 var/。
@@ -27,7 +30,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createSession, type Session } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { DEFAULT_PERSONA_KEY, memoryKeyOf, privateMemoryKeyOf } from "../src/memory-scope.ts";
-import { approvePending, rejectPending, summarizePatch, formatAgeShort, type MemoryState, type PendingMemoryState } from "../src/memory.ts";
+import { approvePending, rejectPending, deleteFactById, hasFact, summarizePatch, formatAgeShort, type MemoryState, type PendingMemoryState } from "../src/memory.ts";
 import { MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc } from "../src/store.ts";
 
 const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
@@ -44,8 +47,13 @@ const rawChat = valueOf("--chat");
 const pending = args.includes("--pending");
 const rawApproveId = valueOf("--approve");
 const rawRejectId = valueOf("--reject");
-if ((args.includes("--approve") && rawApproveId === undefined) || (args.includes("--reject") && rawRejectId === undefined)) {
-  console.error("--approve 需要 <id> [公共|私有]；--reject 需要 <id|全部>");
+const rawDeleteId = valueOf("--delete");
+if (
+  (args.includes("--approve") && rawApproveId === undefined) ||
+  (args.includes("--reject") && rawRejectId === undefined) ||
+  (args.includes("--delete") && rawDeleteId === undefined)
+) {
+  console.error("--approve 需要 <id> [公共|私有]；--reject 需要 <id|全部>；--delete 需要 <fact-id>");
   process.exit(1);
 }
 // 同意的轨道：显式「公共」才公共，缺省私有（与 /记忆 同意 一致）
@@ -55,9 +63,9 @@ const approveTrack: "公共" | "私有" = (() => {
   return track === "公共" ? "公共" : "私有";
 })();
 
-const writeMode = rawApproveId !== undefined || rawRejectId !== undefined;
+const writeMode = rawApproveId !== undefined || rawRejectId !== undefined || rawDeleteId !== undefined;
 if (writeMode && (rawPersona !== undefined || rawChat !== undefined || pending)) {
-  console.error("--approve / --reject 是独立的写操作，不与 --persona / --chat / --pending 组合");
+  console.error("--approve / --reject / --delete 是独立的写操作，不与 --persona / --chat / --pending 组合");
   process.exit(1);
 }
 if (!writeMode && rawPersona === undefined && rawChat === undefined && !pending) {
@@ -192,7 +200,59 @@ async function runApproval(): Promise<void> {
   }
 }
 
-if (writeMode) {
+/**
+ * 真删除一条已入库 fact（--delete）：与私聊 /记忆 删除 同语义。先用只读连接在全部
+ * 公共层与私有层 doc 里按全局唯一 id 定位（含人格书已删的残留 doc），再经
+ * pi-durable 在同一 fish.db 上 commit 删除；日志只带 id 与所在 doc，不打印内容。
+ */
+async function runDelete(): Promise<void> {
+  const id = rawDeleteId!;
+  const db = readDb();
+  let target: { token: typeof MemoryDoc | typeof MemoryPrivateDoc; key: string } | undefined;
+  try {
+    for (const doc of sessionDocs(db, "fish.memory", 1) as { key: string; value: MemoryState }[]) {
+      if (hasFact(doc.value, id)) {
+        target = { token: MemoryDoc, key: doc.key };
+        break;
+      }
+    }
+    if (!target) {
+      for (const doc of sessionDocs(db, "fish.memory.private", 1) as { key: string; value: MemoryState }[]) {
+        if (hasFact(doc.value, id)) {
+          target = { token: MemoryPrivateDoc, key: doc.key };
+          break;
+        }
+      }
+    }
+  } finally {
+    db.close();
+  }
+
+  if (!target) {
+    console.error(`没有这条记忆：${id}`);
+    process.exit(1);
+  }
+  const storage = await openNodeSqliteStorage(DB_PATH);
+  const session: Session = createSession(storage);
+  const context = BACKGROUND_CONTEXT;
+  try {
+    const removed = await session.commit(async (tx) => {
+      const doc = await tx.doc(target!.token, target!.key, target!.key);
+      return deleteFactById(doc, id);
+    }, context);
+    if (removed) console.log(`[鱼缸] 记忆删除 ${id} ${target.key}`);
+    else {
+      console.error(`没有这条记忆：${id}`);
+      process.exitCode = 1;
+    }
+  } finally {
+    await session.close(context);
+  }
+}
+
+if (rawDeleteId !== undefined) {
+  await runDelete();
+} else if (writeMode) {
   await runApproval();
 } else {
   // ---------------------------------------------------------------- 只读查看
@@ -305,8 +365,11 @@ if (writeMode) {
         for (const person of Object.values(entry.state.people)) {
           console.log(`  ${person.subject}  ${person.names.join("/") || "（无别名）"}`);
           for (const fact of person.facts) {
-            const status = fact.invalidAt === undefined ? "有效" : `失效@${formatTime(fact.invalidAt)}`;
-            console.log(`    [${fact.id}] ${fact.text}（来源 ${fact.source}${fact.by ? `，转述人 ${fact.by}` : ""}，${status}，命中 ${fact.hits}）`);
+            const status = fact.invalidAt === undefined
+              ? "有效"
+              : `失效@${formatTime(fact.invalidAt)}${fact.supersededBy ? ` → ${fact.supersededBy}` : ""}`;
+            const from = fact.fromChat ? `，来自 ${fact.fromChat}` : "";
+            console.log(`    [${fact.id}] ${fact.text}（来源 ${fact.source}${fact.by ? `，转述人 ${fact.by}` : ""}${from}，${status}，命中 ${fact.hits}）`);
           }
           if (person.style) console.log(`    风格：${person.style}`);
           if (person.catchphrases.length > 0) console.log(`    口头禅：${person.catchphrases.join(" / ")}`);

@@ -37,6 +37,8 @@ import { createCompactor, MemoryExtractError, type CompactResult, type Compactor
 import { ChatsDoc, MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc, OutboxDoc } from "./store.ts";
 import {
   approvePending,
+  deleteFactById,
+  hasFact,
   isPatchEmpty,
   mergeMemoryStates,
   newPendingId,
@@ -248,7 +250,7 @@ export interface Fish {
   >;
   /** 拒绝待审：单条 id 或 "all"（全部人格的全部待审）；返回删掉的条数。 */
   rejectMemory(id: string | "all"): Promise<number>;
-  /** /记忆 指令的机械回复（闸前通道，不进模型）：群内只回引导语，私聊里执行列表/同意/拒绝。 */
+  /** /记忆 指令的机械回复（闸前通道，不进模型）：群内只回引导语，私聊里执行列表/同意/拒绝/删除。 */
   memoryCommandReply(chatKey: string, command: MemoryCommand): Promise<string>;
   /** 取（或创建）某个群在指定人格下的会话；映射持久化，重启后还是同一个会话。未注册人格回退默认。 */
   group(groupKey: string, profile?: GroupProfile, persona?: string): Promise<Conversation>;
@@ -294,6 +296,9 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     "cmd_memory_no_origin",
     "cmd_memory_rejected",
     "cmd_memory_rejected_all",
+    "cmd_memory_deleted",
+    "cmd_memory_delete_missing",
+    "cmd_memory_supersede_note",
   ]) {
     if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
   }
@@ -612,6 +617,40 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     return removed;
   }
 
+  // 删除通道（/记忆 删除，仅主人私聊）：按全局唯一的 fact id 在该人格公共层与全部
+  // 私有层 doc 里定位并真删除（从数组移除，区别于 supersede 的 invalidAt 失效）。
+  // 私有层候选 key 由 ChatsDoc 的映射键推导（chatKey 或 chatKey#人格 → 人格@chatKey）；
+  // 人格书已删的残留 doc 只有 scripts/memory.ts --delete 能查到。宿主日志只带
+  // id 与所在 doc key，不打印记忆内容。
+  async function deleteMemoryLocal(id: string): Promise<{ status: "ok"; doc: string } | { status: "missing" }> {
+    const chats = await harness.snapshot(ChatsDoc, ctx);
+    const privateKeys = new Set<string>();
+    for (const mappingKey of Object.keys(chats?.chats ?? {})) {
+      const mark = mappingKey.lastIndexOf("#");
+      const persona = mark > 0 ? mappingKey.slice(mark + 1) : DEFAULT_PERSONA;
+      const base = mark > 0 ? mappingKey.slice(0, mark) : mappingKey;
+      privateKeys.add(`${persona}@${base}`);
+    }
+    const candidates: { token: typeof MemoryDoc | typeof MemoryPrivateDoc; key: string }[] = [
+      ...personaKeys.map((persona) => ({ token: MemoryDoc as typeof MemoryDoc, key: persona })),
+      ...[...privateKeys].map((key) => ({ token: MemoryPrivateDoc as typeof MemoryPrivateDoc, key })),
+    ];
+    for (const candidate of candidates) {
+      const snapshot = await harness.snapshot(candidate.token, candidate.key, ctx);
+      if (!snapshot || !hasFact(snapshot, id)) continue;
+      const removed = await harness.commit(async (tx) => {
+        const doc = await tx.doc(candidate.token, candidate.key, candidate.key);
+        return deleteFactById(doc, id);
+      }, ctx);
+      if (removed) {
+        console.log(`[鱼缸] 记忆删除 ${id} ${candidate.key}`);
+        return { status: "ok", doc: candidate.key };
+      }
+      // 并发下刚好被删掉：继续找下一候选
+    }
+    return { status: "missing" };
+  }
+
   return {
     harness,
     models,
@@ -651,7 +690,15 @@ export async function openFish(options: FishOptions): Promise<Fish> {
           ? renderTemplate(messages["cmd_memory_rejected_all"] ?? "", { count: String(removed) })
           : renderTemplate(messages["cmd_memory_rejected"] ?? "", { id: command.id });
       }
-      // 列表：全局单视图（所有人格），最旧在前——最先会被淘汰的排最前，头部给汇总行
+      if (command.kind === "delete") {
+        // 真删除：从公共层与全部私有层 doc 里按全局唯一 id 定位并移除；日志在 deleteMemoryLocal 里
+        const result = await deleteMemoryLocal(command.id);
+        if (result.status === "missing") return renderTemplate(messages["cmd_memory_delete_missing"] ?? "", { id: command.id });
+        return renderTemplate(messages["cmd_memory_deleted"] ?? "", { id: command.id, doc: result.doc });
+      }
+      // 列表：全局单视图（所有人格），最旧在前——最先会被淘汰的排最前，头部给汇总行。
+      // 含 supersede 的条目附「将失效」行：原文从该人格公共 doc 现查（抽取器的 known
+      // 只来自公共 doc，supersede id 必然指向那里；查不到就只标 id）
       const views = await pendingMemoriesLocal();
       const entries = views
         .flatMap((view) => view.entries.map((entry) => ({ entry, persona: view.persona })))
@@ -661,16 +708,39 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         count: String(entries.length),
         age: formatAgeShort(now() - entries[0].entry.at),
       });
+      const factTexts = new Map<string, Map<string, string>>();
+      const factTextOf = async (persona: string, id: string): Promise<string> => {
+        let table = factTexts.get(persona);
+        if (!table) {
+          const snapshot = await harness.snapshot(MemoryDoc, persona, ctx);
+          table = new Map(
+            Object.values(snapshot?.people ?? {}).flatMap((person) =>
+              person.facts.map((fact) => [fact.id, fact.text] as const),
+            ),
+          );
+          factTexts.set(persona, table);
+        }
+        return table.get(id) ?? "";
+      };
       const shown = entries.slice(0, 30);
-      const lines = shown.map(({ entry, persona }) =>
-        renderTemplate(messages["cmd_memory_entry"] ?? "", {
-          id: entry.id,
-          persona,
-          origin: entry.originChatKey || "-",
-          age: formatAgeShort(now() - entry.at),
-          digest: summarizePatch(entry.patch),
-        }),
-      );
+      const lines: string[] = [];
+      for (const { entry, persona } of shown) {
+        lines.push(
+          renderTemplate(messages["cmd_memory_entry"] ?? "", {
+            id: entry.id,
+            persona,
+            origin: entry.originChatKey || "-",
+            age: formatAgeShort(now() - entry.at),
+            digest: summarizePatch(entry.patch),
+          }),
+        );
+        for (const note of entry.patch.supersede ?? []) {
+          for (const id of note.ids) {
+            const text = await factTextOf(persona, id);
+            lines.push(renderTemplate(messages["cmd_memory_supersede_note"] ?? "", { id, text: text || "-" }));
+          }
+        }
+      }
       const rest = entries.length - shown.length;
       return [
         header,

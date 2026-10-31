@@ -238,7 +238,7 @@
   `lastExtractAt`（待审写入即推进，空 patch 不进待审但也推进）；抽取失败不阻塞换页。
   没有 `remember` 工具、没有定时任务、没有主动回忆
 - **批准双轨（写通道只有两处）**：主人私聊的 `/记忆` 机械指令（闸前通道，不进模型）与
-  `scripts/memory.ts` 的 `--approve` / `--reject`。私聊 `/记忆` 是**全局单视图**：列出所有
+  `scripts/memory.ts` 的 `--approve` / `--reject` / `--delete`。私聊 `/记忆` 是**全局单视图**：列出所有
   人格的待审（不按当前会话人格过滤），每条标签含来源人格 + 来源会话，最旧在前，
   头部带 `待审 N 条 / 最早 Xh Ym前` 汇总；`/记忆 同意 <id> [公共|私有]`（**缺省=私有**，
   最小可见面是默认，公开是主动决定；私有=并入来源会话私有 doc，公共=并入人格公共 doc）；
@@ -253,7 +253,20 @@
 - **上限写死在 `src/memory.ts` 的 `MEMORY_CAPS`**：人 ≤12、每人事实 ≤8 且总字数 ≤320、
   names ≤5、style ≤120 字、口头禅 ≤8 条且每条 ≤24 字、lore ≤40（key ≤5 个且每个 ≤10 字、
   text ≤60 字）、cards ≤60（text ≤80 字、keys ≤5、subjects ≤8）、单次 section 渲染 ≤900 字、
-  已知记忆输入 ≤8000 字。冲突不删除：`supersede` 置 `invalidAt`，渲染只认有效事实
+  已知记忆输入 ≤8000 字。冲突不删除：`supersede` 置 `invalidAt` 并同时回填
+  `supersededBy`（取代它的那条新 fact id，审计链），渲染只认有效事实。淘汰与排序是
+  **at（入库时间）+ hits 的纯机械组合**：零命中且更旧的优先淘汰/沉底（people facts 超限
+  淘汰、lore/cards 的渲染排序与超限淘汰都纳入）；**渲染期零写入**（不记 lastUsedAt，
+  渲染只读）。渲染 fact 与卡片时附 `YYYY-MM` 时间锚点，陈年旧事与近况分得清
+- **fact 溯源**：每条 fact 带可选 `fromChat`（来源 chatKey），由宿主在批准路径注入
+  （待审条目的 `originChatKey` → `applyPatch` 写进新 fact），不由模型决定；
+  `npm run memory -- --persona` 详情里逐条可见（「来自 …」），/记忆 待审列表的来源会话照旧展示。
+  待审列表里含 supersede 的条目附「将失效：<fact-id> <原文>」标注（原文从该人格公共 doc 现查，
+  供主人审批时直接看到取代影响，文案 key 在 `prompt/messages.md`）
+- **删除通道（真删，区别于 supersede 的失效）**：主人私聊 `/记忆 删除 <fact-id>`（群内只回引导语）
+  与 `npm run memory -- --delete <fact-id>`：按全局唯一 fact id 在该人格公共层与全部私有层 doc
+  里定位并从数组真删除；日志只打 id 与所在 doc（`[鱼缸] 记忆删除 <id> <doc>`），不打印内容；
+  找不到回错误。线上 /记忆 只覆盖已注册人格（残留 doc 用脚本查删），脚本与指令同语义
 - **模型输出全部当不可信数据**：`sanitizePatch` 对字段/主体/敏感模式/控制字符做机械过滤，
   主体再过一道本次允许集合白名单；fact id 一律代码生成（`f-`/`l-`/`c-` + ≥12 位），不采信模型 id
 - 查看与审批脚本：
@@ -265,8 +278,9 @@
   npm run memory -- --pending [--json]              # 待审队列（全人格，最旧在前，含来源与建议轨道）
   npm run memory -- --approve <id> [公共|私有]       # 同意（缺省私有；写库）
   npm run memory -- --reject <id|全部>               # 拒绝（写库）
+  npm run memory -- --delete <fact-id>               # 真删除一条已入库 fact（写库）
   ```
-  查看走只读连接；`--approve` / `--reject` 经 pi-durable `createSession` 在同一 `var/fish.db`
+  查看走只读连接；`--approve` / `--reject` / `--delete` 经 pi-durable `createSession` 在同一 `var/fish.db`
   上写 doc，与线上进程同库时建议低峰执行（或直接私聊 `/记忆` 让线上进程自己写）；
   发现旧 chatKey 级 / 会话级 `fish.memory` 会明确报冲突，不静默择一
 

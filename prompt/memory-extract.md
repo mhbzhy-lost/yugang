@@ -40,6 +40,8 @@
 - cards 必须有 1–5 个能触发回忆的 keys，以及 0–8 个参与者 subjects；没有 keys 的共同经历不要记
 - 没有值得记的就输出 {"people":[],"lore":[],"cards":[],"supersede":[]}
 - supersede 必须写 subject + ids；ids 只能填该 subject 的「已知事实」里出现过的 id，表示它被这次的新事实取代
+- 新事实与「已知事实」矛盾时，必须把被取代的旧 id 写进 supersede，让旧事实失效——不要让新旧两条并存
+- 与已知事实同义或重复的不要再记一遍；supersede 只在确认取代某条已知事实时才写，没命中 known 里的 id 就不写
 
 允许主体（只能从这里选 subject）：
 {{subjects}}
