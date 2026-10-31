@@ -90,6 +90,13 @@ export interface ToolPackageDeps {
   silentOf?: (roundId: unknown) => boolean;
   /** 本轮 say 的 execute 被进入时回调（成败都算一次）；宿主据此识别「零出口轮」。 */
   onSayCall?: (roundId: unknown) => void;
+  /**
+   * 重耗时工具（video/draw/gpt_image/meme_import/meme_add/restart）execute 入口的宿主回调：
+   * 传本轮轮标识（LiveDoc 的 run.inputs[0]，拿不到就不调），宿主按「submissionId × 工具名」
+   * 去重后经 outbox 发「正在执行」机械提示（文案 prompt/messages.md 的 working_*）。
+   * restart 会 await 返回的 Promise，保证提示在进程退出前先入队并冲一次 outbox。
+   */
+  onLongWork?: (tool: string, submissionId: unknown) => void | Promise<void>;
   /** 表情包跨轮冷却（毫秒）；给函数是每次现取。 */
   memeCooldownMs?: number | (() => number);
 }

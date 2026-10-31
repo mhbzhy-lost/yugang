@@ -45,6 +45,12 @@ export function createMemeAddTool(manifest: ToolManifest, deps: ToolPackageDeps)
     callers: ["model"],
     parameters: manifestParameters<MemeAddArgs>(manifest),
     execute: async (args, api, context) => {
+      // 宿主机械提示：导入轮连打几十张也只在本轮第一次调用时说一句（working_meme_add）；
+      // 收图静默轮不经 submitRound、宿主没有本轮会话映射，宿主侧自行不发
+      const live = await api.snapshot(LiveDoc, api.conversationId, context);
+      const round = live?.run?.inputs?.[0];
+      deps.onLongWork?.("meme_add", round);
+
       const ref = args.ref.trim().replace(/^\[|\]$/g, "");
       const full = resolve(root, ref);
       // 越界先否掉，后面的目录判断只认真实的落点
@@ -56,8 +62,6 @@ export function createMemeAddTool(manifest: ToolManifest, deps: ToolPackageDeps)
       const inInbound = localRef.startsWith("inbound/");
       const isGif = extname(full).toLowerCase() === ".gif";
 
-      const live = await api.snapshot(LiveDoc, api.conversationId, context);
-      const round = live?.run?.inputs?.[0];
       const roundId = round === undefined ? undefined : String(round);
       const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
       const byMaster = deps.master !== "" && String(trigger?.userId ?? "") === deps.master;

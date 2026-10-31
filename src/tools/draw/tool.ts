@@ -159,14 +159,19 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
     callers: ["model"],
     parameters: manifestParameters<DrawArgs>(manifest),
     execute: async (args, api, context) => {
+      // 宿主机械提示：本轮第一次调用先说一句「在画了」（working_draw），再开始耗时工作；
+      // 拿不到轮标识就不发，不影响后续校验
+      const live = await api.snapshot(LiveDoc, api.conversationId, context);
+      const round = live?.run?.inputs?.[0];
+      deps.onLongWork?.("draw", round);
+
       const positive = args.prompt.trim();
       if (!positive || positive.length > 1000) {
         throw new Error(deps.prompts.messages["draw_prompt"] ?? "draw_prompt");
       }
       if (!deps.sdUrl) throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
 
-      const live = await api.snapshot(LiveDoc, api.conversationId, context);
-      const round = live?.run?.inputs?.[0];
+      // 每轮限一次：轮标识与 say/search 同源
       if (round !== undefined && DRAWN.get(api.conversationId) === round) {
         throw new Error(deps.prompts.messages["draw_used"] ?? "draw_used");
       }

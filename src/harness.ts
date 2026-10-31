@@ -158,6 +158,8 @@ export interface FishOptions {
   silentOf?: (roundId: unknown) => boolean;
   /** 本轮 say 的 execute 被进入时回调；宿主按 submission 计数，识别零出口轮。 */
   onSayCall?: (roundId: unknown) => void;
+  /** 重耗时工具 execute 入口的宿主回调：本轮第一次调用时发「正在执行」机械提示；restart 会 await 返回的 Promise。 */
+  onLongWork?: (tool: string, submissionId: unknown) => void | Promise<void>;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费，轮结束失效。 */
   bypassOf?: (roundId: unknown) => string | undefined;
   /** 每个群的工作目录根；实际 cwd 是 <workspaceRoot>/<groupKey>。 */
@@ -250,6 +252,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}),
     ...(options.silentOf ? { silentOf: options.silentOf } : {}),
     ...(options.onSayCall ? { onSayCall: options.onSayCall } : {}),
+    ...(options.onLongWork ? { onLongWork: options.onLongWork } : {}),
     ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}),
     // 宿主侧 limits 与 react 是 FishOptions 硬性要求，这里只是统一交给 factory
     react: options.react,

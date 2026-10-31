@@ -178,14 +178,18 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
     callers: ["model"],
     parameters: manifestParameters<VideoArgs>(manifest),
     execute: async (args, api, context) => {
+      // 宿主机械提示：本轮第一次调用先说一句「在做了」（working_video），再开始耗时工作；
+      // 拿不到轮标识（live.run.inputs[0]）就不发，不影响后续行为
+      const live = await api.snapshot(LiveDoc, api.conversationId, context);
+      const round = live?.run?.inputs?.[0];
+      deps.onLongWork?.("video", round);
+
       const raw = args.url.trim();
       if (!raw || raw.length > 512) {
         throw new Error(deps.prompts.messages["video_invalid"] ?? "链接不对");
       }
 
       // 每轮限一次：轮标识与 say/search 同源
-      const live = await api.snapshot(LiveDoc, api.conversationId, context);
-      const round = live?.run?.inputs?.[0];
       if (round !== undefined) {
         if (USED.get(api.conversationId) === round) {
           throw new Error(deps.prompts.messages["video_used"] ?? "这一轮看过了");

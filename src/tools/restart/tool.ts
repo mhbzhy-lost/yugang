@@ -11,7 +11,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
+import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { assertTriggeredByMaster } from "../fs-shared.ts";
@@ -34,6 +34,10 @@ export function createRestartTool(manifest: ToolManifest, deps: ToolPackageDeps)
       // 身份闸：机械判定，看本轮触发消息的 userId 是不是主人（与 fs / model 同源）
       await assertTriggeredByMaster(deps, api as never, context, deps.prompts.messages["fs_locked"] ?? "fs_locked");
       console.log("[fish] restart scheduled by master, respawning in 3s");
+      // 宿主机械提示：必须在调度重生之前把「我去重启一下」发出去——onLongWork 里 enqueue 后
+      // 同步冲一次 outbox 再放行；发不出去也不阻塞重启（重启完成还有 restart_done 兜底）
+      const live = await api.snapshot(LiveDoc, api.conversationId, context);
+      await deps.onLongWork?.("restart", live?.run?.inputs?.[0]);
       // 重启通知：只记会话定位信息（宿主启动成功后发固定确认），不保存模型文本。
       // key 是调度那一刻的时间戳：稳定（启动中途崩掉重放也派生同一个 outbox 幂等键），不跨重启复用
       try {

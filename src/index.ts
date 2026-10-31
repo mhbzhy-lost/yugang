@@ -82,6 +82,22 @@ function collapseForward(text: string): string {
   return marker.length > 0 ? marker : "[收集]";
 }
 
+/**
+ * 六个重耗时工具的「正在执行」文案（prompt/messages.md 的 working_*）：逐个显式取，
+ * key 拼错只会拿到空文案不发，不报错。
+ */
+function workingTextOf(tool: string): string {
+  switch (tool) {
+    case "video": return fish.prompts.messages["working_video"] ?? "";
+    case "draw": return fish.prompts.messages["working_draw"] ?? "";
+    case "gpt_image": return fish.prompts.messages["working_gpt_image"] ?? "";
+    case "meme_import": return fish.prompts.messages["working_meme_import"] ?? "";
+    case "meme_add": return fish.prompts.messages["working_meme_add"] ?? "";
+    case "restart": return fish.prompts.messages["working_restart"] ?? "";
+    default: return "";
+  }
+}
+
 /** 主人或这个群特别关注的人？（机械匹配 QQ 号，不看模型怎么说） */
 function isVoiceVip(chatKey: string, userId: number | undefined): boolean {
   if (userId === undefined) return false;
@@ -178,6 +194,13 @@ const bypassOf = new Map<string, string>();
 // 与 triggerOf 同生命周期：submit 后置 0，settle 的 finally 里删，成功/失败/抛错都不泄漏；
 // 只累计已登记的轮，收图轮等不经 submitRound 的提交不会留下孤儿条目。
 const sayCalled = new Map<string, number>();
+// submissionId → 本轮所在会话：重耗时工具的「正在执行」机械提示要落回当前会话的 outbox。
+// 与 triggerOf 同生命周期：submitRound 登记轮的会话，settle 的 finally 里删；
+// 收图轮等不经 submitRound 的提交不登记，这类轮本就不许说话，提示也天然不发。
+const roundConv = new Map<string, Conversation>();
+// 轮内去重：roundId → 本轮已发过提示的工具集合，「同轮同工具只发一次」在这里保证；
+// 与 roundConv 同生命周期，settle 的 finally 里整份删。
+const workingSent = new Map<string, Set<string>>();
 // 窗口键（chatKey\0发送者）→ 本组是否有「必答」放行（private/mentioned/replied_forward）。
 // gate 逐条放行时累积，flushBurst 整组消费并清掉：正文兜底只补必答轮——环境轮（rate_pass /
 // watched 等）零 say 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
@@ -242,6 +265,41 @@ const fish = await openFish({
     const key = String(roundId);
     const count = sayCalled.get(key);
     if (count !== undefined) sayCalled.set(key, count + 1);
+  },
+  // 重耗时工具（video/draw/gpt_image/meme_import/meme_add/restart）execute 入口的机械提示：
+  // 本轮第一次调用时经 outbox 唯一出口发一条拟人文案（prompt/messages.md 的 working_*），
+  // 幂等键 working:<tool>:<submissionId> 防崩溃重放；拿不到轮标识或会话映射就不发、不报错。
+  // restart 返回 Promise：工具会 await 它，保证提示在进程退出前入队并冲一次 outbox。
+  onLongWork: (tool, submissionId) => {
+    const round = submissionId === undefined || submissionId === null ? "" : String(submissionId);
+    const conv = round === "" ? undefined : roundConv.get(round);
+    const text = workingTextOf(tool);
+    if (!round || conv === undefined || !text) return;
+    const sentTools = workingSent.get(round);
+    if (sentTools?.has(tool)) return; // 同轮同工具只发一次
+    if (sentTools) sentTools.add(tool);
+    else workingSent.set(round, new Set([tool]));
+    // 幂等键：崩溃重放不重复发（key 进 outbox 与 sent.json，宿主侧防重放）
+    const payload = {
+      items: [text],
+      at: Date.now(),
+      key: `working:${tool}:${round}`,
+    };
+    if (tool === "restart") {
+      // restart：重生窗口内必须先入队再冲一次 outbox；失败只打日志，不阻塞重启
+      return (async () => {
+        try {
+          await fish.enqueue(conv.id, payload);
+          await drainLoop();
+        } catch (error) {
+          console.error("[fish] working send failed", error instanceof Error ? error.message : error);
+        }
+      })();
+    }
+    // 其余五个工具 fire-and-forget：入队完成后立即冲一次 outbox，失败只打日志
+    void fish.enqueue(conv.id, payload)
+      .then(() => drainLoop())
+      .catch((error: unknown) => console.error("[fish] working drain failed", error instanceof Error ? error.message : error));
   },
   // watch 的号码校验：从会话映射回群号，再拉全量成员（不要 limit，要能校验到每个人）
   onWatchChanged: (conversationId, people) => {
@@ -586,6 +644,8 @@ async function submitRound(input: {
     mentionsBot: trigger.mentionsBot,
     userId: trigger.userId,
   });
+  // 重耗时工具的机械提示要落回本轮会话：登记轮的会话，settle 的 finally 里删
+  roundConv.set(String(submission.id), conv);
   if (input.bypass !== undefined) bypassOf.set(String(submission.id), input.bypass);
   // 零出口轮观测：本轮出口计数清零登记，与 triggerOf 同生命周期（见下方 finally）
   sayCalled.set(String(submission.id), 0);
@@ -612,6 +672,9 @@ async function submitRound(input: {
       clearMemeImportRound(String(submission.id));
       // 出口计数同样只活这一轮：done、没答上来、wait 抛错都不残留
       sayCalled.delete(String(submission.id));
+      // 机械提示的会话映射与轮内去重集合同样只活这一轮
+      roundConv.delete(String(submission.id));
+      workingSent.delete(String(submission.id));
     }
   })();
   if (settled.status !== "done") {

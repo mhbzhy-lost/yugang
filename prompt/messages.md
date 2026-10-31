@@ -115,6 +115,15 @@ gif_ingest_task: 上面这段对话里，{{who}} 发了一张动图：{{ref}}。
 voice_hint: （这一条必须用语音回：say 里传 voice: true，别用文字。这是规则，不是建议）
 tool_timeout: 这个工具卡住超过半分钟了，先别重试，换个办法或者说句话
 
+# 重耗时工具执行中的宿主机械提示（工具 execute 入口经 outbox 发出，不是模型发言）：
+# meme_import 在登记时发（立即确认收到），meme_add 在本轮首次打标时发
+working_video: 我去把这个视频翻出来看看，稍等
+working_draw: 在画了，稍等一下下
+working_gpt_image: 这张交给在线画师，稍等
+working_meme_import: 新表情到货，我一张张过目
+working_meme_add: 正在把新表情收进柜子，一张张来
+working_restart: 我去重启一下，马上回来
+
 # 工具目录 section（tool_catalog）的渲染文案；行为说明在 prompt/runtime.md，这里只留标签与行格式
 tool_catalog_header: 当前可用的能力目录（按名字排序）：
 tool_catalog_line: - {{name}}：{{summary}}

@@ -10,7 +10,7 @@
  */
 import { readFileSync } from "node:fs";
 import { extname, resolve, sep } from "node:path";
-import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
+import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { renderTemplate } from "../../prompts.ts";
 import { generateGptImages } from "../../media/gpt-image.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
@@ -53,7 +53,13 @@ export function createGptImageTool(manifest: ToolManifest, deps: ToolPackageDeps
     description: toolFullDescription(manifest),
     callers: ["model"],
     parameters: manifestParameters<GptImageArgs>(manifest),
-    execute: async (args) => {
+    execute: async (args, api, context) => {
+      // 宿主机械提示：本轮第一次调用先说一句「这张交给在线画师」（working_gpt_image），
+      // 再开始耗时工作；拿不到轮标识就不发，不影响后续校验
+      const live = await api.snapshot(LiveDoc, api.conversationId, context);
+      const round = live?.run?.inputs?.[0];
+      deps.onLongWork?.("gpt_image", round);
+
       const positive = args.prompt.trim();
       if (!positive || positive.length > 4000) {
         throw new Error(deps.prompts.messages["gpt_image_prompt"] ?? "gpt_image_prompt");

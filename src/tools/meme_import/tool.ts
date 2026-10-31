@@ -48,6 +48,9 @@ export function createMemeImportTool(manifest: ToolManifest, deps: ToolPackageDe
       if (!byMaster || round === undefined) {
         throw new Error(deps.prompts.messages["meme_import_master"] ?? "meme_import_master");
       }
+      // 宿主机械提示：登记时立即说一句「新表情到货」（working_meme_import）；
+      // 放在身份闸之后，被拒的调用不广播；与 working_meme_add 各发一次，同轮各自只发一次
+      deps.onLongWork?.("meme_import", round);
 
       const scan = scanInbox(inboxDir, maxBytes);
       const { valid, skipped } = scan;

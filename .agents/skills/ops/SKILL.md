@@ -113,6 +113,7 @@ node scripts/ops.ts probe
 5. 私聊没反应 —— 只认 `MASTER_QQ`，陌生人一律不回。这是设计，不是 bug。
 6. 日志出现「零出口轮」= 模型没调 say（裸文本回复被丢弃），常见于极简人格，属 prompt 行为问题。
    配置开着 `salvagePlainReply`（默认开，mtime 热加载）时，必答轮（私聊 / 被@ / 回复合集）零 say 会自动兜底补发，日志见「兜底补发 1 条」；环境轮只留日志不补；误发可把 `fish.config.json` 里的 `salvagePlainReply` 设为 `false` 关掉。
+7. 群里冒出「我去…稍等」「新表情到货」这类一句话（看视频/画图/收表情/重启前出现）：这是重耗时工具执行时宿主经 outbox 发的机械提示（prompt/messages.md 的 `working_*`），不是模型发言。
 
 ## 语音没声音怎么查
 
