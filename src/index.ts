@@ -572,31 +572,53 @@ function flattenAssistantText(model: unknown): string {
 /**
  * 正文兜底补发（salvagePlainReply，仅必答轮）：一轮里一次 say 都没调但末条 assistant 有
  * 非空正文时，取正文首行硬截 120 字，过与 say 完全相同的出口校验（结构 + 溯源 + 重复）
- * 后经 outbox 补发。thinking / tool 文本永不涉及（只取 text block）；校验不过静默放弃，
- * 本函数自身也永不抛错；误发可在 fish.config.json 里把 salvagePlainReply 设为 false 关掉。
+ * 后经 outbox 补发。thinking / tool 文本永不涉及（只取 text block）；放弃与出错都留日志
+ * （文案在 prompt/messages.md 的 salvage_skip / salvage_error），本函数自身也永不抛错；
+ * 误发可在 fish.config.json 里把 salvagePlainReply 设为 false 关掉。
+ *
+ * 定位本轮不能扫 pi.user：记忆链路上线后 submitRound 的输入以 fish.inbound entry 落库，
+ * 鱼自己的轮从不写 pi.user，扫 kind 永远找不到输入、兜底就静默失效（2026-11-01 私聊轮）。
+ * settle 记录直接带本轮的输入 entry 与末条 assistant entry 的 id，按 id 直取；answer 取不到
+ * 时退回按输入 entry 定位、取其后的末条 pi.assistant（与旧语义一致）。
  */
 async function salvagePlainReply(
   conv: Conversation,
   chatKey: string,
   trigger: { messageId?: number | string; mentionsBot: boolean },
+  round: { inputEntryId?: number; answerEntryId?: number },
 ): Promise<void> {
+  // 早退可观测：放弃原因走 prompt/messages.md 的 salvage_skip（缺 key 时退化成裸原因，照样留日志）
+  const skip = (reason: string): void => {
+    const tpl = fish.prompts.messages["salvage_skip"] ?? "";
+    console.log(`[鱼缸] ${chatKey} ${tpl ? renderTemplate(tpl, { reason }) : `兜底放弃：${reason}`}`);
+  };
   try {
     const view = await conv.viewState(ctx);
-    const entries = view.value.entries;
+    const entries = view.value.entries as readonly { id?: number; kind?: string; model?: unknown }[];
     view.dispose();
-    // 只看本轮（最后一次 user 输入）之后末条 assistant 的正文
-    let lastUser = -1;
-    for (let i = entries.length - 1; i >= 0; i--) {
-      if (entries[i]?.kind === "pi.user") { lastUser = i; break; }
-    }
-    if (lastUser < 0) return;
+    // 优先按 settle 给出的 answer entry id 直取本轮末条 assistant（多轮工具调用时它就是最后一条回复）
     let text = "";
-    for (let i = lastUser + 1; i < entries.length; i++) {
-      const entry = entries[i] as { kind?: string; model?: unknown };
-      if (entry.kind === "pi.assistant") text = flattenAssistantText(entry.model);
+    const answered = entries.find((entry) => entry.id === round.answerEntryId);
+    if (answered !== undefined) {
+      text = flattenAssistantText(answered.model);
+    } else {
+      let anchor = -1;
+      for (let i = entries.length - 1; i >= 0; i--) {
+        if (entries[i]?.id === round.inputEntryId) { anchor = i; break; }
+      }
+      if (anchor < 0) {
+        skip(`找不到本轮 entry（input=${round.inputEntryId} answer=${round.answerEntryId}）`);
+        return;
+      }
+      for (let i = anchor + 1; i < entries.length; i++) {
+        if (entries[i]?.kind === "pi.assistant") text = flattenAssistantText(entries[i]?.model);
+      }
     }
     const line = text.split("\n").map((s) => s.trim()).find(Boolean) ?? "";
-    if (!line) return;
+    if (!line) {
+      skip("末条 assistant 没有正文");
+      return;
+    }
     const clipped = line.slice(0, 120);
     const ledger = ledgerOf(conv.id);
     const rejection = validateOutbound(
@@ -610,7 +632,7 @@ async function salvagePlainReply(
       },
     );
     if (rejection) {
-      console.log(`[鱼缸] ${chatKey} 兜底放弃：${rejection.code}`);
+      skip(rejection.code);
       return;
     }
     await fish.enqueue(conv.id, {
@@ -622,8 +644,11 @@ async function salvagePlainReply(
       key: `salvage:${trigger.messageId ?? Date.now()}`, // 幂等键：崩溃重放不重复发
     });
     console.log(`[鱼缸] ${chatKey} 兜底补发 1 条`);
-  } catch {
-    // 兜底本身不能拖垮主流程
+  } catch (error) {
+    // 兜底本身不能拖垮主流程，但失败必须留痕（文案在 prompt/messages.md 的 salvage_error）
+    const detail = error instanceof Error ? error.message : String(error);
+    const tpl = fish.prompts.messages["salvage_error"] ?? "";
+    console.error(`[鱼缸] ${chatKey} ${tpl ? renderTemplate(tpl, { error: detail }) : `兜底出错：${detail}`}`);
   }
 }
 
@@ -700,9 +725,14 @@ async function submitRound(input: {
         // 文案固定含「零出口轮」供 grep，完整解释在 .agents/skills/ops/SKILL.md
         if (result.status === "done" && (sayCalled.get(String(submission.id)) ?? 0) === 0) {
           console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say`);
-          // 必答轮的兜底补发：配置可关（mtime 热加载，每次触发现读）；环境轮只留上面的观测日志
+          // 必答轮的兜底补发：配置可关（mtime 热加载，每次触发现读）；环境轮只留上面的观测日志。
+          // done 变体的 settle 记录带本轮输入（entry）与末条 assistant（answer）的 entry id，兜底按 id 定位
           if (input.mustAnswer === true && fishConfig().config.salvagePlainReply) {
-            await salvagePlainReply(conv, chatKey, trigger);
+            const placed = result as { entry?: number; answer?: number };
+            await salvagePlainReply(conv, chatKey, trigger, {
+              inputEntryId: placed.entry,
+              answerEntryId: placed.answer,
+            });
           }
         }
         return result;

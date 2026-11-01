@@ -214,3 +214,8 @@ cmd_memory_rejected: 已拒绝：{{id}}
 cmd_memory_rejected_all: 已拒绝全部 {{count}} 条待审
 cmd_memory_deleted: 已删除记忆 {{id}}（{{doc}}）
 cmd_memory_delete_missing: 没有这条记忆：{{id}}
+
+# 零出口兜底（salvagePlainReply，仅必答轮）的宿主日志文案：只进鱼缸日志，不给模型也不发群。
+# reason 是机器原因（找不到本轮 entry / 末条 assistant 没有正文 / 出口校验拒绝码），error 是错误摘要
+salvage_skip: 兜底放弃：{{reason}}
+salvage_error: 兜底出错：{{error}}
