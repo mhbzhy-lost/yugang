@@ -214,7 +214,8 @@
   9880 为旧 v2 保留可回滚，9883 为落选 v2ProPlus 试听实例，保留 7 天后回收），依赖 `~/nltk_data` 的
   `cmudict` + `averaged_perceptron_tagger*`——**缺了会返回 200 + 0 字节空音频**（英文 g2p 抛 LookupError）
 - 语音实例由鱼缸启动链拉起（`npm run tts up`），plist `RunAtLoad=false` 不开机自启，`KeepAlive` 崩溃自愈；
-  状态/拉起/收起统一走 `npm run tts [status|up|down]`
+  状态/拉起/收起统一走 `npm run tts [status|up|down]`，活跃实例集以 `fish.config.json` 的 `voices` 端口为准
+  （单一事实源，换端口只改配置不改代码），遗留 plist 不参与拉起/收起
 - 空结果重试一次（第二次用 `text_language=auto`），合成超时默认 70 秒（`say` 工具层覆盖 100 秒）
 
 ### 15. 可观测性

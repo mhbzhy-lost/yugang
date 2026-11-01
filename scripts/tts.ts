@@ -1,22 +1,27 @@
 /**
- * 语音服务管理：macmini 上 3 个 GPT-SoVITS 实例由 launchd 托管
+ * 语音服务管理：macmini 上多个 GPT-SoVITS 实例由 launchd 托管
  * （~/Library/LaunchAgents/com.yugang.tts*.plist，RunAtLoad=false 不开机自启，
  * KeepAlive 崩溃自愈）。实例随鱼缸启动链拉起（scripts/up.ts、scripts/deploy.ts
  * 都会顺带跑一次本脚本的 up），本脚本也给人一个统一运维入口：
  *
- *   npm run tts              # = tts status：实例表格；有异常 exit 1
+ *   npm run tts              # = tts status：实例表格；活跃集有异常 exit 1
  *   npm run tts status
- *   npm run tts up           # 未监听的实例 load + kickstart，等模型加载（≤90s/实例）；已监听跳过
- *   npm run tts down         # 全部 launchctl unload（慎用：语音能力整体下线）
+ *   npm run tts up           # 活跃集内未监听的实例 load + kickstart，等模型加载（≤90s/实例）；已监听跳过
+ *   npm run tts down         # 卸载活跃集（仅人显式调用；遗留 plist 一律不碰）
  *
- * 本地开发机没有这些 plist：任何子命令都提示一句后 exit 0。
+ * 活跃集 = 仓库根 fish.config.json 的 voices[*].url 端口（生产权威定义，随部署
+ * 走配置；换端口只改配置不改代码）。plist 全量扫描展示，按 -p 端口标记活跃/遗留，
+ * 遗留实例不参与健康判定、不被 up/down 触碰。
+ *
+ * 本地开发机没有 fish.config.json：status/up 提示一句后 exit 0，down 拒绝 exit 1。
  */
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { Socket } from "node:net";
 
 const AGENT_DIR = join(process.env.HOME ?? "", "Library", "LaunchAgents");
+const CONFIG_PATH = join(import.meta.dirname, "..", "fish.config.json");
 const HOST = "127.0.0.1";
 const PROBE_TIMEOUT_MS = 500;
 const LOAD_TIMEOUT_MS = 90_000;
@@ -28,10 +33,40 @@ type Instance = {
   port?: number;
   sovits?: string;
   gpt?: string;
+  active: boolean;
 };
 
-/** 扫 ~/Library/LaunchAgents/com.yugang.tts*.plist，plutil 转 JSON 后取字段；目录不存在返回 [] */
-function discover(): Instance[] {
+/** 活跃集端口；配置读不到返回 null（开发机） */
+function activePorts(): Set<number> | null {
+  let cfg: { voices?: Record<string, { url?: string }> };
+  try {
+    cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  } catch {
+    return null;
+  }
+  const ports = new Set<number>();
+  for (const voice of Object.values(cfg.voices ?? {})) {
+    try {
+      const port = Number(new URL(voice?.url ?? "").port);
+      if (Number.isInteger(port) && port > 0) ports.add(port);
+    } catch {
+      // url 不合法：跳过这条音色
+    }
+  }
+  return ports;
+}
+
+function noConfig(action: "status" | "up" | "down"): never {
+  if (action === "down") {
+    console.error("未发现 fish.config.json（开发机），无活跃集定义，拒绝 down（防误收起生产语音）");
+    process.exit(1);
+  }
+  console.log("未发现 fish.config.json（开发机），无活跃语音实例");
+  process.exit(0);
+}
+
+/** 扫 ~/Library/LaunchAgents/com.yugang.tts*.plist 全量，plutil 转 JSON 后取字段；目录不存在返回 [] */
+function discover(active: Set<number>): Instance[] {
   let files: string[];
   try {
     files = readdirSync(AGENT_DIR)
@@ -47,7 +82,7 @@ function discover(): Instance[] {
       const out = spawnSync("plutil", ["-convert", "json", "-o", "-", path], { encoding: "utf8", maxBuffer: 1 << 20 });
       if (out.status === 0 && out.stdout) doc = JSON.parse(out.stdout);
     } catch {
-      // plist 读不动：按缺字段处理，status 表格里会显示异常
+      // plist 读不动：按缺字段处理，status 表格里显示为遗留缺端口
     }
     const args: string[] = Array.isArray(doc.ProgramArguments) ? doc.ProgramArguments : [];
     const port = Number(argValue(args, "-p"));
@@ -57,6 +92,7 @@ function discover(): Instance[] {
       port: Number.isInteger(port) && port > 0 ? port : undefined,
       sovits: shortModel(argValue(args, "-s")),
       gpt: shortModel(argValue(args, "-g")),
+      active: Number.isInteger(port) && port > 0 && active.has(port),
     };
   });
 }
@@ -125,15 +161,11 @@ function modelText(inst: Instance): string {
   return `${inst.sovits ?? "?"} / ${inst.gpt ?? "?"}`;
 }
 
-function emptyDir(): never {
-  console.log("未发现语音服务 plist（本机非生产机？）");
-  process.exit(0);
-}
-
 async function status(): Promise<number> {
-  const instances = discover();
-  if (!instances.length) emptyDir();
+  const active = activePorts();
+  if (!active) noConfig("status");
 
+  const instances = discover(active);
   const rows = [];
   for (const inst of instances) {
     rows.push({
@@ -147,25 +179,34 @@ async function status(): Promise<number> {
   const wPort = Math.max(width("端口"), ...rows.map((r) => width(String(r.inst.port ?? "无"))));
   const wModel = Math.max(width("模型(SoVITS/GPT)"), ...rows.map((r) => width(modelText(r.inst))));
 
-  console.log(`语音实例（${join(AGENT_DIR, "com.yugang.tts*.plist")}）\n`);
-  console.log(`${pad("label", wLabel)}  ${pad("端口", wPort)}  ${pad("模型(SoVITS/GPT)", wModel)}  LISTEN  加载`);
+  console.log(`语音实例（${join(AGENT_DIR, "com.yugang.tts*.plist")}；活跃集 = fish.config.json voices 端口）\n`);
+  console.log(
+    `${pad("label", wLabel)}  ${pad("端口", wPort)}  ${pad("模型(SoVITS/GPT)", wModel)}  状态  LISTEN  加载`,
+  );
   for (const r of rows) {
     console.log(
-      `${pad(r.inst.label, wLabel)}  ${pad(String(r.inst.port ?? "无"), wPort)}  ${pad(modelText(r.inst), wModel)}  ${pad(r.listening ? "✓" : "✗", "LISTEN".length)}  ${r.loaded ? "✓" : "✗"}`,
+      `${pad(r.inst.label, wLabel)}  ${pad(String(r.inst.port ?? "无"), wPort)}  ${pad(modelText(r.inst), wModel)}  ${pad(r.inst.active ? "活跃" : "遗留", "状态".length)}  ${pad(r.listening ? "✓" : "✗", "LISTEN".length)}  ${r.loaded ? "✓" : "✗"}`,
     );
   }
 
-  const bad = rows.filter((r) => !r.listening || !r.loaded);
-  if (!bad.length) {
-    console.log(`\n${rows.length}/${rows.length} 全部健康（监听中 + plist 已加载）`);
-    return 0;
+  const activeRows = rows.filter((r) => r.inst.active);
+  const bad = activeRows.filter((r) => !r.listening);
+  const missing = [...active].filter((p) => !rows.some((r) => r.inst.port === p));
+  const legacy = rows.length - activeRows.length;
+
+  if (bad.length || missing.length) {
+    const names = [...bad.map((r) => r.inst.label), ...missing.map((p) => `端口 ${p}（无 plist）`)];
+    console.log(`\n活跃集 ${activeRows.length - bad.length}/${activeRows.length} 在监听；异常：${names.join("、")}`);
+    console.log("拉起用 npm run tts up");
+    return 1;
   }
-  console.log(`\n${rows.length - bad.length}/${rows.length} 健康；异常：${bad.map((r) => r.inst.label).join("、")}`);
-  console.log("拉起用 npm run tts up");
-  return 1;
+  console.log(
+    `\n活跃集 ${activeRows.length}/${activeRows.length} 全部监听中${legacy ? `（另有 ${legacy} 个遗留 plist 不参与判定）` : ""}`,
+  );
+  return 0;
 }
 
-/** 把一个未监听的实例拉起来：没加载先 load，再 kickstart，轮询等端口（≤90s） */
+/** 把一个未监听的活跃实例拉起来：没加载先 load，再 kickstart，轮询等端口（≤90s） */
 async function bringUp(inst: Instance): Promise<string> {
   if (!isLoaded(inst.label) && launchctl(["load", inst.path]) !== 0)
     return `✗ ${inst.label}  launchctl load 失败`;
@@ -178,14 +219,18 @@ async function bringUp(inst: Instance): Promise<string> {
 }
 
 async function up(): Promise<number> {
-  const instances = discover();
-  if (!instances.length) emptyDir();
+  const active = activePorts();
+  if (!active) noConfig("up");
 
+  const instances = discover(active).filter((inst) => inst.active);
   const results: string[] = [];
   const pending: Promise<void>[] = [];
+  for (const port of active) {
+    if (!instances.some((inst) => inst.port === port)) results.push(`✗ 端口 ${port}  voices 里有但没有对应 plist`);
+  }
   for (const inst of instances) {
     if (!inst.port) {
-      results.push(`✗ ${inst.label}  plist 解析不到端口（-p）`);
+      results.push(`✗ ${inst.label}  活跃 plist 解析不到端口（-p）`);
       continue;
     }
     if (await probePort(inst.port)) {
@@ -200,21 +245,31 @@ async function up(): Promise<number> {
   for (const line of results) console.log(line);
   const fail = results.filter((l) => l.startsWith("✗")).length;
   const ok = results.length - fail;
-  console.log(`\n${ok}/${instances.length} 在监听${fail ? `，${fail} 个异常` : "，全部就绪"}`);
+  console.log(`\n活跃集 ${ok}/${active.size} 在监听${fail ? `，${fail} 个异常` : "，全部就绪"}`);
   return fail ? 1 : 0;
 }
 
 function down(): number {
-  const instances = discover();
-  if (!instances.length) emptyDir();
+  const active = activePorts();
+  if (!active) noConfig("down");
 
+  const instances = discover(active).filter((inst) => inst.active);
   let fail = 0;
-  for (const inst of instances) {
+  for (const port of active) {
+    const inst = instances.find((i) => i.port === port);
+    if (!inst) {
+      console.log(`- 端口 ${port}  voices 里有但没有对应 plist，跳过`);
+      continue;
+    }
+    if (!isLoaded(inst.label)) {
+      console.log(`- ${inst.label}  本来就未加载，跳过`);
+      continue;
+    }
     const rc = launchctl(["unload", inst.path]);
     console.log(`${rc === 0 ? "✓" : "✗"} ${inst.label}  launchctl unload 退出码 ${rc}`);
     if (rc !== 0) fail++;
   }
-  console.log(`\n${instances.length - fail}/${instances.length} 已卸载`);
+  console.log(`\n活跃集卸载完成${fail ? `，${fail} 个失败` : ""}（遗留 plist 未触碰）`);
   return fail ? 1 : 0;
 }
 
