@@ -12,6 +12,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { join } from "node:path";
+import { recordFishPid } from "./lib/pidfile.ts";
 
 const LOG = join(process.cwd(), "var", "fish-console.log");
 
@@ -40,6 +41,7 @@ const fish = spawn(process.execPath, ["--env-file-if-exists=.env", "src/index.ts
 });
 fish.unref();
 closeSync(log);
+recordFishPid(fish.pid); // 与 up 写同一个 var/up.pid（单一事实源）：否则 npm run down 认不得 deploy 起的鱼
 console.log(`[deploy] 新鱼 pid ${fish.pid}，日志 ${LOG}`);
 
 // 4. 语音跟随：与横幅验证并行拉起 TTS 实例；失败只告警，不影响部署结论

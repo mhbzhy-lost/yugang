@@ -9,12 +9,12 @@
  *   PROTOCOL_CMD=npm --prefix ~/napcat start     # 任何能起 OneBot v11 服务的命令
  */
 import { spawn } from "node:child_process";
-import { writeFileSync, existsSync, unlinkSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { pidFilePath, recordFishPid } from "./lib/pidfile.ts";
 
-const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
-const PID_FILE = join(HOME, "up.pid");
 const wsUrl = process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001";
+const PID_FILE = pidFilePath(); // 与 deploy 写同一个 var/up.pid；Ctrl-C / 鱼退出时清掉
 
 const children: ReturnType<typeof spawn>[] = [];
 let stopping = false;
@@ -49,7 +49,7 @@ if (!(await reachable(wsUrl))) {
 console.log("[up] 启动鱼缸");
 const fish = spawn(process.execPath, ["--env-file-if-exists=.env", "src/index.ts"], { stdio: "inherit" });
 children.push(fish);
-writeFileSync(PID_FILE, String(fish.pid ?? ""));
+recordFishPid(fish.pid); // 与 deploy 写同一个 var/up.pid（单一事实源，down 读它收鱼）
 
 // 4. 语音跟随：与起鱼并行拉起 TTS 实例（模型加载要 30-60s）；失败只告警，不阻塞鱼
 const tts = spawn(process.execPath, [join(import.meta.dirname, "tts.ts"), "up"], { stdio: "inherit" });
