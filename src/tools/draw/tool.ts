@@ -36,9 +36,7 @@ const DRAWN = new Map<string, unknown>();
 const PRESET_POSITIVE = `masterpiece, best quality, absurdres, score_7, score_8, score_9,
 newest, detailed, very aesthetic, anime, cel shading, `;
 const PRESET_NEGATIVE = `low quality, worst quality, score_1, score_2, score_3,
-shiny skin, lips, early, old,
-
-mature female, older female, elderly female, `;
+shiny skin, lips, early, old, `;
 const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 4.5, sampler_name: "ER SDE", scheduler: "beta" };
 /** 高分辨率模式（hires fix）：RealESRGAN anime_6B 放大 2 倍，二段步数 0=继承主步数，denoising 0.4，其余默认。
  *  hr_additional_modules 必须显式给 ["Use same choices"]（沿用当前模块）：Forge Neo 的 API 不传时为 None，
