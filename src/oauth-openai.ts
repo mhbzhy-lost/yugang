@@ -108,13 +108,14 @@ export async function loginWithDeviceCode(interaction: LoginInteraction): Promis
       const exchanged = await fetch(TOKEN_URL, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
+        // 字符串 body：代理版 fetch 只吃 string/ArrayBuffer
         body: new URLSearchParams({
           grant_type: "authorization_code",
           client_id: CLIENT_ID,
           code: done.authorization_code,
           code_verifier: done.code_verifier,
           redirect_uri: DEVICE_REDIRECT_URI,
-        }),
+        }).toString(),
         signal,
       });
       return toCredential(await readTokens(exchanged, "exchange"));
@@ -128,11 +129,12 @@ export async function refreshTokens(credential: OAuthCredential, signal?: AbortS
   const response = await fetchImpl(TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
+    // 字符串 body：代理版 fetch 只吃 string/ArrayBuffer
     body: new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: credential.refresh,
       client_id: CLIENT_ID,
-    }),
+    }).toString(),
     ...(signal ? { signal } : {}),
   });
   return toCredential(await readTokens(response, "refresh"));
@@ -207,13 +209,14 @@ export async function finishBrowserLogin(
   const response = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
+    // 字符串 body：代理版 fetch 只吃 string/ArrayBuffer
     body: new URLSearchParams({
       grant_type: "authorization_code",
       client_id: CLIENT_ID,
       code: parsed.code,
       code_verifier: start.verifier,
       redirect_uri: REDIRECT_URI,
-    }),
+    }).toString(),
     ...(signal ? { signal } : {}),
   });
   return toCredential(await readTokens(response, "exchange"));

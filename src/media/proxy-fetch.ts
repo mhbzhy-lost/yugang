@@ -44,9 +44,12 @@ export function createProxyFetch(proxy: string): typeof fetch | undefined {
     const headers = new Headers(init.headers);
     const body = typeof init.body === "string"
       ? init.body
-      : init.body === undefined || init.body === null
-        ? undefined
-        : Buffer.from(init.body as ArrayBuffer);
+      : // URLSearchParams 与全局 fetch 对齐：自动转成 urlencoded 字符串再发
+        init.body instanceof URLSearchParams
+        ? init.body.toString()
+        : init.body === undefined || init.body === null
+          ? undefined
+          : Buffer.from(init.body as ArrayBuffer);
 
     const reply = await new Promise<{ status: number; statusText: string; text: string }>((resolve, reject) => {
       const request = httpsRequest(
