@@ -124,6 +124,29 @@ export function throwSayRejection(messages: Record<string, string>, rejection: R
   throw new Error(`${which}${text}`);
 }
 
+/**
+ * text 参数的机械规整：模型偶发把单条文本按旧 messages 习惯包成数组——
+ * 字符串化的 JSON 数组（"["…"]"）或真数组都可能出现，两者都解包；
+ * 多元素按语音同款用「，」连成一条（text 语义就是一条消息）。
+ */
+export function normalizeTextInput(raw: unknown): string {
+  if (Array.isArray(raw)) {
+    return raw.map((item) => (typeof item === "string" ? item : String(item)).trim()).filter(Boolean).join("，");
+  }
+  const t = typeof raw === "string" ? raw.trim() : String(raw ?? "").trim();
+  if (t.startsWith("[") && t.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(t) as unknown;
+      if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((item) => typeof item === "string")) {
+        return parsed.map((item) => item.trim()).filter(Boolean).join("，");
+      }
+    } catch {
+      // 不是 JSON 数组字面量：按普通文本放行
+    }
+  }
+  return t;
+}
+
 // 轮计数：会话 → { 轮标识, 已开口次数 }（pi.live.run 的 inputs[0]，一次 agent loop 一个）。
 // 四个 say_* 工具共享这一份（模块级），任何组合都吃同一个额度。上限 3 次只是闸门：
 // 不鼓励多说，一句能说完的事别拆三条（人格书仍这么引导）。轮标识由 pi-durable 自己维护，

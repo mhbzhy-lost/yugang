@@ -10,7 +10,7 @@ import { validateOutbound } from "../../egress/policy.ts";
 import { ledgerOf, recordSent } from "../../egress/ledger.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { assertMentions, chargeSayRound, enqueueOutbound, resolveSayContext, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
+import { assertMentions, chargeSayRound, enqueueOutbound, normalizeTextInput, resolveSayContext, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface SayWordsArgs {
@@ -33,7 +33,7 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
     execute: async (args, api, context) => {
       const { round, trigger } = await resolveSayContext(api, deps, context);
 
-      const text = (args.text ?? "").trim();
+      const text = normalizeTextInput(args.text);
       if (!text) throw new Error(deps.prompts.messages["empty"] ?? "empty");
 
       // 主动 @：去重后整段机械校验（say-shared 唯一实现），任何一环缺失都 fail closed

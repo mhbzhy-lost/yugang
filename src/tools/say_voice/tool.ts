@@ -12,7 +12,7 @@ import { synthesizeToMedia } from "../../tts.ts";
 import { renderTemplate } from "../../prompts.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { chargeSayRound, enqueueOutbound, resolveSayContext, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
+import { chargeSayRound, enqueueOutbound, normalizeTextInput, resolveSayContext, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface SayVoiceArgs {
@@ -45,7 +45,7 @@ export function createSayVoiceTool(manifest: ToolManifest, deps: ToolPackageDeps
       const ledger = ledgerOf(api.conversationId);
       if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
 
-      const spoken = (args.text ?? "").trim();
+      const spoken = normalizeTextInput(args.text);
       if (!spoken) throw new Error(deps.prompts.messages["empty"] ?? "empty");
       if (spoken.length > VOICE_MAX_CHARS) {
         throw new Error(renderTemplate(deps.prompts.messages["voice_too_long"] ?? "", { length: String(spoken.length) }));
