@@ -241,8 +241,9 @@ const fish = await openFish({
   // （deepseek 的 minimal 映射为 null，等于不支持），缺省 off
   thinkingLevel: fishConfig().config.thinkingLevel,
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
-  // 只有 video 单独放宽：要下视频、抽帧、逐帧过视觉模型
-  toolTimeoutOverrides: { video: 90, gpt_image: 210 },
+  // 重耗时工具单独放宽：say 要等 GPT-SoVITS 合成（v4 长句最坏 70s，超时覆盖含空响应重试），
+  // video 要下视频、抽帧、逐帧过视觉模型；全局 toolTimeoutSeconds 保持 30 不动
+  toolTimeoutOverrides: { say: 100, video: 90, gpt_image: 210 },
   // codex 订阅走 WebSocket（Node 的 WS 不吃 --use-env-proxy），过代理时在 main provider 写 transport: "sse"
   ...(modelSelection.transport ? { streamTransport: modelSelection.transport } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时

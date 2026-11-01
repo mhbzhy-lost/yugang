@@ -210,14 +210,16 @@
 - 人格解析必须走带 `#人格` 后缀的映射键（`mappingKeys`），`chatKeys` 只存剥离人格的 base 键给路由用
 - 触发提示：主人/特别关注对象每第 3 条过闸消息追加「这一条必须用语音回」；**看到提示必须用语音**
 - 出口限制：一轮一条附件（图/表情包/语音互斥）、台词 ≤100 字、超长/含失败一律以 tool 错误返回
-- 服务端：GPT-SoVITS 常驻本机（9880 爱莉希雅、9881 桑多涅，launchd 托管），依赖 `~/nltk_data` 的
+- 服务端：GPT-SoVITS 常驻本机（launchd 托管；9884 爱莉希雅 v4 自训 elysia、9881 桑多涅、9882 凯尔希；
+  9880 为旧 v2 保留可回滚，9883 为落选 v2ProPlus 试听实例，保留 7 天后回收），依赖 `~/nltk_data` 的
   `cmudict` + `averaged_perceptron_tagger*`——**缺了会返回 200 + 0 字节空音频**（英文 g2p 抛 LookupError）
-- 空结果重试一次（第二次用 `text_language=auto`），合成超时 25 秒（工具层上限 30 秒）
+- 空结果重试一次（第二次用 `text_language=auto`），合成超时默认 70 秒（`say` 工具层覆盖 100 秒）
 
 ### 15. 可观测性
 
 - 日志统一带 `HH:MM:SS` 前缀（`src/index.ts` 启动时包一层 console），排查按时间对齐
-- 单次工具调用超时 30 秒（`fish.config` 的 `toolTimeoutSeconds`），超时以 tool 错误返回，
+- 单次工具调用超时 30 秒（`fish.config` 的 `toolTimeoutSeconds`），个别重耗时工具按 `toolTimeoutOverrides`
+  单独放宽（say 100s / video 90s / gpt_image 210s），超时以 tool 错误返回，
   **没有整轮超时**
 
 ### 16. 长期记忆（审批闸 + 公共/私有双轨）
@@ -335,7 +337,6 @@ mini 上并没有 `home-mac-connect` 这个 skill（今天有子代理在 mini �
 ## 已知欠账
 
 - 长文转图、入群审批没做
-- 姬子/凯尔希音色：权重已下载校验（`~/tts/models/`），但没常驻、没配进 voices；
-  凯尔希是 v4，纯 CPU 首句 22 秒，要先验 MPS + 给 venv 装 resampy
+- 姬子音色：权重已下载校验（`~/tts/models/`），未常驻、未配 voices
 - `say` 的 `meme` 参数是死代码（全历史 0 次使用），可以删
 - 连续相似复读没有修法

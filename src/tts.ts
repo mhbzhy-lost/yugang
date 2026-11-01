@@ -21,7 +21,7 @@ export interface TtsConfig {
   referText?: string;
   /** 参考音频语种，默认 zh。 */
   referLanguage?: string;
-  /** 合成超时，默认 25 秒（工具层上限 30 秒，留出重试余量）。 */
+  /** 合成超时，默认 70 秒（say 工具层覆盖 100 秒，覆盖空响应重试一次的最坏情况）。 */
   timeoutMs?: number;
 }
 
@@ -46,7 +46,7 @@ export async function synthesizeToMedia(config: TtsConfig, text: string, mediaRo
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(config.timeoutMs ?? 25_000),
+      signal: AbortSignal.timeout(config.timeoutMs ?? 70_000),
     });
     if (!response.ok) throw new Error(`tts_http_${response.status}`);
     return Buffer.from(await response.arrayBuffer());
