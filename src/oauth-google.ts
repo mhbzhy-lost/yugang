@@ -2,9 +2,12 @@
  * Google 账户（AI Pro 订阅 / Gemini CLI 同款）OAuth：浏览器 PKCE 登录 + refresh + 请求凭据派生。
  *
  * 为什么只有浏览器流程：这个 client 是 Google 为 gemini-cli 注册的 Desktop 应用，设备码端点
- * 会拒它（Invalid client type），唯一可行的登录路径是浏览器 PKCE；redirect_uri 用 gemini-cli
- * 注册的 https://codeassist.google.com/authcode —— 授权完成后该页面直接把授权码显示出来，
- * 复制回来即可，不需要本地监听端口。
+ * 会拒它（Invalid client type），唯一可行的登录路径是浏览器 PKCE；gemini 通道的 redirect_uri
+ * 用 gemini-cli 注册的 https://codeassist.google.com/authcode —— 授权完成后该页面直接把授权码显示
+ * 出来，复制回来即可，不需要本地监听端口。antigravity 通道用 loopback 回调
+ * http://localhost:51121/oauth-callback：无头机不监听该端口，授权后浏览器地址栏里那条打不开的
+ * 回调 URL 整条复制回来即可（与 codex 浏览器流同款 UX）。两个 flavor 只差 redirect_uri 与
+ * scopes（antigravity 多 cclog / experimentsandconfigs 两个），token 端点与刷新完全同一套。
  *
  * OAuth client 常量不放源码：id/secret 虽是 gemini-cli 的公开常量（gemini-cli 官方源码同样
  * 明文携带），但 GitHub push protection 会拦含明文 client 的提交，所以只放本机
@@ -21,20 +24,36 @@
  */
 import type { OAuthCredential } from "./credential-store.ts";
 
-/** OAuth client（gemini-cli 公开 id/secret），由登录脚本从本机 config/models.json 读出传入。 */
+/** OAuth client（公开 installed-app id/secret），由登录脚本从本机 config/models.json 读出传入。
+ * redirectUri / scopes 按 provider flavor 缺省：gemini-cli 用 codeassist 回调页，
+ * antigravity 用 loopback 回调（见下方两组常量）；登录脚本只传 id/secret 时自动落到 gemini。 */
 export interface GoogleOauthClient {
   id: string;
   secret: string;
+  redirectUri?: string;
+  scopes?: string[];
 }
 
-const SCOPES = [
+/** gemini-cli 通道：授权后 codeassist.google.com/authcode 页面直接显示授权码。 */
+export const GEMINI_REDIRECT_URI = "https://codeassist.google.com/authcode";
+export const GEMINI_SCOPES = [
   "https://www.googleapis.com/auth/cloud-platform",
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
 ];
+
+/** antigravity 通道：loopback 回调，无头机不监听，用户把地址栏整条 URL 复制回来。 */
+export const ANTIGRAVITY_REDIRECT_URI = "http://localhost:51121/oauth-callback";
+export const ANTIGRAVITY_SCOPES = [
+  "https://www.googleapis.com/auth/cloud-platform",
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/cclog",
+  "https://www.googleapis.com/auth/experimentsandconfigs",
+];
+
 const AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
-const REDIRECT_URI = "https://codeassist.google.com/authcode";
 
 export interface BrowserLoginStart {
   url: string;
@@ -97,14 +116,16 @@ async function readTokens(
  * 首次授权或显式 consent 时发 refresh token，缺了这两个参数重登可能拿不到）。
  */
 export async function startBrowserLogin(client: GoogleOauthClient): Promise<BrowserLoginStart> {
+  const redirectUri = client.redirectUri ?? GEMINI_REDIRECT_URI;
+  const scopes = client.scopes ?? GEMINI_SCOPES;
   const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
   const challenge = base64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
   const state = base64url(crypto.getRandomValues(new Uint8Array(16)));
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", client.id);
-  url.searchParams.set("redirect_uri", REDIRECT_URI);
-  url.searchParams.set("scope", SCOPES.join(" "));
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("scope", scopes.join(" "));
   url.searchParams.set("access_type", "offline");
   url.searchParams.set("prompt", "consent");
   url.searchParams.set("state", state);
@@ -159,7 +180,8 @@ export async function finishBrowserLogin(
       code_verifier: start.verifier,
       client_id: client.id,
       client_secret: client.secret,
-      redirect_uri: REDIRECT_URI,
+      // token 交换的 redirect_uri 必须与授权请求一致（Google 严格校验），按 client flavor 缺省
+      redirect_uri: client.redirectUri ?? GEMINI_REDIRECT_URI,
     }).toString(),
     ...(signal ? { signal } : {}),
   });

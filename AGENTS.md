@@ -143,7 +143,12 @@
   WebSocket 不吃 fetch 注入；`main` / `vision` / `image` / `vision_fallback` 复用同一个 provider 时共用这条代理。
   google-gemini（Google 订阅 OAuth，Code Assist 通道）同理走 provider 代理：`cloudcode-pa.googleapis.com` 与
   `oauth2.googleapis.com`（token 刷新走全局 fetch，靠 scoped proxy 接管）都进隧道；登录用
-  `npm run login -- google-gemini`（只有浏览器流程，授权码从 codeassist.google.com/authcode 页面复制回来）
+  `npm run login -- google-gemini`（只有浏览器流程，授权码从 codeassist.google.com/authcode 页面复制回来）。
+  google-antigravity（Antigravity 通道）是 AI Pro 订阅的**现通道**——个人账户 2026-06-18 起 gemini-cli
+  通道整体停用，新登录一律走它；端点 `daily-cloudcode-pa.sandbox.googleapis.com`，同款 provider 代理
+  （token 刷新的 `oauth2.googleapis.com` 一并进隧道）。oauthClient 同样只放本机 `config/models.json` 的
+  `providers.google-antigravity.oauthClient`（模板空串占位）；登录 `npm run login -- google-antigravity`，
+  回调页是 `http://localhost:51121/oauth-callback`，无头机打不开是正常的，把地址栏整条 URL 复制回来
 - **OAuth client 常量只放本机配置**：gemini-cli 公开的 id/secret 只写本机 `config/models.json` 的
   `providers.google-gemini.oauthClient`（模板留空串占位），源码里不出现——git 里含明文 client 会被
   GitHub push protection 拦推送；登录成功后 client 随凭据落盘（`config/auth.json`），token 刷新从

@@ -41,18 +41,22 @@ function buildProvider(config: FishModelConfig) {
   }
 
   const isCodeAssist = config.api === "google-code-assist";
-  const api = isCodeAssist
-    ? googleCodeAssistApi()
-    : config.api === "openai-codex-responses"
-      ? openAICodexResponsesApi()
-      : openAICompletionsApi();
+  const isAntigravity = config.api === "antigravity-code-assist";
+  const isGoogleOAuth = isCodeAssist || isAntigravity;
+  const api = isAntigravity
+    ? googleCodeAssistApi({ flavor: "antigravity" })
+    : isCodeAssist
+      ? googleCodeAssistApi()
+      : config.api === "openai-codex-responses"
+        ? openAICodexResponsesApi()
+        : openAICompletionsApi();
 
   const provider = createProvider({
     id: config.providerId,
     name: config.providerId,
     ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
     auth: oauth
-      ? { oauth: isCodeAssist ? googleGeminiOAuth : openaiCodexOAuth }
+      ? { oauth: isGoogleOAuth ? googleGeminiOAuth : openaiCodexOAuth }
       : {
           apiKey: {
             name: `${config.providerId} key`,
@@ -62,11 +66,13 @@ function buildProvider(config: FishModelConfig) {
         },
     models: config.models.map((model) => ({
       ...model,
-      api: isCodeAssist
-        ? ("google-code-assist" as const)
-        : config.api === "openai-codex-responses"
-          ? ("openai-codex-responses" as const)
-          : ("openai-completions" as const),
+      api: isAntigravity
+        ? ("antigravity-code-assist" as const)
+        : isCodeAssist
+          ? ("google-code-assist" as const)
+          : config.api === "openai-codex-responses"
+            ? ("openai-codex-responses" as const)
+            : ("openai-completions" as const),
       provider: config.providerId,
       ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
     })),
@@ -85,7 +91,13 @@ function providerProxyHosts(config: FishModelConfig): string[] {
     // baseUrl 写坏了不影响代理本身，交给后面的请求报错
   }
   if (config.authMode === "oauth") {
-    if (config.api === "google-code-assist") {
+    if (config.api === "antigravity-code-assist") {
+      // Antigravity：模型流走 daily-cloudcode-pa.sandbox（生产 cloudcode-pa 是回退域，一并挂上），
+      // token 刷新走 oauth2.googleapis.com（裸全局 fetch，scoped proxy 接管）
+      hosts.add("daily-cloudcode-pa.sandbox.googleapis.com");
+      hosts.add("cloudcode-pa.googleapis.com");
+      hosts.add("oauth2.googleapis.com");
+    } else if (config.api === "google-code-assist") {
       // Google 订阅：模型流走 cloudcode-pa，token 刷新走 oauth2.googleapis.com；
       // 刷新用裸全局 fetch，必须进 scoped proxy 才会被接管
       hosts.add("cloudcode-pa.googleapis.com");

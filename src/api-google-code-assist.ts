@@ -11,13 +11,22 @@
  *   3) 响应也是信封：每个 SSE 事件是 { response: { candidates, usageMetadata } }，
  *      先解包 .response 再走与 google-generative-ai 适配器逐事件一致的归一化
  *
+ * 两个 flavor（gemini / antigravity）共用这同一套协议实现，差异全部集中在四处常量：
+ *   - baseUrl：antigravity 主用 daily-cloudcode-pa.sandbox.googleapis.com（配置可覆盖）
+ *   - 必需请求头：antigravity 后端按 user-agent / x-goog-api-client / client-metadata 识别
+ *     客户端，缺了会 403 license；流式另加 accept: text/event-stream
+ *   - 请求信封：antigravity 多两个字段 body.userAgent="antigravity" 与 requestId（每次
+ *     HTTP 请求新生成，重试也换新）
+ *   - 项目发现的 metadata：antigravity 用 ideType ANTIGRAVITY
+ * 其余（SSE 解析、信封解包、事件归一化）完全共用。
+ *
  * 其余事件流（text/thinking 块切换、thoughtSignature 保留、functionCall id 生成、
  * usageMetadata 换算、calculateCost）逐段对照镜像
  * node_modules/@earendil-works/pi-ai/dist/api/google-generative-ai.js。
  *
  * project 字段来自凭据里的 projectId：src/oauth-google.ts 的 toAuth 把它放进私有头
  * x-yugang-ca-project，本适配器在出站前把头摘掉、转进信封；Google 后端对未知头敏感，
- * 出站只留 Content-Type 与 Authorization。
+ * 出站只留 Content-Type 与 Authorization（antigravity flavor 另加它识别客户端的那三个头）。
  */
 import { calculateCost, clampThinkingLevel } from "@earendil-works/pi-ai/models";
 import type { Api, AssistantMessage, Model, SimpleStreamOptions, StreamOptions, TranscriptContext } from "@earendil-works/pi-ai";
@@ -46,8 +55,35 @@ import { getSystemMessageText } from "@earendil-works/pi-ai/utils/text";
 import { collapseSystemMessages, getCurrentTools, getInitialSystemMessage } from "@earendil-works/pi-ai/utils/transcript";
 
 const DEFAULT_BASE_URL = "https://cloudcode-pa.googleapis.com";
+const ANTIGRAVITY_BASE_URL = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 const PROJECT_HEADER = "x-yugang-ca-project";
 const DEFAULT_MAX_RETRIES = 3;
+
+/** 两个订阅通道共用本适配器，差异全部是常量级的（见文件头注释）。 */
+export type CodeAssistFlavor = "gemini" | "antigravity";
+
+function defaultBaseUrl(flavor: CodeAssistFlavor): string {
+  return flavor === "antigravity" ? ANTIGRAVITY_BASE_URL : DEFAULT_BASE_URL;
+}
+
+/** antigravity 后端按这些头识别客户端，缺了会 403 license（实测值，勿改）。 */
+const ANTIGRAVITY_CLIENT_METADATA = '{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}';
+
+function requestHeaders(flavor: CodeAssistFlavor, apiKey: string, streaming: boolean): Record<string, string> {
+  const headers: Record<string, string> = { "content-type": "application/json", authorization: `Bearer ${apiKey}` };
+  if (flavor === "antigravity") {
+    headers["user-agent"] = "antigravity/1.11.5 macos/arm64";
+    headers["x-goog-api-client"] = "google-cloud-sdk vscode_cloudshelleditor/0.1";
+    headers["client-metadata"] = ANTIGRAVITY_CLIENT_METADATA;
+    if (streaming) headers["accept"] = "text/event-stream";
+  }
+  return headers;
+}
+
+/** antigravity 的信封每次 HTTP 请求都带新的 requestId（重试也换新）；userAgent 在 buildParams 里拼。 */
+function encodeBody(params: Record<string, unknown>, flavor: CodeAssistFlavor): Record<string, unknown> {
+  return flavor === "antigravity" ? { ...params, requestId: crypto.randomUUID() } : params;
+}
 
 type CodeAssistModel = Model<"google-code-assist">;
 type GoogleModel = Model<"google-generative-ai">;
@@ -59,6 +95,8 @@ export interface GoogleCodeAssistOptions extends StreamOptions {
     budgetTokens?: number;
     level?: GoogleApiThinkingLevel;
   };
+  /** 订阅通道：gemini（默认，gemini-cli）或 antigravity（AI Pro 现通道）。 */
+  flavor?: CodeAssistFlavor;
 }
 
 // toolCallCounter：functionCall 没带 id 时生成唯一 id（对照 google 适配器的同名计数器）
@@ -140,7 +178,13 @@ async function toResponseError(provider: string, response: Response): Promise<Er
   return error;
 }
 
-function buildParams(model: CodeAssistModel, context: TranscriptContext, options: GoogleCodeAssistOptions = {}, project?: string) {
+function buildParams(
+  model: CodeAssistModel,
+  context: TranscriptContext,
+  options: GoogleCodeAssistOptions = {},
+  project?: string,
+  flavor: CodeAssistFlavor = "gemini",
+) {
   const contents = convertMessages(model as unknown as GoogleModel, context);
   const initialSystemMessage = getInitialSystemMessage(context.messages);
   const currentTools = getCurrentTools(context.messages);
@@ -181,17 +225,20 @@ function buildParams(model: CodeAssistModel, context: TranscriptContext, options
     model: model.id,
     ...(project ? { project } : {}),
     request,
+    // antigravity 的信封多 userAgent 字段（requestId 在 encodeBody 里每次请求新生成）
+    ...(flavor === "antigravity" ? { userAgent: "antigravity" } : {}),
   };
 }
 
 export const stream = (model: CodeAssistModel, context: TranscriptContext, options?: GoogleCodeAssistOptions) => {
   const stream = new AssistantMessageEventStream();
   const normalizedContext = collapseSystemMessages(context);
+  const flavor = options?.flavor ?? "gemini";
   (async () => {
     const output = {
       role: "assistant",
       content: [],
-      api: "google-code-assist",
+      api: flavor === "antigravity" ? "antigravity-code-assist" : "google-code-assist",
       provider: model.provider,
       model: model.id,
       usage: {
@@ -213,19 +260,20 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
       }
       if (options?.signal?.aborted) throw new Error("Request aborted");
       const project = takeProjectHeader(options?.headers);
-      let params = buildParams(model, normalizedContext, options, project);
+      let params = buildParams(model, normalizedContext, options, project, flavor);
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams;
       }
-      const url = `${(model.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "")}/v1internal:streamGenerateContent?alt=sse`;
+      const url = `${(model.baseUrl || defaultBaseUrl(flavor)).replace(/\/+$/, "")}/v1internal:streamGenerateContent?alt=sse`;
       const response = await retryProviderRequest(
         async () => {
           const attempt = await (options?.fetch ?? globalThis.fetch)(url, {
             method: "POST",
-            // Google 后端对未知头敏感：出站只留这两个头，其余（含 x-yugang-ca-project）都不转发
-            headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-            body: JSON.stringify(params),
+            // gemini：出站只留这两个头（含 x-yugang-ca-project 在内的其余头都不转发）；
+            // antigravity：另加它识别客户端的那三个头与流式 accept
+            headers: requestHeaders(flavor, apiKey, true),
+            body: JSON.stringify(encodeBody(params, flavor)),
             ...(options?.signal ? { signal: options.signal } : {}),
           });
           await options?.onResponse?.({ status: attempt.status, headers: headersToRecord(attempt.headers) }, model);
@@ -419,7 +467,12 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
   return stream;
 };
 
-export const streamSimple = (model: CodeAssistModel, context: TranscriptContext, options?: SimpleStreamOptions) => {
+export const streamSimple = (
+  model: CodeAssistModel,
+  context: TranscriptContext,
+  options?: SimpleStreamOptions,
+  flavor: CodeAssistFlavor = "gemini",
+) => {
   const apiKey = options?.apiKey;
   if (!apiKey) {
     throw new Error(`No API key for provider: ${model.provider}`);
@@ -427,6 +480,7 @@ export const streamSimple = (model: CodeAssistModel, context: TranscriptContext,
   const base = {
     ...buildBaseOptions(model, context, options, apiKey),
     toolChoice: options?.toolChoice,
+    flavor,
   };
   if (!options?.reasoning) {
     return stream(model, context, { ...base, thinking: { enabled: false } });
@@ -509,6 +563,12 @@ const DISCOVERY_METADATA = {
   pluginVersion: "2.0.0",
 };
 
+const ANTIGRAVITY_METADATA = {
+  ideType: "ANTIGRAVITY",
+  platform: "PLATFORM_UNSPECIFIED",
+  pluginType: "GEMINI",
+};
+
 function parseLoadCodeAssist(value: unknown): CodeAssistDiscovery {
   const record = (value ?? {}) as { currentTier?: { id?: unknown }; cloudaicompanionProject?: unknown };
   const tier = typeof record.currentTier?.id === "string" ? record.currentTier.id : undefined;
@@ -523,14 +583,17 @@ function parseLoadCodeAssist(value: unknown): CodeAssistDiscovery {
 
 export async function discoverProject(
   accessToken: string,
+  flavor: CodeAssistFlavor = "gemini",
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
 ): Promise<CodeAssistDiscovery> {
+  const baseUrl = defaultBaseUrl(flavor).replace(/\/+$/, "");
+  const metadata = flavor === "antigravity" ? ANTIGRAVITY_METADATA : DISCOVERY_METADATA;
   const post = (path: string) =>
-    fetchImpl(`${DEFAULT_BASE_URL}${path}`, {
+    fetchImpl(`${baseUrl}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify({ metadata: DISCOVERY_METADATA }),
+      headers: requestHeaders(flavor, accessToken, false),
+      body: JSON.stringify({ metadata }),
       ...(signal ? { signal } : {}),
     });
 
@@ -548,8 +611,8 @@ export async function discoverProject(
   let operation = (await onboard.json()) as { done?: boolean; name?: string };
   for (let tries = 0; operation.done !== true && operation.name && tries < 12; tries++) {
     await new Promise((r) => setTimeout(r, 5000));
-    const poll = await fetchImpl(`${DEFAULT_BASE_URL}/v1internal/${operation.name}`, {
-      headers: { authorization: `Bearer ${accessToken}` },
+    const poll = await fetchImpl(`${baseUrl}/v1internal/${operation.name}`, {
+      headers: requestHeaders(flavor, accessToken, false),
       ...(signal ? { signal } : {}),
     });
     if (!poll.ok) throw new Error(`onboard 轮询失败 (${poll.status})`);
@@ -559,15 +622,42 @@ export async function discoverProject(
   return load();
 }
 
-/** 装配给 createProvider 的 api 实现（ProviderStreams 形状）。 */
-export function googleCodeAssistApi(): {
+/** antigravity 专用：列出当前账户在该 project 下可用的模型（登录时打印用，best-effort）。 */
+export interface AvailableModelInfo {
+  displayName?: string;
+  quotaInfo?: unknown;
+}
+
+export async function fetchAvailableModels(
+  accessToken: string,
+  project: string,
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<Record<string, AvailableModelInfo>> {
+  const response = await fetchImpl(`${ANTIGRAVITY_BASE_URL}/v1internal:fetchAvailableModels`, {
+    method: "POST",
+    headers: requestHeaders("antigravity", accessToken, false),
+    body: JSON.stringify({ project }),
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`fetchAvailableModels 失败 (${response.status}): ${text.slice(0, 200)}`);
+  }
+  const json = (await response.json()) as { models?: Record<string, AvailableModelInfo> };
+  return json.models ?? {};
+}
+
+/** 装配给 createProvider 的 api 实现（ProviderStreams 形状）；flavor 缺省 gemini（现有调用不变）。 */
+export function googleCodeAssistApi(options: { flavor?: CodeAssistFlavor } = {}): {
   id: Api;
   stream: (model: Model<Api>, context: TranscriptContext, options?: StreamOptions) => ReturnType<typeof stream>;
   streamSimple: (model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions) => ReturnType<typeof streamSimple>;
 } {
+  const flavor = options.flavor ?? "gemini";
   return {
-    id: "google-code-assist",
-    stream: (model, context, options) => stream(model as CodeAssistModel, context, options as GoogleCodeAssistOptions),
-    streamSimple: (model, context, options) => streamSimple(model as CodeAssistModel, context, options),
+    id: (flavor === "antigravity" ? "antigravity-code-assist" : "google-code-assist") as Api,
+    stream: (model, context, opts) => stream(model as CodeAssistModel, context, { ...(opts as GoogleCodeAssistOptions), flavor }),
+    streamSimple: (model, context, opts) => streamSimple(model as CodeAssistModel, context, opts, flavor),
   };
 }
