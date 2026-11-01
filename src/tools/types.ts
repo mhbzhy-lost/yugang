@@ -56,6 +56,8 @@ export interface ToolPackageDeps {
   models?: Models;
   /** 视觉描述模型；省略时与 main 相同。 */
   visionModel?: { provider: string; modelId: string };
+  /** 视觉描述的兜底模型；省略 = 无兜底（describeImage 行为不变）。 */
+  visionFallbackModel?: { provider: string; modelId: string };
   /** DeepSeek Search API 的 key；有才具备联网搜索能力。 */
   searchKey?: string;
   /** 主人 QQ：主人专属工具的身份闸；缺省则这些 factory 返回 undefined。 */

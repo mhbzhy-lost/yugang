@@ -194,6 +194,7 @@ config/auth.example.json   模板，说明格式                                
   "models": {
     "main":   { "provider": "zai-coding-cn", "model": "glm-5.3-flash" },
     "vision": { "provider": "zai-coding-cn", "model": "glm-5.3-flash" },
+    "vision_fallback": { "provider": "openai-codex", "model": "gpt-6-luna" },
     "image":  { "provider": "openai-codex",  "model": "gpt-image-2" }
   },
   "providers": {
@@ -207,12 +208,13 @@ config/auth.example.json   模板，说明格式                                
 }
 ```
 
-三个角色：
+四个角色：
 
 | 角色 | 用途 | 省略时 |
 |---|---|---|
 | `main` | 主对话模型；压缩/备忘也用它 | 必填，缺了启动报错 |
 | `vision` | `look` / `video` 的识图模型 | 与 `main` 完全相同 |
+| `vision_fallback` | 识图兜底：主视觉失败或被内容审核拒时用它再试一轮 | 无兜底（不隐式兜底；只能手改文件后 restart） |
 | `image` | `gpt_image` 透传通道：`provider` 决定用 `auth.json` 里哪条登录，`model` 是默认模型名 | `gpt_image` 不可用（不隐式兜底） |
 
 旧配置里的 `default` 键已废弃：留着会直接报错，改成 `models.main`。
@@ -222,7 +224,7 @@ Node 的 WS 不吃 `--use-env-proxy`，过代理时必须写 `"sse"`。
 `providers.<name>.proxy`（只认 http/https）让这一个 provider 的全部请求走隧道（模型流 / 生图 / token 刷新），
 其它 provider 仍直连；codex 过代理必须同时写 `transport: "sse"`。
 
-鱼自己能 `read` 这个文件；主人可以让它用 `model` 工具切换三个角色，改完用 `restart` 生效。
+鱼自己能 `read` 这个文件；主人可以让它用 `model` 工具切换三个角色，改完用 `restart` 生效（`vision_fallback` 不在 model 工具的开关里，只能手改文件）。
 
 凭据只导一次，之后运行时不碰任何外部配置：
 
@@ -230,7 +232,7 @@ Node 的 WS 不吃 `--use-env-proxy`，过代理时必须写 `"sse"`。
 npm run creds import     # 从 ~/pi-config/pi/auth.json 导一次，写 config/auth.json（600）
 npm run creds show       # 每个 provider 有没有 key、多少字符
 npm run creds clear      # 删掉
-npm run ping             # 读 models.json → 最小补全 → 打印三角色/耗时/用量
+npm run ping             # 读 models.json → 最小补全 → 打印角色解析结果/耗时/用量
 ```
 
 加模型：往本机 `config/models.json` 对应的 `providers.<name>.models[]` 里加一条，再把 `models.<角色>` 指过去。

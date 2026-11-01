@@ -243,8 +243,9 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
                     const res = await doFetch(url, { headers: HEADERS });
                     if (!res.ok) return null;
                     const bytes = Buffer.from(await res.arrayBuffer());
-                    const text = await describeImage(deps, bytes.toString("base64"), res.headers.get("content-type")?.split(";")[0] ?? "image/jpeg");
-                    return text ? `[图${index + 1}] ${text.replace(/\s+/g, " ").slice(0, 200)}` : null;
+                    // 被内容审核拒/描述失败的单张图直接跳过，不影响其它图
+                    const described = await describeImage(deps, bytes.toString("base64"), res.headers.get("content-type")?.split(";")[0] ?? "image/jpeg");
+                    return described.ok ? `[图${index + 1}] ${described.text.replace(/\s+/g, " ").slice(0, 200)}` : null;
                   } catch {
                     return null;
                   }
@@ -308,9 +309,10 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
               frames.map(async (frame) => {
                 try {
                   const bytes = readFileSync(frame.path);
-                  const text = await describeImage(deps, bytes.toString("base64"), "image/jpeg");
-                  if (!text) return null;
-                  return { time: frame.time, line: `[${fmtTime(frame.time)}] ${text.replace(/\s+/g, " ").slice(0, 220)}` };
+                  // 被内容审核拒/描述失败的帧优雅跳过（不整轮失败），其余帧照常
+                  const described = await describeImage(deps, bytes.toString("base64"), "image/jpeg");
+                  if (!described.ok) return null;
+                  return { time: frame.time, line: `[${fmtTime(frame.time)}] ${described.text.replace(/\s+/g, " ").slice(0, 220)}` };
                 } catch {
                   return null;
                 }

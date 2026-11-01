@@ -24,7 +24,7 @@ import { join, resolve, sep, extname, relative } from "node:path";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { renderTemplate } from "../../prompts.ts";
 import { ledgerOf, recordLook } from "../../egress/ledger.ts";
-import { describeImage } from "../../media/describe.ts";
+import { describeImage, isDescribeFiltered } from "../../media/describe.ts";
 import { checkMemeSource } from "../../media/meme-store.ts";
 import { DEFAULT_LIMITS } from "../../egress/policy.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
@@ -170,13 +170,17 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       // 描述失败（网关视觉管线间歇不稳）也不退回原图块——那会让图永久留在 transcript，
       // 拖垮之后每一轮；宁可这次看不了，让模型告诉用户稍后再看。
       const described = await describeImage(deps, data, outMime);
-      if (!described) {
+      if (isDescribeFiltered(described)) {
+        // 内容审核拒（主模型或兜底）：确定性失败，明确说这张看不了、可换一张，别让人等重试
+        throw new Error(deps.prompts.messages["look_filtered"] ?? "这张图被内容审核拦下了");
+      }
+      if (!described.ok) {
         return { output: [{ type: "text", text: deps.prompts.messages["look_unstable"] ?? "看不了" }] };
       }
       // 真的看成了才记帐：没描述成功不占额度，也不算「看过」（否则清单里的图永远 meme_add 不了）
       recordLook(api.conversationId);
       if (importing && roundId !== undefined) memeImportMarkLooked(roundId, localRef);
-      return { output: [{ type: "text", text: described }] };
+      return { output: [{ type: "text", text: described.text }] };
     },
   });
 }

@@ -45,7 +45,7 @@ export interface ProviderConfig {
   models: ProviderModelConfig[];
 }
 
-export type ModelRole = "main" | "vision" | "image";
+export type ModelRole = "main" | "vision" | "image" | "vision_fallback";
 
 export interface RoleRef {
   provider: string;
@@ -83,6 +83,8 @@ export interface FishModelsSelection {
   main: FishModelConfig;
   /** 看图 / 看视频的模型；省略时与 main 完全相同。 */
   vision: FishModelConfig;
+  /** 看图兜底模型：主视觉 failed/filtered 时再试一轮；省略 = 无兜底（不隐式兜底）。 */
+  visionFallback?: FishModelConfig;
   /** gpt_image 通道：provider 决定用哪份 oauth，model 是默认模型名；省略 = 该工具不可用。 */
   image?: { provider: string; modelId: string; proxy?: string };
   /** 进程级流式传输；取自 main provider 的 transport。 */
@@ -101,7 +103,7 @@ export interface ProviderLoadOptions extends LoadOptions {
   modelId?: string;
 }
 
-const ROLES: readonly ModelRole[] = ["main", "vision", "image"];
+const ROLES: readonly ModelRole[] = ["main", "vision", "image", "vision_fallback"];
 
 function defaultModelsPath(): string {
   return join(process.cwd(), "config", "models.json");
@@ -153,6 +155,18 @@ export function loadFishModels(options: LoadOptions = {}): FishModelsSelection {
     ? main
     : buildConfig(file.providers, configSource, credentialsPath, "vision", visionRef);
 
+  // vision_fallback 省略 = 无兜底：look/video 主模型失败后不再换模型重试（不隐式兜底）。
+  // 与 main/vision 完全相同时直接复用实例：同一个模型兜底没有意义，也避免重复挂 provider。
+  let visionFallback: FishModelConfig | undefined;
+  if (roles.vision_fallback) {
+    const fallbackRef = roleRef(roles, "vision_fallback");
+    visionFallback = fallbackRef.provider === mainRef.provider && fallbackRef.model === mainRef.model
+      ? main
+      : fallbackRef.provider === visionRef.provider && fallbackRef.model === visionRef.model
+        ? vision
+        : buildConfig(file.providers, configSource, credentialsPath, "vision_fallback", fallbackRef);
+  }
+
   let image: FishModelsSelection["image"];
   if (roles.image) {
     const imageRef = roleRef(roles, "image");
@@ -166,7 +180,7 @@ export function loadFishModels(options: LoadOptions = {}): FishModelsSelection {
   const transport = mainProvider?.transport === "sse" || (Boolean(mainProvider?.proxy) && mainProvider?.api === "openai-codex-responses")
     ? ("sse" as const)
     : undefined;
-  return { main, vision, ...(image ? { image } : {}), ...(transport ? { transport } : {}) };
+  return { main, vision, ...(visionFallback ? { visionFallback } : {}), ...(image ? { image } : {}), ...(transport ? { transport } : {}) };
 }
 
 /**

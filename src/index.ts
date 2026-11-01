@@ -172,8 +172,18 @@ if (modelSelection.vision.providerId !== modelSelection.main.providerId) {
   addFishProvider(models, modelSelection.vision);
   console.log(`[鱼缸] 视觉模型 provider 已挂载：${modelSelection.vision.providerId}/${modelSelection.vision.modelId}`);
 }
+// 视觉兜底同理：主视觉失败/被内容审核拒时换它再试一轮；不配就没有兜底
+if (modelSelection.visionFallback
+  && modelSelection.visionFallback.providerId !== modelSelection.main.providerId
+  && modelSelection.visionFallback.providerId !== modelSelection.vision.providerId) {
+  addFishProvider(models, modelSelection.visionFallback);
+  console.log(`[鱼缸] 视觉兜底 provider 已挂载：${modelSelection.visionFallback.providerId}/${modelSelection.visionFallback.modelId}`);
+}
 const mainModel = { provider: modelSelection.main.providerId, modelId: modelSelection.main.modelId };
 const visionModel = { provider: modelSelection.vision.providerId, modelId: modelSelection.vision.modelId };
+const visionFallbackModel = modelSelection.visionFallback
+  ? { provider: modelSelection.visionFallback.providerId, modelId: modelSelection.visionFallback.modelId }
+  : undefined;
 
 const onebot = new OneBot(config.onebotUrl, config.onebotToken, config.mediaRoot);
 const chatlog = createChatlog(join(HOME, "chatlog"));
@@ -252,6 +262,8 @@ const fish = await openFish({
   ttsOf: (conversationId) => voiceConfigFor(mappingKeys.get(String(conversationId)) ?? ""),
   // look / video 的视觉描述模型：models.vision；省略时与 models.main 相同
   visionModel,
+  // 视觉兜底：models.vision_fallback；省略 = 无兜底
+  ...(visionFallbackModel ? { visionFallbackModel } : {}),
   promptRoot: config.promptRoot,
   mediaRoot: config.mediaRoot,
   // 搜索凭据：与模型凭据同源（config/auth.json 的 deepseek 条目），缺了工具会以可读错误回应
@@ -1235,7 +1247,7 @@ await drainLoop();
 
 const shown = describeModel(config.modelConfig);
 console.log(`[鱼缸] 已连接，模型 ${shown.provider}/${shown.model}，工具 ${fish.toolNames.join("、")}`);
-console.log(`[鱼缸] 视觉 ${visionModel.provider}/${visionModel.modelId}，图片 ${modelSelection.image ? `${modelSelection.image.provider}/${modelSelection.image.modelId}` : "未配置"}`);
+console.log(`[鱼缸] 视觉 ${visionModel.provider}/${visionModel.modelId}，兜底 ${visionFallbackModel ? `${visionFallbackModel.provider}/${visionFallbackModel.modelId}` : "无"}，图片 ${modelSelection.image ? `${modelSelection.image.provider}/${modelSelection.image.modelId}` : "未配置"}`);
 console.log(`[鱼缸] 凭据 ${shown.key}（${shown.keySource}）`);
 
 // 优雅退出：deploy 发 SIGTERM 后先把 outbox 里已入队的消息发完再关——

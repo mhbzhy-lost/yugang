@@ -110,7 +110,7 @@
 
 ### 6. 模型与凭据
 
-- **模型选择只有一个入口**：`config/models.json` 的 `models` 角色表（`main` / `vision` / `image`）。
+- **模型选择只有一个入口**：`config/models.json` 的 `models` 角色表（`main` / `vision` / `image` / `vision_fallback`）。
   不允许用环境变量或启动参数选模型；旧 `default` 键会直接报错
 - **配置是本机文件**：`config/models.json`（gitignore，每台机器一份）写 models 角色表、provider 地址、模型清单、
   网关兼容值；模板是 `config/models.example.json`（进仓库），首次使用 `cp config/models.example.json config/models.json`
@@ -122,12 +122,12 @@
 - **key 只在内存里**：不进 prompt、不进 transcript、不进日志。`describeModel()` 只报"已加载 / N 字符"和来源路径
 - 网关兼容值（`maxTokensField: max_tokens`）由 `src/model-config.ts` 的 `withCompat()` 兜底，模型自带 compat 可覆盖
 - 换模型：编辑 `config/models.json` 的 `models.main` / `models.vision` / `models.image`（`vision` 省略 = main，
-  `image` 省略 = `gpt_image` 不可用），改完让鱼 `restart` 生效；没有 `MODEL_PROVIDER` / `MODEL_ID` / `GATE_*` / `VISION_*` / `YUGANG_MODELS` 这类入口
+  `image` 省略 = `gpt_image` 不可用，`vision_fallback` 省略 = 无兜底），改完让鱼 `restart` 生效；没有 `MODEL_PROVIDER` / `MODEL_ID` / `GATE_*` / `VISION_*` / `YUGANG_MODELS` 这类入口
 - 验证：`npm run creds show` / `npm run ping`（都只报长度，不打印 key）
 - **provider 级代理**：`config/models.json` 的 `providers.<id>.proxy`（只认 http/https）。配了它，这个 provider
   的**全部**请求走隧道（模型流、`gpt_image`、内部 OAuth 刷新），其它 provider 与 SD/QQ 仍直连；
   不设进程级的 `--use-env-proxy`（那会把 zai / deepseek 也拖进代理）。codex 过代理必须同时 `transport: "sse"`——
-  WebSocket 不吃 fetch 注入；`main` / `vision` / `image` 复用同一个 provider 时共用这条代理
+  WebSocket 不吃 fetch 注入；`main` / `vision` / `image` / `vision_fallback` 复用同一个 provider 时共用这条代理
 
 ### 7. 主人与陌生人
 

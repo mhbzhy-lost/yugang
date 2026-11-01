@@ -222,6 +222,8 @@ export interface FishOptions {
   };
   /** look 的视觉描述模型；缺省用主模型。 */
   visionModel?: ModelRef;
+  /** look / video 视觉描述的兜底模型（models.vision_fallback）；省略 = 无兜底。 */
+  visionFallbackModel?: ModelRef;
   emit: (conversationId: ConversationId, payload: OutboundPayload) => void | Promise<void>;
   /** 贴表情回应，只带表情编号；目标消息由本轮触发绑定（不取会话级 lastMessageId）。 */
   react: (conversationId: ConversationId, emoji: string, messageId?: number | string) => void | Promise<void>;
@@ -324,6 +326,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     now,
     ...(models ? { models } : {}),
     visionModel: options.visionModel ?? options.model,
+    ...(options.visionFallbackModel ? { visionFallbackModel: options.visionFallbackModel } : {}),
     ...(options.searchKey === undefined ? {} : { searchKey: options.searchKey }),
     ...(options.master === undefined ? {} : { master: options.master }),
     ...(options.modelsPath === undefined ? {} : { modelsPath: options.modelsPath }),
