@@ -42,7 +42,11 @@ fish.unref();
 closeSync(log);
 console.log(`[deploy] 新鱼 pid ${fish.pid}，日志 ${LOG}`);
 
-// 4. 验证：活过 8 秒且打出「已连接」横幅
+// 4. 语音跟随：与横幅验证并行拉起 TTS 实例；失败只告警，不影响部署结论
+const tts = spawn(process.execPath, [join(import.meta.dirname, "tts.ts"), "up"], { stdio: "inherit" });
+const ttsExit = new Promise<number | null>((resolve) => tts.once("exit", (code) => resolve(code)));
+
+// 5. 验证：活过 8 秒且打出「已连接」横幅
 await new Promise((r) => setTimeout(r, 8000));
 const alive = spawnSync("ps", ["-p", String(fish.pid)], { encoding: "utf8" });
 const tail = spawnSync("tail", ["-30", LOG], { encoding: "utf8" }).stdout ?? "";
@@ -55,3 +59,9 @@ console.log("[deploy] ✓ 存活，横幅：");
 for (const line of tail.trim().split("\n").reverse()) {
   if (line.includes("已连接") || line.includes("凭据")) console.log(`  ${line}`);
 }
+const ttsCode = await Promise.race([
+  ttsExit,
+  new Promise<null>((r) => setTimeout(() => r(null), 120_000).unref?.()),
+]);
+if (ttsCode === 0) console.log("[deploy] ✓ 语音实例就绪");
+else console.warn(`[deploy] ⚠ 语音拉起未完全成功（tts up 退出码 ${ttsCode}），鱼不受影响；稍后 npm run tts status 复查`);

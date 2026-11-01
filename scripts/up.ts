@@ -51,6 +51,12 @@ const fish = spawn(process.execPath, ["--env-file-if-exists=.env", "src/index.ts
 children.push(fish);
 writeFileSync(PID_FILE, String(fish.pid ?? ""));
 
+// 4. 语音跟随：与起鱼并行拉起 TTS 实例（模型加载要 30-60s）；失败只告警，不阻塞鱼
+const tts = spawn(process.execPath, [join(import.meta.dirname, "tts.ts"), "up"], { stdio: "inherit" });
+tts.on("exit", (code) => {
+  if (code !== 0) console.warn(`[up] ⚠ 语音拉起未完全成功（tts up 退出码 ${code}），鱼不受影响`);
+});
+
 process.on("SIGINT", () => void stop(0));
 process.on("SIGTERM", () => void stop(0));
 fish.on("exit", (code) => void stop(code ?? 0));

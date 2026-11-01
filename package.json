@@ -23,7 +23,8 @@
     "token": "node --env-file-if-exists=.env scripts/token.ts",
     "memes": "node --env-file-if-exists=.env scripts/memes.ts",
     "memory": "node --env-file-if-exists=.env scripts/memory.ts",
-    "login": "node --env-file-if-exists=.env scripts/login.ts"
+    "login": "node --env-file-if-exists=.env scripts/login.ts",
+    "tts": "node --env-file-if-exists=.env scripts/tts.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",

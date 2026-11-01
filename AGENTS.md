@@ -213,6 +213,8 @@
 - 服务端：GPT-SoVITS 常驻本机（launchd 托管；9884 爱莉希雅 v4 自训 elysia、9881 桑多涅、9882 凯尔希；
   9880 为旧 v2 保留可回滚，9883 为落选 v2ProPlus 试听实例，保留 7 天后回收），依赖 `~/nltk_data` 的
   `cmudict` + `averaged_perceptron_tagger*`——**缺了会返回 200 + 0 字节空音频**（英文 g2p 抛 LookupError）
+- 语音实例由鱼缸启动链拉起（`npm run tts up`），plist `RunAtLoad=false` 不开机自启，`KeepAlive` 崩溃自愈；
+  状态/拉起/收起统一走 `npm run tts [status|up|down]`
 - 空结果重试一次（第二次用 `text_language=auto`），合成超时默认 70 秒（`say` 工具层覆盖 100 秒）
 
 ### 15. 可观测性
@@ -307,6 +309,7 @@ npm run creds show  # 凭据状态（只有长度）
 npm run ping        # 模型连通性 + 用量（不打印 key）
 npm start          # 真跑（自动读 .env）——只在 macmini 上
 npm run deploy     # 部署：git pull + 平滑重启鱼（只在 macmini 上跑）
+npm run tts [status|up|down]  # 语音实例状态/拉起/收起（macmini 上跑）
 node scripts/migrate-memes.ts [--dry]   # 存量表情包按规则补一级情绪词
 node scripts/retag-memes.ts [--dry]     # 用 flash 给缺一级词的表情包补词（只加那一个 tag）
 ```
