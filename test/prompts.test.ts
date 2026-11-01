@@ -15,10 +15,11 @@ import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
 import { auditPrompts, loadPrompts, parseMessageTable, renderTemplate } from "../src/prompts.ts";
-import { loadToolManifests, toolFullDescription } from "../src/tools/manifest.ts";
+import { loadToolManifests, parseToolManifest, toolFullDescription } from "../src/tools/manifest.ts";
+import { mergeToolMessages } from "../src/tools/loader.ts";
 import { scanDir, scanSource } from "../src/prompt-lint.ts";
 import { REJECTION_CODES } from "../src/egress/policy.ts";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -55,7 +56,7 @@ test("工具说明逐字来自 src/tools/<name>/TOOL.md", async () => {
     const root = await fish.harness.root(ctx);
     const agent = await root.agent(ctx);
     const tools = [...agent.tools, ...agent.deferred];
-    for (const name of ["say", "look", "react"] as const) {
+    for (const name of ["say_words", "say_media", "say_meme", "say_voice", "look", "react"] as const) {
       const tool = tools.find((t) => t.name === name);
       assert.ok(tool, `缺少工具 ${name}`);
       const manifest = manifests.get(name);
@@ -157,24 +158,114 @@ test("messages.md 里没有死文案，tools/ 里没有死文件", async () => {
   });
 
   try {
-    // 文案 key：= 出口策略会返回的错误码 ∪ 工具代码里显式引用的 key
+    // 文案 key：= 出口策略会返回的错误码 ∪ 工具代码里显式引用的 key。
+    // 作用于合并后的视图（中心 prompt/messages.md + 各工具 TOOL.md 的 tool-messages 块，
+    // loader 已把它们就地并入 fish.prompts.messages）
     const referenced = new Set<string>([...REJECTION_CODES, "say_sent"]);
     for (const source of sourceLiterals(join(ROOT, "src"))) {
       for (const match of source.matchAll(/messages\["([a-z0-9_]+)"\]/g)) referenced.add(match[1]);
     }
-    const defined = new Set(Object.keys(prompts.messages));
-    assert.deepEqual([...defined].filter((k) => !referenced.has(k)), [], "messages.md 里有没人用的文案");
+    const defined = new Set(Object.keys(fish.prompts.messages));
+    assert.deepEqual([...defined].filter((k) => !referenced.has(k)), [], "合并视图里有没人用的文案（中心或工具块）");
+    // 两处定义的 key 不许重复：合并视图条数 = 中心条数 + 各工具块条数
+    const manifests = loadToolManifests(TOOL_ROOT, { memeTags: prompts.memeTags });
+    const toolKeys = [...manifests.values()].flatMap((m) => Object.keys(m.messages));
+    assert.equal(new Set(toolKeys).size, toolKeys.length, "不同工具的 tool-messages 里有重复 key");
+    assert.equal(
+      defined.size,
+      Object.keys(prompts.messages).length + toolKeys.length,
+      "合并视图条数与中心+工具块之和对不上",
+    );
 
     // 工具包：每个 TOOL.md 都要对应一个真实注册的工具
     assert.deepEqual(
-      [...loadToolManifests(TOOL_ROOT, { memeTags: prompts.memeTags }).keys()]
-        .filter((name) => !fish.toolNames.includes(name)),
+      [...manifests.keys()].filter((name) => !fish.toolNames.includes(name)),
       [],
       "src/tools/ 里有不对应任何工具的 TOOL.md",
     );
   } finally {
     await fish.close();
   }
+});
+
+/** 最小合法 TOOL.md 头（frontmatter + 空 schema 块），供第三块解析测试拼装。 */
+function toolHead(name: string): string {
+  return `---\nname: ${name}\ndescription: 摘要\n---\n---tool-schema\n{"parameters":{"type":"object","properties":{}}}\n---end-tool-schema\n`;
+}
+
+test("TOOL.md 第三块：tool-messages 逐行解析，块可选", () => {
+  // 有块：文案逐行进 manifest.messages，指南不含块内容
+  const withBlock = parseToolManifest(
+    toolHead("demo") + "\n---tool-messages\ndemo_key: 一句文案，含 {{var}}\nanother: 另一句\n---end-tool-messages\n\n使用指南正文",
+    "demo/TOOL.md",
+  );
+  assert.equal(withBlock.messages["demo_key"], "一句文案，含 {{var}}");
+  assert.equal(withBlock.messages["another"], "另一句");
+  assert.equal(withBlock.guide, "使用指南正文");
+  assert.deepEqual(withBlock.description, "摘要");
+
+  // 无块：messages 为空表，指南紧跟 schema 块
+  const withoutBlock = parseToolManifest(toolHead("demo") + "\n使用指南正文", "demo/TOOL.md");
+  assert.deepEqual(withoutBlock.messages, {});
+  assert.equal(withoutBlock.guide, "使用指南正文");
+});
+
+test("TOOL.md 第三块：缺围栏对、非法 key 名、空块、块内重复 key 都直接报错", () => {
+  // 缺 ---end-tool-messages
+  assert.throws(
+    () => parseToolManifest(toolHead("demo") + "\n---tool-messages\ndemo_key: 一句文案\n\n使用指南", "demo/TOOL.md"),
+    /---end-tool-messages 未闭合/,
+  );
+  // 非法 key 名（大写/连字符/数字开头）
+  assert.throws(
+    () => parseToolManifest(toolHead("demo") + "\n---tool-messages\nBad-Key: 一句文案\n---end-tool-messages\n\n使用指南", "demo/TOOL.md"),
+    /tool-messages 行必须是/,
+  );
+  assert.throws(
+    () => parseToolManifest(toolHead("demo") + "\n---tool-messages\n9key: 一句文案\n---end-tool-messages\n\n使用指南", "demo/TOOL.md"),
+    /tool-messages 行必须是/,
+  );
+  // 空块（围栏成对但内部没有合法行）
+  assert.throws(
+    () => parseToolManifest(toolHead("demo") + "\n---tool-messages\n---end-tool-messages\n\n使用指南", "demo/TOOL.md"),
+    /至少要有一条文案/,
+  );
+  // 块内重复 key
+  assert.throws(
+    () => parseToolManifest(toolHead("demo") + "\n---tool-messages\ndemo_key: 一句\ndemo_key: 又一句\n---end-tool-messages\n\n使用指南", "demo/TOOL.md"),
+    /重复的 tool-messages key/,
+  );
+  // 指南里又出现一份围栏：报错，不猜哪个算数
+  assert.throws(
+    () => parseToolManifest(toolHead("demo") + "\n---tool-messages\ndemo_key: 一句\n---end-tool-messages\n\n使用指南\n---tool-messages\n", "demo/TOOL.md"),
+    /多余的 tool-messages 块围栏/,
+  );
+});
+
+test("工具文案合并：key 撞车（工具↔工具、工具↔中心）直接报错并指出两个来源", () => {
+  // 临时工具根：两个包定义同一个 key
+  const tmpRoot = mkdtempSync(join(tmpdir(), "yg-tools-"));
+  mkdirSync(join(tmpRoot, "alpha"), { recursive: true });
+  mkdirSync(join(tmpRoot, "beta"), { recursive: true });
+  writeFileSync(join(tmpRoot, "alpha", "TOOL.md"), toolHead("alpha") + "\n---tool-messages\ndup_key: 甲的文案\n---end-tool-messages\n\n指南A");
+  writeFileSync(join(tmpRoot, "beta", "TOOL.md"), toolHead("beta") + "\n---tool-messages\ndup_key: 乙的文案\n---end-tool-messages\n\n指南B");
+  const manifests = loadToolManifests(tmpRoot, { memeTags: [] });
+  assert.throws(() => mergeToolMessages(manifests, {}), /dup_key.*alpha.*beta/);
+
+  // 工具 ↔ 中心文件
+  const single = new Map([["alpha", manifests.get("alpha")!]]);
+  assert.throws(
+    () => mergeToolMessages(single, { dup_key: "中心文案" }),
+    /dup_key.*messages\.md.*alpha/,
+  );
+
+  // 不撞车时合并进同一个 map（合并视图语义）
+  const okRoot = mkdtempSync(join(tmpdir(), "yg-tools-"));
+  mkdirSync(join(okRoot, "alpha"), { recursive: true });
+  writeFileSync(join(okRoot, "alpha", "TOOL.md"), toolHead("alpha") + "\n---tool-messages\nalpha_key: 甲的文案\n---end-tool-messages\n\n指南A");
+  const target: Record<string, string> = { center_key: "中心文案" };
+  mergeToolMessages(loadToolManifests(okRoot, { memeTags: [] }), target);
+  assert.deepEqual(target, { center_key: "中心文案", alpha_key: "甲的文案" });
 });
 
 function sourceLiterals(dir: string): string[] {

@@ -17,6 +17,12 @@ description: 给刚才那条消息贴一个表情回应，只贴表情不说话�
 }
 ---end-tool-schema
 
+---tool-messages
+react_ok: 贴上了
+react_bad: 那不是一个表情编号
+react_cooling: 刚贴过，别连着贴
+---end-tool-messages
+
 给刚才那条消息贴一个表情回应，不发文字。
 
 群里冷场、别人在互相聊、或者你只想表示看到了，用这个比说话轻。

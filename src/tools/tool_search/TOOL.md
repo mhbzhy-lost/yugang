@@ -21,6 +21,14 @@ description: 搜索当前还没加载的工具；命中后从下一次模型请�
 }
 ---end-tool-schema
 
+---tool-messages
+tool_search_ok: 搜到 {{count}} 个，从下一次模型请求起就能调用：
+tool_search_line: - {{name}}：{{summary}}
+tool_search_none: 没搜到这样的工具，换个说法再试；反复没有就直说做不到，别猜参数。
+tool_search_empty: 搜索词不能是空的，写个中文场景词或英文工具名
+tool_search_bad_limit: limit 得是不小于 1 的整数
+---end-tool-messages
+
 按需查找还没提供给你的工具。
 
 工具目录只是能力清单，列在目录里不等于当前请求已经能用。当你需要的工具不在当前

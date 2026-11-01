@@ -33,10 +33,13 @@ description: 在仓库或 /tmp/yugang 里搜文本，返回「路径:行号:内�
 }
 ---end-tool-schema
 
+---tool-messages
+grep_bad_regex: 正则写错了，检查一下括号和转义
+grep_none: 没搜到
+grep_done_hint: （结果带行号，可直接按行号精读命中的那一段）
+---end-tool-messages
+
 在仓库或 `/tmp/yugang` 草稿区里搜文本，返回「路径:行号:该行内容」。定位代码和文案时先用它，别整文件硬读。
 
 只能在主人让你改自己的时候用；.env、config/auth.json、node_modules、.git 搜不到。
-结果里有行号，拿到之后可以直接用 read 的 startLine/endLine 精读那一段。
-
-这个工具是按需加载的：当前工具列表里没有它时，先用 tool_search 搜到并加载，
-从下一次模型请求起才能调用。
+结果带行号，可直接按行号精读命中的那一段。

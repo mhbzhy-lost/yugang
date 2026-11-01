@@ -39,7 +39,7 @@ export function createSearchTool(manifest: ToolManifest, deps: ToolPackageDeps):
         throw new Error(deps.prompts.messages["search_nokey"] ?? "没有配置搜索凭据");
       }
 
-      // 每轮限一次：轮标识与 say 的每轮一次同源；只有真正返回结果才计数，
+      // 每轮限一次：轮标识与出口工具的轮计数同源；只有真正返回结果才计数，
       // 空结果/失败不消耗机会，模型可以换词重试
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];

@@ -1,7 +1,7 @@
 /**
  * 两件"重启后还能接上"的事：
  *  1. 群 → conversationId 映射落盘，重开还是同一个会话
- *  2. say 先把消息写进 outbox 再发；崩在"写完了还没发"这一刻，重开后补发且只发一次
+ *  2. 出口工具先把消息写进 outbox 再发；崩在"写完了还没发"这一刻，重开后补发且只发一次
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -67,13 +67,13 @@ test("崩在发送前：重开后补发，且只补一次", async () => {
   const db = join(mkdtempSync(join(tmpdir(), "yg-db-")), "fish.db");
   const outbox: string[] = [];
 
-  // 第一次：say 写进 outbox，但进程"崩"了，没 drain
+  // 第一次：出口工具写进 outbox，但进程"崩"了，没 drain
   const built = await boot(db, outbox);
   const { faux } = built;
   const first = await built.fish;
   const conv = await first.group("qq:group:7");
   faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("say", { messages: ["在的"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("say_words", { text: "在的" })], { stopReason: "toolUse" }),
     fauxAssistantMessage("好了"),
   ]);
   await (await conv.submit({ type: "input", content: "在吗" }, ctx)).wait(ctx);
@@ -104,7 +104,7 @@ test("发送失败保留未决：不重试，也不跳过队首发后面的", as
     const conv = await open.group("qq:group:9");
     resetRun(conv.id); // 生产行为对齐：index.ts 每条消息前 resetRun；轮内计数是模块级状态，跨测试会残留
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("say", { messages: ["喂"] })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("say_words", { text: "喂" })], { stopReason: "toolUse" }),
       fauxAssistantMessage("好了"),
     ]);
     await (await conv.submit({ type: "input", content: "在吗" }, ctx)).wait(ctx);

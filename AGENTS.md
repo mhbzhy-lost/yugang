@@ -11,11 +11,12 @@
        → 按发送者静默 5 秒合并（同一发送者整组提交，最后一条是引用锚点）
        → conversation.submit() → agent loop
                                  ├── thinking / 正文 / tool 调用  ✗ 不出境
-                                 └── say / react / look
+                                 └── say_* / react / look
                                        ✓ 硬校验 → QQ
 ```
 
-工具面：`say`（唯一出口，可拆条/引用/带图/带表情包/发语音/点名 @ 群友）、`react`（只贴表情）、
+工具面：`say_words`/`say_media`/`say_meme`/`say_voice`（四个出口工具，共享每轮 3 次调用额度：
+文字/图片/表情包/语音各一个，可引用，除语音外可点名 @ 群友）、`react`（只贴表情）、
 `look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`meme_import`（主人本地批量导入的登记入口）、
 `draw`（本地 SD 生图）、`gpt_image`（GPT Image 2 透传）、`search`/`video`（联网查）、`tags`（danbooru 词表）；
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`model`（切换各类能力使用的模型）、`watch`（特别关注）
@@ -25,14 +26,16 @@
 
 ### 1. 模型能看到的文字只有两个来源：`prompt/` 下的 markdown 与 `src/tools/<name>/TOOL.md`
 
-- 人格、运行时协议、工具回给模型的所有文案、压缩用的 handoff 提示词全在 `prompt/` 里；
-  每个工具的说明、参数 Schema 和使用指南唯一来自 `src/tools/<name>/TOOL.md`（见第 2 条）
+- 人格、运行时协议、宿主/共享层文案（`prompt/messages.md`）、压缩用的 handoff 提示词全在 `prompt/` 里；
+  每个工具的说明、参数 Schema、使用指南与工具专属回执文案唯一来自 `src/tools/<name>/TOOL.md`（见第 2 条）
 - 5 秒合并与入站 @ 的标注也一样：背景栏（`ctx_*`）、整组标记、要回的那一行、`@了你 / @了别人 / @了全体成员`
   全在 `prompt/messages.md`；`src/qq/debounce.ts` / `src/qq/gate.ts` 只负责拼装，不写文案
 - `src/` 里不允许出现大段 prompt 字面量。`npm test` 会扫描（阈值：单条字面量 ≥ 12 个汉字）；
   `TOOL.md` 是唯一例外——它本来就是模型侧文字，只是随工具包放在 `src/tools/<name>/` 里
 - 模板用 `{{name}}` 严格替换，缺变量直接抛错
-- 想加一段新文案，加进 `prompt/messages.md`；想加新 prompt，加新文件并接到 `src/prompts.ts`
+- 想加宿主/共享层文案，加进 `prompt/messages.md`；想加某个工具的专属回执，加进它 `TOOL.md` 的
+  `---tool-messages` 块（key 不许与中心文件或其它工具重复，loader 合并时撞车直接启动失败）；
+  想加新 prompt，加新文件并接到 `src/prompts.ts`
 
 ### 2. 工具 = `src/tools/<name>/TOOL.md + tool.ts` 工具包
 
@@ -41,13 +44,17 @@
 - 一个工具包 = `src/tools/<name>/` 下的 `TOOL.md` + `tool.ts`，目录名 = manifest `name` = 注册名。
   缺块、重复名、目录对不上时 `openFish()` 直接抛错起不来；`src/tools/loader.ts` 启动时做
   manifest ↔ factory 的双向一一对应校验，孤儿文档和没文档的实现都算错
-- `TOOL.md` 是**双元数据块**格式：顶部 frontmatter 只认 `name` + `description`（一句摘要）；
+- `TOOL.md` 是**三元数据块**格式：顶部 frontmatter 只认 `name` + `description`（一句摘要）；
   第二块 `---tool-schema` / `---end-tool-schema` 必须是**严格 JSON**（不许注释、尾逗号、远程 `$ref`），
-  里面的 `parameters` 是唯一参数 Schema；块之后的正文是非空使用指南，注册时与摘要拼成完整 description
-- 解析与动态词表在 `src/tools/manifest.ts`：唯一受控扩展是 `meme.mood` 的
+  里面的 `parameters` 是唯一参数 Schema；第三块 `---tool-messages` / `---end-tool-messages`（可选）
+  是本工具专属的回执文案，逐行 `key: 文案`（格式同 `prompt/messages.md`，可含 `{{var}}`），
+  围栏必须成对、内部至少一行合法 key，key 名只认 `[a-z][a-z0-9_]*` 且块内不重复；
+  块之后的正文是非空使用指南，注册时与摘要拼成完整 description
+- 解析与动态词表在 `src/tools/manifest.ts`：frontmatter / tool-schema / tool-messages 三块都在这里严格解析；
+  唯一受控扩展是 `meme.mood` 的
   `x-yugang-enum-from: "memeTags"`（启动时按 `prompt/meme-tags.md` 机械换成 enum），
   其它运行时改写模型所见 Schema 的通道一律拒绝
-- 工具面分两层：`say` / `react` / `tool_search` 初始可见（eager），其余已启用工具统一 `deferred: true`；
+- 工具面分两层：四个 `say_*` / `react` / `tool_search` 初始可见（eager），其余已启用工具统一 `deferred: true`；
   模型先用中文/英文检索 `tool_search`，命中后从下一次模型请求起才能调用。`runtime` section
   （`prompt/runtime.md`）负责这条渐进加载协议，`tool_catalog` section 只列已启用工具的 `name + 摘要`
 - 加一个工具 = 三处改动，缺一不可：
@@ -61,9 +68,12 @@
 - 主人专属工具（`read`/`grep`/`write`/`tree`/`model`/`restart`/`watch`/`meme_add`/`meme_import`）
   没配 `MASTER_QQ` 时 factory 返回 `undefined`，不进 `agent.tools` / `agent.deferred` / `tool_catalog`；
   `TOOL.md` 仍随包存在，注册与否由 loader 按依赖现判，执行内核里的二次身份校验不变
-- 旧 `prompt/tools/*.md` 平铺文档已删除，不要再建；工具回执/拒绝文案继续走 `prompt/messages.md` 的 key
-- 审查入口：`npm run prompts` 列出 prompt 文件、全部工具包（路径/sha256/摘要/Schema 属性/eager/deferred）、
-  runtime 与 tool_catalog section、源码内嵌扫描结果
+- 旧 `prompt/tools/*.md` 平铺文档已删除，不要再建；工具专属回执/拒绝文案走各自 `TOOL.md` 的
+  `---tool-messages` 块，宿主/共享层文案（出口策略码、fs 共用拒绝、`working_*`、`ctx_*`、`/` 指令回执等）
+  继续走 `prompt/messages.md`。loader 启动时把两边合并成全局 messages 视图，消费侧统一
+  `deps.prompts.messages["key"]`，任何 key 撞车（工具↔工具、工具↔中心）直接启动失败
+- 审查入口：`npm run prompts` 列出 prompt 文件、全部工具包（路径/sha256/摘要/Schema 属性/文案 key/eager/deferred）、
+  工具文案归属（中心条数 + 各工具块条数）、runtime 与 tool_catalog section、源码内嵌扫描结果
 
 ### 3. 能力面必须是可枚举的窄接口（2026-10 修订：主人解锁下有限自改）
 
@@ -88,15 +98,18 @@
 
 要加读取能力，加「读某个确定目录下的某个确定文件」的工具，不要把通用 read 放回来。
 
-### 4. 出口只有一个
+### 4. 出口只有一族
 
-- 只有 `say` 能把东西发到 QQ，且必须 `callers: ["model"]`（脚本/嵌套调用不能绕）
+- 只有 `say_words` / `say_media` / `say_meme` / `say_voice` 能把东西发到 QQ，且都必须
+  `callers: ["model"]`（脚本/嵌套调用不能绕）；四工具共享每轮 3 次**调用**额度（无豁免、
+  被拒不计数），额度规划守则（画图/表情包/语音保开口防吞）在 `prompt/runtime.md`
 - 任何新增工具都不许直接调用 `emit()`
-- 校验失败必须以 tool 错误返回给模型（文案来自 `prompt/messages.md`），不许静默丢弃
-- 主动 @ 不是第二个出口：它是 `say` 的 `mentions` 参数（去重后最多 3 个纯数字 QQ 号），
-  只挂在第一条文本上，并随 outbox 一起持久化——重启补发还是同一条 @，不会静默降级成裸消息
+- 校验失败必须以 tool 错误返回给模型（文案来自 `prompt/messages.md` 或该工具 `TOOL.md` 的 tool-messages 块），不许静默丢弃
+- 主动 @ 不是第二个出口：它是 `say_words` / `say_media` / `say_meme` 的 `mentions` 参数
+  （去重后最多 3 个纯数字 QQ 号；图片消息 @ 段挂图前），并随 outbox 一起持久化——
+  重启补发还是同一条 @，不会静默降级成裸消息
 - 主动 @ 的机械边界：禁 `all`/非数字；只能 @ **当前群的真实成员**（宿主现拉群成员名单核对，拿不到名单就拒）；
-  `voice: true` + `mentions` 直接报错（语音没有文本气泡，@ 等于静默丢人）
+  `say_voice` 没有 `mentions` 参数（语音没有文本气泡，@ 等于静默丢人）
 - 主动 @ 的身份闸：只有**主人**或**当前群的特别关注者**被点名要求时才可以 @，其余一律以 tool 错误返回；
   私聊里没有「@谁」这回事，同样拒绝。号码应优先从可信上下文（「昵称(QQ)」背景行）填写，
   机械校验确认纯数字与当前群成员；来源本身靠 prompt 引导，代码不校验号码抄自哪句话
@@ -144,7 +157,7 @@
   兼容字段 `mentionsBot` 仍只表示「@ 了鱼」；模型看到的是「@了你 / @了别人 / @了全体成员」的标注，
   只 @ 别人时会明确写「这些都不是在叫你」，免得把别人的对话当成点名
 - 名单内判定一行版：任何人 @（含裸 @）必答；回复合集必答 → 特别关注者**先掷随机门**（中了直接回），没中再过 60s 门（冷却够也回）→ 其余消息（含主人的非 @）走**限流**：同一群两条被处理消息之间至少隔 `ambientMinIntervalSeconds`（默认 60 秒）
-- 为什么不是随机门：沉寂很久突然有人说话时，随机门可能一声不吭；限流模式下「安静久了的第一条必进」，更像有人在听。打分闸、作息/配额/冷却早已下线；鱼想沉默也可以在门内不调 say
+- 为什么不是随机门：沉寂很久突然有人说话时，随机门可能一声不吭；限流模式下「安静久了的第一条必进」，更像有人在听。打分闸、作息/配额/冷却早已下线；鱼想沉默也可以在门内不调出口工具
 - **闸放行 ≠ 立刻提交**：放行的群消息按「群 + 发送者」攒 **5 秒静默**（窗口固定，没有环境变量、没有最长等待），
   同一发送者的新消息取消旧计时并继续加长，不同发送者互不干扰；静默满 5 秒才把整组提交一次
 - 整组语义：**最后一条是引用锚点**（A-B-A 里 B 只能进背景，不可能顶掉 A 的位置）；整组里任意一条 @鱼 → 整组必答；
@@ -156,7 +169,7 @@
 ### 8. 重启必须能接上
 
 - 群 → conversationId 存在 session doc `fish.chats`，`group()` 先查映射再决定建不建
-- 待发消息存在 conversation doc `fish.outbox`，`say` 只入队，宿主 `drain()` 负责发
+- 待发消息存在 conversation doc `fish.outbox`，出口工具只入队，宿主 `drain()` 负责发
 - 发送是两阶段（`queued` → `sending` → 删除）：崩在 `sending` 状态的消息**不重发**，宁可少一条不要重复
 - 任何新增的"发出去"的动作都必须走 outbox，不要在 tool 里直接调发送函数
 
@@ -215,22 +228,23 @@
 
 - **音色只认 `fish.config.json` 的 `voices[人格名]`**，没有任何兜底；没配 = 该会话没有语音能力
 - 人格解析必须走带 `#人格` 后缀的映射键（`mappingKeys`），`chatKeys` 只存剥离人格的 base 键给路由用
-- 触发提示：主人/特别关注对象每第 3 条过闸消息追加「这一条必须用语音回」；**看到提示必须用语音**
-- 出口限制：一轮一条附件（图/表情包/语音互斥）、台词 ≤100 字、超长/含失败一律以 tool 错误返回
+- 触发提示：主人/特别关注对象的过闸轮以 0.3 概率追加「这一条必须用语音回」；**看到提示必须用语音**
+- 出口限制：一轮一条附件（图/表情包/语音互斥）、台词 ≤200 字、超长/含失败一律以 tool 错误返回
 - 服务端：GPT-SoVITS 常驻本机（launchd 托管；9884 爱莉希雅 v4 自训 elysia、9881 桑多涅、9882 凯尔希；
   9880 为旧 v2 保留可回滚，9883 为落选 v2ProPlus 试听实例，保留 7 天后回收），依赖 `~/nltk_data` 的
   `cmudict` + `averaged_perceptron_tagger*`——**缺了会返回 200 + 0 字节空音频**（英文 g2p 抛 LookupError）
 - 语音实例由鱼缸启动链拉起（`npm run tts up`），plist `RunAtLoad=false` 不开机自启，`KeepAlive` 崩溃自愈；
   状态/拉起/收起统一走 `npm run tts [status|up|down]`，活跃实例集以 `fish.config.json` 的 `voices` 端口为准
   （单一事实源，换端口只改配置不改代码），遗留 plist 不参与拉起/收起
-- 空结果重试一次（第二次用 `text_language=auto`），合成超时默认 70 秒（`say` 工具层覆盖 100 秒）
+- 空结果重试一次（第二次用 `text_language=auto`），合成超时默认 120 秒（`say_voice` 工具层覆盖 250 秒，
+  覆盖空响应重试一次的最坏情况）
 - 语速：`voices` 条目支持可选 `speed`（语速倍率 0.5–2.0，缺省不传 = 原速），如凯尔希 0.9
 
 ### 15. 可观测性
 
 - 日志统一带 `HH:MM:SS` 前缀（`src/index.ts` 启动时包一层 console），排查按时间对齐
 - 单次工具调用超时 30 秒（`fish.config` 的 `toolTimeoutSeconds`），个别重耗时工具按 `toolTimeoutOverrides`
-  单独放宽（say 100s / video 90s / gpt_image 210s），超时以 tool 错误返回，
+  单独放宽（say_voice 250s / video 90s / gpt_image 210s），超时以 tool 错误返回，
   **没有整轮超时**
 
 ### 16. 长期记忆（审批闸 + 公共/私有双轨）
@@ -310,7 +324,7 @@
 
 ```bash
 npm test           # 86 项，含上面每条约束的兜底
-npm run prompts    # 列出 prompt 文件 + sha256 + 19 个工具包（TOOL.md 摘要/Schema/eager/deferred）+ 内嵌扫描结果
+npm run prompts    # 列出 prompt 文件 + sha256 + 22 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属 + 内嵌扫描结果
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
 npm run memory     # 长期记忆查看与审批（--persona / --chat / --json / --pending / --approve / --reject，见第 16 节）
@@ -340,7 +354,7 @@ mini 上并没有 `home-mac-connect` 这个 skill（今天有子代理在 mini �
 
 ## 人格与指令
 
-鱼有多个人格：`prompt/personas/<名>.md`（默认人格是 `prompt/persona.md`），每人格一个 extension（`fish` / `fish:<名>`），启动时注册。会话按（群/私聊 × 人格）唯一确定：映射键 `chatKey#人格`（默认人格=原键，存量无缝），不同人格上下文/工作区完全隔离，切回时接续原会话。人设图放 `<mediaRoot>/personas/<名>.png`（不进 git），切换回复自动携带、模型可用 say 发。
+鱼有多个人格：`prompt/personas/<名>.md`（默认人格是 `prompt/persona.md`），每人格一个 extension（`fish` / `fish:<名>`），启动时注册。会话按（群/私聊 × 人格）唯一确定：映射键 `chatKey#人格`（默认人格=原键，存量无缝），不同人格上下文/工作区完全隔离，切回时接续原会话。人设图放 `<mediaRoot>/personas/<名>.png`（不进 git），切换回复自动携带、模型可用出口工具发。
 
 主人发 `/` 开头的消息是功能调用，不进模型：`/查询可用人格` 机械返回名单；`/切换人格 <名>` 切换本群当前人格（`fish.chats` 的 `personas` 字段持久化）；其它 `/x` 机械回未知指令。
 
@@ -360,5 +374,4 @@ mini 上并没有 `home-mac-connect` 这个 skill（今天有子代理在 mini �
 
 - 长文转图、入群审批没做
 - 姬子音色：权重已下载校验（`~/tts/models/`），未常驻、未配 voices
-- `say` 的 `meme` 参数是死代码（全历史 0 次使用），可以删
 - 连续相似复读没有修法

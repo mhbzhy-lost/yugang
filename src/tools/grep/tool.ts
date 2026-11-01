@@ -114,7 +114,7 @@ export function createGrepTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       audited("grep", `${args.pattern} @ ${label(base) || "."}`, `${hits.length}命中`);
       const text = hits.length === 0
         ? (p.messages["grep_none"] ?? "grep_none")
-        : hits.join("\n");
+        : hits.join("\n") + "\n" + (p.messages["grep_done_hint"] ?? "");
       return { output: [{ type: "text", text }] };
     },
   });

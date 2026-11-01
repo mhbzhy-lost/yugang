@@ -11,10 +11,6 @@ import { fenceReadablePath } from "../tools/fs-shared.ts";
 export interface EgressLimits {
   maxChars: number;
   maxNewlines: number;
-  /** 一次调用最多几条。 */
-  maxMessages: number;
-  /** 一轮里最多几条。 */
-  maxPerRun: number;
   /** 一个群每分钟最多几条。 */
   maxPerMinute: number;
   mediaRoot: string;
@@ -24,8 +20,6 @@ export interface EgressLimits {
 export const DEFAULT_LIMITS: Omit<EgressLimits, "mediaRoot"> = {
   maxChars: Infinity, // 字数上限已按主人要求移除；换行限制仍在
   maxNewlines: Infinity, // 换行限制已按主人要求移除
-  maxMessages: 3,
-  maxPerRun: 3,
   maxPerMinute: Infinity, // 每分钟条数限制已按主人要求移除
   // media 只转发文件不进模型上下文，QQ 端容量大：媒体大小限制放宽到 32MB
   maxMediaBytes: 32 * 1024 * 1024,
@@ -47,7 +41,6 @@ export interface EgressContext {
   limits: EgressLimits;
   now: number;
   recent: readonly RecentMessage[];
-  sentThisRun: number;
   secrets: readonly string[];
 }
 
@@ -60,12 +53,10 @@ export interface Rejection {
 
 export const REJECTION_CODES = [
   "empty",
-  "too_many_messages",
   "too_long",
   "markdown",
   "secret",
   "duplicate",
-  "quota_run",
   "provenance",
   "media_outside",
   "media_missing",
@@ -81,15 +72,9 @@ export type RejectionCode = (typeof REJECTION_CODES)[number];
 export function validateOutbound(intent: EgressIntent, ctx: EgressContext): Rejection | null {
   const messages = (intent.messages ?? []).map((m) => (m ?? "").trim());
 
-  // 语音可以单独发：voice 存在时允许 messages 为空
-  if (messages.length === 0 && intent.voice === undefined) return { code: "empty" };
-  if (messages.length > ctx.limits.maxMessages) return { code: "too_many_messages" };
-
-  // 带 media 的发送（画完的图/表情）是画图链路的必要出口，不占每轮额度；
-  // 纯文字照旧防话痨。
-  if (!intent.media && !intent.voice && ctx.sentThisRun + messages.length > ctx.limits.maxPerRun) {
-    return { code: "quota_run", vars: { count: String(ctx.sentThisRun) } };
-  }
+  // 出口拆成四个工具后，无字发图/发语音是常态：只有「无字 && 无 media && 无 voice」才算空消息。
+  // 每轮开口次数的门禁不在这里（quota 已删），由 say-shared 的轮闸统一管。
+  if (messages.length === 0 && intent.media === undefined && intent.voice === undefined) return { code: "empty" };
 
   for (const [index, text] of messages.entries()) {
     const single = validateOne(text, ctx);

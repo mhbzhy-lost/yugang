@@ -53,7 +53,7 @@ export function createRestartTool(manifest: ToolManifest, deps: ToolPackageDeps)
         stdio: "ignore",
       });
       child.unref();
-      // 给 say 一点时间把「这就重启」说出去再死
+      // 给出口工具一点时间把「这就重启」说出去再死
       setTimeout(() => doExit(0), 1500).unref?.();
       return { output: [{ type: "text", text: "ok: restarting" }] };
     },

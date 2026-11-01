@@ -31,6 +31,3 @@ description: 读仓库或 /tmp/yugang 草稿区里的一个文件，大文件可
 不带行号才整读，超过大小上限会被拒绝——宁可分段也别硬吞。
 
 不在改自己的时候就别用；.env、config/auth.json、node_modules、.git 里的东西读不到。
-
-这个工具是按需加载的：当前工具列表里没有它时，先用 tool_search 搜到并加载，
-从下一次模型请求起才能调用。

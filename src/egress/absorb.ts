@@ -2,7 +2,7 @@
  * 把 transcript 里的「秘密」喂给溯源校验。
  *
  * 秘密 = assistant 的 thinking block + 所有 tool 结果文本。
- * 这些内容永远不出境，但模型可能把它们抄进 say() 的 text 里，所以要留下来对照。
+ * 这些内容永远不出境，但模型可能把它们抄进出口工具的 text 里，所以要留下来对照。
  */
 import type { Conversation } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";

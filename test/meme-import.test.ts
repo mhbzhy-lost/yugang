@@ -6,7 +6,7 @@
  *  - 动图豁免严格限 inbound/；其他目录的 gif 一样要主人
  *  - 来源校验 fail closed：符号链接 / realpath 逃逸 / 坏 magic / 超限
  *  - 逐张配额：普通轮 2 张，导入轮＝清单张数（上限 50），cursor 续批，清单不跨轮
- *  - say 不能把 meme-inbox 里的图直接当 media 发出去
+ *  - say_media 不能把 meme-inbox 里的图直接当 media 发出去
  *
  * 图片全部用 /tmp 里的临时文件（真实文件头），测试结束清理；不进仓库 fixture。
  */
@@ -19,11 +19,12 @@ import { fileURLToPath } from "node:url";
 import { LiveDoc } from "@earendil-works/pi-durable";
 import { loadPrompts } from "../src/prompts.ts";
 import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
-import { createSayTool } from "../src/tools/say/tool.ts";
+import { createSayMediaTool } from "../src/tools/say_media/tool.ts";
 import { loadToolManifests } from "../src/tools/manifest.ts";
 import { createLookTool } from "../src/tools/look/tool.ts";
 import { createMemeAddTool } from "../src/tools/meme_add/tool.ts";
 import { createMemeImportTool } from "../src/tools/meme_import/tool.ts";
+import { mergeToolMessages } from "../src/tools/loader.ts";
 import {
   MEME_IMPORT_MAX,
   clearMemeImportRound,
@@ -65,8 +66,10 @@ function setup(over: { master?: string; userId?: number; maxBytes?: number } = {
     getModel: () => ({ provider: "stub", modelId: "stub" }),
     streamSimple: () => ({ result: async () => ({ content: [{ type: "text", text: "一张图" }] }) }),
   } as never;
-  // 说明与参数 Schema 唯一来自 TOOL.md manifest（加载 src/tools/ 下的工具包清单）
+  // 说明与参数 Schema 唯一来自 TOOL.md manifest（加载 src/tools/ 下的工具包清单）；
+  // 再与 loader 同款合并把 tool-messages 并进全局 messages 视图（线上由 loadToolSurface 完成）
   const manifests = loadToolManifests(TOOL_ROOT, { memeTags: prompts.memeTags });
+  mergeToolMessages(manifests, prompts.messages);
   // look 的单张上限保持旧默认（不接 maxBytes 覆盖）；meme_add/meme_import 按用例取 maxBytes
   const look = createLookTool(manifests.get("look")!, {
     mediaRoot,
@@ -92,7 +95,7 @@ function setup(over: { master?: string; userId?: number; maxBytes?: number } = {
     triggerOf,
     limits: cappedLimits,
   })!;
-  const say = createSayTool(manifests.get("say")!, { limits: { ...DEFAULT_LIMITS, mediaRoot }, prompts })!;
+  const say = createSayMediaTool(manifests.get("say_media")!, { limits: { ...DEFAULT_LIMITS, mediaRoot }, prompts })!;
   const conversationId = `conv-${++seq}`;
 
   writeInbox(mediaRoot, "a.png", PNG);
@@ -383,7 +386,7 @@ test("逐张配额：清单 1 张就是 1 张，20 张按 20，51 张按 50 + cu
   }
 });
 
-test("say 不能把 meme-inbox 的图直接当 media 发；普通媒体目录照旧", async () => {
+test("say_media 不能把 meme-inbox 的图直接当 media 发；普通媒体目录照旧", async () => {
   const { mediaRoot, say, conversationId, cleanup } = setup();
   try {
     const outbox: { media?: string }[] = [];
@@ -396,7 +399,7 @@ test("say 不能把 meme-inbox 的图直接当 media 发；普通媒体目录照
     });
 
     await assert.rejects(
-      () => textOf(say, { messages: ["看这张"], media: "meme-inbox/a.png" }, api),
+      () => textOf(say, { media: "meme-inbox/a.png" }, api),
       /meme-inbox 里的图不能直接发/,
       "本地待收图必须先 look + meme_add 进库",
     );
@@ -404,7 +407,7 @@ test("say 不能把 meme-inbox 的图直接当 media 发；普通媒体目录照
 
     // 正常媒体目录（群图）不受影响
     writeFileSync(join(mediaRoot, "inbound", "ok.png"), PNG);
-    const sent = await textOf(say, { messages: ["看这张"], media: "inbound/ok.png" }, api);
+    const sent = await textOf(say, { media: "inbound/ok.png" }, api);
     assert.match(sent, /已发到群里/);
     assert.equal(outbox.at(-1)?.media, "inbound/ok.png");
   } finally {

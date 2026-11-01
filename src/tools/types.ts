@@ -35,21 +35,23 @@ export interface ToolManifest {
   readonly name: string;
   /** 顶部 frontmatter 摘要；注册用完整 description 由 toolFullDescription() 拼出。 */
   readonly description: string;
-  /** 第二块之后的正文使用指南（非空），注册时拼进 description。 */
+  /** 元数据块之后的正文使用指南（非空），注册时拼进 description。 */
   readonly guide: string;
   /** ---tool-schema 块解析出的 parameters；动态 enum 已由 loader 按 context 解析。 */
   readonly parameters: ToolParametersSchema;
+  /** ---tool-messages 块解析出的工具专属回执文案（可含 {{var}}）；无块时为空表。 */
+  readonly messages: Readonly<Record<string, string>>;
   /** TOOL.md 的路径；诊断与审查用。 */
   readonly path: string;
 }
 
-/** 所有工具包共享的运行时依赖：现有 ToolDeps 与出口 say/react 依赖的并集，字段语义不变。 */
+/** 所有工具包共享的运行时依赖：现有 ToolDeps 与出口 say_* 和 react 依赖的并集，字段语义不变。 */
 export interface ToolPackageDeps {
   /** prompt 集合：共享 messages、memeTags 是唯一文案来源。 */
   prompts: PromptSet;
   /** 媒体根目录：look / draw / meme 系工具的路径围栏。 */
   mediaRoot: string;
-  /** 出口限额；say 必需，缺省时出口 factory 返回 undefined。 */
+  /** 出口限额；say_* 必需，缺省时出口 factory 返回 undefined。 */
   limits?: import("../egress/policy.ts").EgressLimits;
   now?: () => number;
   /** 模型池：look / video 用独立请求把图描述成文字，图片不进主会话。 */
@@ -74,13 +76,13 @@ export interface ToolPackageDeps {
   sdUrl?: string;
   /** danbooru.csv 路径；给了才能查 tag 词表。 */
   tagsCsv?: string;
-  /** submissionId → 本轮触发消息；say 的引用绑定与各工具身份闸同源。 */
+  /** submissionId → 本轮触发消息；出口工具的引用绑定与各工具身份闸同源。 */
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费。 */
   bypassOf?: (roundId: unknown) => string | undefined;
   /** 贴表情实现；react 必需，缺省时 factory 返回 undefined。 */
   react?: (conversationId: ConversationId, emoji: string, messageId?: number | string) => void | Promise<void>;
-  /** say 主动 @ 用的群成员名单（宿主从当前群现拉）；与 watch 的 groupMembersOf 同源，字段名保持原样。 */
+  /** 出口工具主动 @ 用的群成员名单（宿主从当前群现拉）；与 watch 的 groupMembersOf 同源，字段名保持原样。 */
   membersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
   /** 主动 @ 的身份闸；未提供回调时 fail closed。 */
   mentionPolicyOf?: (conversationId: string, triggerUserId: number | undefined) => "allow" | "not_group" | "not_privileged";
@@ -90,7 +92,7 @@ export interface ToolPackageDeps {
   ttsSynthesize?: (config: import("../tts.ts").TtsConfig, text: string, mediaRoot: string) => Promise<{ ref: string; bytes: Buffer }>;
   /** 静默轮（如收图轮）：这一轮不许说话。 */
   silentOf?: (roundId: unknown) => boolean;
-  /** 本轮 say 的 execute 被进入时回调（成败都算一次）；宿主据此识别「零出口轮」。 */
+  /** 本轮出口工具的 execute 被进入时回调（成败都算一次）；宿主据此识别「零出口轮」。 */
   onSayCall?: (roundId: unknown) => void;
   /**
    * 重耗时工具（video/draw/gpt_image/meme_import/meme_add/restart）execute 入口的宿主回调：

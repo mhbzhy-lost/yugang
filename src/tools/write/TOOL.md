@@ -21,10 +21,11 @@ description: 整文件写入 /tmp/yugang 草稿区（新建或覆盖）；只有
 }
 ---end-tool-schema
 
+---tool-messages
+fs_write_outside: write 只能写 /tmp/yugang 里的文件
+---end-tool-messages
+
 整文件写入（新建或覆盖），只能写 `/tmp/yugang`。
 
-仓库里的文件写不进去：改代码或配置用专门的管理工具（比如 `model`）。
+仓库里的文件写不进去：改代码或配置不在草稿区做。
 凭据文件和版本库里的东西永远不碰。
-
-这个工具是按需加载的：当前工具列表里没有它时，先用 tool_search 搜到并加载，
-从下一次模型请求起才能调用。

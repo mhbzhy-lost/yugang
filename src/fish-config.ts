@@ -29,7 +29,7 @@ export interface FishConfig {
   toolTimeoutSeconds: number;
   /** 表情包跨轮冷却（分钟）：同一群两次配图之间的最短间隔。 */
   memeCooldownMinutes: number;
-  /** 模型忘调 say 时的正文兜底（仅必答轮）：零 say 时取正文首行过出口校验后补发；误发可关。 */
+  /** 模型忘调出口工具时的正文兜底（仅必答轮）：零出口时取正文首行过出口校验后补发；误发可关。 */
   salvagePlainReply: boolean;
   /** 按人格配置的语音：人格名 → TTS 参数。没有条目的人格没有语音能力。speed 为可选语速倍率（0.5–2.0，缺省原速）。 */
   voices: Record<string, { url: string; referWav?: string; referText?: string; referLanguage?: string; speed?: number }>;

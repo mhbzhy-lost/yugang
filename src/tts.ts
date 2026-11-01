@@ -3,7 +3,7 @@
  *
  * 分两层：
  *   synthesize()  合成一段语音，返回 wav 字节
- *   上层（say 工具）负责落盘到 mediaRoot 下的 voice/ 目录，再走 outbox 出口
+ *   上层（say_voice 工具）负责落盘到 mediaRoot 下的 voice/ 目录，再走 outbox 出口
  *
  * 服务不在时快速失败（连接错误立刻抛），由调用方决定退回文字；不重试，
  * 因为 TTS 是可选增强，卡住一条回复比没有语音更糟。
@@ -23,7 +23,7 @@ export interface TtsConfig {
   referLanguage?: string;
   /** 语速倍率（可选）：voices 配了就透传给服务端，缺省不带（原速）。 */
   speed?: number;
-  /** 合成超时，默认 70 秒（say 工具层覆盖 100 秒，覆盖空响应重试一次的最坏情况）。 */
+  /** 合成超时，默认 120 秒（say_voice 工具层覆盖 250 秒，覆盖空响应重试一次的最坏 240s）。 */
   timeoutMs?: number;
 }
 
@@ -49,7 +49,7 @@ export async function synthesizeToMedia(config: TtsConfig, text: string, mediaRo
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(config.timeoutMs ?? 70_000),
+      signal: AbortSignal.timeout(config.timeoutMs ?? 120_000),
     });
     if (!response.ok) throw new Error(`tts_http_${response.status}`);
     return Buffer.from(await response.arrayBuffer());

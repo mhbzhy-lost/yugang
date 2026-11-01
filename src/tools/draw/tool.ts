@@ -3,7 +3,7 @@
  *
  * 只开放 positive / negative 两项注入，模型、采样器、步数、尺寸全是预设；
  * 带 ref 时改走 img2img（初图只认媒体目录 inbound/ 或 gen/ 下的图片），出口与限次不变。
- * 图落 <mediaRoot>/gen/，出口仍走 say.media。一轮最多画一次，失败不消耗次数。
+ * 图落 <mediaRoot>/gen/，出口仍走 say_media。一轮最多画一次，失败不消耗次数。
  *
  * macOS 本地网络权限不认没有责任 App 的裸 node（孤儿进程无许可，
  * 连局域网 IP 必 EHOSTUNREACH），而 Apple 签名的 /usr/bin/ssh 豁免——
@@ -169,7 +169,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       }
       if (!deps.sdUrl) throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
 
-      // 每轮限一次：轮标识与 say/search 同源
+      // 每轮限一次：轮标识与出口工具/search 同源
       if (round !== undefined && DRAWN.get(api.conversationId) === round) {
         throw new Error(deps.prompts.messages["draw_used"] ?? "draw_used");
       }

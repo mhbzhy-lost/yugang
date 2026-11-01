@@ -17,6 +17,18 @@ description: 看一眼 B 站视频或图文动态：元信息、弹幕摘录和�
 }
 ---end-tool-schema
 
+---tool-messages
+video_invalid: 那不是 B 站视频链接
+video_used: 本轮已经看过一个视频了，直接说，别重复看
+video_failed: 视频没打开：{{url}}
+card_bilibili: [B站视频卡片] {{desc}} {{url}}
+card_link: [卡片] {{title}} {{desc}} {{url}}
+video_truncated: （视频超过 {{minutes}} 分钟，只看了前 {{minutes}} 分钟）
+video_danmaku_header: 弹幕摘录：
+video_frames_header: 画面（按时间点）：
+video_comments_header: 热评：
+---end-tool-messages
+
 看一眼 B 站内容：视频（标题、UP 主、时长、简介、弹幕摘录、几个时间点的画面描述、热评），
 或者图文动态（作者、正文、其中配图的描述）。短链 b23.tv 也能直接用，会自动展开。
 
@@ -29,6 +41,3 @@ description: 看一眼 B 站视频或图文动态：元信息、弹幕摘录和�
 
 群里有人发视频链接、聊到某个视频时用。一轮最多看一次，
 看完用自己的话聊两句就行，别复述返回的原文。
-
-这个工具是按需加载的：当前工具列表里没有它时，先用 tool_search 搜到并加载，
-从下一次模型请求起才能调用。

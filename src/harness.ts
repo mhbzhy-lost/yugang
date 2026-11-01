@@ -2,7 +2,7 @@
  * 把 pi-durable 组装成「鱼」。
  *
  * 一只鱼身上只有：
- *   一张嘴  say               唯一出口，硬校验
+ *   一张嘴  say_*             唯一出口族（say_words / say_media / say_meme / say_voice），硬校验
  *   手写的工具（src/tools/）  能力扩展的唯一方式——没有 shell、没有文件读取、没有 MCP
  *
  * 一个 Conversation = 一个 QQ 群，自带 cwd，互不串。
@@ -25,7 +25,7 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { DEFAULT_LIMITS, REJECTION_CODES, type EgressLimits } from "./egress/policy.ts";
-import { OutboundEntry, type OutboundPayload } from "./tools/say/tool.ts";
+import { OutboundEntry, type OutboundPayload } from "./tools/say-shared.ts";
 import { loadPrompts, renderTemplate, type PromptSet } from "./prompts.ts";
 import { loadToolSurface } from "./tools/loader.ts";
 import { renderToolCatalog } from "./tools/catalog.ts";
@@ -176,11 +176,11 @@ export interface FishOptions {
   triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
   /**
    * 主动 @ 的身份闸：由宿主机械提供（私聊 = not_group；群内主人/特别关注者 = allow）。
-   * 同时交给 say（出口校验）使用；不提供时主动 @ 一律 fail closed。
+   * 同时交给 say_*（出口校验）使用；不提供时主动 @ 一律 fail closed。
    */
   mentionPolicyOf?: (conversationId: string, triggerUserId: number | undefined) => "allow" | "not_group" | "not_privileged";
   /**
-   * 会话 → 当前群成员名单：say（主动 @ 目标校验）与 watch（关注对象校验）共用同一条链路。
+   * 会话 → 当前群成员名单：say_*（主动 @ 目标校验）与 watch（关注对象校验）共用同一条链路。
    * 群号必须由宿主自己从映射键解析，不能采信模型给的号码。
    */
   groupMembersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
@@ -199,9 +199,9 @@ export interface FishOptions {
   streamTransport?: "sse" | "websocket" | "websocket-cached" | "auto";
   /** 按会话取 TTS 配置（人格相关）；返回 undefined 表示这个会话没有语音能力。 */
   ttsOf?: (conversationId: string) => import("./tts.ts").TtsConfig | undefined;
-  /** 静默轮（自动收表情包）：这一轮 say 一律拒绝。 */
+  /** 静默轮（自动收表情包）：这一轮 say_* 一律拒绝。 */
   silentOf?: (roundId: unknown) => boolean;
-  /** 本轮 say 的 execute 被进入时回调；宿主按 submission 计数，识别零出口轮。 */
+  /** 本轮 say_* 的 execute 被进入时回调；宿主按 submission 计数，识别零出口轮。 */
   onSayCall?: (roundId: unknown) => void;
   /** 重耗时工具 execute 入口的宿主回调：本轮第一次调用时发「正在执行」机械提示；restart 会 await 返回的 Promise。 */
   onLongWork?: (tool: string, submissionId: unknown) => void | Promise<void>;
@@ -271,6 +271,53 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   const limits: EgressLimits = { ...DEFAULT_LIMITS, ...options.limits, mediaRoot };
 
   const prompts = loadPrompts(resolve(options.promptRoot));
+
+  // conversationId → 该会话当前人格名（memory doc key）：压缩链路找记忆 doc、
+  // memory section 找渲染对象都靠它。一个人格在所有会话（各群、私聊）指向同一个
+  // family member；root conversation 没有映射，记忆相关的一切都返回 undefined
+  // （不注入、不抽取）。
+  const memoryKeyByConversation = new Map<string, string>();
+  const memoryKeyOfConversation = (conversationId: string): string | undefined => memoryKeyByConversation.get(conversationId);
+  // conversationId → 原始 chatKey（不带人格后缀）：待审条目的来源会话与私有层 doc key
+  // （人格名@chatKey）都由它现算；group() 的创建与复用两条路径都会登记。
+  const chatKeyByConversation = new Map<string, string>();
+  const chatKeyOfConversation = (conversationId: string): string | undefined => chatKeyByConversation.get(conversationId);
+
+  // 最终 loader：扫描 src/tools/<name>/TOOL.md + tool.ts，严格一一对应后调 factory 注册；
+  // say_* 四工具 / react / tool_search eager，其余已启用工具 deferred。依赖不满足（无 master、
+  // 无出口限额等）的 factory 返回 undefined：不进 agent.tools、agent.deferred、tool_catalog。
+  const packageDeps: ToolPackageDeps = {
+    prompts,
+    mediaRoot,
+    limits,
+    now,
+    ...(models ? { models } : {}),
+    visionModel: options.visionModel ?? options.model,
+    ...(options.visionFallbackModel ? { visionFallbackModel: options.visionFallbackModel } : {}),
+    ...(options.searchKey === undefined ? {} : { searchKey: options.searchKey }),
+    ...(options.master === undefined ? {} : { master: options.master }),
+    ...(options.modelsPath === undefined ? {} : { modelsPath: options.modelsPath }),
+    // 同一条链路两用：watch 校验关注对象、say_* 校验主动 @ 的目标
+    ...(options.groupMembersOf ? { groupMembersOf: options.groupMembersOf, membersOf: options.groupMembersOf } : {}),
+    ...(options.onWatchChanged ? { onWatchChanged: options.onWatchChanged } : {}),
+    ...(options.gptImage ? { gptImage: options.gptImage } : {}),
+    ...(options.sdUrl === undefined ? {} : { sdUrl: options.sdUrl }),
+    ...(options.tagsCsv === undefined ? {} : { tagsCsv: options.tagsCsv }),
+    ...(options.triggerOf ? { triggerOf: options.triggerOf } : {}),
+    ...(options.bypassOf ? { bypassOf: options.bypassOf } : {}),
+    ...(options.mentionPolicyOf ? { mentionPolicyOf: options.mentionPolicyOf } : {}),
+    ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}),
+    ...(options.silentOf ? { silentOf: options.silentOf } : {}),
+    ...(options.onSayCall ? { onSayCall: options.onSayCall } : {}),
+    ...(options.onLongWork ? { onLongWork: options.onLongWork } : {}),
+    ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}),
+    // 宿主侧 limits 与 react 是 FishOptions 硬性要求，这里只是统一交给 factory
+    react: options.react,
+  };
+  const surface = await loadToolSurface(packageDeps);
+
+  // 启动必要 key 校验：作用于合并后的视图（中心 prompt/messages.md + 各工具 TOOL.md 的
+  // tool-messages 块，loadToolSurface 已就地并入 prompts.messages），清单与迁移前一致
   for (const code of [
     ...REJECTION_CODES,
     "say_sent",
@@ -302,54 +349,11 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     "cmd_memory_delete_missing",
     "cmd_memory_supersede_note",
   ]) {
-    if (!prompts.messages[code]) throw new Error(`prompt/messages.md 缺少文案：${code}`);
+    if (!prompts.messages[code]) throw new Error(`缺少文案 key：${code}（中心或 TOOL.md）`);
   }
 
-  // conversationId → 该会话当前人格名（memory doc key）：压缩链路找记忆 doc、
-  // memory section 找渲染对象都靠它。一个人格在所有会话（各群、私聊）指向同一个
-  // family member；root conversation 没有映射，记忆相关的一切都返回 undefined
-  // （不注入、不抽取）。
-  const memoryKeyByConversation = new Map<string, string>();
-  const memoryKeyOfConversation = (conversationId: string): string | undefined => memoryKeyByConversation.get(conversationId);
-  // conversationId → 原始 chatKey（不带人格后缀）：待审条目的来源会话与私有层 doc key
-  // （人格名@chatKey）都由它现算；group() 的创建与复用两条路径都会登记。
-  const chatKeyByConversation = new Map<string, string>();
-  const chatKeyOfConversation = (conversationId: string): string | undefined => chatKeyByConversation.get(conversationId);
-
-  // 最终 loader：扫描 src/tools/<name>/TOOL.md + tool.ts，严格一一对应后调 factory 注册；
-  // say / react / tool_search eager，其余已启用工具 deferred。依赖不满足（无 master、
-  // 无出口限额等）的 factory 返回 undefined：不进 agent.tools、agent.deferred、tool_catalog。
-  const packageDeps: ToolPackageDeps = {
-    prompts,
-    mediaRoot,
-    limits,
-    now,
-    ...(models ? { models } : {}),
-    visionModel: options.visionModel ?? options.model,
-    ...(options.visionFallbackModel ? { visionFallbackModel: options.visionFallbackModel } : {}),
-    ...(options.searchKey === undefined ? {} : { searchKey: options.searchKey }),
-    ...(options.master === undefined ? {} : { master: options.master }),
-    ...(options.modelsPath === undefined ? {} : { modelsPath: options.modelsPath }),
-    // 同一条链路两用：watch 校验关注对象、say 校验主动 @ 的目标
-    ...(options.groupMembersOf ? { groupMembersOf: options.groupMembersOf, membersOf: options.groupMembersOf } : {}),
-    ...(options.onWatchChanged ? { onWatchChanged: options.onWatchChanged } : {}),
-    ...(options.gptImage ? { gptImage: options.gptImage } : {}),
-    ...(options.sdUrl === undefined ? {} : { sdUrl: options.sdUrl }),
-    ...(options.tagsCsv === undefined ? {} : { tagsCsv: options.tagsCsv }),
-    ...(options.triggerOf ? { triggerOf: options.triggerOf } : {}),
-    ...(options.bypassOf ? { bypassOf: options.bypassOf } : {}),
-    ...(options.mentionPolicyOf ? { mentionPolicyOf: options.mentionPolicyOf } : {}),
-    ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}),
-    ...(options.silentOf ? { silentOf: options.silentOf } : {}),
-    ...(options.onSayCall ? { onSayCall: options.onSayCall } : {}),
-    ...(options.onLongWork ? { onLongWork: options.onLongWork } : {}),
-    ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}),
-    // 宿主侧 limits 与 react 是 FishOptions 硬性要求，这里只是统一交给 factory
-    react: options.react,
-  };
-  const surface = await loadToolSurface(packageDeps);
   const registered = new Map(surface.tools.map((tool) => [tool.name, tool]));
-  for (const name of ["say", "react", "tool_search"]) {
+  for (const name of ["say_words", "say_media", "say_meme", "say_voice", "react", "tool_search"]) {
     if (!registered.has(name)) throw new Error(`核心工具未注册：${name}`);
     if (registered.get(name)!.deferred === true) throw new Error(`核心工具必须是 eager：${name}`);
   }
@@ -412,7 +416,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       const name = key.slice(mark + 1);
       if (registered.has(name)) continue;
       console.warn(`[鱼缸] 会话键 ${key} 的人格 ${name} 未注册`);
-      console.warn(`  该会话失去全部 section 与工具（含 say）`);
+      console.warn(`  该会话失去全部 section 与工具（含 say_*）`);
     }
   }
 

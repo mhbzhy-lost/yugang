@@ -3,7 +3,7 @@
  *
  *   群消息 → 规则闸/打分闸 → conversation.submit() → agent loop
  *                                                      ├── thinking/正文/tool  ✗ 不出境
- *                                                      └── say / react / look
+ *                                                      └── say_* / react / look
  *                                                            → 硬校验 → QQ
  *
  * 模型的正文、思考、tool 调用文本都不在这条链上。
@@ -78,12 +78,8 @@ const ctx = BACKGROUND_CONTEXT;
 // 可热更新的行为配置：fish.config.json > .env > 内置默认
 const fishConfig = createConfigLoader();
 
-// 收表情包等后台轮：这一轮只允许调工具，不许说话（say 会拒绝）
+// 收表情包等后台轮：这一轮只允许调工具，不许说话（say_* 会拒绝）
 const silentRounds = new Set<string>();
-
-// chatKey → userId → 已累计的发言次数：每第 3 条给一句「可以选择用语音回」的提示。
-// 只是提示，不是门禁——用不用由鱼自己判断。
-const voiceCredits = new Map<string, Map<string, number>>();
 
 // 会话 id → 映射键（chatKey 或 chatKey#人格）。chatKeys 存的是剥离人格的 base 键
 // （emit 要解析数字 id），人格相关的配置（音色）必须走这张表，否则重启后
@@ -218,7 +214,7 @@ const lastReply = new Map<string, boolean>(); // 最近一次触发是否@了鱼
 const triggerOf = new Map<string, { messageId?: number | string; mentionsBot: boolean; userId?: number }>();
 // submissionId → 本轮触发消息自带的 bypass 段；仅该轮 draw 可见，轮 settle 即删
 const bypassOf = new Map<string, string>();
-// submissionId → 本轮 say 被调用的次数：识别「零出口轮」（模型裸文本回复，正文不出境，聊天对象零输出）。
+// submissionId → 本轮 say_* 被调用的次数：识别「零出口轮」（模型裸文本回复，正文不出境，聊天对象零输出）。
 // 与 triggerOf 同生命周期：submit 后置 0，settle 的 finally 里删，成功/失败/抛错都不泄漏；
 // 只累计已登记的轮，收图轮等不经 submitRound 的提交不会留下孤儿条目。
 const sayCalled = new Map<string, number>();
@@ -231,7 +227,7 @@ const roundConv = new Map<string, Conversation>();
 const workingSent = new Map<string, Set<string>>();
 // 窗口键（chatKey\0发送者）→ 本组是否有「必答」放行（private/mentioned/replied_forward）。
 // gate 逐条放行时累积，flushBurst 整组消费并清掉：正文兜底只补必答轮——环境轮（rate_pass /
-// watched 等）零 say 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
+// watched 等）零 say_* 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
 const burstMustAnswer = new Map<string, boolean>();
 
 /** 与 debouncer 一致的窗口键：群 + 发送者唯一确定一个待定组。 */
@@ -251,9 +247,9 @@ const fish = await openFish({
   // （deepseek 的 minimal 映射为 null，等于不支持），缺省 off
   thinkingLevel: fishConfig().config.thinkingLevel,
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
-  // 重耗时工具单独放宽：say 要等 GPT-SoVITS 合成（v4 长句最坏 70s，超时覆盖含空响应重试），
+  // 重耗时工具单独放宽：say_voice 要等 GPT-SoVITS 合成（默认超时 120s，覆盖 250s 含空响应重试一次的最坏 240s），
   // video 要下视频、抽帧、逐帧过视觉模型；全局 toolTimeoutSeconds 保持 30 不动
-  toolTimeoutOverrides: { say: 100, video: 90, gpt_image: 210 },
+  toolTimeoutOverrides: { say_voice: 250, video: 90, gpt_image: 210 },
   // codex 订阅走 WebSocket（Node 的 WS 不吃 --use-env-proxy），过代理时在 main provider 写 transport: "sse"
   ...(modelSelection.transport ? { streamTransport: modelSelection.transport } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时
@@ -291,7 +287,7 @@ const fish = await openFish({
   master: config.master,
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
   silentOf: (roundId) => silentRounds.has(String(roundId)),
-  // 出口计数：say 的 execute 进入即回调；未登记的轮（收图轮）直接忽略，不留孤儿计数
+  // 出口计数：say_* 的 execute 进入即回调；未登记的轮（收图轮）直接忽略，不留孤儿计数
   onSayCall: (roundId) => {
     const key = String(roundId);
     const count = sayCalled.get(key);
@@ -378,8 +374,17 @@ const fish = await openFish({
       const quote = (payload.quote || payload.quoteForce === true || lastMention.get(conversationId) === true || lastReply.get(conversationId) === true)
         ? payload.quoteId
         : undefined;
-      await onebot.sendGroup(groupId, payload.items, { quote, ...(payload.mentions && payload.mentions.length > 0 ? { mentions: payload.mentions } : {}) });
-      if (payload.media) await onebot.sendImageGroup(groupId, resolve(config.mediaRoot, payload.media));
+      const mentions = payload.mentions && payload.mentions.length > 0 ? payload.mentions : undefined;
+      // 无字纯图（say_media / say_meme 的出口形态）：文本气泡不发，quote/@ 透传给图片消息
+      if (payload.items.length > 0) {
+        await onebot.sendGroup(groupId, payload.items, { quote, ...(mentions ? { mentions } : {}) });
+      }
+      if (payload.media) {
+        await onebot.sendImageGroup(groupId, resolve(config.mediaRoot, payload.media), {
+          // 有文字时 quote/@ 已经在第一条文本上，图片不重复带
+          ...(payload.items.length === 0 ? { quote, ...(mentions ? { mentions } : {}) } : {}),
+        });
+      }
       if (payload.voice) {
         await onebot.sendVoiceGroup(groupId, readFileSync(resolve(config.mediaRoot, payload.voice)));
       }
@@ -570,8 +575,8 @@ function flattenAssistantText(model: unknown): string {
 }
 
 /**
- * 正文兜底补发（salvagePlainReply，仅必答轮）：一轮里一次 say 都没调但末条 assistant 有
- * 非空正文时，取正文首行硬截 120 字，过与 say 完全相同的出口校验（结构 + 溯源 + 重复）
+ * 正文兜底补发（salvagePlainReply，仅必答轮）：一轮里一次 say_* 都没调但末条 assistant 有
+ * 非空正文时，取正文首行硬截 120 字，过与 say_words 完全相同的出口校验（结构 + 溯源 + 重复）
  * 后经 outbox 补发。thinking / tool 文本永不涉及（只取 text block）；放弃与出错都留日志
  * （文案在 prompt/messages.md 的 salvage_skip / salvage_error），本函数自身也永不抛错；
  * 误发可在 fish.config.json 里把 salvagePlainReply 设为 false 关掉。
@@ -627,7 +632,6 @@ async function salvagePlainReply(
         limits: { ...DEFAULT_LIMITS, mediaRoot: config.mediaRoot },
         now: Date.now(),
         recent: ledger.recent,
-        sentThisRun: ledger.sentThisRun,
         secrets: ledger.secrets,
       },
     );
@@ -655,7 +659,7 @@ async function salvagePlainReply(
 /**
  * 提交一轮，等它跑完，再记账与换页。
  *
- * 轮级清账（resetRun / resetLook / lastMention / lastReply / 语音计数）
+ * 轮级清账（resetRun / resetLook / lastMention / lastReply）
  * 全部挪到这里、在真正 submit 之前做：以前是 gate 放行那一刻就清，同一组连续发言的
  * follow-up 进来会把这一轮的引用目标和记账提前抹掉。
  */
@@ -683,17 +687,11 @@ async function submitRound(input: {
   lastReply.set(conv.id, input.reply);
 
   let content = input.content;
-  // 每第 3 条（主人/关注对象，且过了闸门）追加一行提示，让鱼知道这条可以用语音。
-  // 计数按「轮」加，不按消息加：同一组连续发言只算一次。
-  if (voiceConfigFor(mappingKeys.get(String(conv.id)) ?? chatKey) && isVoiceVip(chatKey, trigger.userId)) {
-    const perUser = voiceCredits.get(chatKey) ?? new Map<string, number>();
-    const count = (perUser.get(String(trigger.userId)) ?? 0) + 1;
-    perUser.set(String(trigger.userId), count);
-    voiceCredits.set(chatKey, perUser);
-    if (count % 3 === 0) {
-      const hint = fish.prompts.messages["voice_hint"] ?? "";
-      if (hint) content = content + "\n" + hint;
-    }
+  // 语音提示的 0.3 概率门：主人/特别关注对象过闸的轮里，三成概率追加一行
+  // 「这一条必须用语音回」。只是提示，不是门禁——用不用由鱼自己判断（说没配音色就不提示）。
+  if (voiceConfigFor(mappingKeys.get(String(conv.id)) ?? chatKey) && isVoiceVip(chatKey, trigger.userId) && Math.random() < 0.3) {
+    const hint = fish.prompts.messages["voice_hint"] ?? "";
+    if (hint) content = content + "\n" + hint;
   }
 
   const scopeToken = pushScope(String(conv.id), { speakers: input.memory.speakers, text: input.memory.inbound.text });
@@ -720,11 +718,11 @@ async function submitRound(input: {
     settled = await (async () => {
       try {
         const result = await submission.wait(ctx);
-        // 正常结束却一次 say 都没调：模型裸文本回复不出口，聊天对象什么都看不到——
+        // 正常结束却一次 say_* 都没调：模型裸文本回复不出口，聊天对象什么都看不到——
         // 打一行宿主日志让这类轮立刻可见（收图轮不经 submitRound，天然不在观测范围）；
         // 文案固定含「零出口轮」供 grep，完整解释在 .agents/skills/ops/SKILL.md
         if (result.status === "done" && (sayCalled.get(String(submission.id)) ?? 0) === 0) {
-          console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say`);
+          console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say_*`);
           // 必答轮的兜底补发：配置可关（mtime 热加载，每次触发现读）；环境轮只留上面的观测日志。
           // done 变体的 settle 记录带本轮输入（entry）与末条 assistant（answer）的 entry id，兜底按 id 定位
           if (input.mustAnswer === true && fishConfig().config.salvagePlainReply) {
@@ -1249,7 +1247,7 @@ for (const legacy of ["restart.marker", "restart.pending.json"]) {
   }
 }
 // restart 工具留下的通知：定位触发重启的会话，启动成功后向它发一条固定机械确认
-// （prompt/messages.md 的 restart_done，经 outbox 唯一出口）。先入队再删文件：启动中途
+// （restart_done，在 src/tools/restart/TOOL.md 的 tool-messages 块，经 outbox 唯一出口）。先入队再删文件：启动中途
 // 崩掉也不会重复确认——outbox 键由通知里的稳定 key 派生，幂等表会挡掉已发出的那一次
 const noticePath = join(process.cwd(), "var", "restart.notice.json");
 if (existsSync(noticePath)) {

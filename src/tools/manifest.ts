@@ -4,7 +4,12 @@
  * 固定格式（解析器不接受近似写法）：
  *   ---\nname: <snake_case>\ndescription: <摘要>\n---        ← frontmatter，只认 name/description
  *   ---tool-schema\n{ ...严格 JSON... }\n---end-tool-schema   ← parameters 是唯一顶层键
+ *   ---tool-messages\nkey: 文案\n---end-tool-messages  ← 可选第三块：工具专属回执文案
  *   <非空正文>                                                ← 使用指南，注册时拼进 description
+ *
+ * 第三块逐行 `key: 文案`（与 prompt/messages.md 同格式，可含 {{var}}），块可选；
+ * 有则围栏必须成对、内部至少一行合法 key，key 名只认 ^[a-z][a-z0-9_]*$，块内不许重复。
+ * 跨文件归属去重（工具 ↔ 工具、工具 ↔ 中心文件）不在这里做，由 loader 的合并步骤报错。
  *
  * 校验全部在解析期机械判定：未知/重复 frontmatter 字段、空字段、非法 JSON（注释、尾逗号、
  * 重复 key）、缺 parameters、保留的 x-yugang-* 扩展、远程 $ref、空指南一律报错。
@@ -105,14 +110,48 @@ export function parseToolManifest(text: string, path: string): ToolManifest {
   const schema = parseStrictJson(lines.slice(i + 1, end).join("\n"), path, i + 2);
   const parameters = validateSchema(schema, path, i + 2);
 
-  for (let j = end + 1; j < lines.length; j++) {
-    const trimmed = lines[j].trim();
-    if (trimmed === "---tool-schema" || trimmed === "---end-tool-schema") fail(path, j + 1, "重复的 schema 块");
+  // 第三块（可选）：---tool-messages / ---end-tool-messages 之间是工具专属回执文案。
+  // 紧跟 schema 块之后（中间只允许空行）；格式与 prompt/messages.md 完全一致。
+  let cursor = end + 1;
+  while (cursor < lines.length && lines[cursor].trim() === "") cursor++;
+  let messages: Record<string, string> = {};
+  let messagesEnd = -1;
+  if (lines[cursor]?.trim() === "---tool-messages") {
+    for (let j = cursor + 1; j < lines.length; j++) {
+      if (lines[j].trim() === "---end-tool-messages") {
+        messagesEnd = j;
+        break;
+      }
+    }
+    if (messagesEnd === -1) fail(path, cursor + 1, "---end-tool-messages 未闭合");
+    messages = parseToolMessageLines(lines.slice(cursor + 1, messagesEnd), path, cursor + 2);
+    cursor = messagesEnd + 1;
+    while (cursor < lines.length && lines[cursor].trim() === "") cursor++;
   }
-  const guide = lines.slice(end + 1).join("\n").trim();
+
+  // 指南区里不允许再出现任何块围栏（第二份 schema / tool-messages 块一律报错，不猜哪个算数）
+  for (let j = cursor; j < lines.length; j++) {
+    const trimmed = lines[j].trim();
+    if (trimmed === "---tool-schema" || trimmed === "---end-tool-schema") fail(path, j + 1, "多余的 schema 块围栏");
+    if (trimmed === "---tool-messages" || trimmed === "---end-tool-messages") fail(path, j + 1, "多余的 tool-messages 块围栏");
+  }
+  const guide = lines.slice(cursor).join("\n").trim();
   if (guide === "") fail(path, undefined, "正文指南为空");
 
-  return { name: nameField.value, description: fields.get("description")!.value, guide, parameters, path };
+  return { name: nameField.value, description: fields.get("description")!.value, guide, parameters, messages, path };
+}
+
+/** 第三块的逐行解析：`key: 文案`，key 名同中心文件规则，块内不许重复、不许空块。 */
+function parseToolMessageLines(lines: string[], path: string, baseLine: number): Record<string, string> {
+  const table: Record<string, string> = {};
+  for (const [index, raw] of lines.entries()) {
+    const match = /^([a-z][a-z0-9_]*): (.+)$/.exec(raw);
+    if (!match) fail(path, baseLine + index, `tool-messages 行必须是 "key: 文案"：${raw.trim()}`);
+    if (match[1] in table) fail(path, baseLine + index, `重复的 tool-messages key：${match[1]}`);
+    table[match[1]] = match[2];
+  }
+  if (Object.keys(table).length === 0) fail(path, baseLine, "tool-messages 块内至少要有一条文案");
+  return table;
 }
 
 /**

@@ -1,10 +1,10 @@
 /**
- * 语音出口：say 的 voice 分支。
+ * 语音出口：say_voice 工具包。
  *
  * 用假合成桩跑完整路径（不联网、不碰真 TTS），覆盖：
  *  - 没配音色 → 拒绝
  *  - 正常：payload 带 voice、文本气泡为空、文件落盘
- *  - 长句 / 与图片同发 → 拒绝
+ *  - 长句 / 本轮已发过附件 → 拒绝
  *  - drain 把 voice 透传给 emit（漏字段 = 语音凭空消失）
  */
 import test from "node:test";
@@ -20,9 +20,11 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { LiveDoc } from "@earendil-works/pi-durable";
-import { createSayTool, OutboundEntry } from "../src/tools/say/tool.ts";
+import { createSayVoiceTool } from "../src/tools/say_voice/tool.ts";
 import { loadToolManifests } from "../src/tools/manifest.ts";
+import { mergeToolMessages } from "../src/tools/loader.ts";
 import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
+import { recordMedia } from "../src/egress/ledger.ts";
 import { loadPrompts } from "../src/prompts.ts";
 import { personaOf, pickVoice } from "../src/voice-route.ts";
 
@@ -40,12 +42,16 @@ function setup(over: { tts?: boolean } = {}) {
   const mediaRoot = mkdtempSync(join(tmpdir(), "yg-voice-"));
   mkdirSync(join(mediaRoot, "voice"), { recursive: true });
   const prompts = loadPrompts(PROMPTS);
+  // 与 loader 同款合并：把各工具 TOOL.md 的 tool-messages 并进全局 messages 视图
+  // （线上由 loadToolSurface 完成，这里手工拼 deps 也要拿到同一份合并视图）
+  const manifests = loadToolManifests(TOOL_ROOT, { memeTags: prompts.memeTags });
+  mergeToolMessages(manifests, prompts.messages);
   // 出站队列：say 在 commit 里 push 进 OutboxDoc
   const outbox: { items: string[]; media?: string; voice?: string }[] = [];
 
-  const say = createSayTool(
+  const say = createSayVoiceTool(
     // 说明与参数 Schema 唯一来自 TOOL.md manifest（加载 src/tools/ 下的工具包清单）
-    loadToolManifests(TOOL_ROOT, { memeTags: prompts.memeTags }).get("say")!,
+    manifests.get("say_voice")!,
     {
       limits: { ...DEFAULT_LIMITS, mediaRoot },
       prompts,
@@ -71,20 +77,20 @@ function setup(over: { tts?: boolean } = {}) {
       }),
   } as never;
 
-  return { say, api, mediaRoot, outbox };
+  return { say, api, mediaRoot, outbox, prompts };
 }
 
-test("没配音色：voice 直接被拒", async () => {
+test("没配音色：say_voice 直接被拒", async () => {
   const { say, api } = setup({ tts: false });
   await assert.rejects(
-    () => say.execute({ messages: ["晚安"], voice: true } as never, api, ctx),
+    () => say.execute({ text: "晚安" } as never, api, ctx),
     /还没有语音能力/,
   );
 });
 
 test("正常路径：payload 带 voice、不发文字气泡、音频落盘", async () => {
   const { say, api, mediaRoot, outbox } = setup();
-  const result = (await say.execute({ messages: ["晚安啦"], voice: true } as never, api, ctx)) as {
+  const result = (await say.execute({ text: "晚安啦" } as never, api, ctx)) as {
     output: { type: string; text: string }[];
   };
   assert.match(result.output[0]?.text ?? "", /已发到群里/);
@@ -97,20 +103,25 @@ test("正常路径：payload 带 voice、不发文字气泡、音频落盘", asy
   assert.deepEqual(outbox[0]?.items, [], "语音消息不再发文字气泡");
 });
 
-test("超过 100 字：拒绝并提示改文字", async () => {
+test("超过 200 字：拒绝并提示改文字", async () => {
   const { say, api } = setup();
-  const long = "啊".repeat(101);
+  // 独立会话号：前置用例成功发过语音后，附件闸（一轮一条）会在字数检查前先把路拦死
+  const longApi = { ...api, conversationId: "conv-long" } as never;
+  const long = "啊".repeat(201);
   await assert.rejects(
-    () => say.execute({ messages: [long], voice: true } as never, api, ctx),
+    () => say.execute({ text: long } as never, longApi, ctx),
     /voice_too_long|太长/,
   );
 });
 
-test("语音与图片同发：拒绝", async () => {
+test("本轮已发过图片/表情：语音被附件闸拒", async () => {
   const { say, api } = setup();
+  // 附件闸按会话记在账本里：先用独立会话号预置一条，避免污染其它用例
+  recordMedia("conv-media-used", 1_000);
+  const usedApi = { ...api, conversationId: "conv-media-used" } as never;
   await assert.rejects(
-    () => say.execute({ messages: ["晚安"], voice: true, media: "gen/x.png" } as never, api, ctx),
-    /不能和图片/,
+    () => say.execute({ text: "晚安" } as never, usedApi, ctx),
+    /这一轮已经配过图/,
   );
 });
 

@@ -12,7 +12,6 @@ function ctx(over: Partial<EgressContext> = {}): EgressContext {
     limits: { ...DEFAULT_LIMITS, mediaRoot: "/tmp/yugang-media" },
     now: 1_000_000,
     recent: [],
-    sentThisRun: 0,
     secrets: [],
     ...over,
   };
@@ -54,8 +53,14 @@ test("媒体必须在白名单目录内且真是图片", () => {
   assert.equal(validateOutbound({ messages: ["看"], media: fake }, ctx({ limits }))?.code, "media_magic");
 });
 
-test("配额与去重", () => {
-  assert.equal(validateOutbound({ messages: ["嗯"] }, ctx({ sentThisRun: 4 }))?.code, "quota_run");
+test("空消息配图放行与去重", () => {
+  // 出口拆成四工具后无字发图是常态：空 messages + media/voice 放行，三皆空才拒 empty
+  const root = mkdtempSync(join(tmpdir(), "yg-empty-"));
+  const good = join(root, "a.png");
+  writeFileSync(good, PNG);
+  const limits = { ...DEFAULT_LIMITS, mediaRoot: root };
+  assert.equal(validateOutbound({ messages: [] }, ctx({ limits }))?.code, "empty");
+  assert.equal(validateOutbound({ messages: [], media: good }, ctx({ limits })), null);
   const recent = Array.from({ length: 8 }, () => ({ text: "别的", at: 999_000 }));
   assert.equal(validateOutbound({ messages: ["嗯"] }, ctx({ recent })), null); // 每分钟条数限制已移除，不再拒
   assert.equal(validateOutbound({ messages: ["在的"] }, ctx({ recent: [{ text: "在的。", at: 999_500 }] }))?.code, "duplicate");

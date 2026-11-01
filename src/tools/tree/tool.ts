@@ -1,7 +1,8 @@
 /**
- * tree —— 列出工作区（仓库）的目录结构（仅主人）。
+ * tree —— 列出仓库或 /tmp/yugang 草稿区的目录结构（仅主人）。
  *
- * 与 fs 工具组同规：主人身份闸（机械判 triggerOf userId）+ 目录围栏
+ * 与 fs 工具组同规：主人身份闸（机械判 triggerOf userId）+ 双根围栏（相对路径按仓库解析，
+ * 绝对路径只认 /tmp/yugang；read / grep 同款）
  * （.git/node_modules/.trash/.pi 只显示名字不展开）。只读，输出限行；
  * 身份闸集中走 ../fs-shared.ts，这里不引入任何写入或 shell 能力。
  *
@@ -12,7 +13,7 @@ import { join, resolve, sep } from "node:path";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { assertTriggeredByMaster, fenceReadablePath } from "../fs-shared.ts";
+import { assertTriggeredByMaster, fenceReadablePath, resolveReadable, SAND_ROOT } from "../fs-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface TreeArgs {
@@ -37,12 +38,14 @@ export function createTreeTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       // 身份闸：机械判定，看本轮触发消息的 userId 是不是主人（与 fs 系列同源）
       await assertTriggeredByMaster(deps, api as never, context, deps.prompts.messages["fs_locked"] ?? "fs_locked");
 
-      const start = resolve(root, args.path ?? ".");
-      if (start !== root && !start.startsWith(root + sep)) {
+      const resolved = resolveReadable(root, args.path ?? ".");
+      if (!resolved) {
         throw new Error(deps.prompts.messages["fs_outside"] ?? "fs_outside");
       }
+      const { full: start, label } = resolved;
       // 起点过符号链接围栏：目录链接逃逸不许整个 tree 落到仓库外；不存在的起点维持旧行为（空清单）
-      const fence = fenceReadablePath(root, start);
+      const fenceRoot = start === SAND_ROOT || start.startsWith(SAND_ROOT + sep) ? SAND_ROOT : root;
+      const fence = fenceReadablePath(fenceRoot, start);
       if (!fence.ok && fence.reason !== "missing") {
         if (fence.reason === "link") throw new Error(deps.prompts.messages["fs_link"] ?? "fs_link");
         throw new Error(deps.prompts.messages["fs_outside"] ?? "fs_outside");
@@ -77,7 +80,7 @@ export function createTreeTool(manifest: ToolManifest, deps: ToolPackageDeps): T
 
       lines.push(".");
       walk(start, "  ", maxDepth);
-      console.log(`[fish] tree ${start.slice(root.length + 1) || "."} depth=${maxDepth} (${lines.length} lines)`);
+      console.log(`[fish] tree ${label} depth=${maxDepth} (${lines.length} lines)`);
       return { output: [{ type: "text", text: lines.join("\n") }] };
     },
   });

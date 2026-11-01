@@ -30,6 +30,20 @@ description: 特别关注名单管理（记人/忘掉/查看）；只有主人�
 }
 ---end-tool-schema
 
+---tool-messages
+watch_no_master: 只有主人能让我特别关注谁，这条不算
+watch_need_id: 得给我那个人的 QQ 号
+watch_need_note: 说说要我记什么——怎么称呼他、该留意什么
+watch_added: 记住了：{{who}}——{{note}}
+watch_removed: 不再关注 {{userId}} 了
+watch_not_found: 本来就没记过 {{userId}}
+watch_empty: 现在没特别关注的人
+watch_unknown_member: {{userId}} 不在这个群里，号可能抄错了，先核准再记
+watch_no_members: 拿不到群成员名单，暂时没法校验号码，稍后再试
+watch_inline: （说话的是主人特别关注的人{{who}}——{{note}}）
+watch_section_header: 下面是主人指名要你特别关注的人（主人钦点，长期有效）：
+---end-tool-messages
+
 特别关注一个人：主人点名要你留意某个群友时用（比如「下次见到他叫宝宝」「他是你老师，记住」）。
 
 userId、name、note 这三个参数配 add 用；只有主人能用，别人让你记一律不做，
@@ -39,6 +53,3 @@ userId、name、note 这三个参数配 add 用；只有主人能用，别人让
 主人让你忘掉某个人时用 remove + 他的 QQ 号。想知道现在记着谁，用 list。
 
 对已经关注的人再 add 一次就是更新：note 会整体覆盖（想保留旧内容先 list 看一眼再拼全），带了 name 也会更新称呼。
-
-这个工具是按需加载的：当前工具列表里没有它时，先用 tool_search 搜到并加载，
-从下一次模型请求起才能调用。

@@ -11,7 +11,7 @@
  * 文档都是小 JSON，checkpointWhen 一律返回 true：每次存整份，不做增量。
  */
 import { defineDoc, defineDocFamily } from "@earendil-works/pi-durable";
-import type { OutboundPayload } from "./tools/say/tool.ts";
+import type { OutboundPayload } from "./tools/say-shared.ts";
 import {
   emptyMemory,
   emptyPendingMemory,

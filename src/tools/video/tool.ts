@@ -189,7 +189,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         throw new Error(deps.prompts.messages["video_invalid"] ?? "链接不对");
       }
 
-      // 每轮限一次：轮标识与 say/search 同源
+      // 每轮限一次：轮标识与出口工具/search 同源
       if (round !== undefined) {
         if (USED.get(api.conversationId) === round) {
           throw new Error(deps.prompts.messages["video_used"] ?? "这一轮看过了");

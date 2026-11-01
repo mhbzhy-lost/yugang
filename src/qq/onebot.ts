@@ -84,7 +84,7 @@ export interface SendOptions {
   quote?: number | string;
   /**
    * 主动 @ 的 QQ 号：只挂在第一条文本上（顺序 quote → at → text）。
-   * 号码合法性、身份闸与群成员校验都在出口层（say）做完，这里只负责拼段。
+   * 号码合法性、身份闸与群成员校验都在出口层（say_*）做完，这里只负责拼段。
    */
   mentions?: readonly string[];
   /** 每条之间的抖动延迟，由宿主决定，模型管不着。 */
@@ -358,15 +358,17 @@ export class OneBot {
     });
   }
 
-  async sendImageGroup(groupId: number, filePath: string): Promise<void> {
+  /** 发群图片：段顺序与 sendGroup 一致（quote → at → image），无字纯图也走这里；私聊发图不变。 */
+  async sendImageGroup(groupId: number, filePath: string, options: { quote?: number | string; mentions?: readonly string[] } = {}): Promise<void> {
     // QQ 是沙盒应用，读不了容器外的本地文件（EPERM）；自己读好后以 base64 传入，
     // NapCat 直接用数据发图，不经文件系统。局域网 WS 内传几 MB 无压力。
     const { readFileSync } = await import("node:fs");
     const data = readFileSync(filePath).toString("base64");
-    await this.call("send_group_msg", {
-      group_id: groupId,
-      message: [{ type: "image", data: { file: `base64://${data}` } }],
-    });
+    const segments: OneBotSegment[] = [];
+    if (options.quote !== undefined) segments.push({ type: "reply", data: { id: String(options.quote) } });
+    for (const qq of options.mentions ?? []) segments.push({ type: "at", data: { qq } });
+    segments.push({ type: "image", data: { file: `base64://${data}` } });
+    await this.call("send_group_msg", { group_id: groupId, message: segments });
   }
 
   /** 贴表情回应（NapCat 扩展）。 */

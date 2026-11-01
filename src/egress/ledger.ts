@@ -1,8 +1,9 @@
 /**
- * 每个群的出口账本：最近说了什么、本轮说了几条、最近有哪些「秘密」文本。
+ * 每个群的出口账本：最近说了什么、最近有哪些「秘密」文本。
  *
- * v0 放在内存里。durable 化的做法是把 recent 与 sentThisRun 存成 conversation doc，
+ * v0 放在内存里。durable 化的做法是把 recent 存成 conversation doc，
  * secrets 只放内存（它只服务当轮溯源校验，重启后丢一次不致命）。
+ * 每轮开口次数的门禁不在账本里（sentThisRun 已删），由 say-shared 的轮闸统一管。
  */
 
 export interface LedgerEntry {
@@ -13,8 +14,6 @@ export interface LedgerEntry {
 export interface Ledger {
   recent: LedgerEntry[];
   secrets: string[];
-  /** 本轮已经发出去的条数（不是调用次数）。 */
-  sentThisRun: number;
   lastReact?: { emoji: string; at: number };
   /** 本轮看过几张图。 */
   lookedThisRun: number;
@@ -29,7 +28,7 @@ const ledgers = new Map<string, Ledger>();
 export function ledgerOf(conversationId: string): Ledger {
   let l = ledgers.get(conversationId);
   if (!l) {
-    l = { recent: [], secrets: [], sentThisRun: 0, lookedThisRun: 0, mediaThisRun: 0 };
+    l = { recent: [], secrets: [], lookedThisRun: 0, mediaThisRun: 0 };
     ledgers.set(conversationId, l);
   }
   return l;
@@ -37,7 +36,6 @@ export function ledgerOf(conversationId: string): Ledger {
 
 export function resetRun(conversationId: string): void {
   const l = ledgerOf(conversationId);
-  l.sentThisRun = 0;
   l.mediaThisRun = 0;
 }
 
@@ -51,7 +49,6 @@ export function recordSent(conversationId: string, texts: readonly string[], now
   const l = ledgerOf(conversationId);
   for (const text of texts) l.recent.push({ text, at: now });
   if (l.recent.length > 200) l.recent.splice(0, l.recent.length - 200);
-  l.sentThisRun += texts.length;
 }
 
 export function recordReact(conversationId: string, emoji: string, now: number): void {

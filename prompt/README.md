@@ -1,8 +1,8 @@
 # prompt/
 
-模型能看到的文字分两处：人格与共享文案在这个目录，每个工具的说明、参数 Schema 和使用指南
-在 `src/tools/<name>/TOOL.md`（格式合同见仓库 `AGENTS.md` 第 2 条）。改动任何一处都等于改动鱼的行为，
-所以让它可 diff、可审查。
+模型能看到的文字分两处：人格与宿主/共享层文案在这个目录，每个工具的说明、参数 Schema、
+使用指南与工具专属回执文案在 `src/tools/<name>/TOOL.md`（格式合同见仓库 `AGENTS.md` 第 2 条）。
+改动任何一处都等于改动鱼的行为，所以让它可 diff、可审查。
 
 | 文件 | 去哪 | 什么时候生效 |
 |---|---|---|
@@ -12,27 +12,31 @@
 | `people.md` | 人物档，随每条请求注入（system section `people`） | 每次请求 |
 | `group-profile.md` | 群档案模板，建会话时渲染一次写进 transcript | 每个群第一次 |
 | `handoff.md` | 上下文压缩时让模型写备忘的提示词，`{{transcript}}` 处填入对话 | 换页时 |
-| `messages.md` | 共享文案：拒绝理由 + 发送回执 + section 标签（含 tool_catalog / tool_search 的模板行） | 被拒/成功时 |
+| `messages.md` | 宿主/共享层文案：出口策略码与回执、fs 共用拒绝、section 标签（含 tool_catalog 模板行）、`ctx_*` 标注、`/` 指令回执。工具专属回执不在本文件——在各自 `TOOL.md` 的 `---tool-messages` 块里，loader 启动时合并成全局 messages 视图（两边 key 不许重复，撞车直接启动失败） | 被拒/成功时 |
 | `meme-tags.md` | 表情包一级情绪词表（受控词表，动态解析进 `meme.mood` 的 enum） | 每次请求 |
 
 现在实际在用的文件：`runtime.md`、`persona.md`、`ops.md`、`people.md`、`group-profile.md`、
 `handoff.md`、`messages.md`、`meme-tags.md`、`personas/*.md`。
-工具说明不在本目录：它们唯一来自 `src/tools/<name>/TOOL.md`（顶部摘要 + `---tool-schema`
-严格 JSON Schema + 正文使用指南），由 `src/tools/loader.ts` 注册；旧 `prompt/tools/*.md`
+工具说明与工具专属文案不在本目录：它们唯一来自 `src/tools/<name>/TOOL.md`（顶部摘要 +
+`---tool-schema` 严格 JSON Schema + 可选 `---tool-messages` 回执文案块 + 正文使用指南），
+由 `src/tools/loader.ts` 注册并把工具文案合并进全局 messages 视图；旧 `prompt/tools/*.md`
 平铺文档已删除，不要再建。
 `npm test` 会检查两件事，防止这里变成垃圾堆：
 
-- `messages.md` 里每一条都必须被代码引用（错误码集合 ∪ `messages["x"]` 字面量）
+- messages 文案（中心 + 各工具块合并后的视图）里每一条都必须被代码引用
+  （错误码集合 ∪ `messages["x"]` 字面量）
 - 每个 `src/tools/<name>/TOOL.md` 都要对应一个真实注册的工具（manifest ↔ loader 名单双向校验）
 
 规则：
 
 - `{{name}}` 是严格替换，缺变量直接抛错——不允许半渲染的 prompt 上线
-- `messages.md` 一行一条 `key: text`，缺 key 会在启动时报错；工具回执只引 key，不在代码里写文案
+- `messages.md` 一行一条 `key: text`，缺 key 会在启动时报错；工具回执只引 key，不在代码里写文案。
+  工具专属回执的格式完全相同，只是住在各自 `TOOL.md` 的 `---tool-messages` 块里；
+  想加某个工具的文案就去那里加，宿主/共享层文案才进本目录的 `messages.md`
 - `src/` 里不允许出现大段 prompt 字面量，`npm test` 会扫描（阈值：单条字面量 ≥ 12 个汉字）；
   `TOOL.md` 是唯一例外——它本来就是模型侧文字，只是随工具包放在 `src/tools/<name>/` 里
 - **加一个工具 = `src/tools/<name>/` 放 `TOOL.md` + `tool.ts`，并在 `src/tools/loader.ts` 的
-  factory 名单加一行**，没有第三种位置；除 `say` / `react` / `tool_search` 外都默认 deferred，
+  factory 名单加一行**，没有第三种位置；除四个 `say_*` / `react` / `tool_search` 外都默认 deferred，
   模型先 `tool_search` 搜到才能用
 - 想要看到实际渲染结果（含全部工具包、runtime、tool_catalog 与 eager/deferred）：`npm run prompts`
 

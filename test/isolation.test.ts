@@ -1,8 +1,8 @@
 /**
  * 隔离性的最小证明：
- *  1. 只有 say() 的参数会出境；模型最终正文不会
+ *  1. 只有 say_*() 的参数会出境；模型最终正文不会
  *  2. 从思考里抄来的文本会被硬拒绝，并作为 tool 错误回给模型
- *  3. say 每轮只有一次机会：被拒的轮次就地结束，改口等下一轮（新的一轮照样放行）
+ *  3. say_* 每轮合计只有 3 次开口机会：被拒的轮次就地结束，改口等下一轮（新的一轮照样放行）
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -25,15 +25,15 @@ function mediaRoot(): string {
   return mkdtempSync(join(tmpdir(), "yugang-"));
 }
 
-test("模型正文不出境，只有 say 的 text 会", async () => {
+test("模型正文不出境，只有出口工具的 text 会", async () => {
   const faux = fauxProvider();
   const models = createModels();
   models.setProvider(faux.provider);
 
   faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("say", { messages: ["在的"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("say_words", { text: "在的" })], { stopReason: "toolUse" }),
     // 这一句是「模型的真实输出」，绝对不许进群
-    fauxAssistantMessage("我已经调用 say 工具，把「在的」发送到群里了。"),
+    fauxAssistantMessage("我已经调用出口工具，把「在的」发送到群里了。"),
   ]);
 
   const outbox: string[] = [];
@@ -57,7 +57,7 @@ test("模型正文不出境，只有 say 的 text 会", async () => {
     await fish.drain([root.id]);
 
     assert.equal(settled.status, "done");
-    assert.deepEqual(outbox, ["在的"], "群里只应该收到 say 的参数");
+    assert.deepEqual(outbox, ["在的"], "群里只应该收到出口工具的参数");
     assert.ok(!outbox.join("\n").includes("我已经调用"), "模型正文泄漏了");
   } finally {
     await fish.close();
@@ -73,7 +73,7 @@ test("从思考里抄来的话被拒，且以 tool 错误返回", async () => {
   const leaky = secret.slice(0, 40); // 40 字连续重合 > 24 阈值
 
   faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("say", { messages: [leaky] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("say_words", { text: leaky })], { stopReason: "toolUse" }),
     fauxAssistantMessage("那我闭嘴。"),
   ]);
 
@@ -103,7 +103,7 @@ test("从思考里抄来的话被拒，且以 tool 错误返回", async () => {
 
     // 下一轮（新的一轮）改口重说：硬上限按轮计，不株连下一轮
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("say", { messages: ["刚在听你们聊"] })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("say_words", { text: "刚在听你们聊" })], { stopReason: "toolUse" }),
       fauxAssistantMessage("好了。"),
     ]);
     const next = await root.submit({ type: "input", content: "再说一次" }, ctx);

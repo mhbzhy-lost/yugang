@@ -34,8 +34,16 @@ description: GPT Image 在线生图/改图；只有用户点名要用 GPT/在线
 }
 ---end-tool-schema
 
+---tool-messages
+gpt_image_prompt: 给我一句画面描述再画
+gpt_image_off: 在线生图没登录，先用 npm run login 登录
+gpt_image_unconfigured: 没配图片模型，去 config/models.json 的 models.image 里加一条
+gpt_image_bad_ref: 参考图 {{ref}} 用不了（要媒体目录里的图片）
+gpt_image_done: 画好了：{{files}} —— 用 say_media 发出去
+---end-tool-messages
+
 用 GPT Image 画图或改图。**只有用户明确要求用 GPT / 在线 / 云端生图时才用这个工具**；
-没提就老老实实用 draw 走本地显卡，别自己替用户换通道。
+用户没点名云端画图就别走这条通道，别自己替用户换。
 
 参数原样交给那一侧的图片接口，不做加工：传了不生效就是服务端的事。
 这条通道只认 prompt / model / background / images 四项——张数、尺寸、画质、审核强度、
@@ -43,11 +51,8 @@ description: GPT Image 在线生图/改图；只有用户点名要用 GPT/在线
 
 三条硬规矩：
 
-- 图必须立刻用 say 的 media 发出去；一次只回一张，别计划着发多张
+- 图必须立刻发出去；一次只回一张，别计划着发多张
 - 画完不要说分辨率、尺寸、画质之类的承诺——服务端不受这些参数控制
 - 要改群友发的图，把那张图的引用放进 images（如 inbound/1793...jpg）
 
 mask、seed、aspect_ratio 这类参数同样不支持，别传。
-
-这个工具是按需加载的：当前工具列表里没有它时，先用 tool_search 搜到并加载，
-从下一次模型请求起才能调用。
