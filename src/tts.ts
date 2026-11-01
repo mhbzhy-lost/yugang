@@ -21,6 +21,8 @@ export interface TtsConfig {
   referText?: string;
   /** 参考音频语种，默认 zh。 */
   referLanguage?: string;
+  /** 语速倍率（可选）：voices 配了就透传给服务端，缺省不带（原速）。 */
+  speed?: number;
   /** 合成超时，默认 70 秒（say 工具层覆盖 100 秒，覆盖空响应重试一次的最坏情况）。 */
   timeoutMs?: number;
 }
@@ -41,6 +43,7 @@ export async function synthesizeToMedia(config: TtsConfig, text: string, mediaRo
     if (config.referWav) body["refer_wav_path"] = config.referWav;
     if (config.referText) body["prompt_text"] = config.referText;
     if (config.referWav) body["prompt_language"] = config.referLanguage ?? "zh";
+    if (config.speed !== undefined) body["speed"] = config.speed;
 
     const response = await fetch(config.url, {
       method: "POST",

@@ -31,8 +31,8 @@ export interface FishConfig {
   memeCooldownMinutes: number;
   /** 模型忘调 say 时的正文兜底（仅必答轮）：零 say 时取正文首行过出口校验后补发；误发可关。 */
   salvagePlainReply: boolean;
-  /** 按人格配置的语音：人格名 → TTS 参数。没有条目的人格没有语音能力。 */
-  voices: Record<string, { url: string; referWav?: string; referText?: string; referLanguage?: string }>;
+  /** 按人格配置的语音：人格名 → TTS 参数。没有条目的人格没有语音能力。speed 为可选语速倍率（0.5–2.0，缺省原速）。 */
+  voices: Record<string, { url: string; referWav?: string; referText?: string; referLanguage?: string; speed?: number }>;
   /** 周报发到哪个群；空 = 不发。 */
   weeklyGroupId?: string;
 }
@@ -117,11 +117,15 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
         problems.push(`voices.${persona}.url 缺失，已忽略`);
         continue;
       }
+      const speedRaw = num(v["speed"]);
+      const speed = speedRaw !== undefined && speedRaw >= 0.5 && speedRaw <= 2 ? speedRaw : undefined;
+      if (speedRaw !== undefined && speed === undefined) problems.push(`voices.${persona}.speed 必须在 0.5–2.0，已忽略`);
       voices[persona] = {
         url,
         ...(typeof v["referWav"] === "string" ? { referWav: v["referWav"] } : {}),
         ...(typeof v["referText"] === "string" ? { referText: v["referText"] } : {}),
         ...(typeof v["referLanguage"] === "string" ? { referLanguage: v["referLanguage"] } : {}),
+        ...(speed !== undefined ? { speed } : {}),
       };
     }
     out.voices = voices;

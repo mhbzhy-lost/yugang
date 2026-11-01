@@ -217,6 +217,7 @@
   状态/拉起/收起统一走 `npm run tts [status|up|down]`，活跃实例集以 `fish.config.json` 的 `voices` 端口为准
   （单一事实源，换端口只改配置不改代码），遗留 plist 不参与拉起/收起
 - 空结果重试一次（第二次用 `text_language=auto`），合成超时默认 70 秒（`say` 工具层覆盖 100 秒）
+- 语速：`voices` 条目支持可选 `speed`（语速倍率 0.5–2.0，缺省不传 = 原速），如凯尔希 0.9
 
 ### 15. 可观测性
 
