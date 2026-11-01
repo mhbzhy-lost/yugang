@@ -7,7 +7,8 @@
  *   npm run memory -- --chat qq:group:659976571     # 便捷入口：经 fish.chats 的
  *                                                    # personas 解析该会话当前人格再查
  *   npm run memory -- --pending [--json]            # 待审队列（全人格，最旧在前）
- *   npm run memory -- --approve <id> [公共|私有]     # 同意一条（缺省私有；写库）
+ *   npm run memory -- --approve <id> [公共|私有]     # 同意一条（缺省私有；写库）；公共先经
+ *                                                    # AI 脱敏（prompt/memory-publicize.md）
  *   npm run memory -- --reject <id|全部>             # 拒绝（写库）
  *   npm run memory -- --delete <fact-id>              # 真删除一条已入库 fact（写库）
  *
@@ -22,15 +23,25 @@
  * createSession 打开同一 fish.db 写 doc（与线上进程同库并发时建议低峰执行，或直接
  * 私聊 /记忆 让线上进程自己写）。数据目录与 scripts/ops.ts 一致：YUGANG_HOME 可覆盖，
  * 缺省仓库内 var/。
+ *
+ * 公共批准与私聊 /记忆 同语义：apply 前先把 patch 文本字段交给便宜模型按
+ * prompt/memory-publicize.md 做 AI 脱敏（模型与压缩抽取同源，脚本同用主模型，参照
+ * scripts/compact-all.ts 先例 loadFishModels + createFishModels）；改写输出重过机械过滤并
+ * 强制结构同构，失败 fail closed——该次批准以错误退出终止，不降级、不原样入库；
+ * 日志只带 id 与结果状态，不打印内容。私有批准不经脱敏。
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createSession, type Session } from "@earendil-works/pi-durable";
+import type { Models } from "@earendil-works/pi-ai/models";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { loadFishModels } from "../src/model-config.ts";
+import { createFishModels } from "../src/models.ts";
+import { loadPrompts } from "../src/prompts.ts";
 import { DEFAULT_PERSONA_KEY, memoryKeyOf, privateMemoryKeyOf } from "../src/memory-scope.ts";
-import { approvePending, rejectPending, deleteFactById, hasFact, summarizePatch, formatAgeShort, type MemoryState, type PendingMemoryState } from "../src/memory.ts";
+import { approvePending, rejectPending, deleteFactById, hasFact, summarizePatch, formatAgeShort, publicizePatch, type MemoryPatch, type MemoryState, type PendingMemoryEntry, type PendingMemoryState } from "../src/memory.ts";
 import { MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc } from "../src/store.ts";
 
 const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
@@ -127,16 +138,50 @@ const baseChatKeyOf = (mappingKey: string): string => {
 async function runApproval(): Promise<void> {
   const db = readDb();
   let persona: string | undefined;
+  let pendingEntry: PendingMemoryEntry | undefined;
   try {
     const docs = sessionDocs(db, "fish.memory.pending", 1) as { key: string; value: PendingMemoryState }[];
     const id = rawApproveId ?? rawRejectId;
     if (rawRejectId === "全部") {
       persona = docs.find((doc) => doc.value.entries.length > 0)?.key;
     } else {
-      persona = docs.find((doc) => doc.value.entries.some((entry) => entry.id === id))?.key;
+      const hostDoc = docs.find((doc) => doc.value.entries.some((entry) => entry.id === id));
+      persona = hostDoc?.key;
+      pendingEntry = hostDoc?.value.entries.find((entry) => entry.id === id);
     }
   } finally {
     db.close();
+  }
+
+  // 公共批准先做 AI 脱敏（与私聊 /记忆 同意 <id> 公共 同语义）：改写输出重过机械过滤、
+  // 强制结构同构才放行；模型或输出不合格一律 fail closed——不降级、不原样入库。
+  // 模型与压缩抽取同源（memoryModel 链；脚本同用主模型，参照 compact-all 先例）。
+  // 日志只带 id 与结果状态。放在开写会话之前：失败时不碰 fish.db。
+  let publicized: MemoryPatch | undefined;
+  if (rawApproveId !== undefined && approveTrack === "公共" && pendingEntry) {
+    const prompts = loadPrompts(process.env.PROMPT_ROOT ?? join(import.meta.dirname, "..", "prompt"));
+    const mainConfig = loadFishModels().main;
+    let modelInstance: Models | undefined; // lazy：patch 没有可改写文本时不去碰 models.json
+    const result = await publicizePatch(pendingEntry.patch, {
+      template: prompts.memoryPublicize,
+      complete: async (prompt) => {
+        modelInstance ??= createFishModels(mainConfig);
+        const model = modelInstance.getModel(mainConfig.providerId, mainConfig.modelId);
+        if (!model) throw new Error(`model_not_found:${mainConfig.providerId}/${mainConfig.modelId}`);
+        const message = await modelInstance.streamSimple(model, { messages: [{ role: "user", content: prompt }] }).result();
+        return message.content
+          .filter((block): block is { type: "text"; text: string } => block.type === "text")
+          .map((block) => block.text)
+          .join("\n");
+      },
+    });
+    if (result.status === "failed") {
+      console.error(`[鱼缸] 记忆公共化脱敏 ${rawApproveId} failed：${result.reason}（fail closed，未写库；可重试或改批私有）`);
+      process.exitCode = 1;
+      return;
+    }
+    publicized = result.patch;
+    console.log(`[鱼缸] 记忆公共化脱敏 ${rawApproveId} ok`);
   }
 
   const storage = await openNodeSqliteStorage(DB_PATH);
@@ -151,6 +196,8 @@ async function runApproval(): Promise<void> {
             const entry = pendingDoc.entries.find((item) => item.id === rawApproveId);
             if (!entry) return { status: "missing" as const };
             if (approveTrack === "私有" && !entry.originChatKey) return { status: "no_origin" as const, id: rawApproveId };
+            // 公共轨道：把脱敏后的 patch 写回待审条目（同一 commit 内），approvePending 应用的就是改写后文本
+            if (publicized) entry.patch = publicized;
             const targetKey = approveTrack === "私有" ? privateMemoryKeyOf(persona, entry.originChatKey) : persona;
             const targetDoc = await tx.doc(approveTrack === "私有" ? MemoryPrivateDoc : MemoryDoc, targetKey, targetKey);
             const applied = approvePending(pendingDoc, rawApproveId, targetDoc, Date.now());

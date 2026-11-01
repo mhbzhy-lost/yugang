@@ -206,6 +206,7 @@ cmd_memory_entry: [{{id}}] {{persona}} · {{origin}} · {{age}}前 · {{digest}}
 cmd_memory_supersede_note:   将失效：{{id}} {{text}}
 cmd_memory_more: 还有 {{count}} 条更新的没显示，先处理完这些再列
 cmd_memory_ok: 已并入{{track}}记忆：{{digest}}
+cmd_memory_publicize_failed: 这条公共记忆的 AI 脱敏没有通过，没有入库：可以重发一次 /记忆 同意 {{id}} 公共，或改批私有
 cmd_memory_missing: 没有这条待审：{{id}}
 cmd_memory_no_origin: 这条没有来源会话，落不了私有，显式选公共再试：{{id}}
 cmd_memory_rejected: 已拒绝：{{id}}

@@ -41,9 +41,9 @@ import { localDay } from "./usage.ts";
 import { weeklyStats, renderWeekly } from "./stats.ts";
 import { createUsageLedger, sumUsage } from "./usage.ts";
 import { bypassAllowed, splitBypass, BYPASS_RE } from "./bypass.ts";
-import { ChatsDoc, WatchDoc } from "./store.ts";
+import { ChatsDoc, MemoryPendingDoc, WatchDoc } from "./store.ts";
 import { renderTemplate } from "./prompts.ts";
-import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, type MemoryInbound, parseMemoryCommand } from "./memory.ts";
+import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, type MemoryInbound, parseMemoryCommand, publicizePatch } from "./memory.ts";
 import { pushScope, shiftScope } from "./memory-scope.ts";
 import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
@@ -824,6 +824,47 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
   });
 }
 
+/**
+ * 公共批准的前置步（AI 脱敏）：私聊 `/记忆 同意 <id> 公共` 在 applyPatch 之前，把待审
+ * patch 的文本字段（facts/lore/cards 的 text；subject/keys/结构不动）交给便宜模型按
+ * prompt/memory-publicize.md 改写——去掉指向来源群的身份信息，让表述在该人格任何会话
+ * 都成立。模型与压缩抽取同源（memoryModel 链：compact.memoryModel ?? 主模型；现配置
+ * 未配 memoryModel，实际与抽取同落主模型）。改写输出在 memory.ts 里重过机械过滤并
+ * 强制结构同构，通过才写回待审 doc，随后的正式审批应用的就是改写后的文本（回执里的
+ * digest 即改写后关键文本）；失败 fail closed，由调用方以错误回执终止，不降级、不原样入库。
+ * 日志只带 id 与结果状态，不打印内容。
+ */
+async function publicizePendingForApproval(id: string): Promise<"ok" | "missing" | "failed"> {
+  const views = await fish.pendingMemories();
+  const found = views
+    .flatMap((view) => view.entries.map((entry) => ({ persona: view.persona, entry })))
+    .find((item) => item.entry.id === id);
+  if (!found) return "missing";
+  const result = await publicizePatch(found.entry.patch, {
+    template: fish.prompts.memoryPublicize,
+    complete: async (prompt) => {
+      const model = models.getModel(mainModel.provider, mainModel.modelId);
+      if (!model) throw new Error(`model_not_found:${mainModel.provider}/${mainModel.modelId}`);
+      const message = await models.streamSimple(model, { messages: [{ role: "user", content: prompt }] }).result();
+      return message.content
+        .filter((block): block is { type: "text"; text: string } => block.type === "text")
+        .map((block) => block.text)
+        .join("\n");
+    },
+  });
+  if (result.status === "failed") {
+    console.log(`[鱼缸] 记忆公共化脱敏 ${id} failed ${result.reason}`);
+    return "failed";
+  }
+  await fish.harness.commit(async (tx) => {
+    const pending = await tx.doc(MemoryPendingDoc, found.persona, found.persona);
+    const entry = pending.entries.find((item) => item.id === id);
+    if (entry) entry.patch = result.patch;
+  }, ctx);
+  console.log(`[鱼缸] 记忆公共化脱敏 ${id} ok`);
+  return "ok";
+}
+
 async function handleCommand(msg: IncomingMessage): Promise<string | null> {
   if (!msg.text.startsWith("/") || String(msg.userId) !== config.master) return null;
   const conv = await conversationFor(msg.chatKey); // 切换前先定回执落点
@@ -836,7 +877,17 @@ async function handleCommand(msg: IncomingMessage): Promise<string | null> {
   // 都在 harness 的 memoryCommandReply（群内只回引导语；私聊全局单视图列表/同意/拒绝）
   const memoryCommand = parseMemoryCommand(msg.text);
   if (memoryCommand) {
-    text = await fish.memoryCommandReply(msg.chatKey, memoryCommand);
+    // 公共批准先过 AI 脱敏（仅私聊通道；群内 /记忆 无副作用，照旧只回引导语）。
+    // 改写成功写回待审后走原审批（回执展示改写后文本）；失败 fail closed，直接回错误文案
+    if (memoryCommand.kind === "approve" && memoryCommand.track === "公共" && !msg.chatKey.startsWith("qq:group:")) {
+      if ((await publicizePendingForApproval(memoryCommand.id)) === "failed") {
+        text = renderTemplate(fish.prompts.messages["cmd_memory_publicize_failed"] ?? "", { id: memoryCommand.id });
+      } else {
+        text = await fish.memoryCommandReply(msg.chatKey, memoryCommand);
+      }
+    } else {
+      text = await fish.memoryCommandReply(msg.chatKey, memoryCommand);
+    }
   } else if (msg.text === "/查询可用人格") {
     text = renderTemplate(fish.prompts.messages["cmd_personas"] ?? "", { list });
   } else if (msg.text === "/关看图") {

@@ -28,6 +28,8 @@ export interface PromptSet {
   handoff: string;
   /** 记忆抽取提示词（压缩链路用），含 {{transcript}} / {{known}} / {{subjects}}。 */
   memoryExtract: string;
+  /** 记忆公共化脱敏提示词（批准闸公共轨道用），含 {{patch}}。 */
+  memoryPublicize: string;
   /** 群档案模板，建会话时渲染一次。 */
   groupProfile: string;
   /** 运维书：管理工具（模型切换 / 重启）的使用约束，常驻 section。 */
@@ -48,6 +50,7 @@ export function loadPrompts(root: string): PromptSet {
     persona: read(join(root, "persona.md")),
     handoff: read(join(root, "handoff.md")),
     memoryExtract: read(join(root, "memory-extract.md")),
+    memoryPublicize: read(join(root, "memory-publicize.md")),
     groupProfile: read(join(root, "group-profile.md")),
     ops: read(join(root, "ops.md")),
     people: read(join(root, "people.md")),
@@ -127,7 +130,7 @@ export function renderTemplate(template: string, vars: Record<string, string>): 
 
 /** 审查用：列出所有 prompt 文件、大小与 sha256。工具说明在 src/tools/<name>/TOOL.md，不在 prompt/ 下。 */
 export function auditPrompts(root: string): { file: string; bytes: number; sha256: string }[] {
-  const files = ["runtime.md", "persona.md", "ops.md", "handoff.md", "memory-extract.md", "group-profile.md", "people.md", "messages.md"];
+  const files = ["runtime.md", "persona.md", "ops.md", "handoff.md", "memory-extract.md", "memory-publicize.md", "group-profile.md", "people.md", "messages.md"];
   const personasDir = join(root, "personas");
   if (existsSync(personasDir)) {
     for (const entry of readdirSync(personasDir).sort()) {
