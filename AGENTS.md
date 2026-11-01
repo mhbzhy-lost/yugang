@@ -127,7 +127,14 @@
 - **provider 级代理**：`config/models.json` 的 `providers.<id>.proxy`（只认 http/https）。配了它，这个 provider
   的**全部**请求走隧道（模型流、`gpt_image`、内部 OAuth 刷新），其它 provider 与 SD/QQ 仍直连；
   不设进程级的 `--use-env-proxy`（那会把 zai / deepseek 也拖进代理）。codex 过代理必须同时 `transport: "sse"`——
-  WebSocket 不吃 fetch 注入；`main` / `vision` / `image` / `vision_fallback` 复用同一个 provider 时共用这条代理
+  WebSocket 不吃 fetch 注入；`main` / `vision` / `image` / `vision_fallback` 复用同一个 provider 时共用这条代理。
+  google-gemini（Google 订阅 OAuth，Code Assist 通道）同理走 provider 代理：`cloudcode-pa.googleapis.com` 与
+  `oauth2.googleapis.com`（token 刷新走全局 fetch，靠 scoped proxy 接管）都进隧道；登录用
+  `npm run login -- google-gemini`（只有浏览器流程，授权码从 codeassist.google.com/authcode 页面复制回来）
+- **OAuth client 常量只放本机配置**：gemini-cli 公开的 id/secret 只写本机 `config/models.json` 的
+  `providers.google-gemini.oauthClient`（模板留空串占位），源码里不出现——git 里含明文 client 会被
+  GitHub push protection 拦推送；登录成功后 client 随凭据落盘（`config/auth.json`），token 刷新从
+  凭据自带字段读，不依赖启动配置
 
 ### 7. 主人与陌生人
 
@@ -308,6 +315,7 @@ npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消�
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
 npm run memory     # 长期记忆查看与审批（--persona / --chat / --json / --pending / --approve / --reject，见第 16 节）
 npm run creds show  # 凭据状态（只有长度）
+npm run login -- google-gemini [--browser | --finish '<授权码>']  # Google 订阅登录（只有浏览器流程；openai-codex 同入口）
 npm run ping        # 模型连通性 + 用量（不打印 key）
 npm start          # 真跑（自动读 .env）——只在 macmini 上
 npm run deploy     # 部署：git pull + 平滑重启鱼（只在 macmini 上跑）

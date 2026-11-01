@@ -7,7 +7,9 @@
 import { createModels, createProvider, type Models } from "@earendil-works/pi-ai/models";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAICodexResponsesApi } from "@earendil-works/pi-ai/api/openai-codex-responses.lazy";
+import { googleCodeAssistApi } from "./api-google-code-assist.ts";
 import { openaiCodexOAuth } from "./oauth-openai.ts";
+import { googleGeminiOAuth } from "./oauth-google.ts";
 import { fileCredentialStore } from "./credential-store.ts";
 import { createProxyFetch, registerScopedProxy } from "./media/proxy-fetch.ts";
 import type { FishModelConfig } from "./model-config.ts";
@@ -38,14 +40,19 @@ function buildProvider(config: FishModelConfig) {
     else console.warn(`[fish] invalid proxy for provider ${config.providerId}`);
   }
 
-  const api = config.api === "openai-codex-responses" ? openAICodexResponsesApi() : openAICompletionsApi();
+  const isCodeAssist = config.api === "google-code-assist";
+  const api = isCodeAssist
+    ? googleCodeAssistApi()
+    : config.api === "openai-codex-responses"
+      ? openAICodexResponsesApi()
+      : openAICompletionsApi();
 
   const provider = createProvider({
     id: config.providerId,
     name: config.providerId,
     ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
     auth: oauth
-      ? { oauth: openaiCodexOAuth }
+      ? { oauth: isCodeAssist ? googleGeminiOAuth : openaiCodexOAuth }
       : {
           apiKey: {
             name: `${config.providerId} key`,
@@ -55,7 +62,11 @@ function buildProvider(config: FishModelConfig) {
         },
     models: config.models.map((model) => ({
       ...model,
-      api: config.api === "openai-codex-responses" ? ("openai-codex-responses" as const) : ("openai-completions" as const),
+      api: isCodeAssist
+        ? ("google-code-assist" as const)
+        : config.api === "openai-codex-responses"
+          ? ("openai-codex-responses" as const)
+          : ("openai-completions" as const),
       provider: config.providerId,
       ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
     })),
@@ -65,7 +76,7 @@ function buildProvider(config: FishModelConfig) {
   return provider;
 }
 
-/** 一个 provider 需要过代理的主机：自己的 baseUrl + 内部 OAuth 刷新落点（目前只有 codex）。 */
+/** 一个 provider 需要过代理的主机：自己的 baseUrl + 内部 OAuth 刷新落点。 */
 function providerProxyHosts(config: FishModelConfig): string[] {
   const hosts = new Set<string>();
   try {
@@ -73,7 +84,16 @@ function providerProxyHosts(config: FishModelConfig): string[] {
   } catch {
     // baseUrl 写坏了不影响代理本身，交给后面的请求报错
   }
-  if (config.authMode === "oauth") hosts.add("auth.openai.com");
+  if (config.authMode === "oauth") {
+    if (config.api === "google-code-assist") {
+      // Google 订阅：模型流走 cloudcode-pa，token 刷新走 oauth2.googleapis.com；
+      // 刷新用裸全局 fetch，必须进 scoped proxy 才会被接管
+      hosts.add("cloudcode-pa.googleapis.com");
+      hosts.add("oauth2.googleapis.com");
+    } else {
+      hosts.add("auth.openai.com");
+    }
+  }
   return [...hosts];
 }
 

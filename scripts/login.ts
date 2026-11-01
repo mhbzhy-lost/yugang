@@ -1,19 +1,28 @@
 /**
- * 登录订阅制 provider（目前只有 openai-codex），把 oauth 凭据写进 config/auth.json。
+ * 登录订阅制 provider（openai-codex / google-gemini），把 oauth 凭据写进 config/auth.json。
  *
  *   npm run login -- openai-codex              # 设备码流程（无头，但 OpenAI 要求手机核验）
  *   npm run login -- openai-codex --browser    # 浏览器 PKCE：打印授权 URL 并暂存 state
  *   npm run login -- openai-codex --finish "<回调 URL 或 code#state>"
  *
+ *   npm run login -- google-gemini             # 只有浏览器流程（Google 的 client 不支持设备码）
+ *   npm run login -- google-gemini --browser   # 同上，显式写出
+ *   npm run login -- google-gemini --finish "<授权码或整条地址>"
+ *
  * 浏览器流程是推荐路径：和 pi 本地登录一致，有登录态就不用再过手机验证。
- * 回调地址是 http://localhost:1455/auth/callback，鱼跑在无头机器上、不需要真的监听，
+ * openai-codex 的回调地址是 http://localhost:1455/auth/callback，鱼跑在无头机器上、不需要真的监听，
  * 把浏览器地址栏那条（哪怕打不开）整条复制回来即可。
+ * google-gemini 的回调页是 https://codeassist.google.com/authcode，授权后页面直接把授权码显示出来。
  */
 import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { loadProviderConfig } from "../src/model-config.ts";
 import { createFishModels } from "../src/models.ts";
-import { finishBrowserLogin, startBrowserLogin } from "../src/oauth-openai.ts";
+import { finishBrowserLogin as finishOpenAIBrowserLogin, startBrowserLogin as startOpenAIBrowserLogin } from "../src/oauth-openai.ts";
+import { finishBrowserLogin as finishGoogleBrowserLogin, startBrowserLogin as startGoogleBrowserLogin } from "../src/oauth-google.ts";
+import { discoverProject } from "../src/api-google-code-assist.ts";
+import { fileCredentialStore } from "../src/credential-store.ts";
+import { createProxyFetch } from "../src/media/proxy-fetch.ts";
 
 const args = process.argv.slice(2);
 const target = args.find((a) => !a.startsWith("--")) ?? "";
@@ -21,12 +30,15 @@ const mode = args.includes("--browser") ? "browser" : args.includes("--finish") 
 const finishIndex = args.indexOf("--finish");
 const finishInput = finishIndex >= 0 ? args[finishIndex + 1] : undefined;
 
+const OAUTH_TARGETS = new Set(["openai-codex", "google-gemini"]);
+
 if (!target) {
-  console.error("用法：npm run login -- <provider> [--browser | --finish <回调URL>]");
+  console.error("用法：npm run login -- <openai-codex|google-gemini> [--browser | --finish <授权码/回调URL>]");
   process.exit(1);
 }
-if (target !== "openai-codex") {
+if (!OAUTH_TARGETS.has(target)) {
   console.error(`${target} 不需要登录流程（API key）；用 npm run creds import`);
+  console.error("支持登录的 provider：openai-codex、google-gemini");
   process.exit(1);
 }
 
@@ -34,10 +46,93 @@ const config = loadProviderConfig(target, { modelsPath: resolve(join(process.cwd
 const models = createFishModels(config);
 const statePath = join(dirname(config.credentialsPath), ".login-state.json");
 
-if (mode === "browser") {
-  const start = await startBrowserLogin();
+// 登录过程的网络请求（token 交换 + 项目发现）在配了 provider 代理时必须走代理：
+// 这些 Google / OpenAI 域名在无代理环境可能不可达。代理非法时回落直连并告警。
+const proxyFetch = config.proxy ? createProxyFetch(config.proxy) : undefined;
+if (config.proxy && !proxyFetch) {
+  console.warn(`[login] provider 代理配置无效（${config.proxy}），token 交换将直连`);
+}
+
+type LoginState = { verifier: string; state: string; provider?: string };
+
+function readState(targetProvider: string): LoginState {
+  if (!existsSync(statePath)) {
+    console.error(`找不到登录状态（${statePath}），先跑 --browser`);
+    process.exit(1);
+  }
+  const saved = JSON.parse(readFileSync(statePath, "utf8")) as LoginState;
+  // 旧文件没有 provider 字段，按 openai-codex 兼容
+  const savedProvider = saved.provider ?? "openai-codex";
+  if (savedProvider !== targetProvider) {
+    console.error(`登录状态是 ${savedProvider} 的，不是 ${targetProvider}；先跑 npm run login -- ${targetProvider} --browser`);
+    process.exit(1);
+  }
+  return saved;
+}
+
+if (target === "google-gemini") {
+  // Google 的 client 是 Desktop 类型，设备码端点会拒（Invalid client type），只有浏览器流程
+  // client 来自本机 config/models.json（源码与模板都不放真值，避免 push protection 拦推送）
+  const client = config.oauthClient;
+  if (!client) {
+    console.error("google-gemini 缺 OAuth client：去 config/models.json 的 providers.google-gemini.oauthClient 填 gemini-cli 公开 client（模板留了空占位，说明见 AGENTS.md 第 6 节）");
+    process.exit(1);
+  }
+  if (mode === "finish") {
+    if (!finishInput) {
+      console.error("用法：npm run login -- google-gemini --finish '<授权码或整条地址>'");
+      process.exit(1);
+    }
+    const saved = readState(target);
+    let credential;
+    try {
+      credential = await finishGoogleBrowserLogin(client, saved, finishInput, undefined, proxyFetch ?? fetch);
+    } catch (error) {
+      console.error(`授权码交换失败：${error instanceof Error ? error.message : error}`);
+      console.error("授权码是一次性的、约 5 分钟失效；报 invalid_grant / 连接失败就重新 --browser 再授权一次。");
+      process.exit(1);
+    }
+    // 项目发现 best-effort：失败只告警不阻塞登录，缺 project 时请求体省略该字段
+    let enriched = credential;
+    try {
+      const discovered = await discoverProject(credential.access, proxyFetch ?? fetch);
+      enriched = {
+        ...credential,
+        ...(discovered.projectId ? { projectId: discovered.projectId } : {}),
+        ...(discovered.tier ? { tier: discovered.tier } : {}),
+      };
+      if (discovered.projectId) console.log(`  Code Assist 项目：${discovered.projectId}${discovered.tier ? `（${discovered.tier}）` : ""}`);
+      else console.warn("  [login] 没发现 cloudaicompanionProject，请求将不带 project 字段");
+    } catch (error) {
+      console.warn(`  [login] 项目发现失败（不影响登录）：${error instanceof Error ? error.message : error}`);
+    }
+    const store = fileCredentialStore(config.credentialsPath);
+    await store.modify(target, async () => enriched);
+    rmSync(statePath, { force: true });
+    console.log(`✓ ${target} 已登录（有效期至 ${new Date(enriched.expires).toISOString()}）`);
+    console.log(`  凭据写入 ${config.credentialsPath}（600，已 gitignore）`);
+    process.exit(0);
+  }
+
+  // 默认与 --browser 都是浏览器流程
+  const start = await startGoogleBrowserLogin(client);
   mkdirSync(dirname(statePath), { recursive: true });
-  writeFileSync(statePath, JSON.stringify({ verifier: start.verifier, state: start.state }), { mode: 0o600 });
+  writeFileSync(statePath, JSON.stringify({ verifier: start.verifier, state: start.state, provider: target }), { mode: 0o600 });
+  console.log("在已登录 Google 账户的浏览器里打开这个地址并授权：");
+  console.log("");
+  console.log(start.url);
+  console.log("");
+  console.log("授权后浏览器会跳到 https://codeassist.google.com/authcode 页面，页面上直接显示授权码。");
+  console.log("把授权码（或整条地址）复制回来，执行：");
+  console.log("  npm run login -- google-gemini --finish '<粘贴这里>'");
+  console.log("注意：授权码是一次性的、约 5 分钟失效；--finish 报 invalid_grant 就重新 --browser 再授权一次。");
+  process.exit(0);
+}
+
+if (mode === "browser") {
+  const start = await startOpenAIBrowserLogin();
+  mkdirSync(dirname(statePath), { recursive: true });
+  writeFileSync(statePath, JSON.stringify({ verifier: start.verifier, state: start.state, provider: target }), { mode: 0o600 });
   console.log("在已登录 ChatGPT 的浏览器里打开这个地址并授权：");
   console.log("");
   console.log(start.url);
@@ -53,12 +148,8 @@ if (mode === "finish") {
     console.error("用法：npm run login -- openai-codex --finish '<回调 URL 或 code#state>'");
     process.exit(1);
   }
-  if (!existsSync(statePath)) {
-    console.error(`找不到登录状态（${statePath}），先跑 --browser`);
-    process.exit(1);
-  }
-  const saved = JSON.parse(readFileSync(statePath, "utf8")) as { verifier: string; state: string };
-  const credential = await finishBrowserLogin(saved, finishInput);
+  const saved = readState(target);
+  const credential = await finishOpenAIBrowserLogin(saved, finishInput);
   await import("../src/credential-store.ts").then(async ({ fileCredentialStore }) => {
     const store = fileCredentialStore(config.credentialsPath);
     await store.modify(target, async () => credential);

@@ -26,7 +26,7 @@ export interface ProviderModelConfig {
 }
 
 export interface ProviderConfig {
-  /** 默认 openai-completions；openai-codex-responses 走 ChatGPT/Codex 的 Responses 接口。 */
+  /** 默认 openai-completions；openai-codex-responses 走 ChatGPT/Codex 的 Responses 接口；google-code-assist 走 Google 订阅的 Code Assist v1internal 通道。 */
   api?: string;
   baseUrl?: string;
   compat?: Record<string, unknown>;
@@ -42,6 +42,12 @@ export interface ProviderConfig {
    * 其它 provider 仍直连。codex 记得同时写 transport: "sse"（WS 不吃 fetch 注入）。
    */
   proxy?: string;
+  /**
+   * OAuth client（google-code-assist 专用）：gemini-cli 的公开 id/secret，但 GitHub push
+   * protection 会拦含明文 client 的提交，所以只放本机 config/models.json，模板留空串占位。
+   * 两个字段都非空才生效；登录时随凭据落盘，之后刷新从凭据自带字段读。
+   */
+  oauthClient?: { id?: string; secret?: string };
   models: ProviderModelConfig[];
 }
 
@@ -76,6 +82,8 @@ export interface FishModelConfig {
   credentialsPath: string;
   /** provider 级代理；空 = 直连。只影响这个 provider 的域名（含 oauth token 主机）。 */
   proxy?: string;
+  /** OAuth client（google-code-assist 用）；来自本机配置，不要打印。 */
+  oauthClient?: { id: string; secret: string };
 }
 
 export interface FishModelsSelection {
@@ -216,6 +224,14 @@ function buildConfig(
   const oauth = authMode === "oauth" && stored && stored.type === "oauth" ? stored : undefined;
   const key = authMode === "key" && stored && stored.type === "api_key" ? stored.key : undefined;
 
+  // id/secret 都非空字符串才透传，缺一半按没配处理（不报错：非 google-code-assist 的
+  // provider 用不到它，不该被启动校验拦住）
+  const oc = provider.oauthClient;
+  const oauthClient =
+    oc && typeof oc.id === "string" && oc.id && typeof oc.secret === "string" && oc.secret
+      ? { id: oc.id, secret: oc.secret }
+      : undefined;
+
   return {
     providerId: ref.provider,
     modelId,
@@ -229,6 +245,7 @@ function buildConfig(
     configSource,
     credentialsPath,
     ...(provider.proxy ? { proxy: provider.proxy } : {}),
+    ...(oauthClient ? { oauthClient } : {}),
   };
 }
 
