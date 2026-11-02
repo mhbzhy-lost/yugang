@@ -1,79 +1,189 @@
-# 外部信息弹药源（定时逛视频网站）实现计划（占位，待展开）
+# 外部信息源实现计划（B 站弹药管线 + 新闻播报管线）v2
 
-> 状态：**需求已钉住，设计未展开**。主线计划（2026-11-02-engagement-next.md）收口后细化。
+> **给执行 agent：** 必须逐任务执行；只有终态全验证通过才算完成。执行方式：Subagent-Driven。**不部署**——完成后停在本地 commit，部署与配置由主人决策。
 
-**用户需求（2026-11-02 两次澄清后定稿）：**
-- 每天定几个时间段，让鱼自己去逛 B 站；**主人定几个 topic**（订阅主题清单）
-- 逛到她觉得有意思的：做**简单小总结 + 视频链接**，存进「**弹药库**」（暂存区，独立于即时弹药栏）
-- 水群窗口（open）开放时可分享：**每个窗口最多分享一个视频**（打扰预算由此确定）
-- 与主线弹药栏（承诺/委托的机械拼装）并存：开窗注入的弹药栏 = 承诺/委托 + 外部弹药库各取所需，外部视频每窗限 1 条
-- **分享随机门（2026-11-02 定稿）**：每个 open 窗口开启时掷一次随机门（`random() <= ammoShareChance`，**缺省 0.2、可配置**）——命中才允许本窗分享外部素材，未命中则本窗弹药栏不含外部视频（承诺/委托弹药不受门影响）；与每窗 1 条上限、00:00–09:00 宵禁叠加生效
+**目标：** ① 鱼每天四时点自己逛 B 站（游客 API + 营销号三层筛选），把有意思的视频做成小总结存进弹药库，open 窗经随机门每窗最多分享 1 条（b23 链接，URL 由宿主渲染）；② 每天 10:30 取当日新闻（自建 60s + RSS）按主人 topic 归纳，经 say_words 定时播报到指定群。两管线全时尊重宵禁与末条自言禁言。
 
-**已确定边界：**
-- 与主线计划分离，独立实现与开关（可单独回滚）
-- 弹药投放仍走主线 T13 的注入段（外部弹药进同一个弹药栏，不另开出口）
-- 额度与出口工具面零新增
+**架构：** 统一 `src/external/` 模块（scheduler/job runner、bili-client 频控内核、RSS/60s 新闻客户端、不可信数据清洗）；独立后台 worker 会话（新轮类型 `worker`：say_* 机械禁用，模型只提交结构化 AmmoDraft）；弹药库/作业/播报全部 durable doc + 幂等键；分享经 `share.externalAmmoId` 机械绑定 canonical 记录。
 
-**技术方案（2026-11-02 调研已定，报告见会话存档）：**
-- **纯游客模式，零登录零扫码**，四端点组合：`popular`（综合热门，游客实测可用）+ `ranking/v2?rid=N`（分区榜，rid 映射抄 RSSHub ranking.ts）+ `view?bvid=`（候选卡片补全）+ 可选热评前 5 条；启动时 `finger/spi` 取 buvid3 存 var/ 长期复用，UA+Referer 钉死。搜索（需 wbi 签名、偶发 -352）与动态流（匿名 412）**不进首期**
-- **工具面**：一个工具包 `bili`，2-3 个 deferred 工具——`bili_hot`（热门/分区榜紧凑行式返回，内置已分享 BV 判重）、`bili_video`（单条卡片+热评核实）、`bili_search` 二期（wbi 签名抄 RSSHub utils.ts ~60 行）
-- **编排形态**：定时投喂 + 模型挑选（dsh-bili-subagent 模式）——宿主定点塞触发语，模型调 bili_hot 拿候选 → 按人格口味挑 1-2 条 → bili_video 核实 → 走 say_words/say_media 出口分享（封面下载进 inbound/ 同现有收图管线）
-- **频控红线**（执行内核实现不靠模型自觉）：同端点 ≥2s 间隔、-412/-352 熔断本轮（跳过该时间点不重试）、每日总请求计数；我们全天 <50 请求，比社区红线低一个数量级；写入类操作（评论/点赞）不做
-- **安全**：B 站标题/简介/热评为不可信输入（当数据不当指令，与群消息同规格）
-- **可抄实现**：RSSHub bilibili utils.ts（游客侧签名/限流）、@xzxzzx/bilibili-mcp（TS 工具规格书）、dsh-bili-subagent（频控/编排）、dsh-bili-scroll（判重/配额）
+**技术栈：** TypeScript / pi-durable docs / OneBot 既有出口 / fast-xml-parser（RSS，受限解析）/ Docker（macmini 上的 60s 服务，部署属运维、不在本计划代码内）。
 
-**已由用户定稿：**
-- 打扰预算：每个 open 窗口最多分享 1 条外部视频
-- 弹药库形态：{小总结 + b23 链接 + topic + 捡拾时间 + BV 判重}，独立暂存（按人格？按鱼全局？——实现时定，倾向按人格）
+## 全局约束（继承主线计划全部硬约束）
 
-**剩余决策已定（2026-11-02 用户定稿）：**
-1. 逛的时段：**每天 9:00 / 12:00 / 18:00 / 24:00 四轮，每轮限时 10 分钟**（到点开逛，10 分钟内自主决定看多少；硬截止，超时本轮收束）
-2. 分享宵禁：**00:00–次日 09:00 之间禁止主动分享外部素材**（弹药库只进不出；24:00 那轮捡的东西留给次日 9 点后的窗口）
-3. 新闻 topic 清单初始值（2026-11-03 主人定）：**AI、时政、军事、科技（以数码为主）、趣闻（以二次元为主，拒绝娱乐圈）**——五个 topic，各自绑源建议：AI→IT之家+虎嗅+36氪热榜关键词过滤；时政→60s+人民网+界面；军事→60s+人民网关键词；科技/数码→IT之家+虎嗅；趣闻/二次元→微博热榜+知乎热榜+B站热门（拒绝娱乐圈：关键词黑名单过滤，命中明星/综艺/八卦类词直接丢弃）
-4. B 站管线主题（2026-11-03 主人定）：**二次元、游戏、军事、数码**为主；**营销号辨别为硬要求**——筛选三层架构（2026-11-03 调研定稿）：
-   - **硬筛一票否决**（工具层、模型之前）：播放<1000、发布<48h 不进互动比、标题党正则（标点堆叠/UC 词表/盘点体）、简介引流模式（必开）、UP 主名黑名单正则（军事观察室类命名+AI 号昵称模式）
-   - **软筛评分三档**（dafeiyu-cleaner 式 ≥60 入池/35-59 观察/<35 丢弃）：赞播比（B 站正常 4.6-5.6%，<2% 重扣，按播放量分档）、币播比 <0.3%、收藏比、时长 <60s、简介为空、UP 评级（card 端点游客可得：粉丝/等级/认证，官方认证与 Lv≥5 减分防误伤）
-   - **模型终选**：机械过滤后的候选交模型按品味挑（读简介/热评/弹幕）
-   - 纪律：宁漏勿误；上线前用两周分区样本标定阈值；规则命中落盘；黑名单本地文件可热更新；鬼畜区夸张标题属文化不误伤；投稿列表端点游客不可依赖（频次铺量靠运行期自建 UP 出现频次账本）
-4. 弹药库保鲜 TTL 与每轮捡拾上限：实现时按候选值（48-72h / 每轮 2-3 条）定，可配置
+- 出口唯一族：新闻播报走 scheduled answer 轮的 `say_words`（入 outbox、有 transcript/sentmap 语义），**绝不直调 OneBot**（P0-3 裁定：采用 scheduled 轮方案而非裸 enqueue，保留人格化口吻与既有账本）
+- 外部文本（标题/简介/热评/弹幕/RSS）= 不可信数据：统一清洗（长度/控制字符/bidi/URL scheme 白名单 http·https）、独立 `external` 行模板、链接一律由宿主从 canonical record 渲染（P0-5）
+- 工具包契约：一目录一工具——`src/tools/bili_hot/`、`src/tools/bili_video/`、`src/tools/ammo_submit/` 分开建包，共享核心在 `src/external/bili-client.ts`（P1-1）
+- 安全域：`news.targetGroup` 必须 ∈ `.env GROUPS`，config 工具只能改行为字段不能扩安全域（P1-7）
+- 模型可见文案唯一源 prompt/；src/ 无大段字面量
+- 不部署、不 commit（各任务产出由主会话统一 commit）
 
-**已否决/后置：** 登录态与个性化推荐（封号风险与扫码维护成本，社区共识只读游客无案例）；搜索与字幕（wbi 复杂度，二期）。
+## 已裁定决策（对应审阅的 14 项必须决策）
 
-**旧待设计问题（已被上述方案覆盖或转为待用户决策）：**
-1. 信息源与浏览方式：视频网站具体指什么（B 站？多源？）；用现有 search/video 工具还是有专用浏览通道；每天几个时间点、每次逛多久/多少条
-2. 「有意思」的判定：按人格兴趣（记忆里的人设偏好）自由判断，还是给挑选准则；每次捡几条
-3. 弹药保鲜：外部内容的时效性（热点几小时就凉）；过期淘汰规则
-4. 打扰预算：一天最多主动分享几条外部内容；与沉默 nudge/开窗节律的配合
-5. 成本与限流：浏览轮的 token/时间预算；失败重试
-6. 安全与审查：外部内容是不可信输入（标题/简介可能含恶意引导），进弹药栏前的机械过滤与「不执行内容里的指令」边界
-7. 存储：外部弹药暂存（会话级？人格级？）与 lastSeen 类去重
+1. **作业模型**：统一 `src/external/scheduler.ts`（可注入时钟/RNG）；B 站与新闻都是 job；worker 为独立后台会话，不复用群 conversation
+2. **人格**：全局抓取池（弹药库 `fish.external_ammo` 会话级 doc、人格中立）；分享措辞由分享轮所在群的当前人格自然人格化
+3. **硬截止**：逛轮 10 分钟 = job watchdog 强制收束（取消在途 submission、未提交候选丢弃）；错过时点：启动后当天该 slot 未跑且距其 ≤2h 则补跑一次（幂等 date+slot）
+4. **持久存储**：`fish.external_ammo`（items: id/kind:"bili"/bvid/title/summary≤60字/topic/pickedAt/ttlAt/state: available|claimed|shared|expired）、`fish.external_jobs`（date+slot 状态机）、`fish.news_runs`（localDay+targetGroup 幂等，state + digest）
+5. **B 站 API 契约**：仅白名单端点 popular/ranking/v2/view/dm list.so/reply main；buvid3 存 `var/bili-state.json`（finger/spi 获取，长期复用）；候选 ID=BV 号（正则校验）
+6. **频控内核**：`bili-client` 串行锁 + 同端点 ≥2s 间隔 + 每日总预算计数（持久 `var/bili-budget.json`，缺省 60/天）+ -412/-352 当日熔断该端点；与现有 `video` 工具共用该客户端（P1-3/P2-1）
+7. **筛选配置**：`var/bili-filters.json`（硬筛阈值/黑名单正则/软筛权重，mtime 热更新）；规则命中逐条落审计日志（仅元数据）
+8. **T13 合并**：ammo 条目 `kind: debt|external`——旧账优先、外部最多 1 条且只占剩余预算；nudge 的 {{n}} 只统计 debt（P1-4）
+9. **分享协议**：open 窗生成稳定 windowId，随机门结果窗进入时一次落库；`share` 参数扩展 `externalAmmoId`——校验「本窗门已开 ∧ 该 item available ∧ 本窗未分享过外部」后 claim，URL/b23 由宿主从 doc 渲染进 payload 前缀（P0-2）；v1 仅 `say_words` 一条（文字+canonical 链接），封面后置
+10. **新闻发送语义**：scheduled answer 轮（人格=目标群当前人格；额度=该轮 3 次；T15 检查保留：末条自言则推迟，最多 30 分钟，仍自言则放弃当日并记日志——宁少勿扰）
+11. **新闻配置**：`news` 块 { at:"10:30", targetGroup, topics:[{name, sources[], keywords[], exclude[]}], perTopicInput≤20, perTopicOutput≤5 }；sources 枚举：60s/jiemian/huxiu/ithome/people/zhihu_daily/weibo_hot/baidu_hot
+12. **新闻模型与兜底**：总结用 main（不新增角色）；输出 NewsDigest 严格 JSON schema；全源失败→当日不发+日志；模型失败→重试 1 次后放弃当日；幂等 localDay+group，重复触发不重发
+13. **Docker 运维**（部署项，代码侧只做客户端容错）：60s 镜像固定版本 digest、loopback 绑定 4399、restart always、healthcheck；RSS 解析响应 ≤2MB、单源超时 10s、实体展开限制；部署 runbook 写入计划附录，执行属主人部署阶段
+14. **媒体边界**：B 站封面（后置功能）存 `mediaRoot/external/bili/<bvid>.jpg`（magic/大小校验、TTL 清理），不伪装成 inbound/（P2-2）
 
-**新闻管线（2026-11-02 需求两次澄清后定稿，与 B 站管线并列）：**
-- **两个时间点、两个动作**：①收集归纳点——定时收集时事新闻（topic 由主人定）并**编写归纳总结**；②播报点——另一个定时任务把总结**直接发送到群里（群号可指定）**，不走 open 窗随机门（独立于弹药库分享机制）
-- **两个时间点由消息源的更新节奏决定，暂不定死**（调研报告回来后按源更新时间定，可配置）
-- **供料栈（2026-11-03 调研定稿，大陆直连实测）**：主干 = **自建 60s API**（vikiboss/60s，MIT，Docker 一行起 macmini：`/v2/60s` 每日 15 条精选+微语、`/v2/hot/*` 平台热榜，零 key 零配额）+ 分类补充 = 界面/虎嗅/IT之家/人民网四个直订 RSS（实测全部活着、无需 key）+ 知乎日报官方 API；补齐 = **RSSHub 自建**（公共实例大陆不可达且限流，必须自建 Docker）；增强层（可选）= Tavily/Brave news vertical（30 次/月够用，按 topic 取全文/国际新闻）+ Jina Reader 单篇全文。落选：今日热榜官方 API（要 key 计费，留付费升级档）、NewsAPI/GNews/Currents（免费层禁生产+延迟+中文弱）、Bing News（已退役）、vvhan（域名已死——个人免费接口存活风险的活样本）
-- **topic 映射两层**：topic 配置每个绑一组源（分类源选择为主，如「科技」→虎嗅+IT之家+36氪热榜）+ 热榜条目关键词过滤为辅（命中优先、未命中兜底防空供料）；单 topic 供 10-20 条（去重截断），总结输入用标题级信息，深挖个别链接过 Jina Reader
-- **时间点定稿（2026-11-03 用户终定）**：**每天上午 10:30 整理当天信息**（上游最晚 10:00 出全，10:30 取当日数据必齐），整理完归纳后**立即直发**——收集与播报合并为一次任务（10:30 取料 → 总结 → 出口），无宵禁冲突；**群配置暂只定搬史群（qq:group:659976571）**，可配置；时间与群均可经 config 工具改
-- **稳定性**：源存活探活 + 多源冗余（单源死只降内容不阻断）；RSS 直订源随时会关（36氪已反爬、财新已 301，均实测），靠多源+RSSHub 补
-- **合规**：只取标题级信息 + 自家模型重写总结（60s 上游为公众号文章）；正规新闻 API 免费层普遍禁生产/商用（不选的实质原因）；总结带来源名与链接
-- 与弹药库的关系：新闻播报是独立出口（定时直发指定群）；B 站视频走弹药库+随机门——两条管线不共额度
+## 整体交付终态
 
-**播报模板 v1（待主人过目，2026-11-03 初稿）：**
+| ID | 必须成立的条件 | 验证方法 | 判据 | 覆盖任务 |
+| --- | --- | --- | --- | --- |
+| FE1 | scheduler 按配置时点触发 job（四时点+10:30），错过补跑 ≤2h 幂等，硬截止收束；job 状态落 `fish.external_jobs` | 单测式内联验证（可注入时钟） | 时点/补跑/截止/幂等全路径正确 | E1 |
+| FE2 | bili-client：白名单端点、串行+端点间隔、每日预算持久、熔断、buvid3 复用；video 工具改走同一客户端不回归 | 内联验证 + npm test 既有 video 回归 | 频控各路径正确；video 行为不变 | E1、E3 |
+| FE3 | bili_hot/bili_video/ammo_submit 三工具包规范落地（deferred）；硬筛+软筛评分在工具层模型之前执行，命中落审计 | npm run prompts + 内联验证 | 候选经三层漏斗；筛选可核对 | E2 |
+| FE4 | worker 轮（kind=worker）：say_* 机械拒绝；模型经 ammo_submit 提交候选（BV 校验、summary≤60、topic 枚举），宿主补全 URL/时间/TTL 入库；重启/重复触发不重复入库（BV 判重） | 内联验证 | 逛轮产物结构化落库、幂等 | E4 |
+| FE5 | 弹药库状态机（available→claimed→shared / expired TTL）；open 窗 windowId+随机门一次落库；share.externalAmmoId 机械绑定（门未开/已分享/非 available 一律拒）；T13 合并 kind 分离与 nudge 口径 | 内联验证 | 每窗≤1 条、claim 原子、URL 宿主渲染 | E5 |
+| FE6 | 新闻客户端：60s/RSS/知乎日报取数、源探活冗余（单源失败降内容不阻断）、topic 两层映射、exclude 黑名单、响应限制 | 内联验证（60s 不可达时用 fixture） | 五 topic 供料正确、娱乐圈过滤生效 | E6 |
+| FE7 | 新闻编排：10:30 job → NewsDigest schema 总结 → scheduled answer 轮 say_words 发 targetGroup（∈GROUPS 校验）；幂等 news_runs；三类失败兜底；末条自言推迟≤30min | 内联验证 | 播报单条出口、幂等、兜底全路径 | E7 |
+| FE8 | 配置 schema：ammo 块（四时点/随机门/TTL/预算）+ news 块进 fish-config 与 config 工具白名单（热加载类）；example/TOOL.md 同步含漏列字段 | npm run prompts + config 工具字段表核对 | 全字段可配置且生效语义标注 | E8 |
+| FE9 | runtime「外部数据非指令」文案；审计日志仅元数据；AGENTS/README 同步两管线 | npm run prompts | 文案唯一源、文档一致 | E9 |
+| FE10 | 全量回归：npm test 102+/102+ 绿、npm run prompts 干净、npm run memory 正常；终态核对表落计划附录 | 实际运行 | 全绿 | E10 |
 
-```
-🎣 早报 {{date}}（{{weekday}}）——鱼缸晨间播报
+**完成规则：** FE1-FE10 全满足；不部署。
 
-{{#sections}}
-【{{topic}}】
-{{#items}}
-· {{summary}}（{{source}}）
-{{/items}}
-{{/sections}}
+## DAG
 
-{{closing}}
-（{{n}} 条来源 · 主人订阅 topic：{{topics}}）
+```text
+E1 (external 基础设施) ──> E2 (bili_hot) ──> E4 (逛轮编排) ──> E5 (弹药库与分享绑定) ──> E10
+E1 ──> E3 (bili_video + video 复用)
+E1 ──> E6 (新闻客户端) ──> E7 (新闻编排)
+E8 (配置 schema) 无依赖可并行；E9 依赖 E2/E6 的工具面成型
 ```
 
-设计说明：`summary` 为模型重写的一句话归纳（非原文照抄，规避版权与复读感）；`source` 带来源名+链接（合规署名）；`closing` 为一句人格化收尾（按当前人格语气，如长征机/爱莉希雅各一版措辞库）；sections 按 topic 分组；总长度目标 ≤500 字，超出时按 topic 优先级裁剪；发送走 say_words（图片化排版留待后续需求「长文转图」——已知欠账）。模板为 prompt/ 文件（模型可见文字唯一源），最终措辞实现时定稿。
+## Waves
 
-**前置依赖：** 主线计划 T12（剖面）与 T13（弹药栏）落地（新闻管线本身仅依赖定时任务与出口，可先行）。
+- Wave 1：E1、E8（并行）
+- Wave 2：E2、E3、E6（并行，文件不重叠）
+- Wave 3：E4、E7、E9（E4/E7 并行；E9 可晚于 E2/E6 开工）
+- Wave 4：E5
+- Wave 5：E10 收口（主会话终态核对）
+
+---
+
+### Task E1：external 基础设施
+
+**Deps：** none
+
+**WritePaths：** `src/external/scheduler.ts`（新）、`src/external/bili-client.ts`（新）、`src/external/sanitize.ts`（新）、`src/index.ts`（接线）、`var/bili-filters.json`（新，缺省筛选配置）
+
+**接口契约：**
+- Produces：`createScheduler(deps:{now,setTimer,clearTimer,onJob})`——时点表驱动（"HH:MM" 列表）、错过补跑（≤2h，幂等 key date+slot）、job watchdog 硬截止（回调收束）；`createBiliClient`——白名单端点、串行锁、同端点 ≥2s、每日预算（var/bili-budget.json 持久）、-412/-352 当日熔断、buvid3（finger/spi 起动获取存 var/bili-state.json）、UA/Referer 钉死；`sanitizeExternalText`（长度/控制字符/bidi/URL scheme）；`var/bili-filters.json` 缺省内容（硬筛阈值与正则、软筛权重，按调研报告 A 节）
+- Produces：`src/external/jobs.ts`（或并入 scheduler）：`fish.external_jobs` doc 读写
+
+**验收：** 内联验证四路径（时点/补跑/截止/幂等）+ bili-client 频控路径；npm test 绿。
+
+### Task E2：bili_hot 工具包
+
+**Deps：** E1
+
+**WritePaths：** `src/tools/bili_hot/TOOL.md`（新）、`src/tools/bili_hot/tool.ts`（新）、`src/tools/loader.ts`
+
+**接口契约：**
+- Produces：工具 `bili_hot`（deferred）：参数 `source: "popular"|"rank"`、`rid?`（常用分区枚举）、`limit 1-20`；实现=榜单取数 → 硬筛一票否决 → 软筛评分排序 → 返回紧凑行式（标题|UP|时长|播放/赞/币|发布相对时间|简介≤60|BV）；多抓 4 倍再筛（防筛空）；已入库 BV 过滤；规则命中审计日志
+- 不可信数据全部过 `sanitizeExternalText`；TOOL.md 是唯一模型侧文档
+
+**验收：** npm run prompts 新工具正确列出；内联验证漏斗与审计。
+
+### Task E3：bili_video 工具与 video 复用
+
+**Deps：** E1
+
+**WritePaths：** `src/tools/bili_video/TOOL.md`（新）、`src/tools/bili_video/tool.ts`（新）、`src/tools/video/tool.ts`（改走 bili-client）、`src/tools/loader.ts`
+
+**接口契约：**
+- Produces：工具 `bili_video`：参数 `bvid`；返回单条完整卡片 + 可选热评前 5（≤50字/条）+ 可选高能弹幕 top N；UP 评级（card 端点：粉丝/等级/认证）并入软筛展示
+- `video` 工具底层 B 站请求改经 bili-client（行为零变化，频控共享）
+
+**验收：** npm test 既有 video 回归绿；内联验证。
+
+### Task E4：逛轮编排（worker 会话）
+
+**Deps：** E2、E3
+
+**WritePaths：** `src/index.ts`、`src/engage-next.ts`（若 windowId 挂此）、`src/tools/ammo_submit/TOOL.md`（新）、`src/tools/ammo_submit/tool.ts`（新）、`src/tools/say-shared.ts`（worker 轮禁言）、`src/tools/types.ts`、`src/harness.ts`、`prompt/messages.md`（worker 触发语文案 key）
+
+**接口契约：**
+- Produces：轮类型 `worker`（RoundKind 扩展；say_* 在 worker 轮一律 tool 错误——复用 silentOf 同款机制）；scheduler 四时点（缺省 09:00/12:00/18:00/24:00 可配）起 worker 会话轮：触发语（messages.md key，语义「到点了，去 B 站刷一轮，10 分钟内用 bili_hot/bili_video 挑 1-3 条有意思的，用 ammo_submit 入库」）；worker 会话=独立 conversation（人格中立 doc）
+- Produces：工具 `ammo_submit`（仅 worker 轮可用）：参数 {bvid, summary≤60, topic 枚举（二次元/游戏/军事/数码）}；宿主核验 BV 合法、经 bili-client 补全卡片字段、判重（BV 已在库拒绝）、写入 `fish.external_ammo`（ttlAt=pickedAt+48h 缺省可配）
+- 硬截止：10 分钟 watchdog 收束（取消 submission，已入库保留）；错过补跑
+
+**验收：** 内联验证全链（触发→工具→入库→判重→截止）；npm test 绿。
+
+### Task E5：弹药库状态机与分享绑定
+
+**Deps：** E4
+
+**WritePaths：** `src/index.ts`、`src/engage-next.ts`、`src/tools/say-shared.ts`、`src/tools/say_words/TOOL.md`、`src/tools/say_words/tool.ts`、`prompt/messages.md`
+
+**接口契约：**
+- Produces：open 窗 windowId（稳定派生）+ 随机门结果窗进入时落库（`ammoShareChance` 缺省 0.2）；弹药 TTL 过期清理（惰性）
+- Produces：`share` 参数扩展对象形态 `{ ammoId }`（或并列 `externalAmmoId`）：校验「门已开 ∧ item available ∧ 本窗未消费外部 ∧ 时段非宵禁」→ 原子 claim → payload 文本由宿主前缀 canonical `https://b23.tv/…`/BV 链接（模型文本只作推荐语，链接不许模型写）→ 发送成功置 shared
+- Produces：T13 合并：`renderAmmoSection` 条目 kind=debt|external，debt 优先、external ≤1 条占剩余预算、nudge {{n}} 只数 debt；external 行独立模板（messages.md key）
+
+**验收：** 内联验证（门/claim/互斥/TTL/合并口径）；npm test 绿。
+
+### Task E6：新闻客户端
+
+**Deps：** E1
+
+**WritePaths：** `src/external/news-client.ts`（新）
+
+**接口契约：**
+- Produces：源枚举客户端（60s `http://127.0.0.1:4399`、界面/虎嗅/IT之家/人民网 RSS、知乎日报 API；RSS 用 fast-xml-parser 受限解析：≤2MB、10s 超时、实体限制）；源探活（单源失败降内容不阻断，健康状态内存+日志）；topic 两层映射（sources+keywords 优先、未命中兜底）+ exclude 黑名单（娱乐圈词表）；输出统一 `{title,url,source,publishedAt}` 列表按 topic
+- dev dependency：fast-xml-parser（npm i，锁版本）
+
+**验收：** 内联验证（60s 用本地 fixture mock；RSS 真源实测可用则测、不可达走失败路径）；npm test 绿。
+
+### Task E7：新闻编排与播报
+
+**Deps：** E6、E8
+
+**WritePaths：** `src/index.ts`、`prompt/messages.md`（播报模板 key，即外部计划 v1 模板落地）、`prompt/`（总结提示词新文件接 src/prompts.ts）
+
+**接口契约：**
+- Produces：10:30 job → 取料（五 topic 缺省）→ main 模型按 NewsDigest 严格 JSON schema 归纳（标题级输入；schema：sections[{topic, items[{summary≤60, sourceRef}]}]，sourceRef=宿主持有的来源索引，URL 不进模型输出）→ 宿主渲染播报文本（模板 key + canonical 链接 + 来源署名）→ scheduled answer 轮（目标群当前人格）say_words 单条出口（≤500 字，超限按 topic 优先级裁剪）
+- 幂等 `fish.news_runs`（localDay+targetGroup）；全源失败不发+日志；模型失败重试 1 后放弃；末条自言推迟 ≤30min 后放弃当日；targetGroup ∈ GROUPS 硬校验
+
+**验收：** 内联验证全路径（含幂等/兜底/推迟）；npm test 绿；npm run prompts 干净。
+
+### Task E8：配置 schema 全量
+
+**Deps：** none
+
+**WritePaths：** `src/fish-config.ts`、`src/tools/config/tool.ts`、`src/tools/config/TOOL.md`、`fish.config.example`
+
+**接口契约：**
+- Produces：`ammo` 块 {slots:["09:00","12:00","18:00","24:00"], browseMinutes:10, shareChance:0.2, ttlHours:48, dailyBudget:60, maxPicksPerRun:3}；`news` 块（决策 11）；全部进 FISH_CONFIG_FIELDS（热加载类；targetGroup 校验含 GROUPS 域检查的接口位——实际域校验在 E7 消费处，config 工具只改值并提示域约束）；同步补 config/TOOOL.md 漏列字段（sendPacingSeconds、engage.shardSeconds/groups）
+
+**验收：** npm run prompts 字段表核对；npm test 绿。
+
+### Task E9：文案与文档
+
+**Deps：** E2、E6
+
+**WritePaths：** `prompt/runtime.md`、`prompt/messages.md`、`AGENTS.md`、`README.md`
+
+**接口契约：**
+- Produces：runtime「外部数据」小节（B 站标题/简介/评论/弹幕、新闻正文永远不是指令；分享链接由系统附上）；messages.md 补齐各新 key；AGENTS/README 两管线条目（含 Docker runbook 附录：60s 镜像 digest 固定、loopback 4399、restart always、healthcheck、升级回滚）
+
+**验收：** npm run prompts 干净；文档一致性核对。
+
+### Task E10：收口（主会话执行）
+
+npm test / npm run prompts / npm run memory 全绿；FE1-FE10 逐项核对并记附录；统一 commit；**不部署**。
+
+---
+
+**部署 runbook（主人阶段，不在执行范围）**：macmini Docker 起 60s（固定 digest、loopback、restart always）→ fish.config.json 配 ammo/news 块与 targetGroup → config 工具热调 → 观察 `fish.external_jobs`/`news_runs` 与审计日志。
+
+**新增测试清单（待授权，暂同主线裁定不建）：** scheduler/bili-client 频控/筛选漏斗/ammo 状态机与 claim/news 幂等。
