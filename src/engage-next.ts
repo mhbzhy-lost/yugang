@@ -23,8 +23,15 @@
  * （忙则丢弃并留日志，宁少勿答）；热切换离开 next / stop 同样清掉。@ 消息不走 shard，
  * 仍由 debounce 的 burst 即时路径提交（answer 轮）。
  *
+ * 沉默递进（T8）：宿主在 ambient/injection 轮 settle 时发现出口数 >0 就调 noteExit，
+ * 状态机只给当前 open 窗记一笔「本窗开过口」；关窗时结算——开过口则连续零出口计数
+ * 清零，全程零出口则 +1。仅统计 open 窗：@ 轮/私聊不开口上报，关窗后的残轮 settle
+ * 也找不到 open 窗，一律不计不清。计数供宿主定 nudge 档位（达 silenceThreshold 尾部
+ * 追加 nudge 文案，2×阈值另放宽积压窗口），状态机本身不读阈值配置。
+ *
  * 相位、lastCloseSeq 与 shard 收集器都只活在内存里：重启回到 closed 从零计时，与
- * debounce 的 pending 同一个取舍——宁可少说一句，不补陈年旧话。
+ * debounce 的 pending 同一个取舍——宁可少说一句，不补陈年旧话。沉默计数同生命周期，
+ * 热切换离开 next / stop 清相位时一并归零。
  */
 import type { EngagementMode } from "./fish-config.ts";
 
@@ -99,6 +106,14 @@ export interface EngageNext {
    * closed / 未跟踪 / 未接 onShard 时返回 false（宿主丢弃并留日志，宁少勿答）。
    */
   collectShard(chatKey: string, message: EngageShardItem): boolean;
+  /**
+   * 零出口观测上报（T8）：宿主在某 ambient/injection 轮 settle 时发现出口数 >0 就调
+   * 它，状态机给该群当前 open 窗记一笔「本窗开过口」（关窗时据此清零/累加沉默计数）。
+   * 仅 open 窗记账：@ 轮/私聊不报，closed / 未跟踪（关窗后的残轮）不计不清。
+   */
+  noteExit(chatKey: string): void;
+  /** 该群当前连续全程零出口的 open 窗数（T8 沉默计数，宿主据此定 nudge 档位）；未跟踪 = 0。 */
+  silenceOf(chatKey: string): number;
 }
 
 interface GroupPhase {
@@ -108,6 +123,10 @@ interface GroupPhase {
   lastCloseSeq?: number;
   /** open 态的 shard 收集器：待提交消息 + 自续定时器；关窗 / 热切换时清掉。 */
   shard?: { messages: EngageShardItem[]; timer?: EngageTimer };
+  /** 连续全程零出口的 open 窗数（T8）：窗内有 ambient/injection 轮开口即清零。 */
+  silentWindows: number;
+  /** 本 open 窗内是否已有 ambient/injection 轮开口（settle 观测，关窗时结算归位）。 */
+  spokeInWindow: boolean;
 }
 
 export function createEngageNext(deps: EngageNextDeps): EngageNext {
@@ -190,12 +209,24 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
       flushShard(chatKey, state, true);
       clearShard(state);
     }
+    // T8 沉默结算：本窗有 ambient/injection 轮开口（settle 观测）→ 计数清零；
+    // 全程零出口 → +1。关窗后的残轮 settle 找不到 open 窗，不影响结算。
+    if (state.spokeInWindow) {
+      if (state.silentWindows > 0) deps.log?.(`搭话沉默清零 ${chatKey}（本窗有开口）`);
+      state.silentWindows = 0;
+    } else {
+      state.silentWindows += 1;
+      deps.log?.(`搭话沉默 ${chatKey}：连续 ${state.silentWindows} 窗零出口`);
+    }
+    state.spokeInWindow = false;
     fire(chatKey, "closed", []);
   };
 
   const enterOpen = (chatKey: string, state: GroupPhase, at: number): void => {
     state.phase = "open";
     state.phaseSince = at;
+    // 新窗从零观测开口（上一窗已在关窗时结算）；沉默计数跨窗保留，开口才清零
+    state.spokeInWindow = false;
     // 忙（在途轮 / 换页 / 收图）时放弃注入（宁少勿答）；backlogOf 由宿主提供
     const backlog = deps.busy(chatKey) ? [] : (deps.backlogOf?.(chatKey, state.lastCloseSeq) ?? []);
     // open 进入即启动分片计时：free_pass 消息从这一刻起逐拍合并提交
@@ -219,7 +250,7 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
       let state = phases.get(chatKey);
       if (!state) {
         // 初次进入（start / 热切换回 next）：closed 从零计时，基线懒定 recent 末条
-        state = { phase: "closed", phaseSince: at, lastCloseSeq: lastSeqOf(deps.recentOf(chatKey)) };
+        state = { phase: "closed", phaseSince: at, lastCloseSeq: lastSeqOf(deps.recentOf(chatKey)), silentWindows: 0, spokeInWindow: false };
         phases.set(chatKey, state);
         deps.log?.(`搭话开窗 next 启动 ${chatKey}：closed 从零计时`);
         continue;
@@ -273,6 +304,15 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
       if (!state || state.phase !== "open") return false;
       (state.shard ??= { messages: [] }).messages.push(message);
       return true;
+    },
+    noteExit(chatKey) {
+      const state = phases.get(chatKey);
+      // 仅 open 窗记账：@ 轮/私聊本就不该报；关窗后的残轮 settle 找不到 open 窗不计不清
+      if (!state || state.phase !== "open") return;
+      state.spokeInWindow = true;
+    },
+    silenceOf(chatKey) {
+      return phases.get(chatKey)?.silentWindows ?? 0;
     },
   };
 }

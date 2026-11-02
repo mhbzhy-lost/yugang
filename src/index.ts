@@ -949,6 +949,11 @@ async function submitRound(input: {
         // 导入清单只属于这一轮：成功、失败、抛错都在这里清掉
         clearMemeImportRound(String(submission.id));
         // 出口计数同样只活这一轮：done、没答上来、wait 抛错都不残留
+        // T8 沉默递进的观测点：settle 时出口数 >0 且属 ambient/injection 轮 = 本窗开过口，
+        // 上报状态机（关窗时据此清零/累加）；@ 轮（answer）与私聊不报，不计不清。
+        // sayCalled 直到本 finally 才删，读数就是本轮完整的出口数（含全部重试尝试）
+        const exits = sayCalled.get(String(submission.id)) ?? 0;
+        if (exits > 0 && (roundKind === "ambient" || roundKind === "injection")) engageNext.noteExit(chatKey);
         sayCalled.delete(String(submission.id));
         // 机械提示的会话映射与轮内去重集合同样只活这一轮
         roundConv.delete(String(submission.id));
@@ -1158,8 +1163,9 @@ function renderEngageLines(chatKey: string, items: readonly EngageBacklogItem[])
 /**
  * 开窗积压查询（injection 轮的输入）：窗口 = (lastCloseSeq, 开窗时刻] 的 recent 流水，
  * 排除 pending burst 内消息（它们归 @ 轮的整组注入）、过滤 `/` 指令与纯 GIF 收图消息，
- * 超 windowSize 截最近 N。lastSeenByModel 去重在提交侧做（键是会话，得先解出会话）。
- */
+ * 超上限截最近 N。lastSeenByModel 去重在提交侧做（键是会话，得先解出会话）。
+ * 上限热读：常态 = windowSize；沉默递进达 2×阈值（T8）的本窗放宽到 windowRelaxCap
+ *（受 recent 流水上限 max(30, windowRelaxCap) 兑底，T2 已提；开口清零后恢复常态）。 */
 function engageBacklogOf(chatKey: string, afterSeq: number | undefined): readonly EngageBacklogItem[] {
   if (afterSeq === undefined) return [];
   // 旧流水没有序号：宁少勿答，不注入
@@ -1171,11 +1177,29 @@ function engageBacklogOf(chatKey: string, afterSeq: number | undefined): readonl
       if (message.arrivalSeq !== undefined) pendingSeqs.add(message.arrivalSeq);
     }
   }
+  const cap = engageNudgeLevel(chatKey) === 2
+    ? fishConfig().config.engage.windowRelaxCap
+    : fishConfig().config.engage.windowSize;
   return (recent.get(chatKey) ?? [])
     .filter((m) => m.arrivalSeq !== undefined && m.arrivalSeq > afterSeq)
     .filter((m) => !((m.messageId !== undefined && pendingIds.has(String(m.messageId))) || (m.arrivalSeq !== undefined && pendingSeqs.has(m.arrivalSeq))))
     .filter((m) => !m.text.startsWith("/") && m.mediaOnly !== "gif")
-    .slice(-fishConfig().config.engage.windowSize);
+    .slice(-cap);
+}
+
+/**
+ * 沉默递进档位（T8，F11）：连续全程零出口的 open 窗数（engageNext 计数，窗内有
+ * ambient/injection 开口即清零）达 silenceThreshold → 1（下窗注入尾部追加 nudge_1，
+ * 积压为空时改提 nudge-only 轮）；达 2×阈值 → 2（改用 nudge_2，且该窗积压窗口放宽
+ * windowRelaxCap）；否则 0。阈值每窗现读配置（mtime 热生效）；@ 轮/私聊不计不清，
+ * 计数口径见 src/engage-next.ts。
+ */
+function engageNudgeLevel(chatKey: string): 0 | 1 | 2 {
+  const { silenceThreshold } = fishConfig().config.engage;
+  const count = engageNext.silenceOf(chatKey);
+  if (count >= silenceThreshold * 2) return 2;
+  if (count >= silenceThreshold) return 1;
+  return 0;
 }
 
 /**
@@ -1184,14 +1208,48 @@ function engageBacklogOf(chatKey: string, afterSeq: number | undefined): readonl
  * （宁少勿答，积压不重放）；注入后已读标记推进到 recent 末条（决策 3：之后归 shard，
  * 不重复注入）。entry kind = fish.engage_tick（不写 fish.inbound、不进摘要与抽取，
  * 但计入换页阈值）；不附 inline 图；quoteIds = 本轮注入的积压消息集。
+ * 沉默递进（T8）：连续零出口达阈值时注入尾部追加 nudge 文案（2×阈值换 nudge_2，
+ * 且本窗积压窗口放宽到 windowRelaxCap，见 engageBacklogOf）；积压为空但档位到位
+ * 时改提 nudge-only 轮（header+footer+nudge，无行，同管线同遇忙放弃）。
  */
 async function submitInjectionRound(chatKey: string, backlog: readonly EngageBacklogItem[]): Promise<void> {
   console.log(`[鱼缸] ${chatKey} 携话窗口 → open（积压 ${backlog.length} 条）`);
-  if (backlog.length === 0) return; // 无积压不注入
+  // 沉默递进档位（T8）：每窗现读，进入即定（窗内计数不变动，开口要等关窗才结算）；
+  // 文案档位用直接下标取（test/prompts.test.ts 按 messages["key"] 逐字扫 src，间接拼 key 不算引用）
+  const nudge = engageNudgeLevel(chatKey);
+  const nudgeText = nudge === 2
+    ? fish.prompts.messages["ctx_engage_nudge_2"]
+    : fish.prompts.messages["ctx_engage_nudge_1"];
+  if (backlog.length === 0) {
+    // 无积压不注入；但沉默递进到位时改提 nudge-only 轮（header+footer+nudge，无行）：
+    // 同走 injection 管线（fish.engage_tick、非必答、无 salvage、无 quoteIds）；
+    // 遇忙放弃（宁少勿答，nudge 不重试不补发，下窗档位还在自然重试）
+    if (nudge === 0) return;
+    const conv = await conversationFor(chatKey);
+    if (conversationBusy(conv.id)) {
+      console.log(`[鱼缸] ${chatKey} nudge 注入放弃：忙（宁少勿答）`);
+      return;
+    }
+    const content = [
+      renderTemplate(fish.prompts.messages["ctx_engage_header"] ?? "", { count: "0" }),
+      fish.prompts.messages["ctx_engage_footer"] ?? "",
+      nudgeText ?? "",
+    ].filter((line) => line.length > 0).join("\n");
+    console.log(`[鱼缸] ${chatKey} nudge-only 轮提交（沉默递进档位 ${nudge}）`);
+    await submitRound({
+      chatKey,
+      conv,
+      content,
+      trigger: { mentionsBot: false, kind: "injection" },
+      reply: false,
+      entryKind: MEMORY_ENGAGE_KIND,
+    });
+    return;
+  }
   const conv = await conversationFor(chatKey);
   // 状态机 busy 检查后的双保险：这中间起了轮 / 换页 / 收图就放弃（宁少勿答）
   if (conversationBusy(conv.id)) {
-    console.log(`[鱼缸] ${chatKey} 开窗注入放弃：会话忙（宁少勿答）`);
+    console.log(`[鱼缸] ${chatKey} 注入放弃：忙（宁少勿答）`);
     return;
   }
   // 已读去重（决策 20）：剔除已进过模型的部分（重启后标记为空＝全未读，不会饿死注入）
@@ -1203,6 +1261,8 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
     fish.prompts.messages["ctx_engage_footer"] ?? "",
     // 每次注入都携带（决策 20，不限于发生截减时）：引导结合历史理解这批背景
     fish.prompts.messages["ctx_seen_note"] ?? "",
+    // 沉默递进（T8）：连续零出口达阈值，尾部追加 nudge（2×阈值换更重的 nudge_2）
+    nudge > 0 ? nudgeText ?? "" : "",
   ].filter((line) => line.length > 0).join("\n");
   await submitRound({
     chatKey,
