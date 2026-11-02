@@ -15,6 +15,7 @@ import {
   Harness,
   configure,
   createRegistry,
+  defineDoc,
   defineEntry,
   defineExtension,
   section,
@@ -44,6 +45,7 @@ import {
   newPendingId,
   rejectPending,
   renderMemorySection,
+  summarizeFeedback,
   summarizePatch,
   formatAgeShort,
   MEMORY_CAPS,
@@ -55,6 +57,37 @@ import { memoryKeyOf, peekScope, privateMemoryKeyOf } from "./memory-scope.ts";
 
 /** 群档案作为一条 system 消息放进 transcript，只在建会话时写一次。 */
 export const GroupProfileEntry = defineEntry("fish.group-profile");
+
+/** fish.sentmap 的一条：实际发出的 QQ 消息 id → outbound entry（评价定位链路的唯一事实源）。 */
+export interface SentmapEntry {
+  /** 被评 outbound 条目所在的会话。 */
+  conversationId: string;
+  /** fish.outbound transcript entry 的 id（按 outbox 幂等 key 关联解析）。 */
+  entryId: number;
+  at: number;
+}
+
+export interface SentmapState {
+  version: 1;
+  /** QQ 消息 id（字符串化）→ 映射；30 天滚动清理（drain 写入时顺手淘汰）。 */
+  map: Record<string, SentmapEntry>;
+}
+
+/**
+ * 发送回执映射（/评 指向型定位，决策 11b B2①）：drain 每条实际发出的 QQ 消息
+ * 在此记 sentMessageId → outbound entryId；fish.enqueue 的机械消息（busy/cmd/working
+ * 等）没有 transcript entry，不在此列。部分发送失败只记成功条目。
+ */
+export const SentmapDoc = defineDoc<SentmapState>({
+  kind: "fish.sentmap",
+  version: 1,
+  scope: "session",
+  initial: () => ({ version: 1, map: {} }),
+  checkpointWhen: () => true,
+});
+
+/** emit 的返回值：实际发出的 QQ 消息 id 列表（群文本/图片逐条；void = 无可记录 id，如私聊发送）。 */
+export type SentMessageIds = (number | string)[];
 
 /** 人格名的「默认」哨兵：默认人格的会话键不带后缀，也不另外选扩展。 */
 export const DEFAULT_PERSONA = "默认";
@@ -249,7 +282,7 @@ export interface FishOptions {
   visionModel?: ModelRef;
   /** look / video 视觉描述的兜底模型（models.vision_fallback）；省略 = 无兜底。 */
   visionFallbackModel?: ModelRef;
-  emit: (conversationId: ConversationId, payload: OutboundPayload) => void | Promise<void>;
+  emit: (conversationId: ConversationId, payload: OutboundPayload) => void | SentMessageIds | Promise<void | SentMessageIds>;
   /** 贴表情回应，只带表情编号；目标消息由本轮触发绑定（不取会话级 lastMessageId）。 */
   react: (conversationId: ConversationId, emoji: string, messageId?: number | string) => void | Promise<void>;
   now?: () => number;
@@ -531,6 +564,49 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   const groups = new Map<string, Promise<Conversation>>();
   const sending = new Set<string>();
 
+  /** sentmap 保留窗口：30 天滚动清理（drain 写入时顺手淘汰过期项）。 */
+  const SENTMAP_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+  /** 幂等 key → fish.outbound transcript entry id：outbox 记录与 entry 在同一次提交里落库，
+   *  用 key 关联（fish.enqueue 的机械消息没有 entry，返回 undefined）。 */
+  async function outboundEntryIdOf(conversationId: ConversationId, key: string): Promise<number | undefined> {
+    const conversation = await harness.conversation(conversationId, ctx);
+    if (!conversation) return undefined;
+    const view = await conversation.viewState(ctx);
+    try {
+      let found: number | undefined;
+      for (const entry of view.value.entries) {
+        if (entry.kind === "fish.outbound" && (entry.data as { key?: unknown } | undefined)?.key === key) {
+          found = entry.id as number;
+        }
+      }
+      return found;
+    } finally {
+      view.dispose();
+    }
+  }
+
+  /** drain 后记 sentmap（决策 11b）：每条实际发出的 QQ 消息 id → outbound entryId，30 天滚动
+   *  清理。失败只打日志不阻塞 drain（定位链路宁可少记，不影响发送语义）。 */
+  async function recordSentmap(conversationId: ConversationId, key: string, sentIds: readonly (number | string)[]): Promise<void> {
+    if (sentIds.length === 0) return;
+    try {
+      const entryId = await outboundEntryIdOf(conversationId, key);
+      if (entryId === undefined) return;
+      const at = now();
+      await harness.commit(async (tx) => {
+        const doc = await tx.doc(SentmapDoc);
+        for (const id of sentIds) doc.map[String(id)] = { conversationId: String(conversationId), entryId, at };
+        const cutoff = at - SENTMAP_TTL_MS;
+        for (const [id, value] of Object.entries(doc.map)) {
+          if (value.at < cutoff) delete doc.map[id];
+        }
+      }, ctx);
+    } catch (error) {
+      console.error("[鱼缸] sentmap 记录失败", error instanceof Error ? error.message : error);
+    }
+  }
+
   async function drainConversation(conversationId: ConversationId): Promise<number> {
     let sent = 0;
     for (;;) {
@@ -562,7 +638,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       }, ctx);
 
       try {
-        await options.emit(conversationId, {
+        const result = await options.emit(conversationId, {
           items: head.items,
           ...(head.media === undefined ? {} : { media: head.media }),
           // voice 也要透传：和 quoteId 一样，漏一个字段就等于整条消息丢一半
@@ -577,7 +653,16 @@ export async function openFish(options: FishOptions): Promise<Fish> {
           at: head.at,
           key: head.key,
         });
+        // 发送链记账（T6，/评 定位）：每条实际发出的 QQ 消息写 fish.sentmap
+        await recordSentmap(conversationId, head.key, Array.isArray(result) ? result : []);
       } catch (error) {
+        // 部分发送失败只记成功条目：emit 可能把已发出的 id 挂在错误的 sentIds 上
+        //（onebot.SendFailure 约定），成功记完再沿用既有语义（保留 sending 不重试）。
+        const partial = (error as { sentIds?: unknown }).sentIds;
+        const extra = Array.isArray(partial)
+          ? partial.filter((id): id is number | string => typeof id === "number" || typeof id === "string")
+          : [];
+        if (extra.length > 0) await recordSentmap(conversationId, head.key, extra);
         // 发送异常 = 不确定状态（sendGroup 可能已发出第一条文本和第一条 @）：保留 sending
         // 供诊断，绝不翻回 queued 重试——重试会把可能已送达的内容再发一遍。停止本会话的
         // 后续 drain（不能跳过队首发后面的记录），其余会话不受影响。
@@ -764,7 +849,8 @@ export async function openFish(options: FishOptions): Promise<Fish> {
             persona,
             origin: entry.originChatKey || "-",
             age: formatAgeShort(now() - entry.at),
-            digest: summarizePatch(entry.patch),
+            // 评价类待审（/评）展示关联摘要：哪条（targetSummary）+ 哪天；哪群在 origin 列里
+            digest: entry.feedback ? summarizeFeedback(entry.feedback) : summarizePatch(entry.patch),
           }),
         );
         for (const note of entry.patch.supersede ?? []) {

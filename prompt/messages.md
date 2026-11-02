@@ -92,7 +92,7 @@ cmd_compact_skip: 这个会话没什么可压的
 cmd_personas: 可用人格：{{list}}（用 /切换人格 <名> 切换）
 cmd_switched: 切换完成，当前人格：{{persona}}
 cmd_bad_persona: 没有这个人格：{{persona}}。{{list}}
-cmd_unknown: 不认识的指令：{{cmd}}。可用：/查询可用人格、/切换人格 <名>
+cmd_unknown: 不认识的指令：{{cmd}}。可用：/查询可用人格、/切换人格 <名>、/评 好|差 <文字>（回复鱼的话可指向具体某条）
 
 # /评 指令（主人给鱼的表现打分，评价经审批闸进长期记忆）的回执文案：
 # eval_rejected 是群内非主人的闸前拒绝（私聊非主人静默，不用文案）；

@@ -15,7 +15,7 @@ import type { Models } from "@earendil-works/pi-ai/models";
 import type { Conversation, ConversationId } from "@earendil-works/pi-durable";
 import { renderTemplate, type PromptSet } from "./prompts.ts";
 import { extractMemories } from "./memory-extract.ts";
-import { MEMORY_INBOUND_KIND, type MemoryInbound, type MemoryPatch } from "./memory.ts";
+import { MEMORY_EVAL_KIND, MEMORY_INBOUND_KIND, type EvalEventData, type MemoryInbound, type MemoryPatch } from "./memory.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -232,7 +232,8 @@ export interface RenderedTranscript {
  * 群消息的 entry 有两种 kind：存量 pi.user，以及带结构化原始数据的 fish.inbound
  * （记忆入口）；两者部读 entry.model（宿主拼装的 user message），handoff 行为不变。
  * fish.gif_ingest（收图任务）与 fish.engage_tick（开窗积压 / shard 轮）不是群友原话，
- * 不进摘要（engage_tick 仍计入换页阈值，见 renderCountedEntries）。
+ * 不进摘要（engage_tick 仍计入换页阈值，见 renderCountedEntries）；fish.eval（主人
+ * 评价事件）同被排除（决策 11b，只进抽取白名单）。
  */
 export async function renderTranscript(conversation: Conversation): Promise<RenderedTranscript> {
   const counted = await renderCountedEntries(conversation);
@@ -266,7 +267,9 @@ function entryTimestamp(entry: { kind: string; model?: unknown; data?: unknown }
  * 群消息的 entry 有两种 kind：存量 pi.user，以及带结构化原始数据的 fish.inbound
  * （记忆入口）；两者部读 entry.model（宿主拼装的 user message），handoff 行为不变。
  * fish.gif_ingest（收图任务）不是群友原话，不进摘要；fish.engage_tick（开窗积压 /
- * shard 轮）计入换页阈值（entries），但不写 handoff 文本（决策 4：背景板不进摘要）。
+ * shard 轮）计入换页阈值（entries），但不写 handoff 文本（决策 4：背景板不进摘要）；
+ * fish.eval（主人评价事件，T6）是书记性 entry（无 model 字段、不占模型上下文），
+ * 既不计数也不进 handoff（决策 11b：排除摘要，只进抽取白名单）。
  */
 async function renderCountedEntries(conversation: Conversation): Promise<CountedEntry[]> {
   const view = await conversation.viewState(ctx);
@@ -324,6 +327,8 @@ export interface MemoryTranscript {
  * fish.gif_ingest / fish.engage_tick / 工具结果 / thinking，也不复用上面宿主拼装
  * 文案的 renderTranscript。改动这个白名单前必读 src/memory.ts 的安全边界注释：
  * 混入任何宿主文案都会让「记忆 → 抽取 → 记忆」的自我污染闭环复活。
+ * fish.eval（主人评价事件，T6）是唯一的有意新增：从结构化 data 渲染一行评价事实，
+ * 决策 11b——评价进抽取白名单、排除摘要。
  */
 export async function renderMemoryTranscript(conversation: Conversation): Promise<MemoryTranscript> {
   const view = await conversation.viewState(ctx);
@@ -340,6 +345,14 @@ export async function renderMemoryTranscript(conversation: Conversation): Promis
         const subject = /^\d{4,12}$/.test(userId) ? `qq:${userId}` : `name:${nickname.slice(0, 20)}`;
         if (!subjects.has(subject)) subjects.set(subject, nickname);
         if (text) lines.push(`${nickname}(${subject}): ${text}`);
+      } else if (entry.kind === MEMORY_EVAL_KIND) {
+        const data = entry.data as Partial<EvalEventData> | undefined;
+        const direction = data?.direction === "差" ? "差" : "好";
+        const masterText = typeof data?.masterText === "string" ? data.masterText.trim() : "";
+        const target = typeof data?.targetSummary === "string" ? data.targetSummary.trim() : "";
+        if (masterText || target) {
+          lines.push(`主人评价(${direction}): ${masterText}（针对：${target}${data?.degraded === true ? "，未定位" : ""}）`);
+        }
       } else if (entry.kind === "fish.outbound") {
         const data = entry.data as { items?: string[] } | undefined;
         for (const text of data?.items ?? []) {

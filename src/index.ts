@@ -16,9 +16,9 @@ import { describeModel, loadFishModels } from "./model-config.ts";
 import { cleanupStaleVideoTemps } from "./tools/video/tool.ts";
 import { isLookDisabled } from "./tools/look/tool.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { Conversation, SettledSubmissionRecord } from "@earendil-works/pi-durable";
-import { openFish, type GroupProfile } from "./harness.ts";
-import { OneBot, orderByArrival, type IncomingMessage } from "./qq/onebot.ts";
+import type { Conversation, ConversationId, EntryId, SettledSubmissionRecord } from "@earendil-works/pi-durable";
+import { openFish, SentmapDoc, type GroupProfile } from "./harness.ts";
+import { OneBot, orderByArrival, type IncomingMessage, type OneBotSendFailure } from "./qq/onebot.ts";
 import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "./voice-route.ts";
 import { createGate } from "./qq/gate.ts";
 import { createEngageNext, type EngageBacklogItem, type EngageShardItem } from "./engage-next.ts";
@@ -47,8 +47,9 @@ import { createUsageLedger, sumUsage } from "./usage.ts";
 import { bypassAllowed, splitBypass, BYPASS_RE } from "./bypass.ts";
 import { ChatsDoc, MemoryPendingDoc, WatchDoc } from "./store.ts";
 import { renderTemplate } from "./prompts.ts";
-import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, type MemoryInbound, parseMemoryCommand, publicizePatch } from "./memory.ts";
-import { pushScope, shiftScope } from "./memory-scope.ts";
+import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "./memory.ts";
+import { memoryKeyOf, pushScope, shiftScope } from "./memory-scope.ts";
+import { OutboundEntry, type OutboundPayload } from "./tools/say-shared.ts";
 import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
 
@@ -500,12 +501,21 @@ const fish = await openFish({
     maxChars: fishConfig().config.compact.maxChars,
     limits: () => fishConfig().config.compact,
   },
-  // outbox 里的消息由 fish.drain() 逐条交给这里；幂等表再加一层保险
+  // outbox 里的消息由 fish.drain() 逐条交给这里；幂等表再加一层保险。
+  // 发送链记账（T6，/评 定位）：群文本/图片逐条返回实际 message_id 给 drain 写 fish.sentmap；
+  // 部分失败时已成功 id 挂在错误上上抛（OneBotSendFailure 约定），只记成功条目。
   emit: async (conversationId, payload) => {
     // 幂等键去重：崩溃重放、重启确认重复入队都会撞上同一个 key，只真发一次
     if (sent.has(payload.key)) return;
     const chatKey = chatKeys.get(conversationId);
     if (!chatKey) return;
+
+    const sentIds: (number | string)[] = [];
+    const bail = (error: unknown): never => {
+      const merged = [...sentIds, ...((error as OneBotSendFailure).sentIds ?? [])];
+      if (merged.length > 0 && error instanceof Error) (error as OneBotSendFailure).sentIds = merged;
+      throw error;
+    };
 
     if (chatKey.startsWith("qq:group:")) {
       const groupId = Number(chatKey.slice("qq:group:".length));
@@ -517,16 +527,29 @@ const fish = await openFish({
       const mentions = payload.mentions && payload.mentions.length > 0 ? payload.mentions : undefined;
       // 无字纯图（say_media / say_meme 的出口形态）：文本气泡不发，quote/@ 透传给图片消息
       if (payload.items.length > 0) {
-        await onebot.sendGroup(groupId, payload.items, { quote, ...(mentions ? { mentions } : {}) });
+        try {
+          sentIds.push(...await onebot.sendGroup(groupId, payload.items, { quote, ...(mentions ? { mentions } : {}) }));
+        } catch (error) {
+          bail(error);
+        }
       }
       if (payload.media) {
-        await onebot.sendImageGroup(groupId, resolve(config.mediaRoot, payload.media), {
-          // 有文字时 quote/@ 已经在第一条文本上，图片不重复带
-          ...(payload.items.length === 0 ? { quote, ...(mentions ? { mentions } : {}) } : {}),
-        });
+        try {
+          const imageId = await onebot.sendImageGroup(groupId, resolve(config.mediaRoot, payload.media), {
+            // 有文字时 quote/@ 已经在第一条文本上，图片不重复带
+            ...(payload.items.length === 0 ? { quote, ...(mentions ? { mentions } : {}) } : {}),
+          });
+          if (imageId !== undefined) sentIds.push(imageId);
+        } catch (error) {
+          bail(error);
+        }
       }
       if (payload.voice) {
-        await onebot.sendVoiceGroup(groupId, readFileSync(resolve(config.mediaRoot, payload.voice)));
+        try {
+          await onebot.sendVoiceGroup(groupId, readFileSync(resolve(config.mediaRoot, payload.voice)));
+        } catch (error) {
+          bail(error);
+        }
       }
     } else if (chatKey.startsWith("qq:private:")) {
       const userId = Number(chatKey.slice("qq:private:".length));
@@ -545,6 +568,7 @@ const fish = await openFish({
     for (const text of payload.items) {
       chatlog.append({ at: payload.at, chat: chatKey, from: "fish", text, kind: "out" });
     }
+    return sentIds;
   },
   react: async (conversationId, emoji, messageId) => {
     // 轮级绑定：只贴本轮触发的那条。会话级 lastMessageId 会被后到的消息顶掉，
@@ -1307,18 +1331,277 @@ async function publicizePendingForApproval(id: string): Promise<"ok" | "missing"
   return "ok";
 }
 
+// ── /评 指令（T6，决策 11b）：sentmap 定位、评价包装配与待审管道 ────────────────
+
+/** /评 指令的形状（严格解析，方向必填）：/评 好|差 <文字>；不匹配返回 undefined（落入未知指令）。 */
+function parseEvalCommand(text: string): { direction: "好" | "差"; masterText: string } | undefined {
+  const hit = /^\/评\s+(好|差)\s+([\s\S]+)$/.exec(text.trim());
+  if (!hit) return undefined;
+  return { direction: hit[1] as "好" | "差", masterText: hit[2].trim() };
+}
+
+/** 会话结构化历史的一条：/评 评价包的上下文来源（只取结构化 entry，不从渲染文本反解析）。 */
+interface StructuredTurn {
+  entryId: number;
+  role: "fish" | "member";
+  qq: string;
+  nickname: string;
+  text: string;
+  at?: number;
+}
+
+/** 会话的结构化历史：fish.inbound（群友原话）+ fish.outbound（鱼发的话），文本截 200 字。 */
+async function structuredHistoryOf(conv: Conversation): Promise<StructuredTurn[]> {
+  const view = await conv.viewState(ctx);
+  try {
+    const turns: StructuredTurn[] = [];
+    for (const entry of view.value.entries) {
+      if (entry.kind === MEMORY_INBOUND_KIND) {
+        const data = entry.data as Partial<MemoryInbound> | undefined;
+        const text = typeof data?.text === "string" ? data.text.trim().slice(0, 200) : "";
+        if (!text) continue;
+        turns.push({
+          entryId: entry.id as number,
+          role: "member",
+          qq: typeof data?.userId === "string" ? data.userId : "",
+          nickname: typeof data?.nickname === "string" ? data.nickname : "",
+          text,
+        });
+      } else if (entry.kind === "fish.outbound") {
+        const data = entry.data as Partial<OutboundPayload> | undefined;
+        const text = (data?.items ?? [])
+          .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          .join(" / ")
+          .slice(0, 200);
+        if (!text) continue;
+        turns.push({
+          entryId: entry.id as number,
+          role: "fish",
+          qq: "",
+          nickname: "",
+          text,
+          at: typeof data?.at === "number" ? data.at : undefined,
+        });
+      }
+    }
+    return turns;
+  } finally {
+    view.dispose();
+  }
+}
+
+/** 最近一条 fish.outbound（/评 指向型的降级目标）：从 transcript 尾部倒找。 */
+async function lastOutboundOf(conv: Conversation): Promise<{ entryId: number; data: OutboundPayload } | undefined> {
+  const view = await conv.viewState(ctx);
+  try {
+    for (let index = view.value.entries.length - 1; index >= 0; index--) {
+      const entry = view.value.entries[index];
+      if (entry?.kind === "fish.outbound") {
+        return { entryId: entry.id as number, data: entry.data as OutboundPayload };
+      }
+    }
+    return undefined;
+  } finally {
+    view.dispose();
+  }
+}
+
+/** 当日该会话的 chatlog 总条数（in+out，含鱼）：/评 范围型统计口径之一。 */
+function chatlogCountToday(chatKey: string): number {
+  const file = join(HOME, "chatlog", localDay(Date.now()), `${chatKey.replace(/[^A-Za-z0-9._-]+/g, "_")}.jsonl`);
+  try {
+    return readFileSync(file, "utf8").split("\n").filter((line) => line.trim().length > 0).length;
+  } catch {
+    return 0;
+  }
+}
+
+/** outbound payload → 评价包的被评条目快照。 */
+function outboundSnapshotOf(entryId: number, data: OutboundPayload): EvalTargetSnapshot {
+  return {
+    entryId,
+    at: data.at,
+    items: data.items,
+    ...(data.media !== undefined ? { media: data.media } : {}),
+    ...(data.voice !== undefined ? { voice: data.voice } : {}),
+    ...(data.quoteId !== undefined ? { quoteId: data.quoteId } : {}),
+  };
+}
+
+/**
+ * /评 好|差 <文字>（主人，闸前机械通道）：装配评价包（决策 11b，好差同构）——被评条目
+ * （含引用链）+ 前 20 条会话摘要（结构化快照）+ 涉及群员清单 + 群/人格/日期 + 主人原文，
+ * 写入待审（同待审管道，不直接落库）；评价事件写 fish.eval entry（进抽取白名单、排除摘要）。
+ * 指向型（回复引用鱼的消息）经 fish.sentmap 定位，查不到降级「最近一条 fish.outbound」
+ * 并在回执注明 eval_unknown_target；范围型附当日统计（口径写进回执）。
+ * 回执由 handleCommand 的通用尾部经 fish.enqueue 发出（不产生 outbound entry、不进 transcript）。
+ */
+async function runEvalCommand(
+  conv: Conversation,
+  msg: IncomingMessage,
+  cmd: { direction: "好" | "差"; masterText: string },
+): Promise<string> {
+  const pointed = (msg.replyIds?.length ?? 0) > 0;
+
+  // ① 定位：指向型经 sentmap → outbound entry（tx.entry 按 id 直取，换页后仍可回溯）；
+  //    未命中（引的不是鱼的消息 / 机械消息 / 超出 30 天窗口）降级最近一条并标注
+  let degraded = false;
+  let target: { conv: Conversation; snapshot: EvalTargetSnapshot } | undefined;
+  if (pointed) {
+    const sentmap = await fish.harness.snapshot(SentmapDoc, ctx);
+    const replyId = String(msg.replyIds?.[0] ?? "");
+    const hit = replyId ? sentmap?.map[replyId] : undefined;
+    if (hit) {
+      const entry = await fish.harness.commit(
+        (tx) => tx.entry(OutboundEntry, Number(hit.entryId) as EntryId),
+        ctx,
+      );
+      const targetConv = await fish.harness.conversation(Number(hit.conversationId) as ConversationId, ctx);
+      if (entry && targetConv) target = { conv: targetConv, snapshot: outboundSnapshotOf(Number(hit.entryId), entry.data) };
+    }
+    if (!target) {
+      degraded = true;
+      const last = await lastOutboundOf(conv);
+      if (last) target = { conv, snapshot: outboundSnapshotOf(last.entryId, last.data) };
+    }
+  }
+
+  // ② 评价发生的会话与人格：指向型 = 被评条目所在会话；范围型 = 指令所在会话
+  const evalConv = target?.conv ?? conv;
+  const evalChatKey = chatKeyFor(evalConv.id) ?? msg.chatKey;
+  const persona = memoryKeyOf(mappingKeys.get(String(evalConv.id)) ?? evalChatKey);
+  const at = Date.now();
+  const day = localDay(at);
+
+  // ③ 前 20 条会话摘要（结构化快照）：指向型以被评条目收尾，范围型取最近 20 条
+  const history = await structuredHistoryOf(evalConv);
+  const anchor = target !== undefined
+    ? history.findIndex((turn) => turn.entryId === target!.snapshot.entryId)
+    : -1;
+  const window = target !== undefined && anchor >= 0
+    ? history.slice(Math.max(0, anchor - 19), anchor + 1)
+    : history.slice(-20);
+  const context: FeedbackContextItem[] = window.map((turn) => ({
+    ref: String(turn.entryId),
+    role: turn.role,
+    ...(turn.role === "member" ? { qq: turn.qq, nickname: turn.nickname } : {}),
+    text: turn.text,
+  }));
+
+  // ④ 引用链：鱼当时回的那条原始消息（quoteId 从 recent 流水解析；不可得 = 标注缺失）
+  const quoteTarget = target?.snapshot.quoteId;
+  const quotedFrom = quoteTarget !== undefined
+    ? (() => {
+        const source = (recent.get(baseChatKey(evalChatKey)) ?? [])
+          .find((item) => item.messageId !== undefined && String(item.messageId) === String(quoteTarget));
+        return source
+          ? { qq: String(source.userId), nickname: source.nickname, text: source.text.slice(0, 200) }
+          : undefined;
+      })()
+    : undefined;
+
+  // ⑤ 涉及群员清单（结构化快照，新到旧去重）：上下文成员 + 被引消息作者
+  const members: { qq: string; nickname: string }[] = [];
+  for (const turn of [...window].reverse()) {
+    if (turn.role !== "member" || !turn.qq) continue;
+    if (!members.some((member) => member.qq === turn.qq)) members.push({ qq: turn.qq, nickname: turn.nickname });
+  }
+  if (quotedFrom && !members.some((member) => member.qq === quotedFrom.qq)) {
+    members.push({ qq: quotedFrom.qq, nickname: quotedFrom.nickname });
+  }
+
+  // ⑥ 当日统计（口径写进回执）：本会话（当前人格）今日发言条数 + chatlog 当日总条数
+  const fishToday = history.filter((turn) => turn.role === "fish" && turn.at !== undefined && localDay(turn.at) === day).length;
+  const statsLine = ["今日鱼发言 " + fishToday + " 条（本会话）", "会话流水 " + chatlogCountToday(evalChatKey) + " 条（chatlog 含鱼）"].join(" · ");
+
+  // ⑦ 摘要与事件装配（好差同构，方向只是字段；截断在 buildFeedbackPending 里机械执行）
+  const targetSummary = target
+    ? (target.snapshot.items.find((item) => item.trim().length > 0)?.slice(0, 20)
+      ?? (target.snapshot.media !== undefined ? "[图]" : target.snapshot.voice !== undefined ? "[语音]" : ""))
+    : (pointed ? "最近无可评发言" : "当日整体表现");
+  const event: EvalEventData = {
+    direction: cmd.direction,
+    masterText: cmd.masterText,
+    targetSummary,
+    degraded,
+    ...(target ? { target: target.snapshot } : {}),
+    ...(quotedFrom ? { quotedFrom } : {}),
+    context,
+    members,
+    chatKey: evalChatKey,
+    persona,
+    day,
+  };
+  const pendingEntry = buildFeedbackPending({
+    direction: cmd.direction,
+    targetSummary,
+    statsLine,
+    ...(quotedFrom ? { quotedFrom: `${quotedFrom.nickname}：${quotedFrom.text.slice(0, 24)}` } : {}),
+    context,
+    originChatKey: baseChatKey(evalChatKey),
+    chatKey: evalChatKey,
+    persona,
+    day,
+    masterText: cmd.masterText,
+    at,
+  });
+
+  // ⑧ 同一次提交落两处：待审 patch（跨人格唯一 id，同待审管道，未批准不落库）+ fish.eval
+  // entry（书记性 entry，不进模型上下文；进抽取白名单、排除摘要）。待审淘汰与压缩链路同口径。
+  await fish.harness.commit(async (tx) => {
+    await tx.appendEntry(MemoryEvalEntry, evalConv.id, { data: event });
+    const pending = await tx.doc(MemoryPendingDoc, persona, persona);
+    pending.entries.push(pendingEntry);
+    while (pending.entries.length > MEMORY_PENDING_CAP) {
+      const evicted = pending.entries.shift();
+      if (evicted !== undefined) console.log(`[鱼缸] 记忆待审淘汰 ${evicted.id} ${persona}`);
+    }
+  }, ctx);
+
+  // ⑨ 回执文本（eval_receipt / eval_unknown_target 在 prompt/messages.md）；发送在 handleCommand 尾部
+  const receipt = renderTemplate(fish.prompts.messages["eval_receipt"] ?? "", {
+    direction: cmd.direction === "好" ? "好评" : "差评",
+    type: pointed ? "指向型" : "范围型",
+    target: pointed ? `「${targetSummary}」` : statsLine,
+  });
+  return degraded ? `${receipt}\n${fish.prompts.messages["eval_unknown_target"] ?? ""}` : receipt;
+}
+
 async function handleCommand(msg: IncomingMessage): Promise<string | null> {
-  if (!msg.text.startsWith("/") || String(msg.userId) !== config.master) return null;
+  if (!msg.text.startsWith("/")) return null;
+  const isMaster = String(msg.userId) === config.master;
+  // /评 特判（master 判定之前，T6 决策 11）：群内非主人回 eval_rejected；私聊非主人静默
+  //（返回 null 落回闸前链路，gate 对陌生人私聊零回应，不违反私聊硬约束）
+  if (!isMaster && (msg.text === "/评" || msg.text.startsWith("/评 "))) {
+    if (!msg.chatKey.startsWith("qq:group:")) return null;
+    const conv = await conversationFor(msg.chatKey);
+    const rejected = fish.prompts.messages["eval_rejected"] ?? "";
+    await fish.enqueue(conv.id, {
+      items: [rejected],
+      quote: true,
+      quoteId: msg.messageId,
+      quoteForce: true,
+      at: Date.now(),
+      key: `eval-rej:${msg.messageId ?? Date.now()}`, // 幂等键：崩溃重放不重复发
+    });
+    await drainLoop();
+    return rejected;
+  }
+  if (!isMaster) return null;
   const conv = await conversationFor(msg.chatKey); // 切换前先定回执落点
   const list = fish.personas.join("、");
   const target = /^\/切换人格\s+(\S+)/.exec(msg.text);
   let text: string;
   let media: string | undefined;
   let opener: string | undefined;
+  // /评 指令（主人，闸前机械通道，不进模型）：评价包装配见 runEvalCommand（决策 11b）
+  const evalCommand = parseEvalCommand(msg.text);
   // /记忆 审批（闸前机械通道）：解析在 memory.ts 的 parseMemoryCommand，执行与文案装配
   // 都在 harness 的 memoryCommandReply（群内只回引导语；私聊全局单视图列表/同意/拒绝）
   const memoryCommand = parseMemoryCommand(msg.text);
-  if (memoryCommand) {
+  if (evalCommand) {
+    text = await runEvalCommand(conv, msg, evalCommand);
+  } else if (memoryCommand) {
     // 公共批准先过 AI 脱敏（仅私聊通道；群内 /记忆 无副作用，照旧只回引导语）。
     // 改写成功写回待审后走原审批（回执展示改写后文本）；失败 fail closed，直接回错误文案
     if (memoryCommand.kind === "approve" && memoryCommand.track === "公共" && !msg.chatKey.startsWith("qq:group:")) {

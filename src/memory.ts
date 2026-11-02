@@ -17,6 +17,7 @@
  *   - 上限在 MEMORY_CAPS 里机械执行，任何 patch 施加后都不超上限。
  */
 import { randomBytes } from "node:crypto";
+import { defineEntry } from "@earendil-works/pi-durable";
 import { renderTemplate } from "./prompts.ts";
 import type { RoundScope } from "./memory-scope.ts";
 
@@ -149,6 +150,92 @@ export interface MemoryInbound {
 
 export const MEMORY_INBOUND_KIND = "fish.inbound";
 export const MEMORY_GIF_KIND = "fish.gif_ingest";
+
+// ── 主人评价（/评，T6）的类型与契约 ────────────────────────────────────────
+
+/** 主人评价事件 entry 的 kind（决策 11b）：书记性 entry（无 model 字段，不进模型上下文），
+ *  进记忆抽取白名单（compact.renderMemoryTranscript）、排除摘要（renderCountedEntries）。 */
+export const MEMORY_EVAL_KIND = "fish.eval";
+
+/** /评 评价包里「前 20 条会话摘要」的一条：只从结构化 entry（fish.inbound / fish.outbound）
+ *  组装，不从宿主渲染文本反解析；ref = 对应 transcript entry 的 id（即 FeedbackMeta.contextRefs）。 */
+export interface FeedbackContextItem {
+  ref: string;
+  /** fish = 鱼的发言；member = 群友原话。 */
+  role: "fish" | "member";
+  /** member 的 QQ 号（fish 时缺省）。 */
+  qq?: string;
+  /** member 的昵称（fish 时缺省）。 */
+  nickname?: string;
+  /** 摘要文本（已截断）。 */
+  text: string;
+}
+
+/** 被评 outbound 条目的快照（含引用链锚点 quoteId）。 */
+export interface EvalTargetSnapshot {
+  entryId: number;
+  at: number;
+  items: string[];
+  media?: string;
+  voice?: string;
+  quoteId?: number | string;
+}
+
+/** fish.eval entry 的结构化载荷：评价事件全量快照（好差同构，方向只是字段）。 */
+export interface EvalEventData {
+  direction: "好" | "差";
+  /** 主人评语原文（≤ FEEDBACK_MASTER_TEXT_CHARS）。 */
+  masterText: string;
+  /** 被评对象短摘要（≤ FEEDBACK_TARGET_SUMMARY_CHARS）。 */
+  targetSummary: string;
+  /** 指向型定位是否降级（sentmap 未命中，按最近一条 outbound 评价）。 */
+  degraded: boolean;
+  target?: EvalTargetSnapshot;
+  /** 引用链：鱼当时回的那条原始消息（按 quoteId 从 recent 解析）；不可得时缺省 = 标注缺失。 */
+  quotedFrom?: { qq: string; nickname: string; text: string };
+  /** 前 20 条会话摘要（结构化）。 */
+  context: FeedbackContextItem[];
+  /** 涉及群员清单（被引消息作者 + 上下文成员，结构化快照）。 */
+  members: { qq: string; nickname: string }[];
+  chatKey: string;
+  persona: string;
+  /** 本地日期 YYYY-MM-DD。 */
+  day: string;
+}
+
+/** fish.eval 的 typed entry token（宿主 appendEntry 用，data = EvalEventData）。 */
+export const MemoryEvalEntry = defineEntry<EvalEventData>(MEMORY_EVAL_KIND);
+
+/**
+ * 主人评价（/评）的结构化元数据——**T7（feedback 数据模型与渲染加权）的输入契约，冻结于
+ * 2026-11-02**：批准 apply 时评价包结构字段进 MemoryFact.meta（决策 12：长期 doc 只存
+ * target 短摘要 + 统计一行；20 条上下文全文只留在待审条目的 feedbackContext，不进长期 doc；
+ * 公共化脱敏对 meta 结构同构保留）。
+ * 上限机械执行：targetSummary ≤ FEEDBACK_TARGET_SUMMARY_CHARS（20）、
+ * masterText ≤ FEEDBACK_MASTER_TEXT_CHARS（200）；超出部分装配时截断。
+ */
+export interface FeedbackMeta {
+  kind: "feedback";
+  direction: "好" | "差";
+  /** 被评对象短摘要（≤20 字；指向型 = 被评发言首句截断，范围型 = 当日整体表现）。 */
+  targetSummary: string;
+  /** 当日统计一行（口径随文写明）。 */
+  statsLine: string;
+  /** 引用链摘要（鱼当时回的那条原始消息，短字符串）；不可得时缺省 = 标注缺失。 */
+  quotedFrom?: string;
+  /** 前 20 条会话的 entry 引用（内容全文在待审条目的 feedbackContext）。 */
+  contextRefs: string[];
+  chatKey: string;
+  persona: string;
+  /** 本地日期 YYYY-MM-DD。 */
+  day: string;
+  /** 主人评语原文（≤200 字）。 */
+  masterText: string;
+}
+
+/** FeedbackMeta 的机械上限（T7 批准链同源消费）。 */
+export const FEEDBACK_TARGET_SUMMARY_CHARS = 20;
+export const FEEDBACK_MASTER_TEXT_CHARS = 200;
 
 export function emptyMemory(): MemoryState {
   return { version: 1, people: {}, lore: [], cards: [] };
@@ -386,12 +473,62 @@ export interface PendingMemoryEntry {
   /** 来源会话的原始 chatKey（批准为「私有」时并入 人格名@该 chatKey 的私有 doc）。 */
   originChatKey: string;
   at: number;
+  /** 评价类待审（/评，T6）：结构化元数据；批准时由审批链（T7）映射进 fact 的 kind/meta。 */
+  feedback?: FeedbackMeta;
+  /** 评价包的前 20 条会话全文：只存待审，批准后不进任何长期 doc（决策 12）。 */
+  feedbackContext?: FeedbackContextItem[];
 }
 
 /** 待审库（fish.memory.pending）的 doc 值：每人格一个 family member，条目按时间正序。 */
 export interface PendingMemoryState {
   version: 1;
   entries: PendingMemoryEntry[];
+}
+
+/**
+ * 装配 /评 的待审条目（好差同构，方向只是字段）：patch 本体为空——评价内容全部在
+ * feedback / feedbackContext 里，存储映射（fact 的 kind/meta）由 T7 的批准链落地。
+ * 输入在本函数内机械截断（targetSummary / masterText / quotedFrom）。
+ */
+export function buildFeedbackPending(input: {
+  direction: "好" | "差";
+  targetSummary: string;
+  statsLine: string;
+  quotedFrom?: string;
+  context: FeedbackContextItem[];
+  originChatKey: string;
+  chatKey: string;
+  persona: string;
+  day: string;
+  masterText: string;
+  at: number;
+}): PendingMemoryEntry {
+  const clip = (text: string, max: number): string => text.replace(/[\u0000-\u001F\u007F]/g, "").trim().slice(0, max);
+  const quoted = input.quotedFrom !== undefined ? clip(input.quotedFrom, 40) : undefined;
+  return {
+    id: newPendingId(),
+    patch: {},
+    originChatKey: input.originChatKey,
+    at: input.at,
+    feedback: {
+      kind: "feedback",
+      direction: input.direction,
+      targetSummary: clip(input.targetSummary, FEEDBACK_TARGET_SUMMARY_CHARS),
+      statsLine: clip(input.statsLine, 120),
+      ...(quoted && quoted.length > 0 ? { quotedFrom: quoted } : {}),
+      contextRefs: input.context.map((item) => item.ref),
+      chatKey: input.chatKey,
+      persona: input.persona,
+      day: input.day,
+      masterText: clip(input.masterText, FEEDBACK_MASTER_TEXT_CHARS),
+    },
+    feedbackContext: input.context,
+  };
+}
+
+/** 评价类待审条目的摘要（/记忆 列表与脚本共用）：哪条（targetSummary）+ 哪天；哪群在列表行模板里。 */
+export function summarizeFeedback(meta: FeedbackMeta): string {
+  return `评价${meta.direction}｜${meta.targetSummary}（${meta.day}）`;
 }
 
 /**

@@ -99,6 +99,17 @@ interface Pending {
   reject: (error: Error) => void;
 }
 
+/** 发送中途失败：已成功发出的 QQ 消息 id 挂在 sentIds 上（部分失败只记成功条，/评 定位链路消费）。 */
+export interface OneBotSendFailure extends Error {
+  sentIds?: (number | string)[];
+}
+
+/** send_group_msg 响应里的实际 message_id（OneBot v11：data.message_id）；拿不到返回 undefined。 */
+function messageIdOf(res: unknown): number | string | undefined {
+  const id = (res as { data?: { message_id?: unknown } } | undefined)?.data?.message_id;
+  return typeof id === "number" || typeof id === "string" ? id : undefined;
+}
+
 export class OneBot {
   #url: string;
   #token?: string;
@@ -313,7 +324,6 @@ export class OneBot {
     });
   }
 
-  /** 按顺序发几条文本，中间加抖动；第一句可以引用触发消息。 */
   /** 发语音：内容走 base64://，绕开 QQ 沙盒对本地路径的限制（已实测）。 */
   async sendVoiceGroup(groupId: number, bytes: Buffer): Promise<void> {
     await this.call("send_group_msg", {
@@ -329,8 +339,11 @@ export class OneBot {
     });
   }
 
-  async sendGroup(groupId: number, texts: readonly string[], options: SendOptions = {}): Promise<void> {
+  /** 按顺序发几条文本，中间加抖动；第一句可以引用触发消息。逐条返回实际 message_id
+   *  （OneBot v11 send_group_msg 响应；中途失败时已成功条目挂在错误的 sentIds 上）。 */
+  async sendGroup(groupId: number, texts: readonly string[], options: SendOptions = {}): Promise<(number | string)[]> {
     const delay = options.delayMs ?? (() => 700 + Math.floor(Math.random() * 1200));
+    const ids: (number | string)[] = [];
     for (const [index, text] of texts.entries()) {
       // 段顺序固定：quote → at → text。@ 只挂在第一条：连说几句时每句都带一遍 @ 会刷屏
       const segments: OneBotSegment[] = [];
@@ -341,9 +354,17 @@ export class OneBot {
         for (const qq of options.mentions ?? []) segments.push({ type: "at", data: { qq } });
       }
       segments.push({ type: "text", data: { text } });
-      await this.call("send_group_msg", { group_id: groupId, message: segments });
+      try {
+        const id = messageIdOf(await this.call("send_group_msg", { group_id: groupId, message: segments }));
+        if (id !== undefined) ids.push(id);
+      } catch (error) {
+        // 部分失败：已成功条目随错误上抛（/评 定位链路只记成功条，见 fish.sentmap）
+        if (ids.length > 0 && error instanceof Error) (error as OneBotSendFailure).sentIds = ids;
+        throw error;
+      }
       if (index < texts.length - 1) await sleep(delay());
     }
+    return ids;
   }
 
   /** 私聊不接收 mentions：私聊里没有「@谁」这回事，出口层已经拒绝带 @ 的私聊发送。 */
@@ -362,8 +383,9 @@ export class OneBot {
     });
   }
 
-  /** 发群图片：段顺序与 sendGroup 一致（quote → at → image），无字纯图也走这里；私聊发图不变。 */
-  async sendImageGroup(groupId: number, filePath: string, options: { quote?: number | string; mentions?: readonly string[] } = {}): Promise<void> {
+  /** 发群图片：段顺序与 sendGroup 一致（quote → at → image），无字纯图也走这里；私聊发图不变。
+   *  成功时返回该消息实际 message_id（同 sendGroup，供 /评 定位链路记账）。 */
+  async sendImageGroup(groupId: number, filePath: string, options: { quote?: number | string; mentions?: readonly string[] } = {}): Promise<number | string | undefined> {
     // QQ 是沙盒应用，读不了容器外的本地文件（EPERM）；自己读好后以 base64 传入，
     // NapCat 直接用数据发图，不经文件系统。局域网 WS 内传几 MB 无压力。
     const { readFileSync } = await import("node:fs");
@@ -372,7 +394,7 @@ export class OneBot {
     if (options.quote !== undefined) segments.push({ type: "reply", data: { id: String(options.quote) } });
     for (const qq of options.mentions ?? []) segments.push({ type: "at", data: { qq } });
     segments.push({ type: "image", data: { file: `base64://${data}` } });
-    await this.call("send_group_msg", { group_id: groupId, message: segments });
+    return messageIdOf(await this.call("send_group_msg", { group_id: groupId, message: segments }));
   }
 
   /** 贴表情回应（NapCat 扩展）。 */
