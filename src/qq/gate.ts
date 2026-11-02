@@ -54,7 +54,7 @@ export interface GateOptions {
   /** next 态该群是否处于 open 窗（src/engage-next.ts 状态机的相位）；缺省 = closed。 */
   isOpen?: (chatKey: string) => boolean;
   /** 每轮现取（热更新用）；给了就盖过上面的静态值。 */
-  chances?: () => { minIntervalMs: number; watched: number; engagement: EngagementMode };
+  chances?: (chatKey: string) => { minIntervalMs: number; watched: number; engagement: EngagementMode };
   now?: () => number;
   random?: () => number;
 }
@@ -107,7 +107,7 @@ export function createGate(options: GateOptions): Gate {
       }
 
       // 每轮现取（热更新用）：搭话开关也走这条通道，改 fish.config.json 下一轮生效
-      const live = options.chances?.();
+      const live = options.chances?.(msg.chatKey);
 
       // next 模式：定时开窗两态。closed——@ 必答外一切搭话判定失效，非 @ 统一
       // skip:next_pending 不进模型；open——状态机开着窗，非 @ 也放行 free_pass

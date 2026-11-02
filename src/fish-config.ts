@@ -37,6 +37,8 @@ export interface EngageConfig {
   windowRelaxCap: number;
   /** open 态分片节拍（秒）：每拍把窗内全部发送者的新消息合成一轮 ambient 提交（T14 消费）。 */
   shardSeconds: number;
+  /** 群白名单（群号字符串）：engagement=next 仅对这些群生效；空 = 任何群都不进 next（fail-safe）。 */
+  groups: string[];
 }
 
 export const ENGAGE_DEFAULTS: EngageConfig = {
@@ -46,6 +48,7 @@ export const ENGAGE_DEFAULTS: EngageConfig = {
   mentionContextSize: 5,
   silenceThreshold: 3,
   windowRelaxCap: 30,
+  groups: [],
   shardSeconds: 20,
 };
 
@@ -192,6 +195,7 @@ function checkEngageBlock(raw: unknown): FieldCheck {
     ["mentionContextSize", "engage.mentionContextSize 必须在 1–30"],
     ["silenceThreshold", "engage.silenceThreshold 必须在 1–50"],
     ["windowRelaxCap", "engage.windowRelaxCap 必须在 10–100"],
+    ["groups", "engage.groups 必须是群号字符串数组"],
     ["shardSeconds", "engage.shardSeconds 必须在 5–120"],
   ];
   const ranges: Record<string, [number, number]> = {
@@ -205,8 +209,15 @@ function checkEngageBlock(raw: unknown): FieldCheck {
   };
   const parsed: Partial<EngageConfig> = {};
   let any = false;
+  if (e["groups"] !== undefined) {
+    const g = e["groups"];
+    if (Array.isArray(g) && g.every((x) => typeof x === "string" && /^\d+$/.test(x))) {
+      parsed.groups = [...new Set(g)];
+      any = true;
+    }
+  }
   for (const [key, reason] of specs) {
-    if (e[key] === undefined) continue;
+    if (key === "groups" || e[key] === undefined) continue;
     const [lo, hi] = ranges[key];
     const r = numberIn(reason, lo, hi, true)(e[key]);
     if (r.ok) {

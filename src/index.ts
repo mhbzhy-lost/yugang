@@ -21,7 +21,7 @@ import { openFish, SentmapDoc, type GroupProfile } from "./harness.ts";
 import { OneBot, orderByArrival, type IncomingMessage, type OneBotSendFailure } from "./qq/onebot.ts";
 import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "./voice-route.ts";
 import { createGate } from "./qq/gate.ts";
-import { createEngageNext, type EngageBacklogItem, type EngageShardItem } from "./engage-next.ts";
+import { engageGroupsIncludes, createEngageNext, type EngageBacklogItem, type EngageShardItem } from "./engage-next.ts";
 import {
   createDebouncer,
   withContext,
@@ -188,6 +188,13 @@ const visionModel = { provider: modelSelection.vision.providerId, modelId: model
 const visionFallbackModel = modelSelection.visionFallback
   ? { provider: modelSelection.visionFallback.providerId, modelId: modelSelection.visionFallback.modelId }
   : undefined;
+
+/** 搭话开关的唯一判定函数（开关 & 群白名单）：engagement=next 且该群在 engage.groups 白名单内
+ * 才算 next；其余一律 legacy。gate / 状态机 / runtime 裁剪 / in-flight 登记全部走这里，不许各自判断。 */
+function engageNextOf(chatKey: string): boolean {
+  const c = fishConfig().config;
+  return c.engagement === "next" && engageGroupsIncludes(c.engage.groups, chatKey);
+}
 
 // inline 直读开关（docs/plans/2026-11-01-inline-vision.md）：主/视觉同模型且通道在白名单。
 // 白名单＝「确认能收 image block 的 api」：两个 Gemini 订阅通道真机验证过；
@@ -424,7 +431,7 @@ const fish = await openFish({
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
   silentOf: (roundId) => silentRounds.has(String(roundId)),
   // runtime 的「自由交流窗口」小节只在 engagement=next 时注入（热读取，决策 18）
-  engagementOf: () => fishConfig().config.engagement,
+  engagementOf: (chatKey: string) => (engageNextOf(chatKey) ? "next" : "legacy"),
   // 出口计数：say_* 的 execute 进入即回调；未登记的轮（收图轮）直接忽略，不留孤儿计数
   onSayCall: (roundId) => {
     const key = String(roundId);
@@ -864,7 +871,7 @@ async function submitRound(input: {
   const { chatKey, conv, trigger } = input;
   // 在途登记要在任何 await 之前（busy 检查与提交之间不开窗口）：仅 next 登记对称登记/释放
   const roundKind: RoundKind = trigger.kind ?? "answer";
-  const trackInFlight = fishConfig().config.engagement === "next";
+  const trackInFlight = engageNextOf(chatKey);
   if (trackInFlight) registerInFlight(conv.id, roundKind);
   await absorbSecrets(conv);
   resetRun(conv.id);
@@ -1079,7 +1086,7 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
 
   // 命中特别关注：legacy 在要回的那行前面给 watch_inline 备注行（零变化）；next 改锚点行
   // 打标（[主人]/[特别关注]，master 优先互斥，沿用 T1 文案；行内「你主人」标注保留）
-  const nextMode = fishConfig().config.engagement === "next";
+  const nextMode = engageNextOf(anchor.chatKey);
   const watched = watchedByChat.get(anchor.chatKey)?.get(String(anchor.userId));
   const watchedNote = !nextMode && watched
     ? renderTemplate(fish.prompts.messages["watch_inline"] ?? "", { who: anchor.nickname, note: watched.note })
@@ -1908,7 +1915,7 @@ async function drainLoop(): Promise<void> {
 // open 态的 free_pass 消息由 onMessage 路由进它的 shard 收集器，每 engage.shardSeconds
 // （缺省 20 秒）一拍经 onShard 合并提交（ambient）；closed 进入只留相位日志。
 const engageNext = createEngageNext({
-  groups: () => config.groups,
+  groups: () => [...new Set(config.groups.filter((g) => fishConfig().config.engage.groups.includes(g)))],
   recentOf: (chatKey) => recent.get(chatKey) ?? [],
   backlogOf: (chatKey, afterSeq) => engageBacklogOf(chatKey, afterSeq),
   busy: (chatKey) => {
@@ -1948,14 +1955,14 @@ const gate = createGate({
   ambientMinIntervalMs: fishConfig().config.ambientMinIntervalSeconds * 1000,
   // 特别关注者发言时的放行概率（走随机门，照顾到但不是必答）
   watchedChance: fishConfig().config.watchAmbientChance,
-  // 搭话总开关：legacy = 现行全部判定；next = 定时开窗两态（closed skip / open free_pass）
-  engagement: fishConfig().config.engagement,
+  // 搭话总开关（缺省值；实际判定走 chances 每轮现取的「开关 & 群白名单」）
+  engagement: "legacy",
   // next 的 open 窗判定：接状态机相位；缺省 = closed（没接状态机时 next 恒 skip）
   isOpen: (chatKey) => engageNext.isOpen(chatKey),
   // 每轮现取：改 fish.config.json 下一轮就生效，不用重启（engagement 同样热切换）
-  chances: () => {
+  chances: (chatKey: string) => {
     const c = fishConfig().config;
-    return { minIntervalMs: c.ambientMinIntervalSeconds * 1000, watched: c.watchAmbientChance, engagement: c.engagement };
+    return { minIntervalMs: c.ambientMinIntervalSeconds * 1000, watched: c.watchAmbientChance, engagement: engageNextOf(chatKey) ? "next" : "legacy" };
   },
 });
 

@@ -52,6 +52,7 @@ const ENGAGE_KEYS: readonly string[] = [
   "silenceThreshold",
   "windowRelaxCap",
   "shardSeconds",
+  "groups",
 ];
 
 function checkEngage(raw: unknown): FieldCheck {

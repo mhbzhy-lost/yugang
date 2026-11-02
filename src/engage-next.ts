@@ -36,6 +36,12 @@
  */
 import type { EngagementMode } from "./fish-config.ts";
 
+/** 群白名单判定：chatKey 形如 qq:group:NNN（含人格后缀也认前缀），群号在名单内才算命中。 */
+export function engageGroupsIncludes(groups: readonly string[], chatKey: string): boolean {
+  const m = /^qq:group:(\d+)/.exec(chatKey);
+  return m !== null && groups.includes(m[1]);
+}
+
 export type EngagePhase = "closed" | "open";
 
 /** 相位回调里的积压消息：与 recent 流水同构（宿主的 injection 轮按行渲染）。 */

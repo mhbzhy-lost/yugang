@@ -9,7 +9,8 @@
     "mentionContextSize": 5,
     "silenceThreshold": 3,
     "windowRelaxCap": 30,
-    "shardSeconds": 20
+    "shardSeconds": 20,
+    "groups": []
   },
   "sendPacingSeconds": 6,
   "thinkingLevel": "low",

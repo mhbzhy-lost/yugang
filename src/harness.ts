@@ -116,7 +116,7 @@ function makeFishExtension(
     /** conversationId → 原始 chatKey：私有层 doc key（人格名@chatKey）由它现算 */
     chatKeyOf: (conversationId: string) => string | undefined;
     /** 携话模式现取（热）：runtime 的「自由交流窗口」小节仅 next 注入（决策 18，T3 接线）。 */
-    engagementOf: () => EngagementMode;
+    engagementOf: (chatKey: string) => EngagementMode;
   },
 ): Extension {
   return defineExtension({
@@ -125,7 +125,7 @@ function makeFishExtension(
     sections: [
       // 运行时协议：能力边界、输入信任、出口、错误处理、渐进加载；人格无关，不随人格换页。
       // 「自由交流窗口」小节是 next 专属的窗口协议，legacy 下动态裁掉（见 runtimeTextOf）
-      section("runtime", () => runtimeTextOf(parts.prompts.runtime, parts.engagementOf()), { tag: false }),
+      section("runtime", (input) => runtimeTextOf(parts.prompts.runtime, parts.engagementOf(parts.chatKeyOf?.(String(input.conversationId)) ?? "")), { tag: false }),
       section("persona", () => persona, { tag: false }),
       // 工具目录：每次请求由 trusted manifest 现渲染，只列已启用工具的 name + 顶部摘要；
       // 「目录 ≠ 已加载」的行为说明在 prompt/runtime.md，这里不内嵌提示词
@@ -261,7 +261,7 @@ export interface FishOptions {
   /** 按会话取 TTS 配置（人格相关）；返回 undefined 表示这个会话没有语音能力。 */
   ttsOf?: (conversationId: string) => import("./tts.ts").TtsConfig | undefined;
   /** 携话模式现取（热）：runtime 的「自由交流窗口」小节仅 next 注入；缺省 = legacy（裁掉）。 */
-  engagementOf?: () => EngagementMode;
+  engagementOf?: (chatKey: string) => EngagementMode;
   /** 静默轮（自动收表情包）：这一轮 say_* 一律拒绝。 */
   silentOf?: (roundId: unknown) => boolean;
   /** 本轮 say_* 的 execute 被进入时回调；宿主按 submission 计数，识别零出口轮。 */
@@ -432,11 +432,11 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     const override = options.toolTimeoutOverrides?.[tool.name];
     return withToolTimeout(tool, override === undefined ? toolTimeoutMs : override * 1000, toolTimeoutMessage);
   });
-  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation, chatKeyOf: chatKeyOfConversation, engagementOf: () => options.engagementOf?.() ?? "legacy" });
+  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation, chatKeyOf: chatKeyOfConversation, engagementOf: (chatKey: string) => options.engagementOf?.(chatKey) ?? "legacy" });
   const personaExtensions = new Map<string, Extension>();
   const openers: Record<string, string> = {};
   for (const [name, book] of Object.entries(prompts.personas)) {
-    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation, chatKeyOf: chatKeyOfConversation, engagementOf: () => options.engagementOf?.() ?? "legacy" }));
+    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation, chatKeyOf: chatKeyOfConversation, engagementOf: (chatKey: string) => options.engagementOf?.(chatKey) ?? "legacy" }));
     if (book.opener) openers[name] = book.opener;
   }
 
