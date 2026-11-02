@@ -60,7 +60,7 @@ test("工具面为窄接口：无 bash，自改工具已注册", async () => {
     // 其余已启用工具（含 meme_import）全部等在 deferred 里，等 tool_search 加载
     assert.deepEqual(
       agent.deferred.map((t) => t.name),
-      ["config", "draw", "gpt_image", "grep", "look", "meme", "meme_add", "meme_import", "read", "restart", "search", "tags", "tree", "video", "watch", "write"],
+      ["bili_hot", "bili_video", "config", "draw", "gpt_image", "grep", "look", "meme", "meme_add", "meme_import", "read", "restart", "search", "tags", "tree", "video", "watch", "write"],
     );
   } finally {
     await open.close();

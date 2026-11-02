@@ -96,6 +96,8 @@ export interface BiliVideoCard {
   stat: BiliStat;
   /** 稿件 cid（弹幕拉取要用；个别榜单条目缺它，调用方自行判空）。 */
   cid?: number;
+  /** 分区名（view 端点才有；榜单条目按需自行判空）。 */
+  tname?: string;
   pic?: string;
 }
 
@@ -215,6 +217,7 @@ function mapCard(raw: unknown): BiliVideoCard {
       like: numOf(stat["like"]),
     },
     ...(r["cid"] !== undefined ? { cid: numOf(r["cid"]) } : {}),
+    ...(typeof r["tname"] === "string" && r["tname"] ? { tname: r["tname"] } : {}),
     ...(typeof pic === "string" && pic ? { pic } : {}),
   };
 }
@@ -507,6 +510,20 @@ export function createBiliClient(options: BiliClientOptions = {}): BiliClient {
 /** 运行时数据目录缺省值（与 index.ts 的 HOME 同源：仓库 var/，YUGANG_HOME 接线时显式传）。 */
 export function defaultVarDir(): string {
   return join(import.meta.dirname, "..", "..", "var");
+}
+
+// —— 共享实例口 ——
+
+let sharedClient: BiliClient | undefined;
+
+/**
+ * 惰性单例口：video / bili_hot / bili_video 等工具层共用同一个频控内核，
+ * 串行锁、每日预算与熔断状态全进程只有一份。varDir 与 index.ts 的 HOME 同源
+ * （YUGANG_HOME 优先，缺省仓库 var/）；构造本身无副作用，预算与 buvid 都在首次请求时才落盘。
+ */
+export function getBiliClient(): BiliClient {
+  sharedClient ??= createBiliClient({ varDir: process.env["YUGANG_HOME"] ?? defaultVarDir() });
+  return sharedClient;
 }
 
 // =====================================================================================

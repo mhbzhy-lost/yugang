@@ -12,6 +12,10 @@
  *
  * 时长上限 30 分钟：超了只取前 30 分钟，并明确告诉鱼这是截断的。
  *
+ * 请求层：view / 弹幕 / 热评三类 B 站请求统一走 bili-client 共享单例
+ * （频控/预算/熔断与 bili_hot、bili_video 共用一份，Task E3）；短链展开与图文
+ * 动态（opus）端点不在白名单内，仍用直接 fetch。对外行为与返回格式零变化。
+ *
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest（factory 只消费它，不再有第二份运行时定义）。
  */
 import { spawnSync } from "node:child_process";
@@ -19,6 +23,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
+import { getBiliClient, type BiliClient } from "../../external/bili-client.ts";
 import { renderTemplate } from "../../prompts.ts";
 import { describeImage } from "../../media/describe.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
@@ -78,28 +83,17 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
     }
   }
 
-  /** 弹幕 XML → {time, text}[]；拿不到返回空数组（不影响主流程）。 */
-  async function fetchDanmaku(cid: string): Promise<{ time: number; text: string }[]> {
+  /** 弹幕 XML → {time, text}[]；拿不到返回空数组（不影响主流程）。XML 经 bili-client 取。 */
+  async function fetchDanmaku(client: BiliClient, cid: string): Promise<{ time: number; text: string }[]> {
     try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      try {
-        const res = await doFetch(`https://api.bilibili.com/x/v1/dm/list.so?oid=${cid}`, {
-          headers: HEADERS,
-          signal: ctrl.signal,
-        });
-        if (!res.ok) return [];
-        const xml = await res.text();
-        const out: { time: number; text: string }[] = [];
-        for (const m of xml.matchAll(/<d p="([^"]+)"[^>]*>([^<]*)<\/d>/g)) {
-          const time = Number(m[1].split(",")[0]);
-          const text = m[2].trim();
-          if (Number.isFinite(time) && text.length > 0) out.push({ time, text });
-        }
-        return out;
-      } finally {
-        clearTimeout(timer);
+      const xml = await client.danmakuXml(cid);
+      const out: { time: number; text: string }[] = [];
+      for (const m of xml.matchAll(/<d p="([^"]+)"[^>]*>([^<]*)<\/d>/g)) {
+        const time = Number(m[1].split(",")[0]);
+        const text = m[2].trim();
+        if (Number.isFinite(time) && text.length > 0) out.push({ time, text });
       }
+      return out;
     } catch {
       return [];
     }
@@ -198,6 +192,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
       }
 
       const startedAt = Date.now();
+      const client = getBiliClient();
       const tmp = mkdtempSync(join(tmpdir(), "yg-video-"));
       try {
         // 短链先展开
@@ -263,28 +258,27 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
           throw new Error("no bv");
         }
 
-        const view = await getJson(`https://api.bilibili.com/x/web-interface/view?bvid=${bv}`);
-        if (view?.code !== 0 || !view?.data) throw new Error("view failed");
-        const d = view.data;
-        const duration = Number(d.duration ?? 0);
-        const cid = String(d.cid ?? "");
+        // view / 弹幕 / 热评三类请求经 bili-client（频控共享）；信封检查与错误映射在客户端内完成
+        const d = await client.view(bv);
+        const duration = d.durationSeconds;
+        const cid = d.cid !== undefined ? String(d.cid) : "";
         const capSeconds = Math.min(duration, maxMinutes * 60);
         const truncated = duration > capSeconds + 5;
 
         const head = [
-          `《${String(d.title).slice(0, 60)}》`,
-          `UP主 ${d.owner?.name ?? "?"} · ${Math.round(duration / 60)} 分钟 · 播放 ${(d.stat?.view ?? 0).toLocaleString()}`,
+          `《${d.title.slice(0, 60)}》`,
+          `UP主 ${d.owner.name || "?"} · ${Math.round(duration / 60)} 分钟 · 播放 ${d.stat.view.toLocaleString()}`,
         ];
         if (truncated) {
           head.push(
             renderTemplate(deps.prompts.messages["video_truncated"] ?? "", { minutes: String(maxMinutes) }),
           );
         }
-        const desc = String(d.desc ?? "").replace(/\s+/g, " ").slice(0, 200);
+        const desc = d.desc.replace(/\s+/g, " ").slice(0, 200);
         if (desc) head.push(desc);
 
         // 弹幕
-        const danmaku = await fetchDanmaku(cid);
+        const danmaku = await fetchDanmaku(client, cid);
         let danmakuText = "";
         if (danmaku.length > 0) {
           const hot = [...danmaku].sort((a, b) => b.time - a.time).slice(0, 4);
@@ -339,17 +333,16 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
           }
         }
 
-        // 热评（拿不到就略过）
+        // 热评（拿不到就略过）；经 bili-client 的 reply 端点（type=1，mode=3 热评序）
         let comments = "";
         try {
-          const reply = await getJson(`https://api.bilibili.com/x/v2/reply/main?type=1&oid=${d.aid}&mode=3&next=0`);
-          const top = (reply?.data?.replies ?? []).slice(0, 3) as { content?: { message?: string } }[];
-          if (top.length > 0) {
+          const replies = (await client.hotReplies(d.aid, 1)).slice(0, 3);
+          if (replies.length > 0) {
             comments =
               "\n" +
               (deps.prompts.messages["video_comments_header"] ?? "") +
               "\n" +
-              top.map((c, i) => `${i + 1}. ${String(c.content?.message ?? "").replace(/\s+/g, " ").slice(0, 100)}`).join("\n");
+              replies.map((c, i) => `${i + 1}. ${c.message.replace(/\s+/g, " ").slice(0, 100)}`).join("\n");
           }
         } catch {
           // 评论区拿不到不影响
