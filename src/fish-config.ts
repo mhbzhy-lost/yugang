@@ -52,6 +52,92 @@ export const ENGAGE_DEFAULTS: EngageConfig = {
   shardSeconds: 20,
 };
 
+/**
+ * B 站弹药管线（外部计划 E1–E5）的行为参数：逛轮时点、硬截止、随机门、TTL 与预算。
+ * 逐字段校验，非法告警保留缺省，热生效。
+ */
+export interface AmmoConfig {
+  /** 每天逛 B 站的时点表（HH:MM，去重保序；24:00 = 当天末尾）。 */
+  slots: string[];
+  /** 单次逛轮的硬截止（分钟）：watchdog 到点收束，未提交候选丢弃。 */
+  browseMinutes: number;
+  /** open 窗随机门：每次开窗以这个概率决定本窗是否可分享一条外部弹药（0–1）。 */
+  shareChance: number;
+  /** 弹药入库后的存活时长（小时），过期惰性清理。 */
+  ttlHours: number;
+  /** bili-client 每日请求总预算（次），跨重启持久计数。 */
+  dailyBudget: number;
+  /** 单次逛轮最多入库的弹药条数。 */
+  maxPicksPerRun: number;
+}
+
+export const AMMO_DEFAULTS: AmmoConfig = {
+  slots: ["09:00", "12:00", "18:00", "24:00"],
+  browseMinutes: 10,
+  shareChance: 0.2,
+  ttlHours: 48,
+  dailyBudget: 60,
+  maxPicksPerRun: 3,
+};
+
+/** 新闻 topic 的来源枚举：与新闻客户端（外部计划 E6）的取数实现一一对应。 */
+export const NEWS_SOURCES: readonly string[] = [
+  "60s",
+  "jiemian",
+  "huxiu",
+  "ithome",
+  "people",
+  "zhihu_daily",
+  "weibo_hot",
+  "baidu_hot",
+];
+
+/** 单个新闻 topic：按 sources+keywords 取料，exclude 词表先过滤（如娱乐圈）。 */
+export interface NewsTopicConfig {
+  /** topic 名（播报分节标题）。 */
+  name: string;
+  /** 取料来源（NEWS_SOURCES 的非空子集）。 */
+  sources: string[];
+  /** 关键词命中表（sources+keywords 两层映射的第一层）。 */
+  keywords: string[];
+  /** 排除词表（标题命中即剔除）。 */
+  exclude: string[];
+}
+
+/** 新闻播报管线（外部计划 E6–E7）的行为参数。逐字段校验，非法告警保留缺省，热生效。 */
+export interface NewsConfig {
+  /** 每天播报时点（HH:MM）。 */
+  at: string;
+  /** 播报目标群号（纯数字）；空串 = 不启用。必须是 .env GROUPS 白名单内的群号——域校验在运行时消费处（E7），这里只做格式校验。 */
+  targetGroup: string;
+  /** 播报 topic 表；显式给 topics 就整体覆盖缺省五 topic。 */
+  topics: NewsTopicConfig[];
+  /** 每 topic 送模型的输入上限（条）。 */
+  perTopicInput: number;
+  /** 每 topic 输出的新闻条数上限。 */
+  perTopicOutput: number;
+}
+
+/** 缺省五 topic（AI/时政/军事/科技数码/趣闻二次元）；趣闻二次元带娱乐圈 exclude 词表，词表可热改。 */
+export const NEWS_DEFAULTS: NewsConfig = {
+  at: "10:30",
+  targetGroup: "",
+  topics: [
+    { name: "AI", sources: ["60s", "huxiu", "ithome", "zhihu_daily"], keywords: ["AI", "人工智能", "大模型", "机器学习", "AIGC"], exclude: [] },
+    { name: "时政", sources: ["people", "60s", "jiemian"], keywords: ["时政", "国内", "国际", "外交", "政策"], exclude: [] },
+    { name: "军事", sources: ["60s", "people", "weibo_hot"], keywords: ["军事", "国防", "军演", "战机", "军舰"], exclude: [] },
+    { name: "科技数码", sources: ["ithome", "huxiu", "zhihu_daily"], keywords: ["科技", "数码", "手机", "芯片", "发布会"], exclude: [] },
+    {
+      name: "趣闻二次元",
+      sources: ["weibo_hot", "baidu_hot", "zhihu_daily"],
+      keywords: ["趣闻", "热梗", "二次元", "动漫", "游戏"],
+      exclude: ["明星", "综艺", "出轨", "官宣恋情", "红毯", "颁奖礼", "八卦", "热搜第一"],
+    },
+  ],
+  perTopicInput: 20,
+  perTopicOutput: 5,
+};
+
 export interface FishConfig {
   /** 非 @、非特别关注的消息：同一群两条被处理消息之间的最短间隔（秒）。 */
   ambientMinIntervalSeconds: number;
@@ -61,6 +147,10 @@ export interface FishConfig {
   engagement: EngagementMode;
   /** next 搭话开窗参数：closed/open 节拍、积压与背景上限、nudge 阈值（仅 next 消费）。 */
   engage: EngageConfig;
+  /** B 站弹药管线参数：逛轮时点、硬截止、随机门、TTL、每日预算与单轮入库上限。 */
+  ammo: AmmoConfig;
+  /** 新闻播报管线参数：播报时点、目标群、topic 供料与输入/输出上限。 */
+  news: NewsConfig;
   /** 出站配速（秒）：outbox drain 同会话相邻两次实际发送的最小间隔，防连珠炮（0 = 关闭）。 */
   sendPacingSeconds: number;
   /** 思考档位；启动时写进会话 agent，改完重启才生效。 */
@@ -246,11 +336,202 @@ function checkEngageBlock(raw: unknown): FieldCheck {
   return { ok: true, value: { ...ENGAGE_DEFAULTS, ...parsed }, ...(problems.length > 0 ? { problems } : {}) };
 }
 
+/** HH:MM 时点校验：00:00–23:59，另认 24:00（当天末尾）；合法时返回 trim 后的原样字符串。 */
+function checkTimeOfDay(label: string) {
+  return (raw: unknown): FieldCheck => {
+    const text = typeof raw === "string" ? raw.trim() : "";
+    const m = /^(\d{2}):(\d{2})$/.exec(text);
+    const hh = m ? Number(m[1]) : NaN;
+    const mm = m ? Number(m[2]) : NaN;
+    const valid = m !== null && (hh === 24 ? mm === 0 : hh <= 23 && mm <= 59);
+    if (!valid) return { ok: false, reason: `${label} 必须是 HH:MM 时点` };
+    return { ok: true, value: text };
+  };
+}
+
+/**
+ * ammo 块的校验（config 工具 set 与 parseFile 共用这一份，区间以此处为准）：
+ * 逐字段校验，非法字段回默认并记入 problems（沿用 checkEngageBlock 的「非法回默认、
+ * 合法照用」语义）；slots 里的坏时点剔除并告警；全部字段非法才整块拒绝。
+ */
+function checkAmmoBlock(raw: unknown): FieldCheck {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "ammo 必须是对象" };
+  const a = raw as Record<string, unknown>;
+  const parsed: Partial<AmmoConfig> = {};
+  const problems: string[] = [];
+  let any = false;
+
+  if (a["slots"] !== undefined) {
+    const list = a["slots"];
+    if (Array.isArray(list) && list.length > 0) {
+      const times: string[] = [];
+      const check = checkTimeOfDay("ammo.slots");
+      for (const item of list) {
+        const r = check(item);
+        if (r.ok) times.push(r.value as string);
+        else problems.push(`${r.reason}，该时点已忽略`);
+      }
+      if (times.length > 0) {
+        parsed.slots = [...new Set(times)];
+        any = true;
+      } else problems.push("ammo.slots 没有合法时点，已回默认");
+    } else problems.push("ammo.slots 必须是非空 HH:MM 数组，已回默认");
+  }
+
+  const ranges: Array<[keyof AmmoConfig, number, number]> = [
+    ["browseMinutes", 1, 60],
+    ["ttlHours", 1, 168],
+    ["dailyBudget", 10, 500],
+    ["maxPicksPerRun", 1, 10],
+  ];
+  for (const [key, lo, hi] of ranges) {
+    if (a[key] === undefined) continue;
+    const r = numberIn(`ammo.${key} 必须在 ${lo}–${hi}`, lo, hi, true)(a[key]);
+    if (r.ok) {
+      (parsed as Record<string, number>)[key] = r.value as number;
+      any = true;
+    } else {
+      problems.push(`${r.reason}，已回默认`);
+    }
+  }
+  if (a["shareChance"] !== undefined) {
+    const c = chance(a["shareChance"]);
+    if (c !== undefined) {
+      parsed.shareChance = c;
+      any = true;
+    } else problems.push("ammo.shareChance 必须是 0–1，已回默认");
+  }
+
+  // 未知嵌套键显式告警（与 engage 同款）：拼错的键名保留忽略语义，但 problems 必须可见
+  const known = new Set<string>(["slots", "shareChance", ...ranges.map(([key]) => key)]);
+  for (const key of Object.keys(a)) {
+    if (known.has(key)) continue;
+    problems.push(`ammo.${key} 不是受控字段，已忽略`);
+  }
+  if (!any) {
+    return { ok: false, reason: problems.length > 0 ? `ammo 至少要有一个合法参数（${problems.join("；")}）` : "ammo 至少要有一个合法参数" };
+  }
+  return { ok: true, value: { ...AMMO_DEFAULTS, ...parsed }, ...(problems.length > 0 ? { problems } : {}) };
+}
+
+/** 字符串数组（topic 的 keywords/exclude）：结构非法返回 undefined，由调用方回空并告警。 */
+function stringList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw) || !raw.every((x) => typeof x === "string")) return undefined;
+  return raw as string[];
+}
+
+/** topics 数组校验：坏 topic 整条剔除并告警，合法 topic 照用；结构非法（非数组）返回 undefined（回缺省五 topic）。 */
+function checkNewsTopics(raw: unknown, problems: string[]): NewsTopicConfig[] | undefined {
+  if (!Array.isArray(raw)) {
+    problems.push("news.topics 必须是 topic 数组，已回默认");
+    return undefined;
+  }
+  const topics: NewsTopicConfig[] = [];
+  raw.forEach((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      problems.push(`news.topics[${index}] 必须是对象，已忽略`);
+      return;
+    }
+    const t = item as Record<string, unknown>;
+    // topic 内未知键同样显式告警（嵌套 topics 的 key 校验）
+    for (const key of Object.keys(t)) {
+      if (key === "name" || key === "sources" || key === "keywords" || key === "exclude") continue;
+      problems.push(`news.topics[${index}].${key} 不是受控字段，已忽略`);
+    }
+    const name = typeof t["name"] === "string" ? t["name"].trim() : "";
+    if (!name) {
+      problems.push(`news.topics[${index}].name 必须是非空字符串，已忽略`);
+      return;
+    }
+    const sourcesRaw = t["sources"];
+    const sources = Array.isArray(sourcesRaw)
+      ? [...new Set(sourcesRaw.filter((s): s is string => typeof s === "string" && NEWS_SOURCES.includes(s)))]
+      : [];
+    if (sources.length === 0) {
+      problems.push(`news.topics[${index}].sources 必须是来源枚举，该 topic 已忽略`);
+      return;
+    }
+    if (Array.isArray(sourcesRaw) && sources.length < new Set(sourcesRaw).size) {
+      problems.push(`news.topics[${index}].sources 有来源不在枚举内，已剔除`);
+    }
+    const keywords = stringList(t["keywords"]);
+    if (keywords === undefined && t["keywords"] !== undefined) problems.push(`news.topics[${index}].keywords 必须是字符串数组，已回空`);
+    const exclude = stringList(t["exclude"]);
+    if (exclude === undefined && t["exclude"] !== undefined) problems.push(`news.topics[${index}].exclude 必须是字符串数组，已回空`);
+    topics.push({ name, sources, keywords: keywords ?? [], exclude: exclude ?? [] });
+  });
+  return topics;
+}
+
+/**
+ * news 块的校验（config 工具 set 与 parseFile 共用这一份，区间以此处为准）：
+ * 逐字段校验，非法字段回默认并记入 problems；targetGroup 只做格式校验（纯数字群号或空串），
+ * GROUPS 白名单域校验在运行时消费处（E7）；全部字段非法才整块拒绝。
+ */
+function checkNewsBlock(raw: unknown): FieldCheck {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "news 必须是对象" };
+  const n = raw as Record<string, unknown>;
+  const parsed: Partial<NewsConfig> = {};
+  const problems: string[] = [];
+  let any = false;
+
+  if (n["at"] !== undefined) {
+    const r = checkTimeOfDay("news.at")(n["at"]);
+    if (r.ok) {
+      parsed.at = r.value as string;
+      any = true;
+    } else problems.push(`${r.reason}，已回默认`);
+  }
+
+  if (n["targetGroup"] !== undefined) {
+    const g = n["targetGroup"];
+    if (g === "" || (typeof g === "string" && /^\d+$/.test(g.trim()))) {
+      parsed.targetGroup = typeof g === "string" ? g.trim() : "";
+      any = true;
+    } else problems.push("news.targetGroup 必须是数字群号，已回默认");
+  }
+
+  const ranges: Array<[keyof NewsConfig, number, number]> = [
+    ["perTopicInput", 1, 20],
+    ["perTopicOutput", 1, 5],
+  ];
+  for (const [key, lo, hi] of ranges) {
+    if (n[key] === undefined) continue;
+    const r = numberIn(`news.${key} 必须在 ${lo}–${hi}`, lo, hi, true)(n[key]);
+    if (r.ok) {
+      (parsed as Record<string, number>)[key] = r.value as number;
+      any = true;
+    } else {
+      problems.push(`${r.reason}，已回默认`);
+    }
+  }
+
+  if (n["topics"] !== undefined) {
+    const topics = checkNewsTopics(n["topics"], problems);
+    if (topics !== undefined) {
+      parsed.topics = topics;
+      any = true;
+    }
+  }
+
+  const known = new Set<string>(["at", "targetGroup", "topics", "perTopicInput", "perTopicOutput"]);
+  for (const key of Object.keys(n)) {
+    if (known.has(key)) continue;
+    problems.push(`news.${key} 不是受控字段，已忽略`);
+  }
+  if (!any) {
+    return { ok: false, reason: problems.length > 0 ? `news 至少要有一个合法参数（${problems.join("；")}）` : "news 至少要有一个合法参数" };
+  }
+  return { ok: true, value: { ...NEWS_DEFAULTS, ...parsed }, ...(problems.length > 0 ? { problems } : {}) };
+}
+
 export const FISH_CONFIG_FIELDS: readonly FishConfigFieldSpec[] = [
   { name: "ambientMinIntervalSeconds", effect: "hot", check: numberIn("ambientMinIntervalSeconds 必须在 5–3600", 5, 3600) },
   { name: "watchAmbientChance", effect: "hot", check: numberIn("watchAmbientChance 必须是 0–1", 0, 1) },
   { name: "engagement", effect: "hot", check: oneOf("engagement 只认 legacy/next", ENGAGEMENT_MODES as readonly string[]) },
   { name: "engage", effect: "hot", check: checkEngageBlock },
+  { name: "ammo", effect: "hot", check: checkAmmoBlock },
+  { name: "news", effect: "hot", check: checkNewsBlock },
   { name: "sendPacingSeconds", effect: "hot", check: numberIn("sendPacingSeconds 必须在 0–60", 0, 60) },
   { name: "thinkingLevel", effect: "restart", check: oneOf("thinkingLevel 不认识", THINKING_LEVELS as readonly string[]) },
   { name: "compact", effect: "hot", check: checkCompact },
@@ -321,6 +602,8 @@ const DEFAULTS: FishConfig = {
   watchAmbientChance: 0.5,
   engagement: "legacy",
   engage: ENGAGE_DEFAULTS,
+  ammo: AMMO_DEFAULTS,
+  news: NEWS_DEFAULTS,
   sendPacingSeconds: 6,
   thinkingLevel: "low",
   compact: { maxEntries: 200, maxChars: 50_000 },
@@ -354,6 +637,8 @@ export function loadFishConfig(options: { path?: string; env?: NodeJS.ProcessEnv
     ...fromFile,
     compact: { ...DEFAULTS.compact, ...(fromEnv.compact ?? {}), ...(fromFile.compact ?? {}) },
     engage: { ...DEFAULTS.engage, ...(fromEnv.engage ?? {}), ...(fromFile.engage ?? {}) },
+    ammo: { ...DEFAULTS.ammo, ...(fromEnv.ammo ?? {}), ...(fromFile.ammo ?? {}) },
+    news: { ...DEFAULTS.news, ...(fromEnv.news ?? {}), ...(fromFile.news ?? {}) },
   };
 
   const usesEnv = Object.keys(fromEnv).length > 0;

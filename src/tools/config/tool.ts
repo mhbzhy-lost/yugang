@@ -227,6 +227,12 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
       if (result.problems?.length) {
         lines.push(renderTemplate(p.messages["config_read_problems"] ?? "{{problems}}", { problems: result.problems.join("；") }));
       }
+      // news.targetGroup 域约束提示（外部计划 E8 接口位）：这里只做格式校验，
+      // GROUPS 白名单域校验在运行时消费处（E7 播报编排）执行
+      const targetGroup = spec.name === "news" ? (result.value as { targetGroup?: unknown } | undefined)?.targetGroup : undefined;
+      if (typeof targetGroup === "string" && targetGroup !== "") {
+        lines.push(renderTemplate(p.messages["config_news_targetgroup_domain"] ?? "{{group}}", { group: targetGroup }));
+      }
       if (spec.effect === "restart") lines.push(p.messages["config_restart_reminder"] ?? "");
       return { output: [{ type: "text", text: lines.filter((line) => line.length > 0).join("\n") }] };
     },
