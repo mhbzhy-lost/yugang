@@ -39,7 +39,7 @@
 | F9 | 主人不入特别关注列表，消息行带「[主人]」标记（互斥）；@ 轮锚点行「你主人」标注保留；runtime 软引导；无新增强制 | 单测 + runtime.md 核对 | 标记存在互斥 | 测试输出 | T1、T3、T5 |
 | F10 | 主人 `/评`（回复引用鱼消息=指向型；不引用=范围型，群友一律拒绝）机械装配评价包：方向、评价原文、结构化关联字段（见决策 11b）；待审→审批→入人格 doc；评价类条目渲染加权置顶；未批准永不注入；提取时关联字段不丢失 | 记忆链路单测 | 两类评价包的结构化字段完整入库、渲染可见关联、群友拒绝 | 测试输出 | T6、T7 |
 | F11 | 连续 silenceThreshold 个 open 窗口全程零出口 → 下一窗注入尾部递进文案；超 2×阈值 → 下窗积压窗口放宽至 windowRelaxCap；模型任一轮开口清零；仅统计 open 窗口（@ 轮不计不清） | 单测 | 阈值触发文案与放宽 | 测试输出 | T8 |
-| F12 | 新增主人专属统一配置工具，一切配置变更只走它（首批覆盖 fish.config.json 全部受控字段，含 engagement 开关与 engage 参数；写后热加载生效）；仅主人触发轮可用（execute 内核二次身份校验）；操作打审计日志；非法值拒绝 | 工具单测 + prompts 审查 | 仅主人轮生效、合法写入热加载生效、非法拒绝、越界字段拒绝、TOOL.md 唯一文档源 | 测试输出 | T9 |
+| F12 | 新增主人专属统一配置工具，一切配置变更只走它（首批覆盖 fish.config.json 全部受控字段，含 engagement 开关与 engage 参数；写后热加载生效）；仅主人私聊轮生效（群内轮一律拒绝，execute 内核二次身份校验）；操作打审计日志；非法值拒绝 | 工具单测 + prompts 审查 | 仅主人私聊轮生效、群内拒绝、合法写入热加载生效、非法拒绝、越界字段拒绝、TOOL.md 唯一文档源 | 测试输出 | T9 |
 | F13 | 每个群友的画像统一并入长期记忆：按人格隔离、以 QQ 为键的累积式印象条目（交流中不断叠加、带时间锚点，经审批闸入库）；无独立于 fish.memory 的第二套画像存储；渲染时在场群友的画像优先可见 | 记忆链路单测 + npm run memory 产物核对 | 画像条目累积叠加、跨会话同 QQ 合并、无重复存储、渲染按在场优先 | 测试输出 | T10 |
 
 **完成规则：** F1-F11 全部满足且证据对应当前版本才完成；步骤勾选不替代终态验证。
@@ -66,7 +66,7 @@
 12. **记忆提取/渲染考虑奖惩**：feedback 条目（`kind:"feedback"` 机械标记）渲染加权置顶（at+hits 机械规则保留）；抽取提示词（prompt/ 下对应文件）明确要求：评价类事实必须保留其结构化关联（对象消息、范围、群、人格、日期），不得降维成孤立的「主人说过 X」；抽取仍只进待审。
 13. **沉默递进**：连续 N 个 open 窗零出口 → 下窗注入尾部 nudge 文案；2N → 积压窗口放宽 windowRelaxCap；开口清零；仅统计 open 窗。
 14. **GIF 收图轮、`/` 指令、私聊、旁路记账** next 下不变（开关任务已保证）。
-15. **鱼可自改配置，入口只有一个**：新增主人专属统一配置工具 `config`（范式同 `model` 工具），一切配置变更都走它，**不为 engage 单独建工具**。首批覆盖 fish.config.json 全部受控字段（engagement、engage 块、ambientMinIntervalSeconds、watchAmbientChance 等，具体字段清单在 TOOL.md schema 定义）；写后靠 mtime 热加载生效；仅主人触发轮可用，execute 内核二次身份校验；审计日志；非法/越界值以 tool 错误拒绝且不落盘。既有 `model` 工具（改 config/models.json）是否并入由用户裁定，未裁定前不动。
+15. **鱼可自改配置，入口只有一个**：新增主人专属统一配置工具 `config`（范式同 `model` 工具），一切配置变更都走它，**不为 engage 单独建工具**。首批覆盖 fish.config.json 全部受控字段（engagement、engage 块、ambientMinIntervalSeconds、watchAmbientChance 等，具体字段清单在 TOOL.md schema 定义）；写后靠 mtime 热加载生效；**仅主人私聊轮可用**（群内轮一律拒绝；factory 无 MASTER_QQ 返回 undefined，execute 内核二次校验 chatKey 是否主人私聊）；审计日志；非法/越界值以 tool 错误拒绝且不落盘。既有 `model` 工具（改 config/models.json）是否并入由用户裁定，未裁定前不动。
 16. **群友画像统一并入长期记忆**（用户已定）：以 fish.memory 的 people 结构为唯一画像载体（按人格隔离、QQ 为键、事实条目累积叠加、带 YYYY-MM 时间锚点，享既有 supersede/上限/淘汰规则），**不另建第二套画像存储**；若发现存在独立的画像/印象机制（如静态人物档），评估后合并入 people 并废弃旧入口；抽取提示词要求：在与某人的交流中持续提炼对其的新印象（只进待审）；渲染时在场群友（当前群/当前轮出现的人）画像优先可见（现有在场/关键词门槛的强化）。跨群同 QQ 在同一人格内自然合并（公共层语义）。
 
 ## DAG
@@ -277,7 +277,7 @@ T7 ──> T10 (群友画像并入记忆)
 
 **接口契约：**
 - Consumes：T2 的 engage 配置块；fish-config 全部字段的既有校验规则（同源复用，不另写一份合法性规则）
-- Produces：工具包 `config`——**唯一配置变更入口**，严格遵循三处改动规范（TOOL.md 三元数据块 + tool.ts defineTool + loader FACTORIES 注册）：支持读现状与改 fish.config.json 受控字段（首批：engagement、engage 块、ambientMinIntervalSeconds、watchAmbientChance 及其它已有运行时参数；入参在 TOOL.md schema 定义，字段白名单制，拒绝越界字段与非法值）；写回仅限白名单字段；热加载生效；仅主人触发轮可用（factory 无 MASTER_QQ 返回 undefined，execute 内核二次校验）；审计日志；回执文案放 TOOL.md tool-messages 块；prompt/ops.md 同步（把「改配置」的引导指向本工具）；AGENTS.md 第 3 节能力面清单更新；**不动 `model` 工具**（是否并入 config/models.json 管理由用户另行裁定）
+- Produces：工具包 `config`——**唯一配置变更入口**，严格遵循三处改动规范（TOOL.md 三元数据块 + tool.ts defineTool + loader FACTORIES 注册）：支持读现状与改 fish.config.json 受控字段（首批：engagement、engage 块、ambientMinIntervalSeconds、watchAmbientChance 及其它已有运行时参数；入参在 TOOL.md schema 定义，字段白名单制，拒绝越界字段与非法值）；写回仅限白名单字段；热加载生效；**仅主人私聊轮可用**（factory 无 MASTER_QQ 返回 undefined，execute 内核二次校验：触发者=主人且会话为主人私聊，群内轮拒绝）；审计日志；回执文案放 TOOL.md tool-messages 块；prompt/ops.md 同步（把「改配置」的引导指向本工具）；AGENTS.md 第 3 节能力面清单更新；**不动 `model` 工具**（是否并入 config/models.json 管理由用户另行裁定）
 
 **终态关联：** F12。
 
