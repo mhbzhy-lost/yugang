@@ -70,7 +70,7 @@ export type IncomingMessage = {
   images: IncomingImage[];
   /** 收消息时临时用来下载的原始段，处理完就清空。 */
   imageSegments: OneBotSegment[];
-  /** reply 段引用的消息 id；宿主取回被引消息里的图后替换占位符。 */
+  /** reply 段引用的消息 id；#onFrame 只替换文本占位符，id 保留给 debounce 算 quoteFromReply（回复轮挂引用）。 */
   replyIds: string[];
   /** forward 段的合集 id；宿主异步拉子消息展开成文本摘要后清空（见 #onFrame）。 */
   forwardIds?: string[];
@@ -270,7 +270,8 @@ export class OneBot {
       }
       parsed.text = parsed.text.replace(`[回复某条消息#${index}]`, shown);
     }
-    parsed.replyIds = [];
+    // replyIds 不清空：debounce 的 quoteFromReply（整组里任意一条是回复 → 这一轮仍然引用）
+    // 和私聊直提路径都靠它判定；水合只替换文本占位符，id 本身保留。清空曾让真回复轮永远裸发。
 
     if (!parsed.text.trim()) return;
     for (const h of this.#handlers) h(parsed);
