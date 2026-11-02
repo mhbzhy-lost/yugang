@@ -28,6 +28,9 @@ export interface RecentChatMessage {
   nickname: string;
   text: string;
   at: number;
+  /** 纯媒体消息形态（onebot 解析层透传，仅 next 的积压/shard 过滤消费；legacy 不看）：
+ *  gif = 纯 GIF 消息，image = 纯图片无文字。undefined = 普通消息。 */
+  mediaOnly?: "gif" | "image";
 }
 
 /** burst 里的一条：多带两个「整组语义」需要的标记。 */
@@ -86,6 +89,8 @@ export interface Debouncer {
   push(input: BurstInput): PendingBurst;
   /** 这个发送者现在有没有待定窗口（被闸拦下的 follow-up 要靠它判断是否并入）。 */
   pending(chatKey: string, userId: number): PendingBurst | undefined;
+  /** 这个群当前的全部待定窗口（open 窗的积压查询要排除其中的消息，不重复注入）。 */
+  pendingOf(chatKey: string): PendingBurst[];
   /** 丢掉窗口（压缩守卫命中、异常收尾用）。 */
   drop(chatKey: string, userId: number): boolean;
   size(): number;
@@ -171,6 +176,13 @@ export function createDebouncer(options: DebouncerOptions): Debouncer {
 
     pending(chatKey, userId) {
       return bursts.get(burstKey(chatKey, userId));
+    },
+
+    pendingOf(chatKey) {
+      const prefix = `${chatKey}\u0000`;
+      return [...bursts.entries()]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([, burst]) => burst);
     },
 
     drop(chatKey, userId) {
@@ -289,29 +301,69 @@ export interface ContextOptions {
 }
 
 /**
+ * 一条进了本轮模型输入的消息锚点（渲染处现算、不另存）：counted entry 渲染行的 [m:id]
+ * 前缀契约结构，T4 的 quoteIds 窗口与 T12 的逐字引用校验都认它。
+ */
+export interface SeenMessage {
+  messageId?: number | string;
+  arrivalSeq?: number;
+  at?: number;
+  author: string;
+  text: string;
+}
+
+/** withContext 的产物：本轮 user 文本 + 现算的注入窗口锚点集（宿主据此登记 quoteIds）。 */
+export interface RoundContext {
+  content: string;
+  /** 本轮注入窗口（背景 + 整组 + 锚点）的消息锚点。 */
+  seen: SeenMessage[];
+}
+
+/** 锚点结构现算：id / 序号 / 时间缺什么就不带什么，不另存。 */
+function seenOf(line: { messageId?: number | string; arrivalSeq?: number; at?: number; nickname: string; text: string }): SeenMessage {
+  return {
+    ...(line.messageId !== undefined ? { messageId: line.messageId } : {}),
+    ...(line.arrivalSeq !== undefined ? { arrivalSeq: line.arrivalSeq } : {}),
+    ...(line.at !== undefined ? { at: line.at } : {}),
+    author: line.nickname,
+    text: line.text,
+  };
+}
+
+/** counted entry 渲染行的 [m:<messageId>] 锚点前缀（T3 契约，机械结构标记）：没有 id 的旧流水不加。 */
+function withAnchor<T extends { messageId?: number | string }>(line: T, rendered: string): string {
+  return line.messageId !== undefined ? `[m:${line.messageId}] ${rendered}` : rendered;
+}
+
+/**
  * 这一轮的 user 文本：背景（带 QQ 号，给主动 @ 提供可信目标）+ 连续发言整组 + 锚点。
  *
  * 顺序是刻意的：先说「刚才群里聊了什么」，再说「这几条是同一个人连着的」，最后才是
  * 要回的那一行（带 @ / 回复 / 主人标注）。锚点之外的消息一律只作背景，且整组不会
- * 在背景里重复出现。
+ * 在背景里重复出现。每条消息行带 [m:id] 锚点（T4 quoteMsgId / T12 逐字校验的挂点），
+ * 锚点集随返回值现算交给宿主登记 quoteIds。
  */
 export function withContext(
   anchor: IncomingMessage,
   bucket: readonly RecentChatMessage[],
   burst: readonly BurstMessage[],
   options: ContextOptions,
-): string {
+): RoundContext {
   const messages = options.messages;
-  const anchorLine = renderForModel(anchor, options.master, messages);
-  if (!anchor.chatKey.startsWith("qq:group:")) return anchorLine;
+  const anchorLine = withAnchor(anchor, renderForModel(anchor, options.master, messages));
+  if (!anchor.chatKey.startsWith("qq:group:")) {
+    return { content: anchorLine, seen: [seenOf(anchor)] };
+  }
 
   const parts: string[] = [];
+  const seen: SeenMessage[] = [];
   const background = backgroundFor(anchor, bucket, burst);
   if (background.length > 0) {
     parts.push(renderTemplate(messages["ctx_header"] ?? "", { count: String(background.length) }));
     const template = messages["ctx_bg_line"] ?? "";
     for (const line of background) {
-      parts.push(renderTemplate(template, { who: line.nickname, qq: String(line.userId), text: line.text }));
+      parts.push(withAnchor(line, renderTemplate(template, { who: line.nickname, qq: String(line.userId), text: line.text })));
+      seen.push(seenOf(line));
     }
   }
 
@@ -323,13 +375,16 @@ export function withContext(
     // 除锚点外都按普通行渲染；同一句只出现一次
     for (const line of burst.slice(0, -1)) {
       const rendered = renderTemplate(template, { who: line.nickname, qq: String(line.userId), text: line.text });
-      parts.push(`${marker} ${rendered}`.trim());
+      parts.push(`${marker} ${withAnchor(line, rendered)}`.trim());
+      seen.push(seenOf(line));
     }
     parts.push(messages["ctx_anchor_note"] ?? "", options.watchedNote ?? "");
     // 锚点这一行走带结构化标注的那份（群号 / 昵称(QQ) / 回复 id / @ 目标），仍打同组标记
     parts.push(`${marker} ${anchorLine}`.trim());
+    seen.push(seenOf(anchor));
   } else {
     parts.push(messages["ctx_target"] ?? "", options.watchedNote ?? "", anchorLine);
+    seen.push(seenOf(anchor));
   }
 
   // inline 附图标注：已附的告诉模型直接看，未附的引导 look（文案在 prompt/messages.md）
@@ -338,5 +393,5 @@ export function withContext(
   const more = options.images?.more ?? 0;
   if (more > 0) parts.push(renderTemplate(messages["ctx_images_more"] ?? "", { count: String(more) }));
 
-  return parts.filter((part) => part.length > 0).join("\n");
+  return { content: parts.filter((part) => part.length > 0).join("\n"), seen };
 }

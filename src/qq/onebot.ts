@@ -78,6 +78,9 @@ export type IncomingMessage = {
   repliedForward?: boolean;
   /** 分享卡片（小程序 / 结构化分享）；文本里留 [卡片#N] 占位，由宿主按 prompt 文案渲染。 */
   cards?: ShareCard[];
+  /** 纯媒体消息形态（next 的积压/shard 过滤消费，legacy 不看）：正文只剩图片占位且带图。
+ *  gif = 纯 GIF（交给静默收图轮），image = 纯图片无文字；解析层就能判，不依赖异步下载。 */
+  mediaOnly?: "gif" | "image";
 };
 
 export interface SendOptions {
@@ -751,6 +754,21 @@ export async function completeAtNames(
   parsed.atOtherNames = names;
 }
 
+/**
+ * 纯媒体消息形态：正文剥掉图片占位后为空且带图——按内容标 gif / image（有任一 gif 段按 gif）。
+ * 段里的 file / url 扩展名在解析时就能拿到，不等异步下载。
+ */
+function mediaOnlyOf(text: string, imageSegments: readonly OneBotSegment[]): "gif" | "image" | undefined {
+  if (imageSegments.length === 0) return undefined;
+  if (text.replace(/\[图片#\d+\]/g, "").trim().length > 0) return undefined;
+  const isGif = (seg: OneBotSegment): boolean => {
+    const file = String(seg.data?.["file"] ?? "");
+    const url = String(seg.data?.["url"] ?? "");
+    return /\.gif([?#]|$)/i.test(file) || /\.gif([?#]|$)/i.test(url);
+  };
+  return imageSegments.some(isGif) ? "gif" : "image";
+}
+
 export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage | null {
   const userId = frame.user_id ?? 0;
   if (!userId) return null;
@@ -820,7 +838,8 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
   if (!text) return null;
 
   const nickname = frame.sender?.card || frame.sender?.nickname || String(userId);
-  const base = { userId, nickname, text, mentionsBot, ...(mentions.length > 0 ? { mentions } : {}), ...(atOthers.length > 0 ? { atOthers, atOtherNames } : {}), messageId: frame.message_id, images, imageSegments: segments, replyIds, forwardIds, ...(cards.length > 0 ? { cards } : {}) };
+  const mediaOnly = mediaOnlyOf(text, segments);
+  const base = { userId, nickname, text, mentionsBot, ...(mentions.length > 0 ? { mentions } : {}), ...(atOthers.length > 0 ? { atOthers, atOtherNames } : {}), messageId: frame.message_id, images, imageSegments: segments, replyIds, forwardIds, ...(cards.length > 0 ? { cards } : {}), ...(mediaOnly ? { mediaOnly } : {}) };
 
   if (frame.message_type === "group" && frame.group_id) {
     return { ...base, chatKey: `qq:group:${frame.group_id}`, groupId: frame.group_id };

@@ -2,6 +2,14 @@
   "ambientMinIntervalSeconds": 30,
   "watchAmbientChance": 0.5,
   "engagement": "legacy",
+  "engage": {
+    "closedMinutes": 10,
+    "openMinutes": 3,
+    "windowSize": 20,
+    "mentionContextSize": 5,
+    "silenceThreshold": 3,
+    "windowRelaxCap": 30
+  },
   "thinkingLevel": "low",
   "compact": {
     "maxEntries": 200,
@@ -18,7 +26,8 @@
     }
   },
   "toolTimeoutSeconds": 30,
-  "_engagement": "注释：搭话总开关。legacy = 现行全部搭话判定；next = 群里只认 @ 鱼必答，其余非 @ 群消息一律 skip:next_pending 不进模型（私聊、/ 指令、GIF 收图轮与记账不受影响）。热生效，只认 legacy/next，非法值保留缺省并告警",
+  "_engagement": "注释：搭话总开关。legacy = 现行全部搭话判定；next = 定时开窗两态——closed 态非 @ 群消息 skip:next_pending 不进模型，open 态（每 closedMinutes 分钟开 openMinutes 分钟）非 @ 群消息 free_pass 走合并管线（@ 恒必答；私聊、/ 指令、GIF 收图轮与记账不受影响）。热生效，只认 legacy/next，非法值保留缺省并告警",
+  "_engage": "注释：next 搭话开窗参数，仅 engagement=next 时消费。closedMinutes=关窗时长（分钟）、openMinutes=开窗时长、windowSize=开窗积压注入上限（条）、mentionContextSize=@ 轮背景条数（legacy 恒 10 不变）、silenceThreshold=连续多少个开窗零出口后注入 nudge、windowRelaxCap=零出口翻倍后积压放宽上限（recent 流水上限同步提升为 max(30, windowRelaxCap)）。逐字段校验，非法值告警保留缺省，热生效",
   "_salvagePlainReply": "注释：模型忘调 say 时的正文兜底，仅必答轮（私聊/被@/回复合集）生效——零 say 时取正文首行截 120 字补发；误发可把下面的键改成 false 关掉",
   "salvagePlainReply": true
 }

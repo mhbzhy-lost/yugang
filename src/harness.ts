@@ -29,7 +29,8 @@ import { OutboundEntry, type OutboundPayload } from "./tools/say-shared.ts";
 import { loadPrompts, renderTemplate, type PromptSet } from "./prompts.ts";
 import { loadToolSurface } from "./tools/loader.ts";
 import { renderToolCatalog } from "./tools/catalog.ts";
-import type { ToolManifest, ToolPackageDeps } from "./tools/types.ts";
+import type { RoundTrigger, ToolManifest, ToolPackageDeps } from "./tools/types.ts";
+import type { EngagementMode } from "./fish-config.ts";
 import { withToolTimeout } from "./tools/timeout.ts";
 import { WatchDoc } from "./store.ts";
 import { createCompactor, MemoryExtractError, type CompactResult, type Compactor } from "./compact.ts";
@@ -78,14 +79,17 @@ function makeFishExtension(
     memoryKeyOf: (conversationId: string) => string | undefined;
     /** conversationId → 原始 chatKey：私有层 doc key（人格名@chatKey）由它现算 */
     chatKeyOf: (conversationId: string) => string | undefined;
+    /** 携话模式现取（热）：runtime 的「自由交流窗口」小节仅 next 注入（决策 18，T3 接线）。 */
+    engagementOf: () => EngagementMode;
   },
 ): Extension {
   return defineExtension({
     name,
     tools: parts.tools,
     sections: [
-      // 运行时协议：能力边界、输入信任、出口、错误处理、渐进加载；人格无关，不随人格换页
-      section("runtime", () => parts.prompts.runtime, { tag: false }),
+      // 运行时协议：能力边界、输入信任、出口、错误处理、渐进加载；人格无关，不随人格换页。
+      // 「自由交流窗口」小节是 next 专属的窗口协议，legacy 下动态裁掉（见 runtimeTextOf）
+      section("runtime", () => runtimeTextOf(parts.prompts.runtime, parts.engagementOf()), { tag: false }),
       section("persona", () => persona, { tag: false }),
       // 工具目录：每次请求由 trusted manifest 现渲染，只列已启用工具的 name + 顶部摘要；
       // 「目录 ≠ 已加载」的行为说明在 prompt/runtime.md，这里不内嵌提示词
@@ -128,6 +132,31 @@ function makeFishExtension(
 
 const ctx = BACKGROUND_CONTEXT;
 
+/** runtime.md 里 next 专属小节的段首前缀（T1 契约：稳定段首，动态裁剪的定位锚）。 */
+const ENGAGE_RUNTIME_PREFIX = "自由交流窗口：";
+
+/**
+ * runtime 的模型可见动态裁剪（决策 18）：engagement≠next 时把「自由交流窗口」整段
+ * 裁掉——那是 next 的窗口协议，legacy 下看到只会误导。按段首前缀定位、按空行分段
+ * 裁剪，不引入新文案；找不到该段（prompt 被改坏）时原样返回，缺省（未接回调）= legacy。
+ */
+function runtimeTextOf(base: string, engagement: EngagementMode): string {
+  if (engagement === "next") return base;
+  const lines = base.split("\n");
+  const start = lines.findIndex((line) => line.startsWith(ENGAGE_RUNTIME_PREFIX));
+  if (start < 0) return base;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index++) {
+    if (lines[index].trim() === "") {
+      end = index;
+      break;
+    }
+  }
+  const kept = [...lines.slice(0, start), ...lines.slice(end)];
+  const text = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return text.length > 0 ? text : base;
+}
+
 export interface GroupProfile {
   groupId: string;
   count: number;
@@ -162,8 +191,8 @@ export interface FishOptions {
   tagsCsv?: string;
   /** 主人 QQ：fs/restart 自改工具的身份闸，给了才注册这些工具。 */
   master?: string;
-  /** submissionId → 本轮触发消息；把回复引用绑在轮上，防串线。 */
-  triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
+  /** submissionId → 本轮触发消息（轮类型 + quoteIds 窗口）；把回复引用绑在轮上，防串线。 */
+  triggerOf?: (roundId: unknown) => RoundTrigger | undefined;
   /**
    * 主动 @ 的身份闸：由宿主机械提供（私聊 = not_group；群内主人/特别关注者 = allow）。
    * 同时交给 say_*（出口校验）使用；不提供时主动 @ 一律 fail closed。
@@ -189,6 +218,8 @@ export interface FishOptions {
   streamTransport?: "sse" | "websocket" | "websocket-cached" | "auto";
   /** 按会话取 TTS 配置（人格相关）；返回 undefined 表示这个会话没有语音能力。 */
   ttsOf?: (conversationId: string) => import("./tts.ts").TtsConfig | undefined;
+  /** 携话模式现取（热）：runtime 的「自由交流窗口」小节仅 next 注入；缺省 = legacy（裁掉）。 */
+  engagementOf?: () => EngagementMode;
   /** 静默轮（自动收表情包）：这一轮 say_* 一律拒绝。 */
   silentOf?: (roundId: unknown) => boolean;
   /** 本轮 say_* 的 execute 被进入时回调；宿主按 submission 计数，识别零出口轮。 */
@@ -357,11 +388,11 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     const override = options.toolTimeoutOverrides?.[tool.name];
     return withToolTimeout(tool, override === undefined ? toolTimeoutMs : override * 1000, toolTimeoutMessage);
   });
-  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation, chatKeyOf: chatKeyOfConversation });
+  const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation, chatKeyOf: chatKeyOfConversation, engagementOf: () => options.engagementOf?.() ?? "legacy" });
   const personaExtensions = new Map<string, Extension>();
   const openers: Record<string, string> = {};
   for (const [name, book] of Object.entries(prompts.personas)) {
-    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation, chatKeyOf: chatKeyOfConversation }));
+    personaExtensions.set(name, makeFishExtension(`fish:${name}`, book.body, { tools: fishTools, prompts, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation, chatKeyOf: chatKeyOfConversation, engagementOf: () => options.engagementOf?.() ?? "legacy" }));
     if (book.opener) openers[name] = book.opener;
   }
 

@@ -21,6 +21,7 @@ import { openFish, type GroupProfile } from "./harness.ts";
 import { OneBot, orderByArrival, type IncomingMessage } from "./qq/onebot.ts";
 import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "./voice-route.ts";
 import { createGate } from "./qq/gate.ts";
+import { createEngageNext, type EngageBacklogItem, type EngageShardItem } from "./engage-next.ts";
 import {
   createDebouncer,
   withContext,
@@ -30,7 +31,8 @@ import {
   type RecentChatMessage,
 } from "./qq/debounce.ts";
 import { replaceWatched, type WatchedMap } from "./qq/watch-state.ts";
-import type { CompactResult } from "./compact.ts";
+import { MEMORY_ENGAGE_KIND, type CompactResult } from "./compact.ts";
+import type { RoundKind, RoundTrigger } from "./tools/types.ts";
 import { setLookDisabled } from "./tools/look/tool.ts";
 import { clearMemeImportRound } from "./tools/meme_import/shared.ts";
 import { hasMemeMd5, md5OfFile } from "./media/meme-store.ts";
@@ -215,17 +217,126 @@ const chatKeys = new Map<string | number, string>();
 const compacting = new Set<string>();
 // 静默收图轮在跑的会话：同一会话不许并发提交 / 不许换页（两条路径共用 conversationBusy）
 const ingestRounds = new Set<string>();
-/** 会话是不是正被换页或静默收图轮占着：起新提交与起换页前都要先看它。 */
+// 会话忙（换页 / 静默收图轮 / next 在途轮）的判定：起新提交与起换页前都要先看它。
+// next 的在途轮登记见 nextInFlight（shard 到期与开窗注入据此退避，同一会话绝不并发提交）；
+// legacy 不登记，行为零变化。
 function conversationBusy(id: string | number): boolean {
   const key = String(id);
-  return compacting.has(key) || ingestRounds.has(key);
+  return compacting.has(key) || ingestRounds.has(key) || nextInFlight.has(key);
+}
+
+// ── 携话 next（engagement=next）的轮级互斥（决策 8 + shard 修订）─────────────────
+// 在途轮登记：conversationId → 在途轮的 kind 集合。submit 前登记、settle 的 finally 释放；
+// 仅 engagement=next 时登记（legacy 零变化）。@ 轮（answer）也登记——shard 到期与开窗
+// 注入据此退避，不与必答轮并发；但 @ 轮自己的等待队列只等 ambient/injection 清零
+// （两个必答轮并发提交是既有行为，不引入排队）。
+const nextInFlight = new Map<string, Set<RoundKind>>();
+// 等待在途 ambient/injection 轮清零的 @ 轮唤醒器：清零（或超时）时逐个唤醒
+const ambientWaiters = new Map<string, Set<(ok: boolean) => void>>();
+const EMPTY_KINDS: ReadonlySet<RoundKind> = new Set();
+
+function registerInFlight(id: string | number, kind: RoundKind): void {
+  const key = String(id);
+  const kinds = nextInFlight.get(key) ?? new Set<RoundKind>();
+  kinds.add(kind);
+  nextInFlight.set(key, kinds);
+}
+
+function releaseInFlight(id: string | number, kind: RoundKind): void {
+  const key = String(id);
+  const kinds = nextInFlight.get(key);
+  if (!kinds) return;
+  kinds.delete(kind);
+  if (kinds.size === 0) nextInFlight.delete(key);
+  // 在途 ambient/injection 清零才唤醒等待的 @ 轮（其它在途 @ 轮不阻塞它们）
+  if (!kinds.has("ambient") && !kinds.has("injection")) {
+    const waiters = ambientWaiters.get(key);
+    if (waiters) {
+      ambientWaiters.delete(key);
+      for (const wake of waiters) wake(true);
+    }
+  }
+}
+
+function hasAmbientInFlight(id: string | number): boolean {
+  const kinds = nextInFlight.get(String(id)) ?? EMPTY_KINDS;
+  return kinds.has("ambient") || kinds.has("injection");
+}
+
+/** @ 轮等待在途 ambient（shard）/ injection 轮清零：上限 timeoutMs，超时返回 false（转 busy_reply）。 */
+async function waitAmbientClear(id: string | number, timeoutMs: number): Promise<boolean> {
+  const key = String(id);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!hasAmbientInFlight(key)) return true;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    const woken = await new Promise<boolean>((resolve) => {
+      let done = false;
+      const finish = (ok: boolean): void => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        const waiters = ambientWaiters.get(key);
+        if (waiters) {
+          waiters.delete(finish);
+          if (waiters.size === 0) ambientWaiters.delete(key);
+        }
+        resolve(ok);
+      };
+      const timer = setTimeout(() => finish(false), remaining);
+      const waiters = ambientWaiters.get(key) ?? new Set<(ok: boolean) => void>();
+      waiters.add(finish);
+      ambientWaiters.set(key, waiters);
+    });
+    if (!woken) return false;
+  }
+}
+
+// ── 已读标记（决策 20）─────────────────────────────────────────────
+// conversationId → 最后一条进入模型输入的消息 arrivalSeq。内存态（重启即无＝什么都
+// 没看过，不会把没看过的当已读）；所有把群消息注入模型输入的路径统一维护：
+// injection backlog / shard 轮注入后推进、@ 轮整组（burst 本体）照常注入并推进。
+// 背景板去重（先取 N 再剔已读）由 T5 接入；@ 轮整组不属背景板，不受标记影响。
+const lastSeenByModel = new Map<string, number>();
+
+function seenSeqOf(id: string | number): number {
+  return lastSeenByModel.get(String(id)) ?? 0;
+}
+
+function advanceSeenSeq(id: string | number, seq: number | undefined): void {
+  if (seq === undefined) return;
+  const key = String(id);
+  if (seq > (lastSeenByModel.get(key) ?? 0)) lastSeenByModel.set(key, seq);
+}
+
+/** 一批消息里最大的 arrivalSeq（推进已读标记用）。 */
+function maxArrivalSeq(messages: readonly { arrivalSeq?: number }[]): number | undefined {
+  let best: number | undefined;
+  for (const message of messages) {
+    if (message.arrivalSeq !== undefined && (best === undefined || message.arrivalSeq > best)) best = message.arrivalSeq;
+  }
+  return best;
+}
+
+/** 流水末条的 arrivalSeq（已按到达序排好）。 */
+function lastArrivalSeq(messages: readonly { arrivalSeq?: number }[]): number | undefined {
+  return messages.length > 0 ? messages[messages.length - 1]?.arrivalSeq : undefined;
+}
+
+/** 本轮注入窗口的合法引用目标（T4 quoteMsgId 消费）：渲染处现算的 [m:id] 集合。 */
+function quoteIdsOf(messages: readonly { messageId?: number | string }[]): Set<string> {
+  return new Set(messages.flatMap((m) => (m.messageId !== undefined ? [String(m.messageId)] : [])));
 }
 const lastMention = new Map<string, boolean>();
 // 本轮触发是否是回复某条消息：是则鱼的回应强制引用（回复链可读性）
 const lastReply = new Map<string, boolean>(); // 最近一次触发是否@了鱼：被@必回引用，让群里看得出鱼在回谁
-// submissionId → 本轮触发消息：把引用目标绑在轮上，不被后续消息顶掉；
-// userId 是主动 @ 身份闸的唯一依据（不靠模型文本推断关系）。
-const triggerOf = new Map<string, { messageId?: number | string; mentionsBot: boolean; userId?: number }>();
+// submissionId → 本轮触发消息（含轮类型 kind 与 quoteIds 窗口）：把引用目标绑在轮上，
+// 不被后续消息顶掉；userId 是主动 @ 身份闸的唯一依据（不靠模型文本推断关系）。
+// kind：answer = 既有必答 / 私聊 / legacy 轮；ambient = open 窗 shard 轮；injection = 开窗
+// 积压注入轮（后两者无锚点消息）。quoteIds = 本轮注入窗口的消息 id（T4 quoteMsgId 消费），
+// settle 的 finally 里随轮清除。
+const triggerOf = new Map<string, RoundTrigger>();
 // submissionId → 本轮触发消息自带的 bypass 段；仅该轮 draw 可见，轮 settle 即删
 const bypassOf = new Map<string, string>();
 // submissionId → 本轮 say_* 被调用的次数：识别「零出口轮」（模型裸文本回复，正文不出境，聊天对象零输出）。
@@ -301,6 +412,8 @@ const fish = await openFish({
   master: config.master,
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
   silentOf: (roundId) => silentRounds.has(String(roundId)),
+  // runtime 的「自由交流窗口」小节只在 engagement=next 时注入（热读取，决策 18）
+  engagementOf: () => fishConfig().config.engagement,
   // 出口计数：say_* 的 execute 进入即回调；未登记的轮（收图轮）直接忽略，不留孤儿计数
   onSayCall: (roundId) => {
     const key = String(roundId);
@@ -681,20 +794,29 @@ async function submitRound(input: {
   chatKey: string;
   conv: Conversation;
   content: string;
-  /** 本轮触发消息：引用目标与主动 @ 的身份闸都只认它 */
-  trigger: { messageId?: number | string; mentionsBot: boolean; userId?: number };
+  /** 本轮触发消息：引用目标与主动 @ 的身份闸都只认它；kind = 轮类型（缺省 answer） */
+  trigger: { messageId?: number | string; mentionsBot: boolean; userId?: number; kind?: RoundKind };
   /** 本轮是不是在回复别人（回复链要引用） */
   reply: boolean;
   /** 本轮是否必答（闸放行原因 ∈ private/mentioned/replied_forward）：正文兜底只补必答轮 */
   mustAnswer?: boolean;
   /** bypass 段（画图指令）；只在这一轮可见，轮 settle 即删 */
   bypass?: string;
-  /** 记忆：结构化入站 entry（fish.inbound，原始文本）与本轮在场人物（memory scope） */
-  memory: { inbound: MemoryInbound; speakers: { subject: string; name: string }[] };
+  /** 记忆：结构化入站 entry（fish.inbound，原始文本）与本轮在场人物（memory scope）。 */
+  /** 不传（injection / shard 轮）= 不写 fish.inbound、不压 scope（背景板非对话输入） */
+  memory?: { inbound: MemoryInbound; speakers: { subject: string; name: string }[] };
   /** inline 附图（绝对路径，≤2 张）：压缩后以 image block 附在文本后；失败静默跳过 */
   imageFiles?: string[];
+  /** entry kind：缺省 fish.inbound（写结构化数据）；injection / shard 轮传 fish.engage_tick */
+  entryKind?: string;
+  /** 本轮注入窗口的消息 id（T4 quoteMsgId 合法目标）；随 triggerOf 在 settle 清除 */
+  quoteIds?: ReadonlySet<string>;
 }): Promise<void> {
   const { chatKey, conv, trigger } = input;
+  // 在途登记要在任何 await 之前（busy 检查与提交之间不开窗口）：仅 next 登记对称登记/释放
+  const roundKind: RoundKind = trigger.kind ?? "answer";
+  const trackInFlight = fishConfig().config.engagement === "next";
+  if (trackInFlight) registerInFlight(conv.id, roundKind);
   await absorbSecrets(conv);
   resetRun(conv.id);
   resetLook(conv.id);
@@ -719,7 +841,10 @@ async function submitRound(input: {
   }
   const submitContent = imageBlocks.length > 0 ? [{ type: "text" as const, text: content }, ...imageBlocks] : content;
 
-  const scopeToken = pushScope(String(conv.id), { speakers: input.memory.speakers, text: input.memory.inbound.text });
+  const scopeToken = input.memory !== undefined
+    ? pushScope(String(conv.id), { speakers: input.memory.speakers, text: input.memory.inbound.text })
+    : undefined;
+  const entryKind = input.entryKind ?? MEMORY_INBOUND_KIND;
   let settled: SettledSubmissionRecord;
   // 轮内自愈：模型错误（如内容拦截 1301）时自动重试，第三次尝试前强制换页——
   // 摘要同源失败会走机械降级把可能的中毒内容清出活跃页，一次输入就能自愈，不依赖用户重发
@@ -734,15 +859,24 @@ async function submitRound(input: {
       }
       // 触发消息绑在 submission 上：轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）。
       // entry 是记忆的唯一原始输入：chatKey / QQ / 昵称 / 原话，不带任何宿主文案；
-      // 重试不重复落库，只有首次尝试携带 entry
+      // 重试不重复落库，只有首次尝试携带 entry。injection / shard 轮不写 fish.inbound
+      //（fish.engage_tick：背景板非对话输入，不进摘要与抽取）
       const submission = await conv.submit(
-        { type: "input", content: submitContent, entry: attempt === 1 ? { kind: MEMORY_INBOUND_KIND, data: input.memory.inbound } : undefined },
+        {
+          type: "input",
+          content: submitContent,
+          entry: attempt === 1
+            ? (input.memory !== undefined ? { kind: entryKind, data: input.memory.inbound } : { kind: entryKind })
+            : undefined,
+        },
         ctx,
       );
       triggerOf.set(String(submission.id), {
         messageId: trigger.messageId,
         mentionsBot: trigger.mentionsBot,
         userId: trigger.userId,
+        kind: roundKind,
+        ...(input.quoteIds !== undefined && input.quoteIds.size > 0 ? { quoteIds: input.quoteIds } : {}),
       });
       // 重耗时工具的机械提示要落回本轮会话：登记轮的会话，settle 的 finally 里删
       roundConv.set(String(submission.id), conv);
@@ -755,10 +889,11 @@ async function submitRound(input: {
       try {
         const result = await submission.wait(ctx);
         // 正常结束却一次 say_* 都没调：模型裸文本回复不出口，聊天对象什么都看不到——
-        // 打一行宿主日志让这类轮立刻可见（收图轮不经 submitRound，天然不在观测范围）；
-        // 文案固定含「零出口轮」供 grep，完整解释在 .agents/skills/ops/SKILL.md
+        // answer 轮打一行宿主日志让这类轮立刻可见（收图轮不经 submitRound，天然不在观测范围），
+        // 完整解释在 .agents/skills/ops/SKILL.md；ambient（shard）/ injection 轮零出口是
+        // 合法沉默（F2/F3），不算异常不占观测日志
         if (result.status === "done" && (sayCalled.get(String(submission.id)) ?? 0) === 0) {
-          console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say_*`);
+          if (roundKind === "answer") console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say_*`);
           // 必答轮的兜底补发：配置可关（mtime 热加载，每次触发现读）；环境轮只留上面的观测日志。
           // done 变体的 settle 记录带本轮输入（entry）与末条 assistant（answer）的 entry id，兜底按 id 定位
           if (input.mustAnswer === true && fishConfig().config.salvagePlainReply) {
@@ -790,6 +925,8 @@ async function submitRound(input: {
   } finally {
     // scope 队列满（scopeToken undefined）时本轮没压过 scope，不能弹掉别人的队首
     if (scopeToken !== undefined) shiftScope(String(conv.id), scopeToken);
+    // 在途登记对称释放（仅 next 登记过）；ambient/injection 清零时唤醒等待的 @ 轮
+    if (trackInFlight) releaseInFlight(conv.id, roundKind);
   }
   if (settled.status !== "done") {
     const why = [settled.status, (settled as { reason?: string }).reason, (settled as { detail?: string }).detail]
@@ -844,12 +981,16 @@ async function compactWithGuard(conv: Conversation, force = false, chatKey = "")
   }
 }
 
+/** @ 轮遇在途 ambient（shard）/ injection 轮的排队上限：超时转 busy_reply，不静默丢。 */
+const ANSWER_WAIT_MS = 60_000;
+
 /**
  * 10 秒静默到期：整组一起进模型。
  *
  * 锚点 = 这一组按收到顺序最后一条（A-B-A 里 B 只出现在背景，不可能顶掉 A）；整组里任意一条 @鱼
- * 就整组必答；引用只看锚点。提交前重新检查会话忙：换页 / 收图轮期间不提交旧上下文，
- * 被@的按既有 busy 语义回执，pending 已由状态机先摘掉，不会留下陈年 burst。
+ * 就整组必答；引用只看锚点。会话忙分两级：换页 / 收图轮沿用既有语义（丢组 + 被@回忙碌语）；
+ * 在途 ambient/injection 轮（仅 next 登记）则分级——@ 轮（必答）排队等待 ≤60s（超时转忙碌语，
+ * 消息不丢），非必答组静默丢弃（沿用环境轮遇忙即弃）。legacy 不登记在途，零变化。
  */
 async function flushBurst(burst: PendingBurst): Promise<void> {
   const anchor = burst.anchor;
@@ -860,10 +1001,25 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
   const conv = (burst.binding as Conversation | undefined) ?? (await conversationFor(anchor.chatKey));
 
   // 换页 / 收图轮进行中：不再受理新提交（根治换页竞态把活跃轮吃掉的问题）
-  if (conversationBusy(conv.id)) {
+  if (compacting.has(String(conv.id)) || ingestRounds.has(String(conv.id))) {
     console.log(`[鱼缸] ${anchor.chatKey} 会话忙，丢弃待定组 ${burst.messages.length}`);
     await sendBusyReplies(conv, burst.messages.filter((m) => m.mentionsBot).map((m) => m.messageId));
     return;
+  }
+
+  // next：在途 ambient（shard）/ injection 轮——@ 轮排队等待，非必答组静默丢弃
+  if (hasAmbientInFlight(conv.id)) {
+    if (!mustAnswer) {
+      console.log(`[鱼缸] ${anchor.chatKey} 在途环境轮，丢弃待定组 ${burst.messages.length}`);
+      return;
+    }
+    console.log(`[鱼缸] ${anchor.chatKey} 在途环境轮，@ 轮排队等待`);
+    const cleared = await waitAmbientClear(conv.id, ANSWER_WAIT_MS);
+    if (!cleared || compacting.has(String(conv.id)) || ingestRounds.has(String(conv.id)) || hasAmbientInFlight(conv.id)) {
+      console.log(`[鱼缸] ${anchor.chatKey} @ 轮等待未清，转忙碌语`);
+      await sendBusyReplies(conv, burst.messages.filter((m) => m.mentionsBot).map((m) => m.messageId));
+      return;
+    }
   }
 
   // 命中特别关注：在要回的那一行前面打标（机械匹配 QQ 号，不靠模型回忆）
@@ -873,12 +1029,13 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     : "";
   // inline 附图选取：锚点图优先、burst 内按序补足，普通轮 ≤2 张；GIF 与缺失文件不附（也不占额度）
   const inlinePick = inlineVisionOn() ? pickInlineImages(anchor, burst.messages, config.mediaRoot) : { attach: [], more: 0 };
-  let content = withContext(anchor, recent.get(anchor.chatKey) ?? [], burst.messages, {
+  const roundContext = withContext(anchor, recent.get(anchor.chatKey) ?? [], burst.messages, {
     master: config.master,
     messages: fish.prompts.messages,
     ...(watchedNote ? { watchedNote } : {}),
     ...(inlinePick.attach.length > 0 ? { images: { attach: inlinePick.attach.length, more: inlinePick.more } } : {}),
   });
+  let content = roundContext.content;
 
   // @ 鱼 + 文字里提到合集/转发：把这个群最近一条没展开的合集拉出来（10 分钟内有效）。
   // 场景：先发合集（不 @，被闸丢弃）→ 再 @ 问「上面那个能看吗」。合集记录里明确标了它是什么。
@@ -913,14 +1070,145 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     chatKey: anchor.chatKey,
     conv,
     content,
-    // 引用锚点与主动 @ 的身份闸都只认锚点；但整组里任意一条 @鱼，整组都必答
-    trigger: { messageId: anchor.messageId, mentionsBot: burst.mustAnswer, userId: anchor.userId },
+    // 引用锚点与主动 @ 的身份闸都只认锚点；但整组里任意一条 @鱼，整组都必答。
+    // burst 轮（@ / legacy）一律 answer；open 态的非 @ 消息走 shard（ambient），不经这里
+    trigger: { messageId: anchor.messageId, mentionsBot: burst.mustAnswer, userId: anchor.userId, kind: "answer" },
     reply: burst.quoteFromReply,
     mustAnswer,
+    quoteIds: quoteIdsOf(roundContext.seen),
     ...(payload !== undefined ? { bypass: payload } : {}),
     ...(inlinePick.attach.length > 0 ? { imageFiles: inlinePick.attach } : {}),
     memory: { inbound: memoryInbound, speakers },
   });
+  // @ 轮整组（burst 本体）不属背景板：照常注入并推进已读标记（决策 20，T5 的背景去重消费）
+  advanceSeenSeq(conv.id, maxArrivalSeq(burst.messages));
+}
+
+// ── 携话 next 的注入轮（injection / ambient shard，T3）─────────────────────
+
+/** 打标（T1 契约，master 优先互斥）：注入行 {{name}} 并入「[主人]」/「[特别关注]」。 */
+const MASTER_MARK = "[主人]";
+const WATCHED_MARK = "[特别关注]";
+
+function engageMarkOf(chatKey: string, userId: number): string {
+  if (config.master && String(userId) === config.master) return MASTER_MARK;
+  return watchedByChat.get(baseChatKey(chatKey))?.has(String(userId)) ? WATCHED_MARK : "";
+}
+
+/** 积压 / shard 行渲染：ctx_engage_line（[m:id] 锚点在模板里），{{name}} 并入打标。 */
+function renderEngageLines(chatKey: string, items: readonly EngageBacklogItem[]): string[] {
+  const template = fish.prompts.messages["ctx_engage_line"] ?? "";
+  return items.map((item) => renderTemplate(template, {
+    id: item.messageId !== undefined ? String(item.messageId) : "",
+    name: `${engageMarkOf(chatKey, item.userId)}${item.nickname}`,
+    qq: String(item.userId),
+    text: item.text,
+  }));
+}
+
+/**
+ * 开窗积压查询（injection 轮的输入）：窗口 = (lastCloseSeq, 开窗时刻] 的 recent 流水，
+ * 排除 pending burst 内消息（它们归 @ 轮的整组注入）、过滤 `/` 指令与纯 GIF 收图消息，
+ * 超 windowSize 截最近 N。lastSeenByModel 去重在提交侧做（键是会话，得先解出会话）。
+ */
+function engageBacklogOf(chatKey: string, afterSeq: number | undefined): readonly EngageBacklogItem[] {
+  if (afterSeq === undefined) return [];
+  // 旧流水没有序号：宁少勿答，不注入
+  const pendingIds = new Set<string>();
+  const pendingSeqs = new Set<number>();
+  for (const burst of debouncer.pendingOf(chatKey)) {
+    for (const message of burst.messages) {
+      if (message.messageId !== undefined) pendingIds.add(String(message.messageId));
+      if (message.arrivalSeq !== undefined) pendingSeqs.add(message.arrivalSeq);
+    }
+  }
+  return (recent.get(chatKey) ?? [])
+    .filter((m) => m.arrivalSeq !== undefined && m.arrivalSeq > afterSeq)
+    .filter((m) => !((m.messageId !== undefined && pendingIds.has(String(m.messageId))) || (m.arrivalSeq !== undefined && pendingSeqs.has(m.arrivalSeq))))
+    .filter((m) => !m.text.startsWith("/") && m.mediaOnly !== "gif")
+    .slice(-fishConfig().config.engage.windowSize);
+}
+
+/**
+ * 开窗注入轮（injection，背景板语义）：open 进入瞬间把积压一轮注入。这些消息只是
+ * 背景板——无必答、无 salvage、模型不必逐条回应也不必补回复任何人；遇忙放弃
+ * （宁少勿答，积压不重放）；注入后已读标记推进到 recent 末条（决策 3：之后归 shard，
+ * 不重复注入）。entry kind = fish.engage_tick（不写 fish.inbound、不进摘要与抽取，
+ * 但计入换页阈值）；不附 inline 图；quoteIds = 本轮注入的积压消息集。
+ */
+async function submitInjectionRound(chatKey: string, backlog: readonly EngageBacklogItem[]): Promise<void> {
+  console.log(`[鱼缸] ${chatKey} 携话窗口 → open（积压 ${backlog.length} 条）`);
+  if (backlog.length === 0) return; // 无积压不注入
+  const conv = await conversationFor(chatKey);
+  // 状态机 busy 检查后的双保险：这中间起了轮 / 换页 / 收图就放弃（宁少勿答）
+  if (conversationBusy(conv.id)) {
+    console.log(`[鱼缸] ${chatKey} 开窗注入放弃：会话忙（宁少勿答）`);
+    return;
+  }
+  // 已读去重（决策 20）：剔除已进过模型的部分（重启后标记为空＝全未读，不会饿死注入）
+  const fresh = backlog.filter((m) => m.arrivalSeq === undefined || m.arrivalSeq > seenSeqOf(conv.id));
+  if (fresh.length === 0) return;
+  const content = [
+    renderTemplate(fish.prompts.messages["ctx_engage_header"] ?? "", { count: String(fresh.length) }),
+    ...renderEngageLines(chatKey, fresh),
+    fish.prompts.messages["ctx_engage_footer"] ?? "",
+    // 每次注入都携带（决策 20，不限于发生截减时）：引导结合历史理解这批背景
+    fish.prompts.messages["ctx_seen_note"] ?? "",
+  ].filter((line) => line.length > 0).join("\n");
+  await submitRound({
+    chatKey,
+    conv,
+    content,
+    trigger: { mentionsBot: false, kind: "injection" },
+    reply: false,
+    entryKind: MEMORY_ENGAGE_KIND,
+    quoteIds: quoteIdsOf(fresh),
+  });
+  advanceSeenSeq(conv.id, lastArrivalSeq(recent.get(chatKey) ?? []));
+}
+
+/**
+ * open 窗 shard 轮（ambient）：每 10 秒一拍，把这一拍收集的全部发送者消息合成一轮
+ * （多发送者逐行渲染，[m:id] 锚点照旧）。非必答：零出口合法、无 salvage、无强制
+ * 引用；已读去重后注入、注入后推进标记；quoteIds = 本轮 shard 消息集。提交前会话
+ * 又忙（状态机检查后的竞态）就放回收集器并入下一拍（绝不丢、绝不并发提交）。
+ */
+async function submitShardRound(chatKey: string, items: readonly EngageShardItem[]): Promise<void> {
+  if (items.length === 0) return;
+  const conv = await conversationFor(chatKey);
+  if (conversationBusy(conv.id)) {
+    const held = items.every((item) => engageNext.collectShard(chatKey, item));
+    if (held) console.log(`[鱼缸] ${chatKey} shard 在途退避，并入下一拍`);
+    else console.log(`[鱼缸] ${chatKey} shard 退避失败（已关窗），丢弃`);
+    return;
+  }
+  const fresh = items.filter((m) => m.arrivalSeq === undefined || m.arrivalSeq > seenSeqOf(conv.id));
+  if (fresh.length === 0) return;
+  const content = [
+    renderTemplate(fish.prompts.messages["ctx_header"] ?? "", { count: String(fresh.length) }),
+    ...renderEngageLines(chatKey, fresh),
+    fish.prompts.messages["ctx_seen_note"] ?? "",
+  ].filter((line) => line.length > 0).join("\n");
+  // 整拍里最近一条非空 bypass 段（整组语义：指令后面跟闲聊不丢指令）
+  let payload: string | undefined;
+  for (let index = fresh.length - 1; index >= 0; index--) {
+    const stash = (fresh[index] as EngageShardItem).payload;
+    if (stash !== undefined && stash.length > 0) {
+      payload = stash;
+      break;
+    }
+  }
+  await submitRound({
+    chatKey,
+    conv,
+    content,
+    trigger: { mentionsBot: false, kind: "ambient" },
+    reply: false,
+    entryKind: MEMORY_ENGAGE_KIND,
+    quoteIds: quoteIdsOf(fresh),
+    ...(payload !== undefined ? { bypass: payload } : {}),
+  });
+  advanceSeenSeq(conv.id, maxArrivalSeq(fresh));
 }
 
 /** inline 附图上限（普通轮；导入轮例外属于 look 路径，与这里无关）。 */
@@ -1085,6 +1373,37 @@ async function drainLoop(): Promise<void> {
   }
 }
 
+// next 搭话开窗状态机：每 tick 现读 fishConfig()（engagement 热切换含无消息期都在 tick 里消化，
+// 切回 legacy 自动清相位停窗，重新进 next 从 closed 零计时）；gate 的 isOpen 接它的相位，
+// 未跟踪/legacy/白名单外恒 closed。open 进入经 onPhase 提交 injection 轮（背景板）；
+// open 态的 free_pass 消息由 onMessage 路由进它的 shard 收集器，每 10 秒一拍经
+// onShard 合并提交（ambient）；closed 进入只留相位日志。
+const engageNext = createEngageNext({
+  groups: () => config.groups,
+  recentOf: (chatKey) => recent.get(chatKey) ?? [],
+  backlogOf: (chatKey, afterSeq) => engageBacklogOf(chatKey, afterSeq),
+  busy: (chatKey) => {
+    // 该群任一会话（含人格映射键）正被换页 / 收图 / 在途轮占着：开窗放弃积压注入、
+    // shard 到期累积背压（宁少勿答）
+    for (const conv of conversations.values()) {
+      if (chatKeys.get(conv.id) === chatKey && conversationBusy(conv.id)) return true;
+    }
+    return false;
+  },
+  onPhase: (chatKey, phase, backlog) => {
+    // open → injection 轮（背景板，日志在 submitInjectionRound 里）；closed → 相位日志
+    if (phase === "open") return submitInjectionRound(chatKey, backlog);
+    console.log(`[鱼缸] ${chatKey} 搭话窗口 → ${phase}`);
+  },
+  onShard: (chatKey, items) => submitShardRound(chatKey, items),
+  config: () => {
+    const c = fishConfig().config;
+    return { engagement: c.engagement, closedMinutes: c.engage.closedMinutes, openMinutes: c.engage.openMinutes };
+  },
+  log: (message) => console.log(`[鱼缸] ${message}`),
+  onError: (error) => console.error("[鱼缸] 搭话开窗回调失败", error instanceof Error ? error.message : error),
+});
+
 const gate = createGate({
   master: config.master,
   groups: config.groups,
@@ -1094,8 +1413,10 @@ const gate = createGate({
   ambientMinIntervalMs: fishConfig().config.ambientMinIntervalSeconds * 1000,
   // 特别关注者发言时的放行概率（走随机门，照顾到但不是必答）
   watchedChance: fishConfig().config.watchAmbientChance,
-  // 搭话总开关：legacy = 现行全部判定；next = 群里只认 @ 鱼，非 @ 群消息统一 skip:next_pending
+  // 搭话总开关：legacy = 现行全部判定；next = 定时开窗两态（closed skip / open free_pass）
   engagement: fishConfig().config.engagement,
+  // next 的 open 窗判定：接状态机相位；缺省 = closed（没接状态机时 next 恒 skip）
+  isOpen: (chatKey) => engageNext.isOpen(chatKey),
   // 每轮现取：改 fish.config.json 下一轮就生效，不用重启（engagement 同样热切换）
   chances: () => {
     const c = fishConfig().config;
@@ -1148,12 +1469,19 @@ function startWeekly(): void {
 }
 startWeekly();
 
+// 开窗循环开始跳：engagement=legacy（缺省）时 tick 空转，改 fish.config.json 切 next 即生效
+engageNext.start();
+
 // 每个群的最近流水：背景栏与连续发言都从这里取。
 // 流水带 userId / messageId / arrivalSeq：入站补充（查名片/下头像/拉合集）是异步的，
 // 处理完成顺序可能倒过来，消费侧按收到顺序排（orderByArrival），模型才能看到自然的对话；
 // 旧构造没有 arrivalSeq 时原地不动（即改版前的到达顺序）。
 // userId 是背景行里「昵称(QQ号)」的来源，模型主动 @ 只从可信上下文抄号码。
 const recent = new Map<string, RecentChatMessage[]>();
+
+// 流水上限：缺省 30 不变；next 的积压放宽（engage.windowRelaxCap）需要流水兜底，
+// 上限提升为 max(30, windowRelaxCap)。legacy 的背景截断（背景最多 10 条）不受影响。
+const recentCap = () => Math.max(30, fishConfig().config.engage.windowRelaxCap);
 const lastSpoke = new Map<string, number>();
 const spokenToday = new Map<string, { day: string; count: number }>();
 const today = () => new Date().toISOString().slice(0, 10);
@@ -1196,9 +1524,11 @@ onebot.onMessage((raw) => {
         at: Date.now(),
         ...(msg.messageId !== undefined ? { messageId: msg.messageId } : {}),
         ...(msg.arrivalSeq !== undefined ? { arrivalSeq: msg.arrivalSeq } : {}),
+        ...(msg.mediaOnly ? { mediaOnly: msg.mediaOnly } : {}),
       },
     ]);
-    if (bucket.length > 30) bucket.splice(0, bucket.length - 30);
+    const cap = recentCap();
+    if (bucket.length > cap) bucket.splice(0, bucket.length - cap);
     recent.set(msg.chatKey, bucket);
 
     // 昵称 → QQ 映射：每条入站消息（含被闸挡掉的）都登记，memory scope 靠它把背景
@@ -1260,6 +1590,27 @@ onebot.onMessage((raw) => {
     // 群消息：gate 放行不立即提交，等 10 秒静默把整组一起送进 loop（flushBurst）。
     // 会话在这里先定下来（人格按当下解析）并绑到窗口上：10 秒里 `/切换人格` 也改不了落点。
     if (msg.chatKey.startsWith("qq:group:")) {
+      // next 的 open 态：free_pass（非 @）消息不进按发送者的合并窗口，改投 shard
+      // 收集器（每 10 秒一拍、全部发送者合成一轮 ambient）。同发送者已有 @ 待定窗口
+      // 时照旧并入——一组话不拆两轮；纯 GIF 交给静默收图轮，不进 shard 行。
+      // 收集器不收（窗口已关 / 未跟踪的边缘竞态）：宁少勿答，留日志丢弃。
+      if (decision.reason === "free_pass" && !debouncer.pending(msg.chatKey, msg.userId)) {
+        if (msg.mediaOnly !== "gif") {
+          const collected = engageNext.collectShard(msg.chatKey, {
+            userId: msg.userId,
+            nickname: msg.nickname,
+            text: burstText,
+            at: Date.now(),
+            ...(msg.messageId !== undefined ? { messageId: msg.messageId } : {}),
+            ...(msg.arrivalSeq !== undefined ? { arrivalSeq: msg.arrivalSeq } : {}),
+            ...(bypass ? { payload: bypass.stash } : {}),
+          });
+          if (!collected) {
+            console.log("[fish] gate " + msg.chatKey + " " + msg.nickname.slice(0, 12) + " -> shard:closed_drop");
+          }
+        }
+        return;
+      }
       // 必答放行随窗口累积（flush 时整组消费）：任一条必答进闸，整组都算必答
       const key = windowKey(msg.chatKey, msg.userId);
       burstMustAnswer.set(key, (burstMustAnswer.get(key) ?? false) || MUST_ANSWER_REASONS.has(decision.reason));
@@ -1292,8 +1643,8 @@ onebot.onMessage((raw) => {
     await submitRound({
       chatKey: msg.chatKey,
       conv,
-      content: withContext(msg, bucket, [], { master: config.master, messages: fish.prompts.messages }),
-      trigger: { messageId: msg.messageId, mentionsBot: msg.mentionsBot, userId: msg.userId },
+      content: withContext(msg, bucket, [], { master: config.master, messages: fish.prompts.messages }).content,
+      trigger: { messageId: msg.messageId, mentionsBot: msg.mentionsBot, userId: msg.userId, kind: "answer" },
       // 回复链：本轮触发本身是在回复某条消息，鱼的回应应引用触发那条
       reply: (msg.replyIds?.length ?? 0) > 0,
       mustAnswer: MUST_ANSWER_REASONS.has(decision.reason),
@@ -1376,6 +1727,7 @@ process.on("SIGTERM", () => {
   if (closing) return;
   closing = true;
   console.log("[鱼缸] SIGTERM，冲刷后退出");
+  engageNext.stop(); // 先停开窗循环：退出后不再触发相位迁移回调
   void (async () => {
     try { const n = await fish.drain(); if (n > 0) console.log(`[鱼缸] 退出前补发 ${n} 条`); } catch { /* 尽力而为 */ }
     onebot.close(); // 先冲刷再断 WS：让协议端立即感知重连，不等它自己的超时

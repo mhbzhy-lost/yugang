@@ -19,6 +19,13 @@ import { MEMORY_INBOUND_KIND, type MemoryInbound, type MemoryPatch } from "./mem
 
 const ctx = BACKGROUND_CONTEXT;
 
+/**
+ * 开窗积压注入轮（injection）与 open 窗 shard 轮（ambient，engagement=next）的 entry kind：
+ * 背景板 / 分片摘要不是群友原话——不写 fish.inbound、不进摘要与记忆抽取，
+ * 但计入换页阈值（entries）：它们真实占用模型上下文。行是否进 T12 的机械尾巴由 T12 裁定。
+ */
+export const MEMORY_ENGAGE_KIND = "fish.engage_tick";
+
 /** 记忆抽取阶段的失败标记：onError 据此区分换页失败与抽取失败，只携带安全的错误摘要。 */
 export class MemoryExtractError extends Error {
   constructor(cause: unknown) {
@@ -70,13 +77,25 @@ export function createCompactor(options: CompactorOptions): Compactor {
     async maybeCompact(conversation, force = false) {
       const counted = await renderCountedEntries(conversation);
       const transcript = counted.flatMap((e) => e.lines).join("\n");
-      if (transcript.trim().length === 0) return { compacted: false, reason: "empty" };
+      if (counted.length === 0) return { compacted: false, reason: "empty" };
 
       const entries = counted.length;
       const chars = transcript.length;
       const limits = options.limits ? options.limits() : { maxEntries: options.maxEntries, maxChars: options.maxChars };
       if (!force && entries < limits.maxEntries && chars < limits.maxChars) {
         return { compacted: false, reason: "below_threshold", entries, chars };
+      }
+
+      // 页里只有 engage_tick 这类无文本 entry（背景板轮把条数顶到阈值）时没有可摘要的内容：
+      // 直接机械降级换页（时间头照旧），不做三次注定失败的摘要尝试
+      if (transcript.trim().length === 0) {
+        try {
+          await conversation.reset(mechanicalHandoff(counted), ctx);
+          return { compacted: true, entries, chars, fallback: true, detail: "no_summary_text" };
+        } catch (error) {
+          options.onError?.(error);
+          return { compacted: false, reason: "failed", entries, chars };
+        }
       }
 
       try {
@@ -212,7 +231,8 @@ export interface RenderedTranscript {
  * thinking、tool 调用、tool 结果、系统提示一律不进去——它们不进摘要，也就不进下一轮的上下文。
  * 群消息的 entry 有两种 kind：存量 pi.user，以及带结构化原始数据的 fish.inbound
  * （记忆入口）；两者部读 entry.model（宿主拼装的 user message），handoff 行为不变。
- * fish.gif_ingest（收图任务）不是群友原话，不进摘要。
+ * fish.gif_ingest（收图任务）与 fish.engage_tick（开窗积压 / shard 轮）不是群友原话，
+ * 不进摘要（engage_tick 仍计入换页阈值，见 renderCountedEntries）。
  */
 export async function renderTranscript(conversation: Conversation): Promise<RenderedTranscript> {
   const counted = await renderCountedEntries(conversation);
@@ -245,7 +265,8 @@ function entryTimestamp(entry: { kind: string; model?: unknown; data?: unknown }
  * thinking、tool 调用、tool 结果、系统提示一律不进去——它们不进摘要，也就不进下一轮的上下文。
  * 群消息的 entry 有两种 kind：存量 pi.user，以及带结构化原始数据的 fish.inbound
  * （记忆入口）；两者部读 entry.model（宿主拼装的 user message），handoff 行为不变。
- * fish.gif_ingest（收图任务）不是群友原话，不进摘要。
+ * fish.gif_ingest（收图任务）不是群友原话，不进摘要；fish.engage_tick（开窗积压 /
+ * shard 轮）计入换页阈值（entries），但不写 handoff 文本（决策 4：背景板不进摘要）。
  */
 async function renderCountedEntries(conversation: Conversation): Promise<CountedEntry[]> {
   const view = await conversation.viewState(ctx);
@@ -256,6 +277,9 @@ async function renderCountedEntries(conversation: Conversation): Promise<Counted
       if (entry.kind === "pi.user" || entry.kind === MEMORY_INBOUND_KIND) {
         const text = entryText(entry.model);
         counted.push({ lines: text ? [`群友: ${text}`] : [], at: entryTimestamp(entry) });
+      } else if (entry.kind === MEMORY_ENGAGE_KIND) {
+        // engage_tick：计入阈值（entries），不写 handoff 文本——时间戳保留给降级头
+        counted.push({ lines: [], at: entryTimestamp(entry) });
       } else if (entry.kind === "fish.outbound") {
         const data = entry.data as { items?: string[]; at?: unknown } | undefined;
         counted.push({
@@ -297,9 +321,9 @@ export interface MemoryTranscript {
 /**
  * 记忆抽取专用的原始转录：只读结构化原始 entry（fish.inbound 的 data 与
  * fish.outbound 的 items），带结构化说话人元数据；不读 pi.user / pi.system /
- * fish.gif_ingest / 工具结果 / thinking，也不复用上面宿主拼装文案的 renderTranscript。
- * 改动这个白名单前必读 src/memory.ts 的安全边界注释：混入任何宿主文案都会
- * 让「记忆 → 抽取 → 记忆」的自我污染闭环复活。
+ * fish.gif_ingest / fish.engage_tick / 工具结果 / thinking，也不复用上面宿主拼装
+ * 文案的 renderTranscript。改动这个白名单前必读 src/memory.ts 的安全边界注释：
+ * 混入任何宿主文案都会让「记忆 → 抽取 → 记忆」的自我污染闭环复活。
  */
 export async function renderMemoryTranscript(conversation: Conversation): Promise<MemoryTranscript> {
   const view = await conversation.viewState(ctx);

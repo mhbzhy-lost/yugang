@@ -16,6 +16,28 @@ export const ENUM_FROM_KEY = "x-yugang-enum-from";
 /** 目前唯一受控的动态词表键：prompt/meme-tags.md 的一级情绪词。 */
 export type EnumFromContextKey = "memeTags";
 
+/**
+ * 轮类型（搭话 next，决策 7）：answer = 既有必答 / 私聊 / legacy 轮（语义不变）；
+ * ambient = open 窗的 shard 轮（free_pass 消息每 10 秒一拍合并提交，非必答）；
+ * injection = 开窗瞬间的积压注入轮（背景板语义）。legacy 轮全部 answer。
+ */
+export type RoundKind = "ambient" | "injection" | "answer";
+
+/**
+ * triggerOf 的值：本轮触发消息 + 轮类型 + quoteMsgId 窗口。
+ * shard / injection 轮没有锚点消息（无 messageId），quoteIds = 本轮注入窗口的消息 id
+ * （[m:…] 锚点），是 T4 quoteMsgId 的合法目标集合；随轮 settle 一并清除。
+ */
+export interface RoundTrigger {
+  messageId?: number | string;
+  mentionsBot: boolean;
+  userId?: number;
+  /** 缺省 = answer（legacy 轮全部 answer）。 */
+  kind?: RoundKind;
+  /** 本轮注入窗口的消息 id 集合（[m:…] 锚点里的数字）；T4 消费。 */
+  quoteIds?: ReadonlySet<string>;
+}
+
 /** loadToolManifests 的动态上下文；词表为空时对应属性退化为普通字符串（与现行为一致）。 */
 export interface ManifestLoadContext {
   readonly memeTags: readonly string[];
@@ -76,8 +98,8 @@ export interface ToolPackageDeps {
   sdUrl?: string;
   /** danbooru.csv 路径；给了才能查 tag 词表。 */
   tagsCsv?: string;
-  /** submissionId → 本轮触发消息；出口工具的引用绑定与各工具身份闸同源。 */
-  triggerOf?: (roundId: unknown) => { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
+  /** submissionId → 本轮触发消息（轮类型 + quoteIds 窗口）；出口工具的引用绑定与各工具身份闸同源。 */
+  triggerOf?: (roundId: unknown) => RoundTrigger | undefined;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费。 */
   bypassOf?: (roundId: unknown) => string | undefined;
   /** 贴表情实现；react 必需，缺省时 factory 返回 undefined。 */

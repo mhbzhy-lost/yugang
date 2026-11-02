@@ -16,18 +16,45 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 
 const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-/** 搭话总开关：legacy = 现行全部搭话判定；next = 群里只认 @ 鱼，其余非 @ 群消息统一 skip。 */
+/** 搭话总开关：legacy = 现行全部搭话判定；next = 按群定时开窗——closed 态非 @ 群消息统一 skip:next_pending，open 态 free_pass 走合并管线。 */
 export type EngagementMode = "legacy" | "next";
 
 const ENGAGEMENT_MODES: readonly EngagementMode[] = ["legacy", "next"];
+
+/** next 搭话（engagement=next）的开窗参数；逐字段校验，非法告警保留缺省，热生效。 */
+export interface EngageConfig {
+  /** closed 相位时长（分钟）：非 @ 群消息 skip:next_pending，@ 恒必答。 */
+  closedMinutes: number;
+  /** open 相位时长（分钟）：非 @ 群消息 free_pass 走合并管线（非必答，零出口合法）。 */
+  openMinutes: number;
+  /** 开窗积压注入上限（条）：超出取最近 N 条（T3 消费；零出口翻倍后放宽到 windowRelaxCap）。 */
+  windowSize: number;
+  /** @ 轮背景条数（legacy 恒 10 不变，仅 next 消费）。 */
+  mentionContextSize: number;
+  /** 连续 N 个 open 窗全程零出口后，下窗注入尾部 nudge（T8 消费）。 */
+  silenceThreshold: number;
+  /** 零出口超 2×阈值后积压窗口放宽到此上限；recent 流水上限同步提升 max(30, windowRelaxCap)。 */
+  windowRelaxCap: number;
+}
+
+export const ENGAGE_DEFAULTS: EngageConfig = {
+  closedMinutes: 10,
+  openMinutes: 3,
+  windowSize: 20,
+  mentionContextSize: 5,
+  silenceThreshold: 3,
+  windowRelaxCap: 30,
+};
 
 export interface FishConfig {
   /** 非 @、非特别关注的消息：同一群两条被处理消息之间的最短间隔（秒）。 */
   ambientMinIntervalSeconds: number;
   /** 特别关注者发言的概率（0–1）。 */
   watchAmbientChance: number;
-  /** 搭话总开关：legacy（缺省）= 现行判定照旧；next = 群里除「直接 @ 鱼」外一切搭话判定失效，非 @ 统一 skip:next_pending。 */
+  /** 搭话总开关：legacy（缺省）= 现行判定照旧；next = 定时开窗两态（节拍与上限见 engage）。 */
   engagement: EngagementMode;
+  /** next 搭话开窗参数：closed/open 节拍、积压与背景上限、nudge 阈值（仅 next 消费）。 */
+  engage: EngageConfig;
   /** 思考档位；启动时写进会话 agent，改完重启才生效。 */
   thinkingLevel: ThinkingLevel;
   /** 换页阈值：条目数 / 字符数。 */
@@ -86,6 +113,42 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
     else problems.push(`engagement 只认 legacy/next：${engagement}，已忽略`);
   } else if (engagement !== undefined) {
     problems.push("engagement 必须是 legacy/next，已忽略");
+  }
+
+  const engage = src["engage"];
+  if (engage !== undefined) {
+    if (engage && typeof engage === "object" && !Array.isArray(engage)) {
+      const e = engage as Record<string, unknown>;
+      const parsed: Partial<EngageConfig> = {};
+      const minutes = num(e["closedMinutes"]);
+      if (minutes !== undefined && minutes >= 1 && minutes <= 240) parsed.closedMinutes = Math.floor(minutes);
+      else if (e["closedMinutes"] !== undefined) problems.push("engage.closedMinutes 必须在 1–240，已忽略");
+
+      const open = num(e["openMinutes"]);
+      if (open !== undefined && open >= 1 && open <= 120) parsed.openMinutes = Math.floor(open);
+      else if (e["openMinutes"] !== undefined) problems.push("engage.openMinutes 必须在 1–120，已忽略");
+
+      const windowSize = num(e["windowSize"]);
+      if (windowSize !== undefined && windowSize >= 1 && windowSize <= 100) parsed.windowSize = Math.floor(windowSize);
+      else if (e["windowSize"] !== undefined) problems.push("engage.windowSize 必须在 1–100，已忽略");
+
+      const mentionContext = num(e["mentionContextSize"]);
+      if (mentionContext !== undefined && mentionContext >= 1 && mentionContext <= 30) parsed.mentionContextSize = Math.floor(mentionContext);
+      else if (e["mentionContextSize"] !== undefined) problems.push("engage.mentionContextSize 必须在 1–30，已忽略");
+
+      const silence = num(e["silenceThreshold"]);
+      if (silence !== undefined && silence >= 1 && silence <= 50) parsed.silenceThreshold = Math.floor(silence);
+      else if (e["silenceThreshold"] !== undefined) problems.push("engage.silenceThreshold 必须在 1–50，已忽略");
+
+      const relaxCap = num(e["windowRelaxCap"]);
+      if (relaxCap !== undefined && relaxCap >= 10 && relaxCap <= 100) parsed.windowRelaxCap = Math.floor(relaxCap);
+      else if (e["windowRelaxCap"] !== undefined) problems.push("engage.windowRelaxCap 必须在 10–100，已忽略");
+
+      // 合法字段并入缺省（部分非法只丢非法项），全非法则整块走缺省
+      if (Object.keys(parsed).length > 0) out.engage = { ...ENGAGE_DEFAULTS, ...parsed };
+    } else {
+      problems.push("engage 必须是对象，已忽略");
+    }
   }
 
   const level = src["thinkingLevel"];
@@ -186,6 +249,7 @@ const DEFAULTS: FishConfig = {
   ambientMinIntervalSeconds: 60,
   watchAmbientChance: 0.5,
   engagement: "legacy",
+  engage: ENGAGE_DEFAULTS,
   thinkingLevel: "low",
   compact: { maxEntries: 200, maxChars: 50_000 },
   memeCooldownMinutes: 8,
@@ -217,6 +281,7 @@ export function loadFishConfig(options: { path?: string; env?: NodeJS.ProcessEnv
     ...fromEnv,
     ...fromFile,
     compact: { ...DEFAULTS.compact, ...(fromEnv.compact ?? {}), ...(fromFile.compact ?? {}) },
+    engage: { ...DEFAULTS.engage, ...(fromEnv.engage ?? {}), ...(fromFile.engage ?? {}) },
   };
 
   const usesEnv = Object.keys(fromEnv).length > 0;

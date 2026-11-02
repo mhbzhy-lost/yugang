@@ -16,10 +16,14 @@
  *
  * 搭话总开关 engagement（2026-11，fish.config.json 热生效）：
  *   legacy（缺省）= 上面整套判定照旧；
- *   next = 群里除「直接 @ 鱼」外一切搭话判定失效：@ 必答不变，replied_forward /
- *   watched / watched_rate_pass / rate_pass 四条通路全部不判，非 @ 群消息统一
- *   skip:next_pending（不进模型）。私聊、`/` 指令、GIF 收图轮在闸前各有自己的
- *   通道不受影响；recent 流水、chatlog、合集 id 缓存等旁路记账也都在闸外照常。
+ *   next = 定时开窗两态（节拍由 src/engage-next.ts 状态机驱动，本闸只认它给的 isOpen）：
+ *     closed 态——@ 必答不变，replied_forward / watched / watched_rate_pass / rate_pass
+ *       四条通路全部不判，非 @ 群消息统一 skip:next_pending（不进模型）；
+ *     open 态——非 @ 群消息 enter:free_pass（非必答：不 markHandled、不刷限流冷却、
+ *       不触发正文兜底），照常走既有 10 秒合并管线（ambient 轮语义，零出口合法）。
+ *   isOpen 由宿主注入（src/index.ts 接状态机相位）；缺省 = closed——没接状态机时 next
+ *   恒为 skip:next_pending。私聊、`/` 指令、GIF 收图轮在闸前各有自己的通道不受影响；
+ *   recent 流水、chatlog、合集 id 缓存等旁路记账也都在闸外照常。
  *
  * 旧的作息/配额/冷却/抽样不再参与判定，字段仅兼容保留。
  */
@@ -45,8 +49,10 @@ export interface GateOptions {
   ambientMinIntervalMs?: number;
   /** 主人特别关注的人发言时的概率（比普通闲聊高得多，但不等于必答）。 */
   watchedChance?: number;
-  /** 搭话总开关：legacy = 全部现行判定；next = 群里只认 @ 鱼，非 @ 群消息一律 next_pending。 */
+  /** 搭话总开关：legacy = 全部现行判定；next = 定时开窗两态（closed skip / open free_pass）。 */
   engagement?: EngagementMode;
+  /** next 态该群是否处于 open 窗（src/engage-next.ts 状态机的相位）；缺省 = closed。 */
+  isOpen?: (chatKey: string) => boolean;
   /** 每轮现取（热更新用）；给了就盖过上面的静态值。 */
   chances?: () => { minIntervalMs: number; watched: number; engagement: EngagementMode };
   now?: () => number;
@@ -64,7 +70,7 @@ export interface GateInput {
 }
 
 export type GateDecision =
-  | { enter: true; reason: "private" | "mentioned" | "replied_forward" | "watched_rate_pass" | "watched" | "rate_pass" }
+  | { enter: true; reason: "private" | "mentioned" | "replied_forward" | "free_pass" | "watched_rate_pass" | "watched" | "rate_pass" }
   | { enter: false; reason: "stranger_private" | "group_not_allowed" | "next_pending" | "forward_ignored" | "watched_sampled_out" | "rate_limited" };
 
 export interface Gate {
@@ -103,11 +109,16 @@ export function createGate(options: GateOptions): Gate {
       // 每轮现取（热更新用）：搭话开关也走这条通道，改 fish.config.json 下一轮生效
       const live = options.chances?.();
 
-      // next 模式：群里除「直接 @ 鱼」外一切搭话判定失效——回复合集不再必答（决定
-      // 回复的是 @），无 @ 合集、特别关注、限流全部不判，统一 skip:next_pending，
-      // 不进模型。私聊 / `/` 指令 / GIF 收图轮走闸前自己的通道；recent 流水与合集
-      // id 缓存（onebot 解析层，闸前照记）等旁路记账不受开关影响。
+      // next 模式：定时开窗两态。closed——@ 必答外一切搭话判定失效，非 @ 统一
+      // skip:next_pending 不进模型；open——状态机开着窗，非 @ 也放行 free_pass
+      // （非必答：不 markHandled、不刷限流冷却，flushBurst 走 ambient 轮语义，零出口合法）。
+      // isOpen 缺省 = closed：没接状态机时 next 恒为 skip。私聊 / `/` 指令 / GIF 收图轮走
+      // 闸前自己的通道；recent 流水与合集 id 缓存（onebot 解析层，闸前照记）等旁路记账
+      // 不受开关影响。
       if ((live?.engagement ?? options.engagement ?? "legacy") === "next") {
+        if (options.isOpen?.(msg.chatKey) === true) {
+          return { enter: true, reason: "free_pass" };
+        }
         return { enter: false, reason: "next_pending" };
       }
 
