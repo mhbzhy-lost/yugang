@@ -213,6 +213,10 @@ function markSent(key: string): boolean {
 const chatKeys = new Map<string | number, string>();
 // 换页（自动 / 手动 `/压缩`）中的会话：期间不受理新提交，被@只回机械忙碌语
 const compacting = new Set<string>();
+// 连续模型错误轮计数（按会话）：成功一轮即清零。达到阈值时无视换页阈值强制换页，
+// 让机械降级把可能的中毒内容换出活跃页——自愈不能依赖「正好撞到阈值」
+const modelErrorStreak = new Map<string, number>();
+const MODEL_ERROR_FORCE_COMPACT = 3;
 // 静默收图轮在跑的会话：同一会话不许并发提交 / 不许换页（两条路径共用 conversationBusy）
 const ingestRounds = new Set<string>();
 /** 会话是不是正被换页或静默收图轮占着：起新提交与起换页前都要先看它。 */
@@ -780,17 +784,23 @@ async function submitRound(input: {
       .filter(Boolean)
       .join(" · ");
     console.error(`[鱼缸] ${chatKey} 这一轮没答上来：${why}`);
-    // 模型错误轮也要尝试换页：中毒页每轮都失败时，轮后自动换页是唯一自愈入口
-    const compacted = await compactWithGuard(conv, false, chatKey);
+    // 模型错误轮也要尝试换页：中毒页每轮都失败时，轮后自动换页是唯一自愈入口。
+    // 页还低于阈值时自动换页不会动（below_threshold），但连续错误说明活跃页本身可能
+    // 触发拦截：达到 MODEL_ERROR_FORCE_COMPACT 后强制换页，交由机械降级清页自愈
+    const streak = (modelErrorStreak.get(chatKey) ?? 0) + 1;
+    modelErrorStreak.set(chatKey, streak);
+    const forced = streak >= MODEL_ERROR_FORCE_COMPACT;
+    const compacted = await compactWithGuard(conv, forced, chatKey);
     if (compacted.compacted) {
-      console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
+      console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字${forced ? "（连续错误强制）" : ""}`);
     } else {
-      console.log(`[鱼缸] ${chatKey} 失败轮换页未执行：${compacted.reason ?? "skipped"} entries=${compacted.entries ?? "-"} chars=${compacted.chars ?? "-"}`);
+      console.log(`[鱼缸] ${chatKey} 失败轮换页未执行：${compacted.reason ?? "skipped"} entries=${compacted.entries ?? "-"} chars=${compacted.chars ?? "-"} streak=${streak}`);
     }
     return;
   }
 
   await drainLoop();
+  modelErrorStreak.delete(chatKey);
 
   // 记账：pi-durable 的 pi.usage 是累计值，这里取差落盘；基线按会话维度记，
   // 人格切换换了 conversation 后累计值回落不再被钳零丢账
