@@ -108,3 +108,7 @@ cmd_memory_delete_missing: 没有这条记忆：{{id}}
 # reason 是机器原因（找不到本轮 entry / 末条 assistant 没有正文 / 出口校验拒绝码），error 是错误摘要
 salvage_skip: 兜底放弃：{{reason}}
 salvage_error: 兜底出错：{{error}}
+
+# 换页降级告警（compact.ts 降级换页成功后由 index.ts 打）：宿主日志文案，不打印内容。
+# 机械时间头是短拼接文案（阈值内），直接在 compact.ts 里拼，不占文案 key
+compact_fallback_log: 换页摘要失败，降级机械换页 {{chatKey}} {{reason}}

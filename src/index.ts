@@ -793,7 +793,7 @@ async function submitRound(input: {
     console.log(`[鱼缸] ${chatKey} +${delta.total} tokens / ${delta.cost}`);
   }
 
-  const compacted = await compactWithGuard(conv);
+  const compacted = await compactWithGuard(conv, false, chatKey);
   if (compacted.compacted) {
     console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
   }
@@ -803,12 +803,19 @@ async function submitRound(input: {
  * 换页的统一守卫：手动 `/压缩`、轮后自动换页共用，静默收图轮在跑时直接跳过
  * （那一轮正在用这个会话，换页会把它吃掉；计账不受影响，下一轮再压）。
  * 换页期间把 id 记进 compacting，flushBurst / 私聊据此回忙碌语而不是提交。
+ * 摘要失败降级机械换页成功时在这里打告警（文案在 prompt/messages.md，不打印内容）。
  */
-async function compactWithGuard(conv: Conversation, force = false): Promise<CompactResult> {
+async function compactWithGuard(conv: Conversation, force = false, chatKey = ""): Promise<CompactResult> {
   if (ingestRounds.has(String(conv.id))) return { compacted: false };
   compacting.add(String(conv.id));
   try {
-    return await fish.compact(conv, force);
+    const result = await fish.compact(conv, force);
+    if (result.fallback) {
+      const tpl = fish.prompts.messages["compact_fallback_log"] ?? "";
+      const reason = result.detail ?? "";
+      console.error(`[鱼缸] ${tpl ? renderTemplate(tpl, { chatKey, reason }) : `换页摘要失败 ${reason}`}`);
+    }
+    return result;
   } finally {
     compacting.delete(String(conv.id));
   }
@@ -998,7 +1005,7 @@ async function handleCommand(msg: IncomingMessage): Promise<string | null> {
   } else if (msg.text === "/压缩") {
     // 强制换页当前会话（无视阈值）：混入的重内容（图块等）立即清掉。
     // 走统一守卫：换页期间到达的群消息/私聊会看到 compacting，不会与换页并发。
-    const result = await compactWithGuard(conv, true);
+    const result = await compactWithGuard(conv, true, msg.chatKey);
     text = result.compacted
       ? renderTemplate(fish.prompts.messages["cmd_compacted"] ?? "", { entries: String(result.entries), chars: String(result.chars) })
       : (fish.prompts.messages["cmd_compact_skip"] ?? "");

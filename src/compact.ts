@@ -5,7 +5,10 @@
  * 这里自己实现：攒到阈值后，让一个便宜模型读一遍最近的对话，写一段 handoff，
  * 然后 conversation.reset(handoff) —— 换一页，鱼只带着这段备忘继续。
  *
- * 摘要提示词在 prompt/handoff.md 里，和其它 prompt 一起受审查。
+ * 换页必须总能完成：摘要有界重试（上限 2 次）后仍失败（如网关内容拦截），
+ * 机械降级换页——不生成摘要，新页起点 = 尾部最近 50 条 entry 原文 + 机械时间头。
+ *
+ * 摘要提示词在 prompt/handoff.md 里，降级告警文案在 prompt/messages.md，和其它 prompt 一起受审查。
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
@@ -52,6 +55,10 @@ export interface CompactResult {
   reason?: "below_threshold" | "empty" | "failed";
   entries?: number;
   chars?: number;
+  /** 机械降级换页：摘要有界重试全败后的兜底（新页 = 尾部原文 + 机械时间头），换页已完成。 */
+  fallback?: boolean;
+  /** 摘要失败原因摘要（已脱敏，不含对话内容）；仅 fallback 时携带，供宿主告警日志使用。 */
+  detail?: string;
 }
 
 export interface Compactor {
@@ -61,18 +68,19 @@ export interface Compactor {
 export function createCompactor(options: CompactorOptions): Compactor {
   return {
     async maybeCompact(conversation, force = false) {
-      const rendered = await renderTranscript(conversation);
-      if (rendered.transcript.trim().length === 0) return { compacted: false, reason: "empty" };
+      const counted = await renderCountedEntries(conversation);
+      const transcript = counted.flatMap((e) => e.lines).join("\n");
+      if (transcript.trim().length === 0) return { compacted: false, reason: "empty" };
 
-      const { entries, chars, transcript } = rendered;
+      const entries = counted.length;
+      const chars = transcript.length;
       const limits = options.limits ? options.limits() : { maxEntries: options.maxEntries, maxChars: options.maxChars };
       if (!force && entries < limits.maxEntries && chars < limits.maxChars) {
         return { compacted: false, reason: "below_threshold", entries, chars };
       }
 
       try {
-        const summary = await summarize(options, transcript);
-        if (!summary.trim()) return { compacted: false, reason: "failed", entries, chars };
+        const summary = (await summarizeBounded(options, transcript)).trim();
 
         // 记忆抽取：在 summarize 成功之后、reset 之前。任何异常（含 knownMemory、
         // savePendingMemories 和 onError 自身抛错）都不得阻止后面的 reset——宁可没记上，不能不换页。
@@ -103,11 +111,19 @@ export function createCompactor(options: CompactorOptions): Compactor {
           }
         }
 
-        await conversation.reset(summary.trim(), ctx);
+        await conversation.reset(summary, ctx);
         return { compacted: true, entries, chars };
       } catch (error) {
-        options.onError?.(error);
-        return { compacted: false, reason: "failed", entries, chars };
+        // 摘要有界重试全败：机械降级换页——换页必须总能完成，不许在失败页上死循环。
+        // 新页 = 机械时间头 + 被压缩页尾部最近 50 条 entry 的原文（顺序与格式照旧），
+        // 照常 reset；reset 失败则保持原行为：报错、保留原页。
+        try {
+          await conversation.reset(mechanicalHandoff(counted), ctx);
+        } catch {
+          options.onError?.(error);
+          return { compacted: false, reason: "failed", entries, chars };
+        }
+        return { compacted: true, entries, chars, fallback: true, detail: errorDigest(error) };
       }
     },
   };
@@ -120,10 +136,63 @@ async function summarize(options: CompactorOptions, transcript: string): Promise
   const prompt = renderTemplate(await loadHandoff(options), { transcript });
   const stream = options.models.streamSimple(model, { messages: [{ role: "user", content: prompt }] });
   const message = await stream.result();
+  // 网关拦截/断流不抛异常，只回来一条 error 消息（content 为空）：必须主动翻成异常，
+  // 否则空摘要会被当成失败而页永远压不动
+  if (message.stopReason === "error" || message.stopReason === "aborted") {
+    throw new Error(message.errorMessage ?? `summary_${message.stopReason}`);
+  }
   return message.content
     .filter((block): block is { type: "text"; text: string } => block.type === "text")
     .map((block) => block.text)
     .join("\n");
+}
+
+/** 摘要尝试次数上限：首次 + 2 次重试。重试必须有界，耗尽后走机械降级而不是卡死换页。 */
+const SUMMARY_ATTEMPTS = 3;
+
+/** 有界重试的摘要：空摘要与异常都算失败，耗尽上限后抛最后一次的原因。 */
+async function summarizeBounded(options: CompactorOptions, transcript: string): Promise<string> {
+  let lastError: unknown = new Error("empty_summary");
+  for (let attempt = 0; attempt < SUMMARY_ATTEMPTS; attempt++) {
+    try {
+      const summary = await summarize(options, transcript);
+      if (summary.trim()) return summary;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+/** 降级换页携带的尾部 entry 条数：机械截取，不经过模型。 */
+const FALLBACK_TAIL_ENTRIES = 50;
+
+/**
+ * 机械降级的新页起点：不生成摘要，直接把被压缩页尾部最近 50 条 entry 的原文
+ * （顺序与 transcript 格式照旧）搬进新页，头部加一行机械时间说明（起止时间与条数，
+ * 取自 entry 时间戳；短拼接文案，不占 prompt/messages.md 的 key）。任何模型都不再参与。
+ */
+function mechanicalHandoff(counted: CountedEntry[]): string {
+  const tail = counted.slice(-FALLBACK_TAIL_ENTRIES);
+  const stamps = tail.map((e) => e.at).filter((at): at is number => typeof at === "number");
+  const start = stamps.length ? formatStamp(Math.min(...stamps)) : "?";
+  const end = stamps.length ? formatStamp(Math.max(...stamps)) : "?";
+  const header = `（前情 ${tail.length} 条 · ${start} ~ ${end}）`;
+  return [header, ...tail.flatMap((e) => e.lines)].join("\n");
+}
+
+/** 时间戳 → 本地「YYYY-MM-DD HH:mm」；降级头与用量一样按本地时区展示。 */
+function formatStamp(ts: number): string {
+  const at = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
+/** 错误摘要：类名 + 去控制字符、截断后的 message（同 MemoryExtractError 的脱敏口径），不含对话内容。 */
+function errorDigest(error: unknown): string {
+  const name = error instanceof Error ? error.constructor.name : typeof error;
+  const detail = error instanceof Error ? String(error.message).replace(/[\r\n\u0000-\u001F]/g, " ").slice(0, 120) : "";
+  return detail ? `${name}: ${detail}` : name;
 }
 
 async function loadHandoff(options: CompactorOptions): Promise<string> {
@@ -146,28 +215,60 @@ export interface RenderedTranscript {
  * fish.gif_ingest（收图任务）不是群友原话，不进摘要。
  */
 export async function renderTranscript(conversation: Conversation): Promise<RenderedTranscript> {
+  const counted = await renderCountedEntries(conversation);
+  const transcript = counted.flatMap((e) => e.lines).join("\n");
+  return { transcript, entries: counted.length, chars: transcript.length };
+}
+
+/** 一条入册 entry 摊平后的行与它的时间戳（机械降级头用；没有可靠时间戳时为 undefined）。 */
+interface CountedEntry {
+  lines: string[];
+  at?: number;
+}
+
+/** entry 时间戳：pi.user / fish.inbound 取首条 user message，fish.outbound 取 payload 的 at。 */
+function entryTimestamp(entry: { kind: string; model?: unknown; data?: unknown }): number | undefined {
+  if (entry.kind === "fish.outbound") {
+    const at = (entry.data as { at?: unknown } | undefined)?.at;
+    return typeof at === "number" ? at : undefined;
+  }
+  if (!Array.isArray(entry.model)) return undefined;
+  for (const message of entry.model) {
+    const ts = (message as { timestamp?: unknown }).timestamp;
+    if (typeof ts === "number") return ts;
+  }
+  return undefined;
+}
+
+/**
+ * 只把「谁说了什么」摊平：群消息 + 鱼真正发出去的话，按 entry 逐条返回。
+ * thinking、tool 调用、tool 结果、系统提示一律不进去——它们不进摘要，也就不进下一轮的上下文。
+ * 群消息的 entry 有两种 kind：存量 pi.user，以及带结构化原始数据的 fish.inbound
+ * （记忆入口）；两者部读 entry.model（宿主拼装的 user message），handoff 行为不变。
+ * fish.gif_ingest（收图任务）不是群友原话，不进摘要。
+ */
+async function renderCountedEntries(conversation: Conversation): Promise<CountedEntry[]> {
   const view = await conversation.viewState(ctx);
-  const lines: string[] = [];
-  let entries = 0;
+  const counted: CountedEntry[] = [];
 
   try {
     for (const entry of view.value.entries) {
       if (entry.kind === "pi.user" || entry.kind === MEMORY_INBOUND_KIND) {
         const text = entryText(entry.model);
-        if (text) lines.push(`群友: ${text}`);
-        entries++;
+        counted.push({ lines: text ? [`群友: ${text}`] : [], at: entryTimestamp(entry) });
       } else if (entry.kind === "fish.outbound") {
-        const data = entry.data as { items?: string[] } | undefined;
-        for (const text of data?.items ?? []) lines.push(`鱼: ${text}`);
-        entries++;
+        const data = entry.data as { items?: string[]; at?: unknown } | undefined;
+        counted.push({
+          lines: (data?.items ?? []).map((text) => `鱼: ${text}`),
+          at: typeof data?.at === "number" ? data.at : undefined,
+        });
       }
     }
   } finally {
     view.dispose();
   }
 
-  const transcript = lines.join("\n");
-  return { transcript, entries, chars: transcript.length };
+  return counted;
 }
 
 function entryText(model: unknown): string {
