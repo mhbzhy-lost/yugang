@@ -784,6 +784,8 @@ async function submitRound(input: {
     const compacted = await compactWithGuard(conv, false, chatKey);
     if (compacted.compacted) {
       console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
+    } else {
+      console.log(`[鱼缸] ${chatKey} 失败轮换页未执行：${compacted.reason ?? "skipped"} entries=${compacted.entries ?? "-"} chars=${compacted.chars ?? "-"}`);
     }
     return;
   }
