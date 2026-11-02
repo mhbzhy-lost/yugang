@@ -386,6 +386,8 @@ const fish = await openFish({
   ...(modelSelection.transport ? { streamTransport: modelSelection.transport } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时
   memeCooldownMs: () => Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
+  // 出站配速（T14，决策 23）：drain 同会话相邻两次实际发送至少隔 sendPacingSeconds（0 = 关闭）
+  sendPacingSeconds: () => fishConfig().config.sendPacingSeconds,
   // 语音：按会话所在人格取配置（只认 fish.config 的 voices，没配就是没有语音）
   ttsOf: (conversationId) => voiceConfigFor(mappingKeys.get(String(conversationId)) ?? ""),
   // look / video 的视觉描述模型：models.vision；省略时与 models.main 相同
@@ -1903,8 +1905,8 @@ async function drainLoop(): Promise<void> {
 // next 搭话开窗状态机：每 tick 现读 fishConfig()（engagement 热切换含无消息期都在 tick 里消化，
 // 切回 legacy 自动清相位停窗，重新进 next 从 closed 零计时）；gate 的 isOpen 接它的相位，
 // 未跟踪/legacy/白名单外恒 closed。open 进入经 onPhase 提交 injection 轮（背景板）；
-// open 态的 free_pass 消息由 onMessage 路由进它的 shard 收集器，每 10 秒一拍经
-// onShard 合并提交（ambient）；closed 进入只留相位日志。
+// open 态的 free_pass 消息由 onMessage 路由进它的 shard 收集器，每 engage.shardSeconds
+// （缺省 20 秒）一拍经 onShard 合并提交（ambient）；closed 进入只留相位日志。
 const engageNext = createEngageNext({
   groups: () => config.groups,
   recentOf: (chatKey) => recent.get(chatKey) ?? [],
@@ -1925,7 +1927,13 @@ const engageNext = createEngageNext({
   onShard: (chatKey, items) => submitShardRound(chatKey, items),
   config: () => {
     const c = fishConfig().config;
-    return { engagement: c.engagement, closedMinutes: c.engage.closedMinutes, openMinutes: c.engage.openMinutes };
+    return {
+      engagement: c.engagement,
+      closedMinutes: c.engage.closedMinutes,
+      openMinutes: c.engage.openMinutes,
+      // shard 节拍（T14）：engage.shardSeconds，缺省 20 秒，每拍现读热生效
+      shardSeconds: c.engage.shardSeconds,
+    };
   },
   log: (message) => console.log(`[鱼缸] ${message}`),
   onError: (error) => console.error("[鱼缸] 搭话开窗回调失败", error instanceof Error ? error.message : error),

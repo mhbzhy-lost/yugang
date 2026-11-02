@@ -35,6 +35,8 @@ export interface EngageConfig {
   silenceThreshold: number;
   /** 零出口超 2×阈值后积压窗口放宽到此上限；recent 流水上限同步提升 max(30, windowRelaxCap)。 */
   windowRelaxCap: number;
+  /** open 态分片节拍（秒）：每拍把窗内全部发送者的新消息合成一轮 ambient 提交（T14 消费）。 */
+  shardSeconds: number;
 }
 
 export const ENGAGE_DEFAULTS: EngageConfig = {
@@ -44,6 +46,7 @@ export const ENGAGE_DEFAULTS: EngageConfig = {
   mentionContextSize: 5,
   silenceThreshold: 3,
   windowRelaxCap: 30,
+  shardSeconds: 20,
 };
 
 export interface FishConfig {
@@ -55,6 +58,8 @@ export interface FishConfig {
   engagement: EngagementMode;
   /** next 搭话开窗参数：closed/open 节拍、积压与背景上限、nudge 阈值（仅 next 消费）。 */
   engage: EngageConfig;
+  /** 出站配速（秒）：outbox drain 同会话相邻两次实际发送的最小间隔，防连珠炮（0 = 关闭）。 */
+  sendPacingSeconds: number;
   /** 思考档位；启动时写进会话 agent，改完重启才生效。 */
   thinkingLevel: ThinkingLevel;
   /** 换页阈值：条目数 / 字符数。 */
@@ -187,6 +192,7 @@ function checkEngageBlock(raw: unknown): FieldCheck {
     ["mentionContextSize", "engage.mentionContextSize 必须在 1–30"],
     ["silenceThreshold", "engage.silenceThreshold 必须在 1–50"],
     ["windowRelaxCap", "engage.windowRelaxCap 必须在 10–100"],
+    ["shardSeconds", "engage.shardSeconds 必须在 5–120"],
   ];
   const ranges: Record<string, [number, number]> = {
     closedMinutes: [1, 240],
@@ -195,6 +201,7 @@ function checkEngageBlock(raw: unknown): FieldCheck {
     mentionContextSize: [1, 30],
     silenceThreshold: [1, 50],
     windowRelaxCap: [10, 100],
+    shardSeconds: [5, 120],
   };
   const parsed: Partial<EngageConfig> = {};
   let any = false;
@@ -216,6 +223,7 @@ export const FISH_CONFIG_FIELDS: readonly FishConfigFieldSpec[] = [
   { name: "watchAmbientChance", effect: "hot", check: numberIn("watchAmbientChance 必须是 0–1", 0, 1) },
   { name: "engagement", effect: "hot", check: oneOf("engagement 只认 legacy/next", ENGAGEMENT_MODES as readonly string[]) },
   { name: "engage", effect: "hot", check: checkEngageBlock },
+  { name: "sendPacingSeconds", effect: "hot", check: numberIn("sendPacingSeconds 必须在 0–60", 0, 60) },
   { name: "thinkingLevel", effect: "restart", check: oneOf("thinkingLevel 不认识", THINKING_LEVELS as readonly string[]) },
   { name: "compact", effect: "hot", check: checkCompact },
   { name: "toolTimeoutSeconds", effect: "restart", check: numberIn("toolTimeoutSeconds 必须在 5–600", 5, 600) },
@@ -282,6 +290,7 @@ const DEFAULTS: FishConfig = {
   watchAmbientChance: 0.5,
   engagement: "legacy",
   engage: ENGAGE_DEFAULTS,
+  sendPacingSeconds: 6,
   thinkingLevel: "low",
   compact: { maxEntries: 200, maxChars: 50_000 },
   memeCooldownMinutes: 8,

@@ -16,7 +16,8 @@
  *
  * open 态的窗口分片（shard，2026-11-02 修订）：free_pass（非 @）消息不走按发送者的
  * debounce/burst 管线，由宿主路由进这里的 shard 收集器（collectShard）——open 窗内每
- * shardMs（默认 10 秒）一拍，到期把这一拍收集的**全部发送者**消息合成一轮交给
+ * shardSeconds 一拍（engage.shardSeconds，缺省 20 秒，每拍现读配置热生效），到期把这一拍
+ * 收集的**全部发送者**消息合成一轮交给
  * onShard 提交（ambient 轮，多发送者逐行渲染）。背压：到期时会话忙（在途
  * ambient/injection 轮、换页、收图）就不提交，消息累积并入下一拍——绝不丢、绝不
  * 并发提交、绝不向 pi 的 steering 队列塞多条。关窗时收集器里还有整拍消息就补交一拍
@@ -59,6 +60,8 @@ export interface EngageTickConfig {
   engagement: EngagementMode;
   closedMinutes: number;
   openMinutes: number;
+  /** open 态分片节拍（秒，engage.shardSeconds）：每拍排程时现读，热加载下一拍生效。 */
+  shardSeconds: number;
 }
 
 export type EngageTimer = ReturnType<typeof setTimeout>;
@@ -84,7 +87,7 @@ export interface EngageNextDeps {
   clearTimer?: (timer: EngageTimer) => void;
   /** tick 周期（默认 1000ms）；留参数只为验证时注入。 */
   tickMs?: number;
-  /** shard 时长（默认 10 秒，与 debounce 窗口同量级）；留参数只为验证时注入。 */
+  /** shard 时长覆盖（毫秒）；缺省每拍现读 config().shardSeconds（缺省 20 秒）。留参数只为验证时注入。 */
   shardMs?: number;
   /** 启动/停止等状态机自身事件的日志出口；缺省静默。 */
   log?: (message: string) => void;
@@ -134,8 +137,10 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
   const setTimer = deps.setTimer ?? ((flush, ms) => setTimeout(flush, ms));
   const clearTimer = deps.clearTimer ?? ((timer) => clearTimeout(timer));
   const tickMs = deps.tickMs ?? 1_000;
-  const shardMs = deps.shardMs ?? 10_000;
   const shardEnabled = deps.onShard !== undefined;
+
+  /** shard 一拍的时长（毫秒）：验证注入优先；否则现读配置（engage.shardSeconds，缺省 20，热加载每拍现读）。 */
+  const shardMsOf = (): number => deps.shardMs ?? deps.config().shardSeconds * 1000;
 
   const phases = new Map<string, GroupPhase>();
   let running = false;
@@ -196,7 +201,7 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
       if (state.phase !== "open" || state.shard !== shard) return;
       flushShard(chatKey, state, false);
       if (state.phase === "open" && state.shard === shard) scheduleShard(chatKey, state);
-    }, shardMs);
+    }, shardMsOf());
   };
 
   const enterClosed = (chatKey: string, state: GroupPhase, at: number): void => {

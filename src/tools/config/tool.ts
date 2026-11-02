@@ -40,9 +40,9 @@ interface ConfigArgs {
 const ROLES: readonly ModelRole[] = ["main", "vision", "image"];
 
 /**
- * engage 块的受控键与校验：字段名以计划契约（docs/plans/2026-11-02-engagement-next.md Task 2）
+ * engage 块的受控键与校验：字段名以计划契约（docs/plans/2026-11-02-engagement-next.md Task 2/Task 14）
  * 为准；engage 的解析与 FishConfig 归搭话状态机所有（与 config 工具不同一写路径），落地若有出入
- * 集成时在这里对齐。只认六个已知键、数值 1–1440，空对象与未知键拒绝。
+ * 集成时在这里对齐。只认七个已知键、数值 1–1440，空对象与未知键拒绝。
  */
 const ENGAGE_KEYS: readonly string[] = [
   "closedMinutes",
@@ -51,6 +51,7 @@ const ENGAGE_KEYS: readonly string[] = [
   "mentionContextSize",
   "silenceThreshold",
   "windowRelaxCap",
+  "shardSeconds",
 ];
 
 function checkEngage(raw: unknown): FieldCheck {
