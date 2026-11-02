@@ -32,7 +32,7 @@
 | F2 | 状态机按群：closed 10 分钟（可配）→ open 3 分钟 → 循环；closed 态非 @ 群消息 skip:next_pending 不进模型（**边界**：open 窗末尾已存在的 pending burst，closed 后同发送者续话并入该组照常 flush，属期望——同组不拆）；open 态非 @ 消息 free_pass 走既有合并管线（mustAnswer=false 零出口合法）；`isOpen` 缺省 = closed；热切换（含无消息期）由状态机每 tick 现读配置驱动 start/stop | engage-next 单测 + gate 单测 + 日志 | 态迁移精确、closed 零新提交、open 走管线、无消息热切换生效 | 测试输出 | T2、T3 |
 | F3 | 开窗注入（**背景板语义**）：open 瞬间把「上次关窗以来」积压（排除 pending burst 内消息、过滤 `/` 指令与纯 GIF 收图消息、>windowSize 截最近 N）注入 injection 轮（每条 `[m:<messageId>]`，watched/master 打标）；文案明确这些**只是背景板，不构成需要回复的任务**：无必答、无 salvage、模型不逐条回应也不补回复任何人；无积压不注入 | 单测 | 积压一轮注入、过滤与截断正确、文案含背景板声明、无积压零提交 | 测试输出 | T3 |
 | F4 | @ 必答轮在 next 任何 phase 即时进，背景缩为最近 5 条（含整组，**且剔除已进过模型的消息：如 5 条里 3 条已读过则只注入后 2 条；**每次携带 ctx_seen_note 引导结合历史**）；必答/salvage/引用语义不变；@ 轮遇在途 ambient/injection 轮**排队等待**（上限 60s，超时 busy_reply），不丢弃 | 单测 + 既有必答回归 | 背景 ≤5、去重正确、标记推进、@ 在环境轮进行中到达能进（等待或 busy，不静默丢） | 测试输出 | T5 |
-| F5 | say_words/say_media/say_mema 的模型侧引用参数**收敛为单一 `quoteMsgId`**（接受 `[m:…]` 或裸数字）：不传 = 不引用（quote=false 语义，机械必答引用不受影响）；传了且属本轮注入窗口 → 置 `payload.quoteId = 该消息 id`；不在窗口 tool 错误不计数额度；旧 `quote` 布尔参数从 schema 移除（emit 层机械引用链 quoteForce/@ 必答照旧，内部实现可用 payload.quote 传递）；say_voice 不变（无 quoteMsgId，可照常 quote 正在回的那条） | 单测 + schema 校验 | 不传不引用、合法挂 quote、非法拒、schema 无 quote 参数、机械必答引用不变 | 测试输出 | T4 |
+| F5 | say_words/say_media/say_meme 的模型侧引用参数**收敛为单一 `quoteMsgId`**（接受 `[m:…]` 或裸数字）：不传 = 不引用（quote=false 语义，机械必答引用不受影响）；传了且属本轮注入窗口 → 置 `payload.quoteId = 该消息 id`；不在窗口 tool 错误不计数额度；旧 `quote` 布尔参数从 schema 移除，但 execute 层**运行时容忍旧字段**（模型若仍输出 quote:true，按「引用锚点」处理，不报错不忽略）——schema 不再暴露，行为不破坏 legacy；emit 层机械引用链 quoteForce/@ 必答照旧；say_voice 不变（无 quoteMsgId，可照常 quote 正在回的那条）。F1 口径：此处属「模型可见接口变更」，legacy 亦生效（参数收敛与开关无关），回退靠代码回滚 | 单测（含旧 quote:true 兼容回归）+ schema 校验 | 不传不引用、合法挂 quote、非法拒、schema 无 quote 参数、旧 quote:true 兼容、机械必答引用不变 | 测试输出 | T4 |
 | F6 | ambient/injection 轮零出口合法（无 salvage、无强制引用）；可 @ 目标 ∈ {主人} ∪ 本群 watched（成员校验照旧），越界拒绝并记审计；answer 轮与 legacy 的 @ 语义不变 | 单测 + runtime 文案核对 | 轮类型判定正确、@ 白名单生效、审计有痕 | 测试输出 | T3、T4、T1 |
 | F7 | engage 配置（closedMinutes=10 / openMinutes=3 / windowSize=20 / mentionContextSize=5 / silenceThreshold=3 / windowRelaxCap=30）缺省合法、非法告警保留缺省、热加载 | 配置解析单测 | 判据如左 | 测试输出 | T2 |
 | F8 | next 态：特别关注无强制（不进 gate、语音骰对 ambient/injection 关闭）；名单与备注照常记录；watched 消息行带「[特别关注]」标记；runtime 软引导（全局可见，属措辞不属搭话机制） | 单测 + runtime 核对 | next 判据如左；legacy watched 行为（gate/语音骰）不变 | 测试输出 | T1、T3、T5 |
@@ -41,7 +41,7 @@
 | F11 | 连续 silenceThreshold 个 open 窗全程零出口 → 下窗注入尾部 nudge 文案；**backlog 为空时提交 nudge-only 轮**（header+footer+nudge，无行）；超 2×阈值 → 下窗 backlog 窗口放宽至 windowRelaxCap（受 recent 上限约束，上限已同步提升）；仅 ambient/injection 轮开口清零，@ 轮/私聊不计不清 | 单测 | 阈值触发文案、nudge-only 轮、放宽、清零口径 | 测试输出 | T8 |
 | F12 | 统一配置工具 `config`（仅主人私聊轮，群内一律拒绝）：fish.config.json 受控字段（热加载类）+ config/models.json 角色表（restart 生效类，迁移自 model 工具）；旧 model 工具移除且全仓无残留引用（含 test/tools.test.ts、README、AGENTS 第 1/2/3 节、types/harness 注释）；审计日志；非法/越界拒绝 | 工具单测 + prompts 审查 | 仅主人私聊生效、两类配置生效语义正确、model 无残留、config 进 deferred 名单断言 | 测试输出 | T9 |
 | F13 | 群友画像并入长期记忆（people 为唯一载体，**在场/活跃优先、受既有 MEMORY_CAPS 约束**——大群允许旧画像按既有淘汰规则让位）；people.md 的主人/关系**静态设定保留**（不属群友画像），仅「群里的人/梗」类动态画像并入；无第二套画像存储 | 记忆链路单测 + npm run memory | 画像累积叠加、同 QQ 合并、静态设定不受影响 | 测试输出 | T10 |
-| F14 | 抽取评价机制：试金石提示词（few-shot+受益判准+confidence low 不报+signal 标注，signal 仅保留机械可得的「命中 people 名单/与现有 fact 冲突」两类）；对账三分类 ADD/SUPERSEDE（含 subject，factId→subject 由渲染 known 时附带 id→subject 映射机械解析）/SKIP（仅计数不产出）；空 patch 与解析失败可判别；零提取计数（阈值常量 5）+ 一次复查模式（不阻塞换页）；待审列表展示 signal 标签与零提取头部提示 | 抽取器单测 + npm run prompts | 三分类被 sanitize 通过、判别正确、计数与复查路径正确 | 测试输出 | T11 |
+| F14 | 抽取评价机制：试金石提示词（few-shot+受益判准+confidence low 不报+signal 标注，signal 仅保留机械可得的「命中 people 名单/与现有 fact 冲突」两类）**且 lore 类正例显式覆盖热梗/缩写/领域黑话（释义+首次出现锚点，走既有 lore 通道）**；对账三分类 ADD/SUPERSEDE（含 subject，factId→subject 由渲染 known 时附带 id→subject 映射机械解析）/SKIP（仅计数不产出）；**显式 ExtractOutcome 三态**（ok/empty/parse_failed，解析失败不计零提取）；零提取计数（阈值常量 5，持久化）+ 一次复查模式（不阻塞换页）；待审列表展示 signal 标签与零提取头部提示 | 抽取器单测 + npm run prompts | 三分类被 sanitize 通过、三态判别正确、计数与复查路径正确、热梗正例在提示词唯一源 | 测试输出 | T11 |
 | F15 | 换页新页结构 = 剖面卡片（≤300 字，字段化：时间范围/活跃成员机械生成，话头/梗/承诺逐字引用可校验，氛围一行）+ 被压缩页尾部 30-50 条原文（机械截取，来源仅限 transcript 不含未见消息）；逐字引用校验、事务性、失败走机械降级换页；跨页合并字段级覆盖不重新叙事 | compact 单测（随授权）+ 生产验证（换页后新页开头形态） | 尾巴来源正确、引用可校验、失败降级、无 summary-of-summary | 测试输出 | T12 |
 
 **完成规则：** F1-F15 全部满足且证据对应当前版本才完成；步骤勾选不替代终态验证。
@@ -55,7 +55,7 @@
 3. **open 态**：gate next 分支放行 `free_pass`（非必答）；消息走既有 10 秒合并管线；**环境轮背景上限沿用 10 不变**（mentionContextSize 仅 @ 轮）；开窗瞬间若有积压先提交 injection 轮（覆盖到开窗时刻，之后归 burst，游标推进到 recent 末条 arrivalSeq，不重复注入）。
 4. **injection 轮（背景板语义，用户已确认）**：closed 期间的非 @ 消息不作回复任务处理，开窗仅作背景板给鱼看：不要求逐条回应、不补回复任何人、无必答无 salvage；`ctx_engage_header + ctx_engage_line×N + ctx_engage_footer`；**submitRound 增加 `entryKind` 参数**（现硬编码 MEMORY_INBOUND_KIND），injection 用 `fish.engage_tick`（摘要与抽取白名单排除）；**计入换页阈值**（renderTranscript 对 engage_tick 计 entries/chars，但不写 handoff 文本）；不附 inline image block。
 5. **@ 轮**：任何 phase 即时进；next 下背景 = mentionContextSize（默认 5）；legacy 恒 10。
-6. **引用目标（参数收敛，用户已定：quote 与 quoteMsgId 重复，quoteMsgId 不传即 quote=false）**：三工具（say_voice 除外）模型侧**只保留 `quoteMsgId` 一个引用参数，移除旧 `quote` 布尔**；窗口挂点扩展 `triggerOf` 值形状（`quoteIds?: Set<string>`）或照 `bypassOf` 新增 FishOptions 回调，**随轮清理**（settle finally）；有效时置 `payload.quoteId=<该 id>`（内部实现层面等效 quote=true，防 emit 层静默丢弃）；不传 = 不引用，机械必答引用（quoteForce/@ 必答/整组回复）不受模型参数影响、照旧生效；模型想引用锚点时同样传锚点 id（锚点行已带 [m:id] 标注）。
+6. **引用目标（参数收敛，用户已定：quote 与 quoteMsgId 重复，quoteMsgId 不传即 quote=false）**：三工具（say_voice 除外）模型侧**只保留 `quoteMsgId` 一个引用参数，移除旧 `quote` 布尔**；窗口挂点扩展 `triggerOf` 值形状（`quoteIds?: Set<string>`）或照 `bypassOf` 新增 FishOptions 回调，**随轮清理**（settle finally）；有效时置 `payload.quoteId=<该 id>`（内部实现层面等效 quote=true，防 emit 层静默丢弃）；不传 = 不引用；**execute 层容忍旧 `quote:true` 字段**（视为引用锚点，schema 不再声明），机械必答引用（quoteForce/@ 必答/整组回复）不受模型参数影响、照旧生效；模型想引用锚点时同样传锚点 id（锚点行已带 [m:id] 标注）。
 7. **轮类型显式化**：`triggerOf` 值增加 `kind: "ambient" | "injection" | "answer"`（legacy 轮全部 answer/既有语义）；`mentionPolicyOf` 按轮类型判定（ambient/injection → 白名单 {master}∪watched；answer/legacy → 既有「被点名」语义）；语音骰仅 answer 轮且 isVoiceVip（ambient/injection 一律不掷——修正「环境轮 userId undefined」的错误前提：flushBurst 实际传 anchor.userId）；injection 轮 trigger 无 messageId 时 `say_mention_no_trigger` 分支按轮类型放行 @ 白名单。@ 放宽记审计日志。
 8. **互斥分级**：in-flight 登记仅针对 **next 的 ambient/injection 轮**（submit 前 set、settle finally 删，并入 conversationBusy）；**@ 轮遇 in-flight 排队等待**（重试等待上限 60s，超时 busy_reply），绝不因在途环境轮丢必答；ambient/injection 遇 in-flight/换页/收图轮：injection 放弃本轮注入（宁少勿答）、ambient 组静默丢弃（沿用既有语义）；legacy 不登记、行为零变化。
 9. **特别关注 = 纯设定集（next）**：记录机制照旧；`[特别关注]` 打标（injection 行与 @ 锚点行；legacy watch_inline 行为零变化）；runtime 软引导全局可见（措辞不属搭话机制，F8 已按此口径）。
@@ -79,7 +79,8 @@ T1 (文案契约) ──> T3 ──> T4 ──> T8
 T2 (状态机+gate+配置) ──> T3
 T3 ──> T5（串行：同写 index.ts/debounce.ts）
 T5 ──> T6（串行：同写 index.ts）
-T3 ──> T7（feedback 渲染消费轮类型/quoteIds 不冲突，仅排程稳妥）
+T6 ──> T7（T6 产出的评价包/FeedbackMeta 结构是 T7 存储实现的输入契约）
+T11 ──> T12（抽取评价机制先行，压缩重构在其后串行）
 T7 ──> T10、T7 ──> T11（同写 memory.ts，串行排程）
 T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 ```
@@ -157,7 +158,10 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 - Produces：**submitRound 增加 `entryKind` 参数**（默认现值，injection 用 `fish.engage_tick`）；compact renderTranscript 对 engage_tick **计入 entries/chars 阈值但不写 handoff 文本**
 - Produces：**轮类型**：triggerOf 值加 `kind: "ambient" | "injection" | "answer"`（legacy 全 answer）；ambient 轮 = free_pass burst flush（trigger.userId=anchor.userId，kind=ambient）；injection 轮 trigger 无 messageId、kind=injection；packageDeps/harness 透传
 - Produces：injection 注入轮（决策 4 格式 + backlog 过滤 `/` 指令与纯 GIF 消息 + **lastSeenByModel 去重与推进（决策 20）**，**每次携带 `ctx_seen_note`**）；遇忙放弃（宁少勿答）；quoteIds 窗口登记（决策 6 挂点，settle finally 清）；**lastSeenByModel 标记的存储与维护 helper 在本任务落地**（按会话 Map，供 T5 与 burst 背景消费）
-- Produces：**互斥分级**（决策 8）：ambient/injection in-flight 登记（并入 conversationBusy）；@ 轮 flushBurst 遇 in-flight **排队等待**（上限 60s 超时 busy_reply）；legacy 不登记零变化
+- Produces：**互斥分级**（决策 8）：ambient/injection in-flight 登记（并入 conversationBusy）；@ 轮 flushBurst 遇「换页/收图」沿用既有 busy 语义，遇「在途 ambient/injection 轮」进入**显式等待队列**（每会话一个微队列，60s 超时转 busy_reply，等待期间消息不丢弃）；legacy 不登记零变化
+- Produces：**transcript 锚点标记**：countable entry（fish.inbound/outbound 渲染行）统一携带 `[m:<messageId>]` 前缀（渲染层改动；该结构同时是 T4 quoteIds 窗口与 T12 逐字校验的锚点契约：`SeenMessage { messageId, arrivalSeq, at, author, text }`，由渲染处现算不另存）
+- Produces：**injection 轮 memory 语义**：entryKind=fish.engage_tick，不写 fish.inbound（背景板非对话输入，不进记忆抽取/摘要）；memory scope 参数传空集；renderCountedEntries 对 engage_tick 计数（阈值）但其行是否进 handoff 尾巴由 T12 统一裁定
+- Produces：**recent 消息类型标记**：RecentChatMessage 增加纯 GIF/图片类型标志（onebot 解析层已有该信息，透传进 recent）；仅 next backlog 过滤消费，legacy recent 行为零变化
 - Produces：runtime.md「自由交流窗口」小节的 engagement 条件注入接线（harness）
 - 注意：injection 不附 inline image block；@ 锚点行 watched/master 打标（T1 文案）
 
@@ -216,7 +220,8 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 **WritePaths：** `src/index.ts`（handleCommand、sentmap 写入）、`src/harness.ts`（drain 后 sentmap 记录，如发送链在此）、`src/qq/onebot.ts`（sendGroup 返回 message_id）、`src/memory.ts`（patch 构造 helper）、`prompt/messages.md`（key 已在 T1 落）
 
 **接口契约：**
-- Produces：`onebot.sendGroup` 返回 message_id；drain 成功后写 `fish.sentmap`（sentMessageId→entryId，30 天滚动清理）
+- Produces：发送链改造：`onebot.sendGroup`/`sendImageGroup` **返回实际 message_id**；outbox 持久化 outbound entryId；drain 每条实际发出的 QQ 消息写 `fish.sentmap`（sentMessageId→outbound entryId，30 天滚动清理）；部分发送失败语义：仅成功条目入 sentmap
+- Produces：**涉及群员结构化快照**：`fish.eval` entry 内保存评价包的结构化上下文（被引消息作者、前 20 条的消息 id/作者/昵称），评价包只从该结构化快照组装，不从宿主渲染文本反解析
 - Produces：`/评 好|差 <文字>`（方向必填，两方向同构）：闸前特判（在 master 判断前识别 `/评`：群内非主人回 `eval_rejected`；私聊非主人静默——不违反私聊硬约束）；指向型经 sentmap 定位（降级最近一条 outbound 并回执注明 `eval_unknown_target`）；评价包统一装配（决策 11b：被评条目+引用链+前 20 条摘要+涉及群员清单+群/人格/日期+原文）写入待审；评价事件写 `fish.eval` entry（进抽取白名单、排除摘要）；回执走 `fish.enqueue`（不产生 outbound entry、不进 transcript）
 - Produces：`/记忆` 待审列表兼容展示评价条目（含关联摘要）
 
@@ -328,7 +333,7 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 
 ### Task 12：压缩结构重构（剖面卡片 + transcript 尾巴）
 
-**Deps：** `none`（与搭话机制无关；建议在 T11 后串行排程，同改 prompt/ 与记忆链路相邻）
+**Deps：** `T3`（counted entry 的 `[m:<messageId>]` 锚点标记与 SeenMessage 结构）、`T11`（同改 prompt/ 与记忆链路相邻，串行排程）；**已合入的机械降级换页（`12dab09`/`cbf5c41`）是已满足的前置**，正常路径重构不得改写 fallback 分支
 
 **WritePaths：**
 - `prompt/handoff.md`（重写为剖面卡片模板）
@@ -341,6 +346,9 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 
 **接口契约：**
 - Consumes：换页链路；已修复的机械降级换页（失败兑底，正常路径不碰）；长期记忆链路（人/约定/lore 已另链路沉淀，压缩不再重复承担）
+- Produces（结构冻结）：正常路径产出**严格字段化 profile**（JSON schema 校验：时间范围/活跃成员/话头≤5/承诺/氛围，逐字引用字段必须 substring 命中本页 counted entry 文本，锚点用 `[m:id]`）；校验失败不 reset，直接走既有机械降级分支；**与机械降级共享的挂点冻结**：抽出「计数 entry / 机械尾巴」纯函数，fallback 分支保持现状只消费该函数，正常路径仅新增 `buildProfileHandoff`；上一页 profile 从 pi.reset head 前的剖面 entry 提取，字段级合并后作为本页输入（不重新叙事）
+- Produces：机械时间头模板挪入 `prompt/messages.md`（key 化，消除「src 直接拼接模型可见文字」的边界瑕疵，机械降级与剖面共用）
+- Produces：renderCountedEntries / renderTranscript **跳过 `stopReason:error` 的空 assistant entry**（生产观察：失败轮会留 content 空的错误 entry 在活跃链，重放成噪音）；机械尾巴是否包含 engage_tick 行在本任务裁定（默认：含，背景板也是模型见过的内容）
 - Produces：**换页新页结构 = `[剖面卡片 ≤300 字] + [被压缩页尾部最近 30-50 条原文（机械截取）]`**：
   1. **尾巴来源硬约束（用户已定）**：尾巴**只从被压缩页的 transcript 尾部取**（model-seen 内容），不从 recent/chatlog 原始流水取——保持不变式「transcript entry = 模型见过的内容」，不把鱼没见过的消息伪装成已读上下文；尾巴保持原 entry 顺序与标注格式（[m:id]/打标/背景板声明），不二次渲染
   2. **剖面卡片字段**：本页时间范围（纯机械）；活跃成员 top≤5（纯机械统计）；进行中的话头/梗 ≤5 条（LLM，**逐字引用原文短语**附消息 id 锚点，禁转述）；鱼的未完话头与承诺（LLM，逐字引用）；氛围一行（LLM）
@@ -369,5 +377,7 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 - `test/config-tool.test.ts`：仅主人私聊、两类配置生效语义、model 无残留
 - `test/memory-people.test.ts`：画像叠加/在场优先/静态设定保留
 - `test/compact-extract.test.ts`：三分类、空 patch vs 解析失败判别、零提取计数与复查
-- `test/compact-profile.test.ts`：剖面字段、逐字引用校验、尾巴来源约束、字段级合并、失败降级
+- `test/compact-profile.test.ts`：剖面字段、逐字引用校验、尾巴来源约束、字段级合并、失败降级、错误 entry 跳过
+- 旧 `quote:true` 字段的兼容回归（模型输出旧参数不破坏行为）
+- @ 轮等待队列（遇在途环境轮排队 60s、超时 busy、legacy 不变）与 recent 类型标记回归
 - 配置解析测试（engage 块缺省/非法/热加载，F7）
