@@ -166,6 +166,26 @@ function takeProjectHeader(headers: Record<string, string | null> | undefined): 
   return project;
 }
 
+/** 图格式类 400 判定：状态 400 且错误体提到 image/inline/media（toResponseError 会把响应体并进 message）。 */
+function isImageFormat400(error: unknown): boolean {
+  const err = error as { status?: number; message?: string } | null;
+  return err?.status === 400 && /image|inline|media/i.test(err.message ?? "");
+}
+
+/** 信封里是否带 inlineData（剥图降级只对真的带图的请求有意义）。 */
+function hasInlineData(params: unknown): boolean {
+  const request = (params as { request?: { contents?: { parts?: unknown[] }[] } })?.request;
+  return (request?.contents ?? []).some((content) => (content?.parts ?? []).some((part) => part && typeof part === "object" && "inlineData" in part));
+}
+
+/** 克隆信封并移除全部 inlineData part；只剩图的 content 整条丢掉，其余原样保留。 */
+function stripInlineData<T extends { request?: { contents?: { parts?: unknown[] }[] } }>(params: T): T {
+  const contents = (params.request?.contents ?? [])
+    .map((content) => ({ ...content, parts: (content?.parts ?? []).filter((part) => !(part && typeof part === "object" && "inlineData" in part)) }))
+    .filter((content) => (content?.parts?.length ?? 0) > 0);
+  return { ...params, request: { ...params.request, contents } };
+}
+
 /** 把错误包成 retryProviderRequest 认识的形状（Error + status + headers），429/5xx 才会被重试。 */
 async function toResponseError(provider: string, response: Response): Promise<Error & { status: number; headers: Headers }> {
   const text = await response.text().catch(() => "");
@@ -266,7 +286,7 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
         params = nextParams;
       }
       const url = `${(model.baseUrl || defaultBaseUrl(flavor)).replace(/\/+$/, "")}/v1internal:streamGenerateContent?alt=sse`;
-      const response = await retryProviderRequest(
+      const attemptOnce = () => retryProviderRequest(
         async () => {
           const attempt = await (options?.fetch ?? globalThis.fetch)(url, {
             method: "POST",
@@ -287,6 +307,20 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
           signal: options?.signal,
         },
       );
+      let response: Awaited<ReturnType<typeof attemptOnce>>;
+      try {
+        response = await attemptOnce();
+      } catch (error) {
+        // inline 附图降级：图格式类 400（错误体提及 image/inline/media）时剥掉全部
+        // inlineData 重试一次；403/429/5xx 走原有路径不变。剥图后文字仍在，不让整轮哑掉
+        if (isImageFormat400(error) && hasInlineData(params)) {
+          console.warn(`[fish] ${model.provider} inline image rejected, retry without images`);
+          params = stripInlineData(params);
+          response = await attemptOnce();
+        } else {
+          throw error;
+        }
+      }
 
       stream.push({ type: "start", partial: output });
       let currentBlock: null | { type: "text"; text: string; textSignature?: string } | { type: "thinking"; thinking: string; thinkingSignature?: string } = null;

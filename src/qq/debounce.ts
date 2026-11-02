@@ -284,6 +284,8 @@ export interface ContextOptions {
   messages: MessageTable;
   /** 特别关注标注（宿主按当前 watchedByChat 现算），只挂在这一轮要说的人前面。 */
   watchedNote?: string;
+  /** inline 附图标注（宿主按图选取结果现算）：attach=已附张数，more=未附张数。缺省不标注。 */
+  images?: { attach: number; more: number };
 }
 
 /**
@@ -329,6 +331,12 @@ export function withContext(
   } else {
     parts.push(messages["ctx_target"] ?? "", options.watchedNote ?? "", anchorLine);
   }
+
+  // inline 附图标注：已附的告诉模型直接看，未附的引导 look（文案在 prompt/messages.md）
+  const attach = options.images?.attach ?? 0;
+  if (attach > 0) parts.push(renderTemplate(messages["ctx_image_attached"] ?? "", { count: String(attach) }));
+  const more = options.images?.more ?? 0;
+  if (more > 0) parts.push(renderTemplate(messages["ctx_images_more"] ?? "", { count: String(more) }));
 
   return parts.filter((part) => part.length > 0).join("\n");
 }

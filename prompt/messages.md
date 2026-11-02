@@ -67,6 +67,8 @@ ctx_burst_header: {{who}} 连着发了 {{count}} 条，这是一整组话（下�
 ctx_burst_line: {{who}}({{qq}}): {{text}}
 ctx_anchor_note: 最后这一条只是引用的锚点，你要回应的是上面这一整组——整组里问你的、@你的都算数。
 ctx_target: 要你回应的是最后这一条：
+ctx_image_attached: 本条消息末尾直接附了 {{count}} 张图（你能看到原图），需要的话直接看它们，不必调 look
+ctx_images_more: 这组话里另有 {{count}} 张图没有附上（动图或超出限额），想看用 look
 
 # 主人 / 指令的闸前机械回执（不进模型）
 bypass_placeholder: （一条画图指令：图片的细节发送者已单独指定，直接用 draw 画一张就好）

@@ -14,6 +14,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { addFishProvider, createFishModels } from "./models.ts";
 import { describeModel, loadFishModels } from "./model-config.ts";
 import { cleanupStaleVideoTemps } from "./tools/video/tool.ts";
+import { isLookDisabled } from "./tools/look/tool.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { Conversation, SettledSubmissionRecord } from "@earendil-works/pi-durable";
 import { openFish, type GroupProfile } from "./harness.ts";
@@ -33,6 +34,7 @@ import type { CompactResult } from "./compact.ts";
 import { setLookDisabled } from "./tools/look/tool.ts";
 import { clearMemeImportRound } from "./tools/meme_import/shared.ts";
 import { hasMemeMd5, md5OfFile } from "./media/meme-store.ts";
+import { shrinkForModel } from "./media/shrink-image.ts";
 import { absorbSecrets } from "./egress/absorb.ts";
 import { resetRun, resetLook, ledgerOf } from "./egress/ledger.ts";
 import { validateOutbound, DEFAULT_LIMITS } from "./egress/policy.ts";
@@ -180,6 +182,16 @@ const visionModel = { provider: modelSelection.vision.providerId, modelId: model
 const visionFallbackModel = modelSelection.visionFallback
   ? { provider: modelSelection.visionFallback.providerId, modelId: modelSelection.visionFallback.modelId }
   : undefined;
+
+// inline 直读开关（docs/plans/2026-11-01-inline-vision.md）：主/视觉同模型且通道在白名单
+// （仅已真机验证的 Gemini 订阅通道；zai 等是历史事故通道，明确排除）。/关看图 同时关掉
+// inline 附图——网关不稳时的运行时止损开关。开关每轮现算（/关看图 可在线切换）
+const INLINE_IMAGE_APIS = new Set(["google-code-assist", "antigravity-code-assist"]);
+const inlineVisionOn = (): boolean =>
+  !isLookDisabled()
+  && modelSelection.vision.providerId === modelSelection.main.providerId
+  && modelSelection.vision.modelId === modelSelection.main.modelId
+  && INLINE_IMAGE_APIS.has(modelSelection.main.api);
 
 const onebot = new OneBot(config.onebotUrl, config.onebotToken, config.mediaRoot);
 const chatlog = createChatlog(join(HOME, "chatlog"));
@@ -677,6 +689,8 @@ async function submitRound(input: {
   bypass?: string;
   /** 记忆：结构化入站 entry（fish.inbound，原始文本）与本轮在场人物（memory scope） */
   memory: { inbound: MemoryInbound; speakers: { subject: string; name: string }[] };
+  /** inline 附图（绝对路径，≤2 张）：压缩后以 image block 附在文本后；失败静默跳过 */
+  imageFiles?: string[];
 }): Promise<void> {
   const { chatKey, conv, trigger } = input;
   await absorbSecrets(conv);
@@ -694,13 +708,22 @@ async function submitRound(input: {
     if (hint) content = content + "\n" + hint;
   }
 
+  // inline 附图：压图规格见 src/media/shrink-image.ts；任何一张失败都只跳过那张，不阻塞整轮
+  const imageBlocks: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
+  for (const file of input.imageFiles ?? []) {
+    const shrunk = shrinkForModel({ file });
+    if (!shrunk.ok) continue;
+    imageBlocks.push({ type: "image", data: shrunk.buffer.toString("base64"), mimeType: shrunk.mimeType });
+  }
+  const submitContent = imageBlocks.length > 0 ? [{ type: "text" as const, text: content }, ...imageBlocks] : content;
+
   const scopeToken = pushScope(String(conv.id), { speakers: input.memory.speakers, text: input.memory.inbound.text });
   let settled: SettledSubmissionRecord;
   try {
     // 触发消息绑在 submission 上：轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）。
     // entry 是记忆的唯一原始输入：chatKey / QQ / 昵称 / 原话，不带任何宿主文案
     const submission = await conv.submit(
-      { type: "input", content, entry: { kind: MEMORY_INBOUND_KIND, data: input.memory.inbound } },
+      { type: "input", content: submitContent, entry: { kind: MEMORY_INBOUND_KIND, data: input.memory.inbound } },
       ctx,
     );
     triggerOf.set(String(submission.id), {
@@ -816,10 +839,13 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
   const watchedNote = watched
     ? renderTemplate(fish.prompts.messages["watch_inline"] ?? "", { who: anchor.nickname, note: watched.note })
     : "";
+  // inline 附图选取：锚点图优先、burst 内按序补足，普通轮 ≤2 张；GIF 与缺失文件不附（也不占额度）
+  const inlinePick = inlineVisionOn() ? pickInlineImages(anchor, burst.messages, config.mediaRoot) : { attach: [], more: 0 };
   let content = withContext(anchor, recent.get(anchor.chatKey) ?? [], burst.messages, {
     master: config.master,
     messages: fish.prompts.messages,
     ...(watchedNote ? { watchedNote } : {}),
+    ...(inlinePick.attach.length > 0 ? { images: { attach: inlinePick.attach.length, more: inlinePick.more } } : {}),
   });
 
   // @ 鱼 + 文字里提到合集/转发：把这个群最近一条没展开的合集拉出来（10 分钟内有效）。
@@ -860,8 +886,39 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     reply: burst.quoteFromReply,
     mustAnswer,
     ...(payload !== undefined ? { bypass: payload } : {}),
+    ...(inlinePick.attach.length > 0 ? { imageFiles: inlinePick.attach } : {}),
     memory: { inbound: memoryInbound, speakers },
   });
+}
+
+/** inline 附图上限（普通轮；导入轮例外属于 look 路径，与这里无关）。 */
+const INLINE_IMAGE_MAX = 2;
+
+/** 文本里的图片标记：[图片 inbound/xxx]（onebot 下载回填后的形状）。 */
+const IMAGE_REF_PATTERN = /\[图片 (inbound\/[^\]\s]+)\]/g;
+
+/**
+ * inline 附图选取：锚点图优先，burst 内按文本标记顺序补足；GIF 不附；
+ * ref 为空（下载失败）与文件缺失的跳过且不占额度。返回绝对路径列表与未附张数。
+ * 只在 inline 模式（主/视觉同模型且通道在白名单）被消费；并图开关在 submitRound 上游。
+ */
+function pickInlineImages(
+  anchor: { images: readonly { ref: string }[] },
+  messages: readonly { text: string }[],
+  mediaRoot: string,
+): { attach: string[]; more: number } {
+  const distinct: string[] = [];
+  const seen = new Set<string>();
+  const push = (ref: string) => {
+    if (ref && !seen.has(ref)) {
+      seen.add(ref);
+      distinct.push(ref);
+    }
+  };
+  for (const image of anchor.images) push(image.ref);
+  for (const line of messages) for (const match of line.text.matchAll(IMAGE_REF_PATTERN)) push(match[1] ?? "");
+  const eligible = distinct.filter((ref) => !ref.toLowerCase().endsWith(".gif") && existsSync(join(mediaRoot, ref)));
+  return { attach: eligible.slice(0, INLINE_IMAGE_MAX).map((ref) => join(mediaRoot, ref)), more: distinct.length - Math.min(eligible.length, INLINE_IMAGE_MAX) };
 }
 
 /**

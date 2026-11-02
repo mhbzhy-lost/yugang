@@ -171,6 +171,8 @@ export async function renderTranscript(conversation: Conversation): Promise<Rend
 }
 
 function entryText(model: unknown): string {
+  // 只取 text block：主会话 inline 附图（docs/plans/2026-11-01-inline-vision.md）的 image block
+  // 在这里被有意丢弃——摘要永远只吃文本，图片随换页退出活跃上下文
   if (!Array.isArray(model)) return "";
   return model
     .map((message) => {
