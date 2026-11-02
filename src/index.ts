@@ -213,10 +213,6 @@ function markSent(key: string): boolean {
 const chatKeys = new Map<string | number, string>();
 // 换页（自动 / 手动 `/压缩`）中的会话：期间不受理新提交，被@只回机械忙碌语
 const compacting = new Set<string>();
-// 连续模型错误轮计数（按会话）：成功一轮即清零。达到阈值时无视换页阈值强制换页，
-// 让机械降级把可能的中毒内容换出活跃页——自愈不能依赖「正好撞到阈值」
-const modelErrorStreak = new Map<string, number>();
-const MODEL_ERROR_FORCE_COMPACT = 3;
 // 静默收图轮在跑的会话：同一会话不许并发提交 / 不许换页（两条路径共用 conversationBusy）
 const ingestRounds = new Set<string>();
 /** 会话是不是正被换页或静默收图轮占着：起新提交与起换页前都要先看它。 */
@@ -725,26 +721,37 @@ async function submitRound(input: {
 
   const scopeToken = pushScope(String(conv.id), { speakers: input.memory.speakers, text: input.memory.inbound.text });
   let settled: SettledSubmissionRecord;
+  // 轮内自愈：模型错误（如内容拦截 1301）时自动重试，第三次尝试前强制换页——
+  // 摘要同源失败会走机械降级把可能的中毒内容清出活跃页，一次输入就能自愈，不依赖用户重发
+  const MAX_MODEL_ATTEMPTS = 3;
   try {
-    // 触发消息绑在 submission 上：轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）。
-    // entry 是记忆的唯一原始输入：chatKey / QQ / 昵称 / 原话，不带任何宿主文案
-    const submission = await conv.submit(
-      { type: "input", content: submitContent, entry: { kind: MEMORY_INBOUND_KIND, data: input.memory.inbound } },
-      ctx,
-    );
-    triggerOf.set(String(submission.id), {
-      messageId: trigger.messageId,
-      mentionsBot: trigger.mentionsBot,
-      userId: trigger.userId,
-    });
-    // 重耗时工具的机械提示要落回本轮会话：登记轮的会话，settle 的 finally 里删
-    roundConv.set(String(submission.id), conv);
-    if (input.bypass !== undefined) bypassOf.set(String(submission.id), input.bypass);
-    // 零出口轮观测：本轮出口计数清零登记，与 triggerOf 同生命周期（见下方 finally）
-    sayCalled.set(String(submission.id), 0);
+    for (let attempt = 1; ; attempt++) {
+      if (attempt === MAX_MODEL_ATTEMPTS) {
+        const cleared = await compactWithGuard(conv, true, chatKey);
+        if (cleared.compacted) {
+          console.log(`[鱼缸] ${chatKey} 换页 ${cleared.entries}条/${cleared.chars}字 ·强制`);
+        }
+      }
+      // 触发消息绑在 submission 上：轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）。
+      // entry 是记忆的唯一原始输入：chatKey / QQ / 昵称 / 原话，不带任何宿主文案；
+      // 重试不重复落库，只有首次尝试携带 entry
+      const submission = await conv.submit(
+        { type: "input", content: submitContent, entry: attempt === 1 ? { kind: MEMORY_INBOUND_KIND, data: input.memory.inbound } : undefined },
+        ctx,
+      );
+      triggerOf.set(String(submission.id), {
+        messageId: trigger.messageId,
+        mentionsBot: trigger.mentionsBot,
+        userId: trigger.userId,
+      });
+      // 重耗时工具的机械提示要落回本轮会话：登记轮的会话，settle 的 finally 里删
+      roundConv.set(String(submission.id), conv);
+      if (input.bypass !== undefined) bypassOf.set(String(submission.id), input.bypass);
+      // 零出口轮观测：本轮出口计数清零登记，与 triggerOf 同生命周期（见下方 finally）
+      sayCalled.set(String(submission.id), 0);
 
-    // 成功、失败、抛错都要把这一轮的绑定清掉
-    settled = await (async () => {
+      // 成功、失败、抛错都要把这一轮的绑定清掉
+      settled = await (async () => {
       try {
         const result = await submission.wait(ctx);
         // 正常结束却一次 say_* 都没调：模型裸文本回复不出口，聊天对象什么都看不到——
@@ -775,6 +782,11 @@ async function submitRound(input: {
         workingSent.delete(String(submission.id));
       }
     })();
+      // 模型错误且还有重试余量：轮内重试（第三次前已强制换页）；其它结果直接出循环
+      const reason = (settled as { reason?: string }).reason;
+      if (settled.status === "done" || reason !== "model_error" || attempt >= MAX_MODEL_ATTEMPTS) break;
+      console.log(`[鱼缸] ${chatKey} 模型错误，轮内重试 ${attempt}/${MAX_MODEL_ATTEMPTS - 1}`);
+    }
   } finally {
     // scope 队列满（scopeToken undefined）时本轮没压过 scope，不能弹掉别人的队首
     if (scopeToken !== undefined) shiftScope(String(conv.id), scopeToken);
@@ -784,23 +796,17 @@ async function submitRound(input: {
       .filter(Boolean)
       .join(" · ");
     console.error(`[鱼缸] ${chatKey} 这一轮没答上来：${why}`);
-    // 模型错误轮也要尝试换页：中毒页每轮都失败时，轮后自动换页是唯一自愈入口。
-    // 页还低于阈值时自动换页不会动（below_threshold），但连续错误说明活跃页本身可能
-    // 触发拦截：达到 MODEL_ERROR_FORCE_COMPACT 后强制换页，交由机械降级清页自愈
-    const streak = (modelErrorStreak.get(chatKey) ?? 0) + 1;
-    modelErrorStreak.set(chatKey, streak);
-    const forced = streak >= MODEL_ERROR_FORCE_COMPACT;
-    const compacted = await compactWithGuard(conv, forced, chatKey);
+    // 轮内重试与强制换页都试过仍失败：再尝试一次常规自动换页（阈值满足时），保持既有行为
+    const compacted = await compactWithGuard(conv, false, chatKey);
     if (compacted.compacted) {
-      console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字${forced ? " ·强制" : ""}`);
+      console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
     } else {
-      console.log(`[鱼缸] ${chatKey} 失败轮换页未执行：${compacted.reason ?? "skipped"} entries=${compacted.entries ?? "-"} chars=${compacted.chars ?? "-"} streak=${streak}`);
+      console.log(`[鱼缸] ${chatKey} 失败轮换页未执行：${compacted.reason ?? "skipped"} entries=${compacted.entries ?? "-"} chars=${compacted.chars ?? "-"}`);
     }
     return;
   }
 
   await drainLoop();
-  modelErrorStreak.delete(chatKey);
 
   // 记账：pi-durable 的 pi.usage 是累计值，这里取差落盘；基线按会话维度记，
   // 人格切换换了 conversation 后累计值回落不再被钳零丢账
