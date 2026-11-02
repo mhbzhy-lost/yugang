@@ -37,7 +37,7 @@
 | F7 | engage 配置（closedMinutes=10 / openMinutes=3 / windowSize=20 / mentionContextSize=5 / silenceThreshold=3 / windowRelaxCap=30）缺省合法、非法告警保留缺省、热加载 | 配置解析单测 | 判据如左 | 测试输出 | T2 |
 | F8 | next 态：特别关注无强制（不进 gate、语音骰对 ambient/injection 关闭）；名单与备注照常记录；watched 消息行带「[特别关注]」标记；runtime 软引导（全局可见，属措辞不属搭话机制） | 单测 + runtime 核对 | next 判据如左；legacy watched 行为（gate/语音骰）不变 | 测试输出 | T1、T3、T5 |
 | F9 | 主人不入特别关注列表：watch add 拒绝 master、装载时过滤 master；主人消息行带「[主人]」标记（与 [特别关注] 互斥，master 优先）；@ 轮锚点行「你主人」标注保留；runtime 软引导；无新增强制 | 单测（含 watch 工具） | watch 无法添加 master、标记互斥 | 测试输出 | T1、T3、T5 |
-| F10 | 主人 `/评 好|差 <文字>`（方向必填）：指向型（回复引用鱼消息）经 sentmap 定位被评 outbound 条目（查不到降级最近一条并在回执注明）；范围型（不引用）带当日统计；评价包结构化字段（对象/被引消息/前 20 条摘要或统计/群/人格/日期）随待审 patch 持久化，批准后进 fact 的 kind/meta；群内非主人 `/评` 闸前特判回拒绝，私聊非主人静默；meta 有独立上限，长期 doc 只存 target 短摘要+统计一行，20 条上下文只存 pending | 记忆链路单测 | 定位/降级/两型字段/互斥拒绝/上限全覆盖 | 测试输出 | T6、T7 |
+| F10 | 主人 `/评 好|差 <文字>`（方向必填，**好评与差评同构：同一套评价包结构，方向仅是字段之一**）：指向型（回复引用鱼消息）经 sentmap 定位被评 outbound 条目（查不到降级最近一条并在回执注明）；范围型（不引用）带当日统计；评价包统一包含结构化关联——被评条目（含引用链：鱼当时回的那条原始消息）、前 20 条会话摘要、涉及的群员（被引消息作者与上下文中出现的成员）、群、人格、日期、主人评语原文；随待审 patch 持久化，批准后进 fact 的 kind/meta；群内非主人 `/评` 闸前特判回拒绝，私聊非主人静默；meta 有独立上限，长期 doc 只存 target 短摘要+统计一行，20 条上下文只存 pending | 记忆链路单测 | 好评/差评两方向的结构化字段同等完整（含引用链/上下文/涉及群员/人格绑定）、定位/降级/互斥拒绝/上限全覆盖 | 测试输出 | T6、T7 |
 | F11 | 连续 silenceThreshold 个 open 窗全程零出口 → 下窗注入尾部 nudge 文案；**backlog 为空时提交 nudge-only 轮**（header+footer+nudge，无行）；超 2×阈值 → 下窗 backlog 窗口放宽至 windowRelaxCap（受 recent 上限约束，上限已同步提升）；仅 ambient/injection 轮开口清零，@ 轮/私聊不计不清 | 单测 | 阈值触发文案、nudge-only 轮、放宽、清零口径 | 测试输出 | T8 |
 | F12 | 统一配置工具 `config`（仅主人私聊轮，群内一律拒绝）：fish.config.json 受控字段（热加载类）+ config/models.json 角色表（restart 生效类，迁移自 model 工具）；旧 model 工具移除且全仓无残留引用（含 test/tools.test.ts、README、AGENTS 第 1/2/3 节、types/harness 注释）；审计日志；非法/越界拒绝 | 工具单测 + prompts 审查 | 仅主人私聊生效、两类配置生效语义正确、model 无残留、config 进 deferred 名单断言 | 测试输出 | T9 |
 | F13 | 群友画像并入长期记忆（people 为唯一载体，**在场/活跃优先、受既有 MEMORY_CAPS 约束**——大群允许旧画像按既有淘汰规则让位）；people.md 的主人/关系**静态设定保留**（不属群友画像），仅「群里的人/梗」类动态画像并入；无第二套画像存储 | 记忆链路单测 + npm run memory | 画像累积叠加、同 QQ 合并、静态设定不受影响 | 测试输出 | T10 |
@@ -60,7 +60,7 @@
 9. **特别关注 = 纯设定集（next）**：记录机制照旧；`[特别关注]` 打标（injection 行与 @ 锚点行；legacy watch_inline 行为零变化）；runtime 软引导全局可见（措辞不属搭话机制，F8 已按此口径）。
 10. **主人打标**：`[主人]` 与 [特别关注] 同套机制、master 优先互斥；**watch add 拒绝 master、applyWatched 装载过滤 master**（归 T5）；「你主人」锚点标注保留。
 11. **奖惩 = 评价进长期记忆**：`/评 好|差 <文字>`（方向必填，主人闸前指令）。
-11b. **评价包机械装配**：指向型（回复引用鱼消息）——经 **sentmap**（B2 方案①：drain 成功发送后持久化 `sentMessageId → outbound entryId` 映射，新 doc `fish.sentmap`，保留 30 天滚动清理；`onebot.sendGroup` 需改为返回 message_id）定位被评条目；查不到降级「最近一条 fish.outbound」并在回执注明降级；附带被引消息（quoteId 解析，recent/chatlog 不可得时标注缺失）+ 前 20 条会话摘要（conv.viewState 取，只存 pending）+ chatKey/人格/日期。范围型（不引用）——当日统计：当前人格当前会话 entry 计数 + chatlog 当日该群总条数（口径写进回执）；主人原文存 patch 专用字段（≤200 字，不进 fact 40 字限制）。评价事件写专用 entry `fish.eval`（进抽取白名单、排除摘要）。
+11b. **评价包机械装配（好评差评同构，用户已定）**：指向型与范围型两型、好/差两方向**共用同一套结构**，方向仅是字段；两方向都完整抓取：①被评 outbound 条目（含引用链：鱼当时回的那条原始消息）②前 20 条会话摘要（conv.viewState，只存 pending）③**涉及群员清单**（被引消息作者、上下文中出现的成员，供画像/记忆关联）④chatKey、人格、日期⑤主人评语原文（≤200 字）。指向型（回复引用鱼消息）经 **sentmap**（B2 方案①：drain 成功发送后持久化 `sentMessageId → outbound entryId` 映射，新 doc `fish.sentmap`，保留 30 天滚动清理；`onebot.sendGroup` 需改为返回 message_id）定位被评条目；查不到降级「最近一条 fish.outbound」并在回执注明降级；被引消息（quoteId 解析，recent/chatlog 不可得时标注缺失）。范围型（不引用）另附当日统计：当前人格当前会话 entry 计数 + chatlog 当日该群总条数（口径写进回执）。评价事件写专用 entry `fish.eval`（进抽取白名单、排除摘要）。
 12. **feedback 数据模型与渲染**：`MemoryFact` 扩展可选 `kind?: "feedback"` 与 `meta?`（上限：target 短摘要 ≤20 字 + 统计数字一行；**20 条上下文只存 pending，不进长期 doc**）；MEMORY_CAPS 为 meta 补独立上限；渲染 feedback 条目加权置顶（at+hits 保留）；`/评` 回执走 `fish.enqueue`（不产生 outbound entry、不进 transcript）；公共化脱敏对 meta 结构同构保留（文本字段以原 patch 为准重建）。
 13. **沉默递进**：连续 N 窗零出口 → 下窗注入尾部 nudge；**backlog 空时提交 nudge-only 轮**；2N → backlog 窗口放宽 windowRelaxCap=30（**recent 上限同步提升至 max(30, windowRelaxCap)**，legacy 背景截断不受影响）；仅 ambient/injection 开口清零。
 14. **GIF 收图轮、`/` 指令、私聊、旁路记账** next 下不变；backlog 注入过滤 `/` 指令与纯 GIF 收图消息。
@@ -215,7 +215,7 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 
 **接口契约：**
 - Produces：`onebot.sendGroup` 返回 message_id；drain 成功后写 `fish.sentmap`（sentMessageId→entryId，30 天滚动清理）
-- Produces：`/评 好|差 <文字>`（方向必填）：闸前特判（在 master 判断前识别 `/评`：群内非主人回 `eval_rejected`；私聊非主人静默——不违反私聊硬约束）；指向型经 sentmap 定位（降级最近一条 outbound 并回执注明 `eval_unknown_target`）；范围型带当日统计（口径见决策 11b）；评价包（结构化字段+原文 ≤200 字）写入待审；评价事件写 `fish.eval` entry（进抽取白名单、排除摘要）；回执走 `fish.enqueue`（不产生 outbound entry、不进 transcript）
+- Produces：`/评 好|差 <文字>`（方向必填，两方向同构）：闸前特判（在 master 判断前识别 `/评`：群内非主人回 `eval_rejected`；私聊非主人静默——不违反私聊硬约束）；指向型经 sentmap 定位（降级最近一条 outbound 并回执注明 `eval_unknown_target`）；评价包统一装配（决策 11b：被评条目+引用链+前 20 条摘要+涉及群员清单+群/人格/日期+原文）写入待审；评价事件写 `fish.eval` entry（进抽取白名单、排除摘要）；回执走 `fish.enqueue`（不产生 outbound entry、不进 transcript）
 - Produces：`/记忆` 待审列表兼容展示评价条目（含关联摘要）
 
 **终态关联：** F10。
