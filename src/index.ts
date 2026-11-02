@@ -183,10 +183,12 @@ const visionFallbackModel = modelSelection.visionFallback
   ? { provider: modelSelection.visionFallback.providerId, modelId: modelSelection.visionFallback.modelId }
   : undefined;
 
-// inline 直读开关（docs/plans/2026-11-01-inline-vision.md）：主/视觉同模型且通道在白名单
-// （仅已真机验证的 Gemini 订阅通道；zai 等是历史事故通道，明确排除）。/关看图 同时关掉
-// inline 附图——网关不稳时的运行时止损开关。开关每轮现算（/关看图 可在线切换）
-const INLINE_IMAGE_APIS = new Set(["google-code-assist", "antigravity-code-assist"]);
+// inline 直读开关（docs/plans/2026-11-01-inline-vision.md）：主/视觉同模型且通道在白名单。
+// 白名单＝「确认能收 image block 的 api」：两个 Gemini 订阅通道真机验证过；
+// openai-completions（zai/deepseek 等，pi-ai 映射为 image_url）2026-11-02 经主人决定
+// 放开——describe 路径本就向该通道发 image_url，且附图已压到 ≤50KB；codex 适配器
+// 不支持图片输入，保持排除。/关看图 同时关掉 inline 附图，开关每轮现算（可在线切换）
+const INLINE_IMAGE_APIS = new Set(["google-code-assist", "antigravity-code-assist", "openai-completions"]);
 const inlineVisionOn = (): boolean =>
   !isLookDisabled()
   && modelSelection.vision.providerId === modelSelection.main.providerId

@@ -87,6 +87,8 @@
   符号链接 / 目录 / 非图片 / 超限一律跳过并逐项报给模型；仅主人触发的轮可用；每批最多 50 张，`cursor` 续批，
   同一轮的清单合并保留；登记结果只写入本轮 manifest，round 结束即清
 
+主会话有一条条件式 inline 直读通道（docs/plans/2026-11-01-inline-vision.md）：`models.vision` 解析结果 == `models.main` 且 main 的 api 在白名单（`google-code-assist` / `antigravity-code-assist` 真机验证过；`openai-completions` 即 zai/deepseek 2026-11-02 经主人决定放开——describe 路径本就向该通道发 image_url，且附图已压到 ≤50KB；codex 适配器不支持图片输入，仍排除）时，锚点消息的图经压图（`src/media/shrink-image.ts`：1280px 上限 / 50KB 阈值 / q80 只降分辨率）后以 image block 直接附在本轮 user message 上（普通轮 ≤2 张；GIF、导入轮、私聊、被回复引用图不附；ref 缺失/压图失败跳过不阻塞）。`/关看图` 同时关掉 inline 附图（止损：当年 zai 网关曾被无压图的大图撞挂）。图进 transcript 但换页即丢弃、摘要永远只吃文本。
+
 读媒体目录的入口只有两处：`look` 只把图描述成文字；`draw` 的 `ref` 只读一张 `inbound/` 或 `gen/` 的图片当 img2img 初图。`look` 的额度：**普通一轮最多 2 张**。
 唯一的受控例外是**导入轮**——主人本轮调过 `meme_import`、且这张图就在本轮 manifest 里时，
 额度放宽到 manifest 数量（硬上限 50 张），可以逐张看、逐张用 `meme_add` 收。
@@ -119,7 +121,7 @@
 
 - **禁止打开 pi-durable 内置的 compaction**（它会在中途注入库里写死的提示词，不可审查）
 - 压缩 = `src/compact.ts` 的换页 + `prompt/handoff.md` 的备忘
-- 摘要只收「群友的话 + 鱼发出去的话」；thinking、tool 调用、tool 结果一律不进摘要
+- 摘要只收「群友的话 + 鱼发出去的话」；thinking、tool 调用、tool 结果一律不进摘要；inline 附图的 image block 同样不进（compact 的 entryText 只取 text block），随换页退出活跃上下文
 
 ### 6. 模型与凭据
 
