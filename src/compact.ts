@@ -328,7 +328,9 @@ export interface MemoryTranscript {
  * 文案的 renderTranscript。改动这个白名单前必读 src/memory.ts 的安全边界注释：
  * 混入任何宿主文案都会让「记忆 → 抽取 → 记忆」的自我污染闭环复活。
  * fish.eval（主人评价事件，T6）是唯一的有意新增：从结构化 data 渲染一行评价事实，
- * 决策 11b——评价进抽取白名单、排除摘要。
+ * 决策 11b——评价进抽取白名单、排除摘要。抽取器看到评价行后产出的任何候选照旧
+ * 只进待审（savePendingMemories）；kind="feedback" 的 fact 仅由审批链机器装配（T7），
+ * 不经抽取器。
  */
 export async function renderMemoryTranscript(conversation: Conversation): Promise<MemoryTranscript> {
   const view = await conversation.viewState(ctx);

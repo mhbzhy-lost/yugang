@@ -13,6 +13,9 @@
  *   - 抽取只读结构化原始 entry（fish.inbound / fish.outbound），
  *     必须继续排除 pi.system、宿主任务文案和工具结果，否则自我污染闭环会复活；
  *   - renderMemory 只读，不写回任何字段（不写 lastUsedAt，不改 hits）；
+ *   - 评价 fact（kind="feedback"）只由审批链机器装配（MemoryPatch.feedback 通道），
+ *     抽取器不产（sanitizePatch 结构性忽略模型输出里的 feedback 键）；渲染加权置顶
+ *     但不豁免任何上限，渲染期同样零写入；
  *   - applyPatch 必须深拷贝输入，不得原地改写 doc 或调用方状态；
  *   - 上限在 MEMORY_CAPS 里机械执行，任何 patch 施加后都不超上限。
  */
@@ -22,6 +25,21 @@ import { renderTemplate } from "./prompts.ts";
 import type { RoundScope } from "./memory-scope.ts";
 
 export type FactSource = "stated" | "observed" | "reported";
+
+/**
+ * 评价 fact 的持久化 meta（FeedbackMeta 的持久化子集，决策 12）：长期 doc 只存
+ * 方向 + 被评短摘要 + 统计一行 + 评价日期；quotedFrom / contextRefs / 20 条上下文 /
+ * chatKey / persona 都不进长期 doc（只留待审条目），主人评语原文进 fact.text。
+ */
+export interface FeedbackFactMeta {
+  direction: "好" | "差";
+  /** 被评对象短摘要（≤ FEEDBACK_TARGET_SUMMARY_CHARS）。 */
+  targetSummary: string;
+  /** 当日统计一行（口径随文写明）。 */
+  statsLine: string;
+  /** 本地日期 YYYY-MM-DD（评价发生日，非批准日）。 */
+  day: string;
+}
 
 export interface MemoryFact {
   id: string;
@@ -38,6 +56,10 @@ export interface MemoryFact {
   /** 来源会话 chatKey：批准路径由宿主注入（待审条目的 originChatKey），不由模型决定。 */
   fromChat?: string;
   hits: number;
+  /** 评价类 fact（/评 批准落地）：渲染加权置顶的唯一 kind，仅审批链机器装配。 */
+  kind?: "feedback";
+  /** 评价 fact 的持久化元数据（kind="feedback" 时必有）。 */
+  meta?: FeedbackFactMeta;
 }
 
 export interface MemoryPerson {
@@ -72,6 +94,8 @@ export interface MemoryState {
   people: Record<string, MemoryPerson>;
   lore: MemoryLore[];
   cards: MemoryCard[];
+  /** 主人评价 fact（/评 批准落地）：自指记忆，独立于 people；渲染加权置顶。 */
+  feedback?: MemoryFact[];
   lastExtractAt?: number;
 }
 
@@ -88,7 +112,14 @@ export interface MemoryPatch {
   lore?: { keys: string[]; text: string; kind: "word" | "meme" | "rule" }[];
   cards?: { text: string; importance: number; keys: string[]; subjects: string[] }[];
   supersede?: { subject: string; ids: string[] }[];
+  /** 评价类（/评）：机器装配通道（buildFeedbackPending；T6 存量待审批准时由
+   *  approvePending 映射）。抽取器不产——sanitizePatch 不读模型输出里的 feedback 键。 */
+  feedback?: { text: string; meta: FeedbackFactMeta }[];
 }
+
+/** 评价包（/评）的机械上限：装配（buildFeedbackPending）与批准 apply 同源消费。 */
+export const FEEDBACK_TARGET_SUMMARY_CHARS = 20;
+export const FEEDBACK_MASTER_TEXT_CHARS = 200;
 
 /**
  * 硬上限：写死在代码里，机械执行。
@@ -112,6 +143,11 @@ export const MEMORY_CAPS: {
   cardTextChars: number;
   renderChars: number;
   knownChars: number;
+  feedback: number;
+  feedbackTextChars: number;
+  feedbackTargetSummaryChars: number;
+  feedbackStatsLineChars: number;
+  feedbackRender: number;
 } = {
   people: 12,
   factsPerPerson: 8,
@@ -130,15 +166,22 @@ export const MEMORY_CAPS: {
   cardTextChars: 80,
   renderChars: 900,
   knownChars: 8000,
+  // 评价 fact 的独立上限（决策 12）：feedback 不豁免 MEMORY_CAPS，淘汰照 at+hits 机械口径
+  feedback: 20,
+  feedbackTextChars: FEEDBACK_MASTER_TEXT_CHARS,
+  feedbackTargetSummaryChars: FEEDBACK_TARGET_SUMMARY_CHARS,
+  feedbackStatsLineChars: 120,
+  feedbackRender: 3,
 };
 
 /** 单条 fact 文本上限（抽取提示词同值：facts 每条一句话）。 */
 export const FACT_TEXT_CHARS = 40;
 
-/** 渲染段预算：群里的说法 ≤200，单人 ≤240，卡片 ≤240。 */
+/** 渲染段预算：群里的说法 ≤200，单人 ≤240，卡片 ≤240，主人评价 ≤300。 */
 const LORE_BUDGET = 200;
 const PERSON_BUDGET = 240;
 const CARDS_BUDGET = 240;
+const FEEDBACK_BUDGET = 300;
 
 /** 结构化入站 entry：记忆抽取只读它，不读宿主拼装的 user content。 */
 export interface MemoryInbound {
@@ -233,9 +276,7 @@ export interface FeedbackMeta {
   masterText: string;
 }
 
-/** FeedbackMeta 的机械上限（T7 批准链同源消费）。 */
-export const FEEDBACK_TARGET_SUMMARY_CHARS = 20;
-export const FEEDBACK_MASTER_TEXT_CHARS = 200;
+/** FeedbackMeta 的机械上限（常量定义在文件前部，与 MEMORY_CAPS 的 feedback* 同源）。 */
 
 export function emptyMemory(): MemoryState {
   return { version: 1, people: {}, lore: [], cards: [] };
@@ -288,6 +329,10 @@ export function applyPatch(state: MemoryState, patch: MemoryPatch, now: number, 
   }
   const lore: MemoryLore[] = state.lore.map((item) => ({ ...item, keys: [...item.keys] }));
   const cards: MemoryCard[] = state.cards.map((card) => ({ ...card, keys: [...card.keys], subjects: [...card.subjects] }));
+  const feedback: MemoryFact[] = (state.feedback ?? []).map((fact) => ({
+    ...fact,
+    ...(fact.meta !== undefined ? { meta: { ...fact.meta } } : {}),
+  }));
 
   // supersede：命中同 subject 的有效 fact 才失效；不存在、subject 不匹配或已失效则忽略。
   // 失效的 fact 暂存，等新 fact 落地后回填 supersededBy 审计链（见 people 循环之后）
@@ -402,18 +447,50 @@ export function applyPatch(state: MemoryState, patch: MemoryPatch, now: number, 
     });
   }
 
+  // 评价 fact（/评 批准落地，T7）：机器通道（MemoryPatch.feedback，抽取器不产）。
+  // 去重签名 = 方向 + 归一化原文 + 归一化被评摘要，重复批准只加 hits；上限与淘汰
+  // 照 at+hits 机械口径执行（feedback 不豁免）。supersede 不适用于评价 fact——
+  // 新评价不推翻旧评价，审计链语义照旧（supersede 仍只作用于 people 的 facts）
+  for (const incoming of patch.feedback ?? []) {
+    const text = cleanText(incoming.text).slice(0, MEMORY_CAPS.feedbackTextChars);
+    if (!text) continue;
+    const meta = cleanFeedbackMeta(incoming.meta);
+    if (!meta) continue;
+    const signature = feedbackSignature(meta.direction, text, meta.targetSummary);
+    const existing = feedback.find(
+      (fact) => fact.kind === "feedback" && fact.meta !== undefined && feedbackSignature(fact.meta.direction, fact.text, fact.meta.targetSummary) === signature,
+    );
+    if (existing) {
+      existing.hits += 1;
+      continue;
+    }
+    feedback.push({
+      id: newId("f"),
+      subject: FEEDBACK_FACT_SUBJECT,
+      text,
+      at: now,
+      source: "stated",
+      ...(fromChat !== undefined && fromChat.length > 0 ? { fromChat } : {}),
+      hits: 0,
+      kind: "feedback",
+      meta,
+    });
+  }
+
   // 上限淘汰：机械执行，宁丢旧的，不破上限。时效口径：at + hits 组合——
   // 零命中且更旧的优先淘汰；渲染期零写入（不记 lastUsedAt，渲染只读）
   evictPeople(people);
   for (const person of Object.values(people)) evictFacts(person);
   evictList(lore, MEMORY_CAPS.lore, byAgeHits);
   evictList(cards, MEMORY_CAPS.cards, (a, b) => a.importance - b.importance || a.at - b.at);
+  evictList(feedback, MEMORY_CAPS.feedback, byAgeHits);
 
   return {
     version: 1,
     people,
     lore,
     cards,
+    ...(feedback.length > 0 ? { feedback } : {}),
     ...(state.lastExtractAt !== undefined ? { lastExtractAt: state.lastExtractAt } : {}),
   };
 }
@@ -433,6 +510,24 @@ function evictPeople(people: Record<string, MemoryPerson>): void {
 function byAgeHits<T extends { at: number; hits?: number }>(a: T, b: T): number {
   const zero = (item: T): number => ((item.hits ?? 0) === 0 ? 0 : 1);
   return zero(a) - zero(b) || a.at - b.at || (a.hits ?? 0) - (b.hits ?? 0);
+}
+
+/** 评价 fact 的 subject 占位：它不属于任何 people 主体，永不参与主体匹配与 supersede。 */
+const FEEDBACK_FACT_SUBJECT = "master";
+
+/** 评价 fact 的去重签名：方向 + 归一化原文 + 归一化被评摘要。 */
+function feedbackSignature(direction: string, text: string, targetSummary: string): string {
+  return `${direction}\u0001${normalizeText(text)}\u0001${normalizeText(targetSummary)}`;
+}
+
+/** 评价 meta 的机械过滤：方向/日期必须合法，摘要与统计行截断；不合格整条丢弃（fail closed）。 */
+function cleanFeedbackMeta(meta: FeedbackFactMeta): FeedbackFactMeta | undefined {
+  if (meta.direction !== "好" && meta.direction !== "差") return undefined;
+  if (typeof meta.day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(meta.day)) return undefined;
+  const targetSummary = cleanText(meta.targetSummary).slice(0, MEMORY_CAPS.feedbackTargetSummaryChars);
+  const statsLine = cleanText(meta.statsLine).slice(0, MEMORY_CAPS.feedbackStatsLineChars);
+  if (targetSummary.length === 0 || statsLine.length === 0) return undefined;
+  return { direction: meta.direction, targetSummary, statsLine, day: meta.day };
 }
 
 /** 每人 facts 超 8 条或总字数超 320：先淘汰已失效的，再淘汰有效里的；两层内都按 at+hits 组合（零命中更旧优先）。 */
@@ -486,9 +581,10 @@ export interface PendingMemoryState {
 }
 
 /**
- * 装配 /评 的待审条目（好差同构，方向只是字段）：patch 本体为空——评价内容全部在
- * feedback / feedbackContext 里，存储映射（fact 的 kind/meta）由 T7 的批准链落地。
- * 输入在本函数内机械截断（targetSummary / masterText / quotedFrom）。
+ * 装配 /评 的待审条目（好差同构，方向只是字段）：评价内容在 feedback /
+ * feedbackContext（/记忆 列表展示用）与 patch 的 feedback 通道（批准 apply 时映射进
+ * fact 的 kind/meta，也让待审列表与批准回执的 summarizePatch 能出 meta 摘要）里
+ * 各存一份；输入在本函数内机械截断（targetSummary / masterText / quotedFrom）。
  */
 export function buildFeedbackPending(input: {
   direction: "好" | "差";
@@ -507,7 +603,21 @@ export function buildFeedbackPending(input: {
   const quoted = input.quotedFrom !== undefined ? clip(input.quotedFrom, 40) : undefined;
   return {
     id: newPendingId(),
-    patch: {},
+    // patch 的 feedback 通道（T7）：批准 apply 时结构字段进 fact 的 kind/meta；
+    // 20 条上下文只留在 feedbackContext，永不进长期 doc（决策 12）
+    patch: {
+      feedback: [
+        {
+          text: clip(input.masterText, FEEDBACK_MASTER_TEXT_CHARS),
+          meta: {
+            direction: input.direction,
+            targetSummary: clip(input.targetSummary, FEEDBACK_TARGET_SUMMARY_CHARS),
+            statsLine: clip(input.statsLine, 120),
+            day: input.day,
+          },
+        },
+      ],
+    },
     originChatKey: input.originChatKey,
     at: input.at,
     feedback: {
@@ -547,7 +657,8 @@ export function isPatchEmpty(patch: MemoryPatch): boolean {
     (patch.people?.length ?? 0) === 0 &&
     (patch.lore?.length ?? 0) === 0 &&
     (patch.cards?.length ?? 0) === 0 &&
-    (patch.supersede?.length ?? 0) === 0
+    (patch.supersede?.length ?? 0) === 0 &&
+    (patch.feedback?.length ?? 0) === 0
   );
 }
 
@@ -568,6 +679,12 @@ export function summarizePatch(patch: MemoryPatch): string {
   if (lore.length > 0) parts.push(`说法${lore.length}｜${lore[0].keys.join("/")} ${lore[0].text}`);
   if (cards.length > 0) parts.push(`卡片${cards.length}｜${cards[0].text}`);
   if ((patch.supersede?.length ?? 0) > 0) parts.push(`取代${patch.supersede!.length}`);
+  // 评价类（/评）：待审列表（npm run memory --pending）与批准回执共用这个摘要，
+  // 格式与 summarizeFeedback 同构（哪条 + 哪天）
+  const feedback = patch.feedback ?? [];
+  if (feedback.length > 0) {
+    parts.push(`评价${feedback[0].meta.direction}｜${feedback[0].meta.targetSummary}（${feedback[0].meta.day}）`);
+  }
   return parts.length > 0 ? parts.join("；") : "空";
 }
 
@@ -585,6 +702,8 @@ export function formatAgeShort(ms: number): string {
 /**
  * 同意一条待审：从待审 doc 摘掉该条，把 patch apply 进目标 doc（公共或私有）。
  * 来源会话（entry.originChatKey）作为 fromChat 注入，写进新 fact——溯源字段不由模型决定。
+ * 评价类条目（/评）：patch.feedback 通道在 apply 时落成 kind="feedback" 的 fact；
+ * T6 存量待审（patch 为空、结构在 entry.feedback 上）在这里映射进去。
  * 直接改写两个 draft（pi-durable 的 tx.doc 返回值就是可写 draft）；找不到该 id 返回 missing。
  */
 export function approvePending(
@@ -596,11 +715,25 @@ export function approvePending(
   const index = pending.entries.findIndex((entry) => entry.id === id);
   if (index < 0) return { status: "missing" };
   const [entry] = pending.entries.splice(index, 1);
-  const next = applyPatch(target, entry.patch, at, entry.originChatKey || undefined);
+  // T6 存量评价待审：patch 为空、评价包在 entry.feedback 上——映射进 patch 的
+  // feedback 通道再 apply；新装配（buildFeedbackPending）已直接写进 patch.feedback
+  const patch = entry.feedback !== undefined && (entry.patch.feedback?.length ?? 0) === 0
+    ? { ...entry.patch, feedback: [feedbackItemFromMeta(entry.feedback)] }
+    : entry.patch;
+  const next = applyPatch(target, patch, at, entry.originChatKey || undefined);
   target.people = next.people;
   target.lore = next.lore;
   target.cards = next.cards;
+  if (next.feedback !== undefined) target.feedback = next.feedback;
   return { status: "ok", entry };
+}
+
+/** T6 存量待审条目（feedback 在条目上、patch 为空）→ patch.feedback 通道的映射。 */
+function feedbackItemFromMeta(meta: FeedbackMeta): { text: string; meta: FeedbackFactMeta } {
+  return {
+    text: meta.masterText,
+    meta: { direction: meta.direction, targetSummary: meta.targetSummary, statsLine: meta.statsLine, day: meta.day },
+  };
 }
 
 /** 拒绝待审：单条 id 或 "all"（该 doc 全部）；返回删掉的条数。 */
@@ -656,6 +789,9 @@ function publicSafeText(value: string, max: number, extraInjections: readonly Re
  * 公共批准（AI 脱敏）的编排：把 patch 的文本字段（facts/lore/cards 的 text；subject/keys/
  * names/style/口头禅/supersede 等结构与其它字段不动）交给便宜模型按
  * prompt/memory-publicize.md 改写，去掉指向来源群的身份信息，让表述在该人格任何会话都成立。
+ * 评价类（/评）的 feedback 通道不进模型：主人原话与机器装配的结构字段不做 AI 改写
+ * （决策 12：公共化脱敏对 meta 结构同构保留，文本字段以原 patch 为准）——重建时
+ * 经展开原样带回；fact 级 kind/meta 同样只在重建时原样保留。
  * 模型输出全部当不可信数据：
  *   - 只接受与输入同构的 JSON（同数组长度、同 subject、同 keys），文本之外的字段一律
  *     以原 patch 为准重建，模型改不动；
@@ -768,9 +904,12 @@ export async function publicizePatch(patch: MemoryPatch, deps: PublicizeDeps): P
   };
 }
 
-/** 定位：该 fact id 是否在 state 里（遍历每个人物的 facts）。 */
+/** 定位：该 fact id 是否在 state 里（遍历每个人物的 facts 与评价 fact 列表）。 */
 export function hasFact(state: MemoryState, id: string): boolean {
-  return Object.values(state.people).some((person) => person.facts.some((fact) => fact.id === id));
+  return (
+    (state.feedback ?? []).some((fact) => fact.id === id) ||
+    Object.values(state.people).some((person) => person.facts.some((fact) => fact.id === id))
+  );
 }
 
 /**
@@ -779,6 +918,12 @@ export function hasFact(state: MemoryState, id: string): boolean {
  * --delete；命中返回 true。调用方负责打日志（只带 id 与所在 doc，不打印内容）。
  */
 export function deleteFactById(state: MemoryState, id: string): boolean {
+  const feedback = state.feedback ?? [];
+  const feedbackIndex = feedback.findIndex((fact) => fact.id === id);
+  if (feedbackIndex >= 0) {
+    feedback.splice(feedbackIndex, 1);
+    return true;
+  }
   for (const person of Object.values(state.people)) {
     const index = person.facts.findIndex((fact) => fact.id === id);
     if (index >= 0) {
@@ -854,12 +999,23 @@ export function mergeMemoryStates(
 
   const lore = mergeByIdentity(pub.lore, priv.lore, (item) => loreSignature(item.keys), (a, b) => b.hits - a.hits || b.at - a.at);
   const cards = mergeByIdentity(pub.cards, priv.cards, (card) => normalizeText(card.text), (a, b) => b.importance - a.importance || b.at - a.at);
+  // 评价 fact：同签名去重（方向+原文+被评摘要），保留 hits 更高（平手取更新）的那条
+  const feedback = mergeByIdentity(
+    pub.feedback ?? [],
+    priv.feedback ?? [],
+    (fact) =>
+      fact.kind === "feedback" && fact.meta !== undefined
+        ? feedbackSignature(fact.meta.direction, fact.text, fact.meta.targetSummary)
+        : `id:${fact.id}`,
+    (a, b) => b.hits - a.hits || b.at - a.at,
+  );
 
   return {
     version: 1,
     people,
     lore,
     cards,
+    ...(feedback.length > 0 ? { feedback } : {}),
     lastExtractAt: [pub.lastExtractAt, priv.lastExtractAt].reduce<number | undefined>(
       (newest, at) => (at === undefined ? newest : newest === undefined ? at : Math.max(newest, at)),
       undefined,
@@ -913,6 +1069,23 @@ export function renderMemory(state: MemoryState, scope: RoundScope | undefined, 
   const cardsHeader = sectionSafe(messages["memory_cards_header"] ?? "");
 
   const blocks: string[][] = [];
+
+  // 主人评价（/评 批准落地的 feedback fact）：机械加权置顶——本块永远排在 section
+  // 最前（feedback 加权是 at+hits 之外的额外机械规则；块内排序仍照 at+hits 组合：
+  // 零命中沉底、更新的在前）；renderChars 裁剪从后往前，评价块因此最后才被裁。
+  // 渲染只读（零写入），一行摘要 = meta（方向/日期/被评摘要/统计）与 text（主人原话）
+  const feedbackLines: string[] = [];
+  const topFeedback = [...(state.feedback ?? [])]
+    .filter((fact): fact is MemoryFact & { kind: "feedback"; meta: FeedbackFactMeta } =>
+      fact.invalidAt === undefined && fact.kind === "feedback" && fact.meta !== undefined)
+    .sort((a, b) => byAgeHits(b, a))
+    .slice(0, MEMORY_CAPS.feedbackRender);
+  for (const fact of topFeedback) {
+    const line = `- 主人评价${fact.meta.direction}（${fact.meta.day}）：${sectionSafe(fact.text)}｜针对：${sectionSafe(fact.meta.targetSummary)}｜${sectionSafe(fact.meta.statsLine)}`;
+    if (feedbackLines.join("\n").length + line.length + 1 > FEEDBACK_BUDGET) break;
+    feedbackLines.push(line);
+  }
+  if (feedbackLines.length > 0) blocks.push(feedbackLines);
 
   // 群里的说法：scope.text 命中任一 keys，最多 5 条，≤200 字。排序与淘汰同口径：
   // 零命中的沉底（at+hits 组合），其余更新在前

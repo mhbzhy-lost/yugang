@@ -87,6 +87,9 @@ export async function extractMemories(
 /**
  * 机械过滤（不依赖模型自觉）：字段形状、主体格式、来源、敏感模式与控制字符。
  * 任一条不合格就丢弃该条，不影响其它条；整个结构不可用才返回 undefined。
+ * 评价类（/评，T7）不经过这里：feedback 通道是机器装配专用（buildFeedbackPending /
+ * approvePending 存量映射），模型输出里的 feedback 键在这里被结构性丢弃——模型
+ * 伪造不了 kind="feedback" 的 fact，也借不了加权置顶；抽取产出的候选照旧只进待审。
  */
 export function sanitizePatch(raw: unknown): MemoryPatch | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
@@ -217,7 +220,8 @@ function allowedSubjects(input: { known: string; subjects: readonly { subject: s
 
 /**
  * 第二道主体白名单：sanitizePatch 只验格式，这里把主体限制到本次允许集合，
- * 防止模型用对话正文里提到的陌生 QQ 号把事实归给第三人。
+ * 防止模型用对话正文里提到的陌生 QQ 号把事实归给第三人。返回值不含 feedback
+ * 通道（抽取器不产评价 fact，见 sanitizePatch 的边界注释）。
  */
 function restrictSubjects(patch: MemoryPatch, allowed: ReadonlySet<string>): MemoryPatch {
   const people = (patch.people ?? [])
