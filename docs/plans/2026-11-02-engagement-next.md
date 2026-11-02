@@ -77,6 +77,8 @@
 
 22. **注入文案宵禁二态（2026-11-03 用户定）**：open 窗注入 footer 按本地时段分化——00:00–09:00 夜间版（纯搭话模式：可简短接话，不主动起话题、不 @、不分享）；其余时段白天版（鼓励自由发挥/自由发言/@ 熟悉的人/quoteMsgId 引用任意条）。机械取 hour 判定，纯文案层；@ 白名单等硬机制不随时段变化（是否硬化夜间禁 @ 观察后再定）。归 T13。
 
+23. **分片节律与出站配速（2026-11-03 用户定）**：shard 窗 10 秒 → **20 秒**（engage 配置项 shardSeconds=20）——20 秒说 3 句节奏合理；**出站配速**：鱼发出的所有消息经发送队列天然间隔 **6 秒**（防连珠炮，机械层实现于 outbox drain：同会话相邻两次实际发送至少隔 6s，配置项 sendPacingSeconds=6，0=关闭）——配速对全部模式生效（含 @ 轮/环境轮/机械回执），不另设窗口出口配额（配速已是总量护栏：3 分钟窗 18 shard→9 shard × 3 条 × 6s 间隔，物理上不可能刷屏）。归 T14。
+
 ## DAG
 
 ```text
@@ -394,6 +396,26 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 - [ ] 步骤 1：核对 T12 落地后的剖面字段形态与记忆委托标记
 - [ ] 步骤 2：实现弹药拼装/注入/退化/引导/nudge 联动
 - [ ] 步骤 3：`npm test` 绿；`npm run prompts` 干净
+
+---
+
+### Task 14：shard 20 秒与出站配速
+
+**Deps：** `T13`（同文件串行）
+
+**WritePaths：** `src/engage-next.ts`、`src/fish-config.ts`、`src/harness.ts`、`src/index.ts`、`fish.config.example`、`AGENTS.md`
+
+**接口契约：**
+- Consumes：T3 的 shard collector（当前 10 秒硬编码）；outbox drain 链（harness drainConversation）
+- Produces：①`engage.shardSeconds`（缺省 20，合法区间 5–120，非法告警保留缺省），shard 计时改读配置；②`sendPacingSeconds`（缺省 6，合法 0–60，0=关闭）：drain 发送循环按会话维护「上次实际发送时刻」，距上次不足间隔的消息等待补齐（不丢、不重排，队列语义不变；busy/机械回执同样配速）；配置进 config 工具白名单（热加载类）
+- 硬边界：配速不改变 outbox 两阶段语义（sending 不重发照旧）；等待期间进程退出按既有补发语义处理
+
+**终态关联：** F2（节律）、F6（不刷屏）。
+
+**验收标准：**
+- [ ] 核对 shard 计时点与 drain 发送循环的真实位置
+- [ ] 实现两个配置项与配速等待
+- [ ] `npm test` 绿；`npm run prompts` 干净
 
 ---
 
