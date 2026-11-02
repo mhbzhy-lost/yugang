@@ -1,15 +1,15 @@
 /**
- * 群消息的 5 秒静默合并（debounce）与「整组连续发言」的上下文渲染。
+ * 群消息的 10 秒静默合并（debounce）与「整组连续发言」的上下文渲染。
  *
  * 为什么要有它：同一个人在群里连着打字很常见，一句话常被拆成三五条。以前每条过闸的消息
  * 都立刻 conv.submit()，鱼就会对着半句话作答；而且 A 说完、B 插一句、A 又说时，
  * 会话级的 lastMessageId 会被后来那条顶掉，引用目标就串到别人身上。
  *
- * 现在是：gate 放行不提交，先按「群 + 发送者」攒 5 秒——同一发送者的新消息取消旧 timer
- * 重新计时，不同发送者互不干扰，5 秒没有新消息才把整组提交一次。整组最后**收到**的那条
+ * 现在是：gate 放行不提交，先按「群 + 发送者」攒 10 秒——同一发送者的新消息取消旧 timer
+ * 重新计时，不同发送者互不干扰，10 秒没有新消息才把整组提交一次。整组最后**收到**的那条
  * （按 arrivalSeq，不是最后处理完的那条）是 quote 锚点（A-B-A 里 B 只能出现在背景，
  * 不可能顶掉 A 的位置），整组里任意一条 @鱼，整组都算被点名（mustAnswer），
- * 回复引用语义同理。连续发言没有额外的最长等待：一直在说就一直往后延，静默 5 秒才 flush。
+ * 回复引用语义同理。连续发言没有额外的最长等待：一直在说就一直往后延，静默 10 秒才 flush。
  *
  * 这个文件只有状态机与上下文渲染：时钟、定时器、提交动作、压缩守卫、轮级清账都在
  * src/index.ts（便于注入假时钟验证）。pending 只活在内存里——重启时没 flush 的窗口
@@ -56,7 +56,7 @@ export interface PendingBurst {
   anchor: IncomingMessage;
   /**
    * 宿主首次 push 时绑定的不透明上下文（会话 / 人格）。flush 只认这一份：
-   * 5 秒窗口里主人 `/切换人格` 之后，这一组仍然落在切换前那个会话里。
+   * 10 秒窗口里主人 `/切换人格` 之后，这一组仍然落在切换前那个会话里。
    */
   binding?: unknown;
 }
@@ -72,7 +72,7 @@ export interface BurstInput {
 }
 
 export interface DebouncerOptions {
-  /** 静默窗口，固定 5000ms；留参数只是为了验证时注入。 */
+  /** 静默窗口，固定 10000ms；留参数只是为了验证时注入。 */
   windowMs?: number;
   now?: () => number;
   setTimer?: (flush: () => void, ms: number) => DebounceTimer;
@@ -92,7 +92,7 @@ export interface Debouncer {
   dropAll(): void;
 }
 
-export const DEBOUNCE_WINDOW_MS = 5_000;
+export const DEBOUNCE_WINDOW_MS = 10_000;
 
 /** chatKey + userId 是窗口的唯一键：同一个人在不同群互不影响。 */
 function burstKey(chatKey: string, userId: number): string {

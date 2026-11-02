@@ -1,12 +1,12 @@
 /**
- * 5 秒静默合并的状态机与背景栏。
+ * 10 秒静默合并的状态机与背景栏。
  *
  * 这里锁的是几个真出过事的点：
  *  - 整组按「收到顺序」（arrivalSeq）排，锚点取最后收到的那条，不是最后处理完的那条
  *  - recent 只有 30 条，锚点可能已经被挤掉；背景只能取锚点之前的，不能把后来的话当背景
  *  - 有 id / 序号时不能拿「同人同话」去删背景（同一个人说两次同一句是两件事）
  *  - bypass 段可能落在整组中间，flush 时要取最近一条非空的
- *  - 会话 / 人格在首次 push 时绑住，5 秒内切人格不能把待定组送进新人格
+ *  - 会话 / 人格在首次 push 时绑住，10 秒内切人格不能把待定组送进新人格
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -188,7 +188,7 @@ test("会话/人格在首次 push 时绑住，后续 push 改不动", () => {
   const second = msg({ userId: 7, text: "第二句", messageId: 2, arrivalSeq: 2 });
 
   debouncer.push({ msg: first, text: first.text, binding: "persona-A" });
-  // 5 秒里主人 /切换人格 了：新消息带着新人格进来，但不能把整组的落点改掉
+  // 10 秒里主人 /切换人格 了：新消息带着新人格进来，但不能把整组的落点改掉
   const burst = debouncer.push({ msg: second, text: second.text, binding: "persona-B" });
   assert.equal(burst.binding, "persona-A");
 
