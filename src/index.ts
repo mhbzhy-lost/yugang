@@ -792,7 +792,7 @@ async function submitRound(input: {
     const forced = streak >= MODEL_ERROR_FORCE_COMPACT;
     const compacted = await compactWithGuard(conv, forced, chatKey);
     if (compacted.compacted) {
-      console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字${forced ? "（连续错误强制）" : ""}`);
+      console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字${forced ? " ·强制" : ""}`);
     } else {
       console.log(`[鱼缸] ${chatKey} 失败轮换页未执行：${compacted.reason ?? "skipped"} entries=${compacted.entries ?? "-"} chars=${compacted.chars ?? "-"} streak=${streak}`);
     }
