@@ -79,6 +79,8 @@
 
 23. **分片节律与出站配速（2026-11-03 用户定）**：shard 窗 10 秒 → **20 秒**（engage 配置项 shardSeconds=20）——20 秒说 3 句节奏合理；**出站配速**：鱼发出的所有消息经发送队列天然间隔 **6 秒**（防连珠炮，机械层实现于 outbox drain：同会话相邻两次实际发送至少隔 6s，配置项 sendPacingSeconds=6，0=关闭）——配速对全部模式生效（含 @ 轮/环境轮/机械回执），不另设窗口出口配额（配速已是总量护栏：3 分钟窗 18 shard→9 shard × 3 条 × 6s 间隔，物理上不可能刷屏）。归 T14。
 
+24. **末条自言禁言（2026-11-03 用户定）**：open 态发言前检查「群里最新一条消息是否鱼自己发的」——是，则**只允许素材分享**，其它任何形式发言一律禁止（prompt 引导 + 机械禁止双层）。机械实现：按会话维护 lastWasFish 标记（drain 实际发送成功置 true，任一入站消息置 false）；ambient/injection 轮的 say_* 增加 `share` 布尔标记（模型声明此条为素材分享：承诺兑现/委托结果/外部素材），lastWasFish 为 true 时未带 share 的 say_* 以 tool 错误拒绝（不计数额度）；answer 轮（@ 必答）天然豁免（有人 @ 必有入站，标记已翻 false）。归 T15。
+
 ## DAG
 
 ```text
@@ -415,6 +417,26 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 **验收标准：**
 - [ ] 核对 shard 计时点与 drain 发送循环的真实位置
 - [ ] 实现两个配置项与配速等待
+- [ ] `npm test` 绿；`npm run prompts` 干净
+
+---
+
+### Task 15：末条自言禁言（share 标记 + lastWasFish）
+
+**Deps：** `T13`（弹药定义先行）、`T14`（同文件串行）
+
+**WritePaths：** `src/tools/say-shared.ts`、`src/tools/say_words/TOOL.md`、`src/tools/say_media/TOOL.md`、`src/tools/say_meme/TOOL.md`、`src/tools/say_words/tool.ts`、`src/tools/say_media/tool.ts`、`src/tools/say_meme/tool.ts`、`src/index.ts`、`src/harness.ts`、`prompt/messages.md`、`prompt/runtime.md`
+
+**接口契约：**
+- Consumes：drain 发送链（T6/T14 后形态）、入站消息链
+- Produces：①按会话 lastWasFish 标记（内存态；drain 成功发送置 true，任一入站置 false）；②三 say 工具（voice 不加——语音无 share 场景）schema 加可选 `share: boolean`（TOOL.md 说明：仅当「群里最后一条是你自己说的」时才需要且只允许 share=true 的发言；share 语义=素材分享：兑现承诺/交付委托结果/分享外部素材）；③ambient/injection 轮校验：lastWasFish && !share → tool 错误（新 key，不计数额度）；answer 轮不校验；④prompt：footer/窗口小节补引导「群里最后一条是你自己时，只能做素材分享，不能继续闲聊」
+- 硬边界：标记内存态重启归 false（宁松勿严）；不改变既有 @/quote 校验
+
+**终态关联：** F6。
+
+**验收标准：**
+- [ ] 核对 drain 成功点与入站钩子的真实位置
+- [ ] 实现标记/share 校验/文案
 - [ ] `npm test` 绿；`npm run prompts` 干净
 
 ---
