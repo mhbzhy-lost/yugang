@@ -30,7 +30,7 @@
 | --- | --- | --- | --- | --- | --- |
 | F1 | legacy 的**搭话行为**零变化（闸/合并/背景/出口/语音骰）；计划中与开关无关部分（评价→记忆、feedback 加权、画像、抽取机制、config 工具）在 legacy 同样生效，回退靠代码回滚 | `npm test` + 分项验收 | 搭话相关既有测试不变绿；记忆/工具测试不依赖开关 | 测试输出 | T1-T11 |
 | F2 | 状态机按群：closed 10 分钟（可配）→ open 3 分钟 → 循环；closed 态非 @ 群消息 skip:next_pending 不进模型（**边界**：open 窗末尾已存在的 pending burst，closed 后同发送者续话并入该组照常 flush，属期望——同组不拆）；open 态非 @ 消息 free_pass 走既有合并管线（mustAnswer=false 零出口合法）；`isOpen` 缺省 = closed；热切换（含无消息期）由状态机每 tick 现读配置驱动 start/stop | engage-next 单测 + gate 单测 + 日志 | 态迁移精确、closed 零新提交、open 走管线、无消息热切换生效 | 测试输出 | T2、T3 |
-| F3 | 开窗注入：open 瞬间把「上次关窗以来」积压（排除 pending burst 内消息、过滤 `/` 指令与纯 GIF 收图消息、>windowSize 截最近 N）注入 injection 轮（每条 `[m:<messageId>]`，watched/master 打标）；无积压不注入 | 单测 | 积压一轮注入、过滤与截断正确、无积压零提交 | 测试输出 | T3 |
+| F3 | 开窗注入（**背景板语义**）：open 瞬间把「上次关窗以来」积压（排除 pending burst 内消息、过滤 `/` 指令与纯 GIF 收图消息、>windowSize 截最近 N）注入 injection 轮（每条 `[m:<messageId>]`，watched/master 打标）；文案明确这些**只是背景板，不构成需要回复的任务**：无必答、无 salvage、模型不逐条回应也不补回复任何人；无积压不注入 | 单测 | 积压一轮注入、过滤与截断正确、文案含背景板声明、无积压零提交 | 测试输出 | T3 |
 | F4 | @ 必答轮在 next 任何 phase 即时进，背景缩为最近 5 条（含整组）；必答/salvage/引用语义不变；@ 轮遇在途 ambient/injection 轮**排队等待**（上限 60s，超时 busy_reply），不丢弃 | 单测 + 既有必答回归 | 背景 ≤5；@ 在环境轮进行中到达能进（等待或 busy，不静默丢） | 测试输出 | T5 |
 | F5 | say_words/say_media/say_meme 新增 `quoteMsgId`（接受 `[m:…]` 或裸数字）；属本轮注入窗口才有效；有效时**同时**置 `payload.quote = true` 且 `payload.quoteId = 该消息 id`；无效 tool 错误不计数额度；缺省现行为不变（say_voice 不加此参数） | 单测 + schema 校验 | 合法挂 quote、非法拒、缺省零变化 | 测试输出 | T4 |
 | F6 | ambient/injection 轮零出口合法（无 salvage、无强制引用）；可 @ 目标 ∈ {主人} ∪ 本群 watched（成员校验照旧），越界拒绝并记审计；answer 轮与 legacy 的 @ 语义不变 | 单测 + runtime 文案核对 | 轮类型判定正确、@ 白名单生效、审计有痕 | 测试输出 | T3、T4、T1 |
@@ -52,7 +52,7 @@
 1. **状态机按群、内存态**：`Map<chatKey, {phase, phaseSince, lastCloseSeq}>`；可注入时钟（debounce 先例）；重启/热切换进入 closed 从零计时，`lastCloseSeq` 懒定基线（宁少勿答）。状态机**自带 tick 现读 fishConfig()**，不依赖消息驱动（无消息期也能热切换 start/stop）。
 2. **closed 态**：非 @ 消息 skip:next_pending（旁路记账照常）；已存在的 pending burst 在关窗后收尾属期望（同组不拆）。
 3. **open 态**：gate next 分支放行 `free_pass`（非必答）；消息走既有 10 秒合并管线；**环境轮背景上限沿用 10 不变**（mentionContextSize 仅 @ 轮）；开窗瞬间若有积压先提交 injection 轮（覆盖到开窗时刻，之后归 burst，游标推进到 recent 末条 arrivalSeq，不重复注入）。
-4. **injection 轮**：`ctx_engage_header + ctx_engage_line×N + ctx_engage_footer`；**submitRound 增加 `entryKind` 参数**（现硬编码 MEMORY_INBOUND_KIND），injection 用 `fish.engage_tick`（摘要与抽取白名单排除）；**计入换页阈值**（renderTranscript 对 engage_tick 计 entries/chars，但不写 handoff 文本）；不附 inline image block。
+4. **injection 轮（背景板语义，用户已确认）**：closed 期间的非 @ 消息不作回复任务处理，开窗仅作背景板给鱼看：不要求逐条回应、不补回复任何人、无必答无 salvage；`ctx_engage_header + ctx_engage_line×N + ctx_engage_footer`；**submitRound 增加 `entryKind` 参数**（现硬编码 MEMORY_INBOUND_KIND），injection 用 `fish.engage_tick`（摘要与抽取白名单排除）；**计入换页阈值**（renderTranscript 对 engage_tick 计 entries/chars，但不写 handoff 文本）；不附 inline image block。
 5. **@ 轮**：任何 phase 即时进；next 下背景 = mentionContextSize（默认 5）；legacy 恒 10。
 6. **引用目标**：三工具（say_voice 除外）`quoteMsgId`；窗口挂点扩展 `triggerOf` 值形状（`quoteIds?: Set<string>`）或照 `bypassOf` 新增 FishOptions 回调，**随轮清理**（settle finally），不用会话级 Map；有效时同时置 `payload.quote=true` 与 `payload.quoteId=<该 id>`（否则 emit 层静默丢弃）。
 7. **轮类型显式化**：`triggerOf` 值增加 `kind: "ambient" | "injection" | "answer"`（legacy 轮全部 answer/既有语义）；`mentionPolicyOf` 按轮类型判定（ambient/injection → 白名单 {master}∪watched；answer/legacy → 既有「被点名」语义）；语音骰仅 answer 轮且 isVoiceVip（ambient/injection 一律不掷——修正「环境轮 userId undefined」的错误前提：flushBurst 实际传 anchor.userId）；injection 轮 trigger 无 messageId 时 `say_mention_no_trigger` 分支按轮类型放行 @ 白名单。@ 放宽记审计日志。
@@ -103,9 +103,9 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 
 **接口契约：**
 - Produces 新 key（不撞车；消费引用由 T3/T4/T8 落地，见决策 19）：
-  - `ctx_engage_header`（`{{count}}`）——「你刚打开群，这是你不在时新冒出来的 {{count}} 条，都看一遍再决定要不要说话」
+  - `ctx_engage_header`（`{{count}}`）——「你刚打开群，这是你不在时新冒出来的 {{count}} 条——都只是背景板，看一遍就好，不构成需要你回应的任务，也不必补回复任何人」
   - `ctx_engage_line`（`{{id}} {{name}} {{qq}} {{text}}`；主人 `[主人]`、特别关注 `[特别关注]`，master 优先互斥）
-  - `ctx_engage_footer`——「说不说话你定：可以引用其中一条回（quoteMsgId 填那行 [m:…] 里的数字）、可以只吐槽、可以 @ 你感兴趣的人（只能 @ 主人和特别关注的人；语音不能 @ 也不能用 quoteMsgId，但可以照常引用正在回的那条）、也可以不出声。这个窗口里新进来的话你都会看到」
+  - `ctx_engage_footer`——「说不说话你定：可以就背景里某条搭一句（quoteMsgId 填那行 [m:…] 里的数字）、可以只吐槽、可以 @ 你感兴趣的人（只能 @ 主人和特别关注的人；语音不能 @ 也不能用 quoteMsgId，但可以照常引用正在回的那条）、也可以什么都不说。这个窗口里新进来的话你都会看到」
   - `ctx_engage_nudge_1` / `ctx_engage_nudge_2`
   - `quote_msg_invalid`
   - `eval_rejected`（群内非主人 /评 拒绝）、`eval_unknown_target`（定位降级注明）、`eval_receipt`（/评 回执，含方向/类型/定位结果摘要）
