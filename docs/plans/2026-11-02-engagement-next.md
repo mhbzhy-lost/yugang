@@ -32,7 +32,7 @@
 | F2 | 状态机按群：closed 10 分钟（可配）→ open 3 分钟 → 循环；closed 态非 @ 群消息 skip:next_pending 不进模型（**边界**：open 窗末尾已存在的 pending burst，closed 后同发送者续话并入该组照常 flush，属期望——同组不拆）；open 态非 @ 消息 free_pass 走既有合并管线（mustAnswer=false 零出口合法）；`isOpen` 缺省 = closed；热切换（含无消息期）由状态机每 tick 现读配置驱动 start/stop | engage-next 单测 + gate 单测 + 日志 | 态迁移精确、closed 零新提交、open 走管线、无消息热切换生效 | 测试输出 | T2、T3 |
 | F3 | 开窗注入（**背景板语义**）：open 瞬间把「上次关窗以来」积压（排除 pending burst 内消息、过滤 `/` 指令与纯 GIF 收图消息、>windowSize 截最近 N）注入 injection 轮（每条 `[m:<messageId>]`，watched/master 打标）；文案明确这些**只是背景板，不构成需要回复的任务**：无必答、无 salvage、模型不逐条回应也不补回复任何人；无积压不注入 | 单测 | 积压一轮注入、过滤与截断正确、文案含背景板声明、无积压零提交 | 测试输出 | T3 |
 | F4 | @ 必答轮在 next 任何 phase 即时进，背景缩为最近 5 条（含整组，**且剔除已进过模型的消息：如 5 条里 3 条已读过则只注入后 2 条；**每次携带 ctx_seen_note 引导结合历史**）；必答/salvage/引用语义不变；@ 轮遇在途 ambient/injection 轮**排队等待**（上限 60s，超时 busy_reply），不丢弃 | 单测 + 既有必答回归 | 背景 ≤5、去重正确、标记推进、@ 在环境轮进行中到达能进（等待或 busy，不静默丢） | 测试输出 | T5 |
-| F5 | say_words/say_media/say_meme 新增 `quoteMsgId`（接受 `[m:…]` 或裸数字）；属本轮注入窗口才有效；有效时**同时**置 `payload.quote = true` 且 `payload.quoteId = 该消息 id`；无效 tool 错误不计数额度；缺省现行为不变（say_voice 不加此参数） | 单测 + schema 校验 | 合法挂 quote、非法拒、缺省零变化 | 测试输出 | T4 |
+| F5 | say_words/say_media/say_mema 的模型侧引用参数**收敛为单一 `quoteMsgId`**（接受 `[m:…]` 或裸数字）：不传 = 不引用（quote=false 语义，机械必答引用不受影响）；传了且属本轮注入窗口 → 置 `payload.quoteId = 该消息 id`；不在窗口 tool 错误不计数额度；旧 `quote` 布尔参数从 schema 移除（emit 层机械引用链 quoteForce/@ 必答照旧，内部实现可用 payload.quote 传递）；say_voice 不变（无 quoteMsgId，可照常 quote 正在回的那条） | 单测 + schema 校验 | 不传不引用、合法挂 quote、非法拒、schema 无 quote 参数、机械必答引用不变 | 测试输出 | T4 |
 | F6 | ambient/injection 轮零出口合法（无 salvage、无强制引用）；可 @ 目标 ∈ {主人} ∪ 本群 watched（成员校验照旧），越界拒绝并记审计；answer 轮与 legacy 的 @ 语义不变 | 单测 + runtime 文案核对 | 轮类型判定正确、@ 白名单生效、审计有痕 | 测试输出 | T3、T4、T1 |
 | F7 | engage 配置（closedMinutes=10 / openMinutes=3 / windowSize=20 / mentionContextSize=5 / silenceThreshold=3 / windowRelaxCap=30）缺省合法、非法告警保留缺省、热加载 | 配置解析单测 | 判据如左 | 测试输出 | T2 |
 | F8 | next 态：特别关注无强制（不进 gate、语音骰对 ambient/injection 关闭）；名单与备注照常记录；watched 消息行带「[特别关注]」标记；runtime 软引导（全局可见，属措辞不属搭话机制） | 单测 + runtime 核对 | next 判据如左；legacy watched 行为（gate/语音骰）不变 | 测试输出 | T1、T3、T5 |
@@ -54,7 +54,7 @@
 3. **open 态**：gate next 分支放行 `free_pass`（非必答）；消息走既有 10 秒合并管线；**环境轮背景上限沿用 10 不变**（mentionContextSize 仅 @ 轮）；开窗瞬间若有积压先提交 injection 轮（覆盖到开窗时刻，之后归 burst，游标推进到 recent 末条 arrivalSeq，不重复注入）。
 4. **injection 轮（背景板语义，用户已确认）**：closed 期间的非 @ 消息不作回复任务处理，开窗仅作背景板给鱼看：不要求逐条回应、不补回复任何人、无必答无 salvage；`ctx_engage_header + ctx_engage_line×N + ctx_engage_footer`；**submitRound 增加 `entryKind` 参数**（现硬编码 MEMORY_INBOUND_KIND），injection 用 `fish.engage_tick`（摘要与抽取白名单排除）；**计入换页阈值**（renderTranscript 对 engage_tick 计 entries/chars，但不写 handoff 文本）；不附 inline image block。
 5. **@ 轮**：任何 phase 即时进；next 下背景 = mentionContextSize（默认 5）；legacy 恒 10。
-6. **引用目标**：三工具（say_voice 除外）`quoteMsgId`；窗口挂点扩展 `triggerOf` 值形状（`quoteIds?: Set<string>`）或照 `bypassOf` 新增 FishOptions 回调，**随轮清理**（settle finally），不用会话级 Map；有效时同时置 `payload.quote=true` 与 `payload.quoteId=<该 id>`（否则 emit 层静默丢弃）。
+6. **引用目标（参数收敛，用户已定：quote 与 quoteMsgId 重复，quoteMsgId 不传即 quote=false）**：三工具（say_voice 除外）模型侧**只保留 `quoteMsgId` 一个引用参数，移除旧 `quote` 布尔**；窗口挂点扩展 `triggerOf` 值形状（`quoteIds?: Set<string>`）或照 `bypassOf` 新增 FishOptions 回调，**随轮清理**（settle finally）；有效时置 `payload.quoteId=<该 id>`（内部实现层面等效 quote=true，防 emit 层静默丢弃）；不传 = 不引用，机械必答引用（quoteForce/@ 必答/整组回复）不受模型参数影响、照旧生效；模型想引用锚点时同样传锚点 id（锚点行已带 [m:id] 标注）。
 7. **轮类型显式化**：`triggerOf` 值增加 `kind: "ambient" | "injection" | "answer"`（legacy 轮全部 answer/既有语义）；`mentionPolicyOf` 按轮类型判定（ambient/injection → 白名单 {master}∪watched；answer/legacy → 既有「被点名」语义）；语音骰仅 answer 轮且 isVoiceVip（ambient/injection 一律不掷——修正「环境轮 userId undefined」的错误前提：flushBurst 实际传 anchor.userId）；injection 轮 trigger 无 messageId 时 `say_mention_no_trigger` 分支按轮类型放行 @ 白名单。@ 放宽记审计日志。
 8. **互斥分级**：in-flight 登记仅针对 **next 的 ambient/injection 轮**（submit 前 set、settle finally 删，并入 conversationBusy）；**@ 轮遇 in-flight 排队等待**（重试等待上限 60s，超时 busy_reply），绝不因在途环境轮丢必答；ambient/injection 遇 in-flight/换页/收图轮：injection 放弃本轮注入（宁少勿答）、ambient 组静默丢弃（沿用既有语义）；legacy 不登记、行为零变化。
 9. **特别关注 = 纯设定集（next）**：记录机制照旧；`[特别关注]` 打标（injection 行与 @ 锚点行；legacy watch_inline 行为零变化）；runtime 软引导全局可见（措辞不属搭话机制，F8 已按此口径）。
@@ -175,7 +175,7 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 **WritePaths：** `src/tools/say_words|say_media|say_meme/TOOL.md + tool.ts`、`src/tools/say-shared.ts`、`src/tools/types.ts`、`src/index.ts`、`src/harness.ts`、`AGENTS.md`
 
 **接口契约：**
-- Produces：`quoteMsgId`（三工具；`[m:123]` 或裸数字）→ 属窗口有效 → **同时置 `payload.quote=true` 与 `payload.quoteId=<该 id>`** → 无效 tool 错误不计数额度 → 缺省不变
+- Produces：三工具（say_voice 除外）**移除 `quote` 参数、新增 `quoteMsgId`**（`[m:123]` 或裸数字）→ 属窗口有效 → 置 `payload.quoteId=<该 id>`（内部等效 quote=true）→ 无效 tool 错误不计数额度 → 不传 = 不引用；机械必答引用链不动
 - Produces：`mentionPolicyOf` 按轮类型：ambient/injection → 白名单 {master} ∪ 本群 watched（成员校验照旧，拿不到名单拒）；answer/legacy → 既有语义；@ 放宽**记审计日志**；AGENTS.md 第 4 节修订含风险说明
 - 语音骰仅 answer 轮（T3 的 kind 判定在此消费）
 
@@ -328,7 +328,7 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 - `test/engage-next.test.ts`：状态机迁移（含无消息热切换）、closed skip/open free_pass、backlog（pending 排除、过滤、截断）、懒基线、isOpen 缺省 closed、注入时钟
 - injection 渲染（打标/[m:id]）、entry kind 排除但计入换页阈值、互斥分级（@ 排队 60s/ambient 丢弃/injection 放弃）
 - 轮类型：mentionPolicyOf 三态、语音骰仅 answer、say_mention_no_trigger 分支
-- quoteMsgId 三态 + quote/quoteId 双置；@ 白名单 + 审计
+- quoteMsgId 收敛后的三态（不传=不引用/合法/非法）+ 机械必答引用回归；@ 白名单 + 审计
 - @ 轮背景 5 条（ambient 10/legacy 10 对照）；watch 拒 master
 - `/评` 全链路（sentmap 定位/降级、两型评价包、群内拒绝/私聊静默、meta 上限）；feedback 渲染加权与 meta 约束
 - nudge/nudge-only 轮/放宽/清零口径
