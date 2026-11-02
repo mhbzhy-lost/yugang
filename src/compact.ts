@@ -218,10 +218,12 @@ export interface PageProfile {
 }
 
 /** 上一页剖面（字段级合并的输入）：profile 只保留还开着的条目；text 是旧页换页文本， */
-/** 作为带入条目逐字校验的 corpus（旧剖面里的 quote 在自己那页已经过同一道校验）。 */
+/** 作为带入条目逐字校验的 corpus（旧剖面里的 quote 在自己那页已经过同一道校验）； */
+/** at 是落页时间（pi.reset head 时间戳），T13 开窗弹药行的时间锚点消费它。 */
 interface PreviousProfile {
   profile: PageProfile;
   text: string;
+  at?: number;
 }
 
 /** 换页尾巴（机械降级与剖面页共用）的条数：机械截取，不经过模型。 */
@@ -503,15 +505,20 @@ function activeMembers(counted: CountedEntry[]): string[] {
  * 就是携带换页文本的 pi.reset（head: self，model 里是那条 user message）；卡片条目行
  * 按状态词（进行中/已完结/未兑现/已兑现）机械回读，只留还开着的条目。旧页是叙事摘要 /
  * 机械降级页 / 解析不出条目时返回 undefined——按首换页处理，不报错不阻塞。
- * text（整份旧换页文本）作为带入条目逐字校验的 corpus 一并返回。
+ * text（整份旧换页文本）作为带入条目逐字校验的 corpus 一并返回；at 是落页时间
+ * （pi.reset head 的 entry 时间戳），T13 开窗弹药行的「N 天前」锚点消费它，拿不到为 undefined。
  */
 async function extractPreviousProfile(conversation: Conversation): Promise<PreviousProfile | undefined> {
   try {
     const view = await conversation.viewState(ctx);
     let text = "";
+    let at: number | undefined;
     try {
       const head = view.value.entries.find((entry) => entry.kind === "pi.reset");
-      if (head) text = entryText(head.model);
+      if (head) {
+        text = entryText(head.model);
+        at = entryTimestamp(head);
+      }
     } finally {
       view.dispose();
     }
@@ -530,10 +537,32 @@ async function extractPreviousProfile(conversation: Conversation): Promise<Previ
       mood: "",
     };
     if (open.threads.length + open.promises.length === 0) return undefined;
-    return { profile: open, text };
+    return { profile: open, text, ...(at !== undefined ? { at } : {}) };
   } catch {
     return undefined;
   }
+}
+
+/**
+ * 开窗弹药栏（T13）的剖面来源：当前页 pi.reset head 里上一页剖面还开着的未兑现承诺
+ * 与话头（T12 字段，quote 逐字、锚点原样）。开窗时刻会话空闲（injection 轮已过 busy
+ * 检查），viewState 只读快照随时可取——提取失败 / 无旧剖面 / 无开条目一律返回空数组，
+ * 不报错不阻塞开窗注入（弹药栏是可选增强，宁缺勿错）。
+ */
+export interface ProfileAmmo {
+  items: ProfileItem[];
+  /** 剖面落页时间（pi.reset head 时间戳）：弹药行「N 天前」的机械锚点；拿不到为 undefined。 */
+  at?: number;
+}
+
+/** 剖面弹药（T13 开窗拼装的来源①）：承诺（鱼的欠账）在前、话头（还在聊的）在后。 */
+export async function profileAmmoOf(conversation: Conversation): Promise<ProfileAmmo> {
+  const previous = await extractPreviousProfile(conversation);
+  if (!previous) return { items: [] };
+  return {
+    items: [...previous.profile.promises, ...previous.profile.threads],
+    ...(previous.at !== undefined ? { at: previous.at } : {}),
+  };
 }
 
 /** 时间戳 → 本地「YYYY-MM-DD HH:mm」；降级头与用量一样按本地时区展示。 */

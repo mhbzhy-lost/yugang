@@ -31,7 +31,7 @@ import {
   type RecentChatMessage,
 } from "./qq/debounce.ts";
 import { replaceWatched, type WatchedMap } from "./qq/watch-state.ts";
-import { MEMORY_ENGAGE_KIND, type CompactResult } from "./compact.ts";
+import { MEMORY_ENGAGE_KIND, profileAmmoOf, type CompactResult } from "./compact.ts";
 import type { RoundKind, RoundTrigger } from "./tools/types.ts";
 import { setLookDisabled } from "./tools/look/tool.ts";
 import { clearMemeImportRound } from "./tools/meme_import/shared.ts";
@@ -45,10 +45,10 @@ import { localDay } from "./usage.ts";
 import { weeklyStats, renderWeekly } from "./stats.ts";
 import { createUsageLedger, sumUsage } from "./usage.ts";
 import { bypassAllowed, splitBypass, BYPASS_RE } from "./bypass.ts";
-import { ChatsDoc, MemoryPendingDoc, WatchDoc } from "./store.ts";
+import { ChatsDoc, MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc, WatchDoc } from "./store.ts";
 import { renderTemplate } from "./prompts.ts";
-import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "./memory.ts";
-import { memoryKeyOf, pushScope, shiftScope } from "./memory-scope.ts";
+import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, mergeMemoryStates, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "./memory.ts";
+import { memoryKeyOf, privateMemoryKeyOf, pushScope, shiftScope } from "./memory-scope.ts";
 import { OutboundEntry, type OutboundPayload } from "./tools/say-shared.ts";
 import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
@@ -362,7 +362,9 @@ const burstMustAnswer = new Map<string, boolean>();
 
 /** 与 debouncer 一致的窗口键：群 + 发送者唯一确定一个待定组。 */
 function windowKey(chatKey: string, userId: number): string {
-  return `${chatKey}\u0000${userId}`;
+  // 与 debouncer 一致的窗口键：群 + 发送者唯一确定一个待定组（拼接式：模板内含 \u0000
+  // 反斜杠会让 prompt-lint 的栅栏号配对错位，全文件陷入幻影字面量相，见 test/prompts）
+  return chatKey + "\u0000" + userId;
 }
 
 /** 必答放行原因：只有以这些原因进闸的轮才允许正文兜底补发。 */
@@ -482,7 +484,7 @@ const fish = await openFish({
     const allowed = (config.master && id === config.master)
       || (watchedByChat.get(baseChatKey(chatKey))?.has(id) ?? false);
     if (kind === "ambient" || kind === "injection") {
-      console.log(`[鱼缸] 审计 ${chatKey} ${kind} 轮主动 @ ${id} → ${allowed ? "白名单放行" : "白名单外拒绝"}`);
+      console.log(`[鱼缸] 审计 ${chatKey} ${kind} 轮 @ ${id} → ${allowed ? "白名单" : "名单外"}`);
     }
     return allowed ? "allow" : "not_privileged";
   },
@@ -607,12 +609,20 @@ function chatKeyFor(conversationId: string | number): string | undefined {
   return chatKeys.get(String(conversationId)) ?? chatKeys.get(conversationId);
 }
 
-async function conversationFor(chatKey: string): Promise<Conversation> {
-  // 当前人格：非变更式读取（严禁对 snapshot() 结果赋值）
+/**
+ * 该群当前人格（conversationFor 与 T13 弹药的记忆 doc key 共用同一份解析）：
+ * ChatsDoc 现读，返回原始值与悬空回退后的生效值（回退规则与 group() 同）。
+ */
+async function personaOfChatKey(chatKey: string): Promise<{ persona: string; effective: string }> {
   const snapshot = await fish.harness.snapshot(ChatsDoc, ctx);
   const persona = snapshot?.personas?.[chatKey] ?? "默认";
-  // 悬空人格名与 group() 同规则回退默认，内存缓存键才能对上持久化映射键
   const effective = persona !== "默认" && !fish.personas.includes(persona) ? "默认" : persona;
+  return { persona, effective };
+}
+
+async function conversationFor(chatKey: string): Promise<Conversation> {
+  // 当前人格：非变更式读取（严禁对 snapshot() 结果赋值）；fish.group 拿原始值（悬空它自己回退）
+  const { persona, effective } = await personaOfChatKey(chatKey);
   const mapKey = effective === "默认" ? chatKey : `${chatKey}#${effective}`;
   let conv = conversations.get(mapKey);
   if (!conv) {
@@ -1098,7 +1108,8 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     if (pending) {
       const expanded = await onebot.expandForwardById(pending, anchor);
       if (expanded) {
-        content = `${fish.prompts.messages["forward_recent_prefix"] ?? ""}\n${expanded}\n${content}`;
+        // 拼接式而非模板字面量（\n 在模板内同样破坏 prompt-lint 的栅栏号配对）
+        content = (fish.prompts.messages["forward_recent_prefix"] ?? "") + "\n" + expanded + "\n" + content;
         console.log(`[鱼缸] ${anchor.chatKey} 补展开最近合集`);
       }
     }
@@ -1202,6 +1213,137 @@ function engageNudgeLevel(chatKey: string): 0 | 1 | 2 {
   return 0;
 }
 
+// ── 开窗弹药栏（T13，决策 21）与宵禁二态 footer ─────────────────────────────
+
+/**
+ * 注入 footer 的宵禁二态（纯文案层切换，@ 白名单等硬机制不动）：本地 00:00–09:00
+ * 用夜间版（纯搭话模式：不鼓励主动开腔），其余时间用白天版（自由发挥）。每小时
+ * 天然分档，不引入配置项；模板 key 用直接下标取（test/prompts.test.ts 逐字扫 src）。
+ */
+function engageFooterOf(): string {
+  const night = new Date().getHours() < 9;
+  return (night ? fish.prompts.messages["ctx_engage_footer_night"] : fish.prompts.messages["ctx_engage_footer"]) ?? "";
+}
+
+/**
+ * 记忆委托的机械标记（T13）：lore/people 文本命中任一即视为一条未了的群友委托。
+ * 硬边界：纯子串匹配、不做语义检索——标记面宁窄勿宽，漏捡只是少一条可选弹药，
+ * 误捡会把闲聊当成欠账塞进注入轮。样本取自计划契约（托你查/帮我查/等我问问类）；
+ * 写成正则字面量（test/prompt-lint 只扫引号字面量，标记是匹配模式不是模型可见文案）。
+ */
+const AMMO_DELEGATION_RE = /托你查|托我查|帮我查|帮忙查|让你查|帮我问问|等我问问/;
+
+/** 弹药条目：一段原文（逐字，不生成）+ 谁（可空）+ 时间锚（可空），渲染成一行。 */
+interface AmmoCandidate {
+  what: string;
+  who: string;
+  at?: number;
+}
+
+/** 弹药段预算（字符，头+行合计）：机械裁决，超限丢条目而不是放宽。 */
+const AMMO_SECTION_CHARS = 300;
+/** 弹药条数上限：先截条数，预算再裁。 */
+const AMMO_ITEM_CAP = 5;
+/** 单条弹药原文截断：一行能放下的短语级文本，不是整段搬运。 */
+const AMMO_TEXT_CHARS = 60;
+
+/** 「N 天前」机械锚点：有时间戳按天差计算，拿不到退化为「之前」（不伪造时间）。 */
+function ammoDaysAgo(at: number | undefined): string {
+  if (at === undefined) return "之前";
+  const days = Math.floor((Date.now() - at) / 86_400_000);
+  // 字符串拼接而非模板字面量：新增栅栏号会移动 prompt-lint 的配对链（文件里已有反斜杠模板）
+  return days >= 1 ? days + " 天前" : "之前";
+}
+
+/** 锚点消息 → 发送者昵称（「名字」）：只认 recent 流水里还在的那条，查不到留空。 */
+function nicknameOfMessage(chatKey: string, messageId: string | number | undefined): string {
+  if (messageId === undefined) return "";
+  const hit = (recent.get(chatKey) ?? []).find((m) => String(m.messageId) === String(messageId));
+  return hit ? "「" + hit.nickname + "」" : "";
+}
+
+function isDelegationText(text: string): boolean {
+  return AMMO_DELEGATION_RE.test(text);
+}
+
+/**
+ * 弹药来源②（记忆委托）：公共 + 本会话私有记忆合并后，机械扫 people 事实与 lore
+ * 文本里的委托标记；失效事实（invalidAt）不算。who 取人物档首个名字，lore 没有
+ * 归属人则留空。读的是已批准入库的记忆，只读不写。
+ */
+async function memoryDelegationsOf(chatKey: string): Promise<AmmoCandidate[]> {
+  const { effective } = await personaOfChatKey(chatKey);
+  const [pub, priv] = await Promise.all([
+    fish.harness.snapshot(MemoryDoc, effective, ctx),
+    fish.harness.snapshot(MemoryPrivateDoc, privateMemoryKeyOf(effective, chatKey), ctx),
+  ]);
+  if (!pub && !priv) return [];
+  const state = mergeMemoryStates(pub, priv);
+  const out: AmmoCandidate[] = [];
+  for (const person of Object.values(state.people)) {
+    for (const fact of person.facts) {
+      if (fact.invalidAt !== undefined || !isDelegationText(fact.text)) continue;
+      out.push({
+        what: fact.text.trim().slice(0, AMMO_TEXT_CHARS),
+        who: person.names[0] ? "「" + person.names[0] + "」" : "",
+        at: fact.at,
+      });
+    }
+  }
+  for (const lore of state.lore) {
+    if (!isDelegationText(lore.text)) continue;
+    out.push({ what: lore.text.trim().slice(0, AMMO_TEXT_CHARS), who: "", at: lore.at });
+  }
+  return out;
+}
+
+/**
+ * 开窗弹药（T13）：机械拼装两路来源——①上一页剖面还开着的未兑现承诺/话头
+ * （T12 字段，profileAmmoOf 从 pi.reset head 提取）；②记忆里命中委托标记的文本。
+ * 只拼装不生成：文本逐字取自剖面/记忆，who 与天数由锚点/时间戳机械推导，拿不到
+ * 就留空退化。两路按 what 去重（同一句话可能两边各收一次）；都空 = 空弹药，
+ * 整段不注入（零占位，F16）。任何一路失败都只少一路，不阻塞开窗。
+ */
+async function ammoOf(chatKey: string, conv: Conversation): Promise<AmmoCandidate[]> {
+  const [profile, delegations] = await Promise.all([
+    profileAmmoOf(conv).catch(() => ({ items: [] })),
+    memoryDelegationsOf(chatKey).catch(() => [] as AmmoCandidate[]),
+  ]);
+  const candidates: AmmoCandidate[] = [
+    ...profile.items.map((item) => ({ what: item.quote, who: nicknameOfMessage(chatKey, item.anchor), ...(profile.at !== undefined ? { at: profile.at } : {}) })),
+    ...delegations,
+  ];
+  const seen = new Set<string>();
+  const out: AmmoCandidate[] = [];
+  for (const item of candidates) {
+    if (!item.what || seen.has(item.what)) continue;
+    seen.add(item.what);
+    out.push(item);
+    if (out.length >= AMMO_ITEM_CAP) break;
+  }
+  return out;
+}
+
+/**
+ * 弹药段渲染：头 + 逐条一行；条数先截（AMMO_ITEM_CAP）、预算再裁（超限丢条目）。
+ * 弹药为空或模板缺失时 lines 为空数组——整段不注入、不占位（空则退化，F16）；
+ * count 是实际渲染的弹药条数，喂给 nudge_2 的 {{n}}（未兑现数联动）。
+ */
+function renderAmmoSection(items: readonly AmmoCandidate[]): { lines: string[]; count: number } {
+  const header = fish.prompts.messages["ctx_engage_ammo_header"] ?? "";
+  const template = fish.prompts.messages["ctx_engage_ammo_line"] ?? "";
+  if (!header || !template || items.length === 0) return { lines: [], count: 0 };
+  const lines: string[] = [];
+  let total = header.length;
+  for (const item of items) {
+    const line = renderTemplate(template, { days: ammoDaysAgo(item.at), who: item.who, what: item.what });
+    if (total + line.length > AMMO_SECTION_CHARS) break;
+    lines.push(line);
+    total += line.length;
+  }
+  return lines.length > 0 ? { lines: [header, ...lines], count: lines.length } : { lines: [], count: 0 };
+}
+
 /**
  * 开窗注入轮（injection，背景板语义）：open 进入瞬间把积压一轮注入。这些消息只是
  * 背景板——无必答、无 salvage、模型不必逐条回应也不必补回复任何人；遇忙放弃
@@ -1210,14 +1352,17 @@ function engageNudgeLevel(chatKey: string): 0 | 1 | 2 {
  * 但计入换页阈值）；不附 inline 图；quoteIds = 本轮注入的积压消息集。
  * 沉默递进（T8）：连续零出口达阈值时注入尾部追加 nudge 文案（2×阈值换 nudge_2，
  * 且本窗积压窗口放宽到 windowRelaxCap，见 engageBacklogOf）；积压为空但档位到位
- * 时改提 nudge-only 轮（header+footer+nudge，无行，同管线同遇忙放弃）。
+ * 时改提 nudge-only 轮（header+footer+nudge，无行，同管线同遇忙放弃）；nudge_2 带
+ * {{n}} 未兑现数（当前拼出的弹药条数，决策 21）。
+ * 弹药栏（T13）：注入尾部可选追加旧账弹药段（剖面未兑现承诺 + 记忆委托，机械拼装），
+ * 空弹药整段不注入不占位；footer 按宵禁二态（engageFooterOf）。
  */
 async function submitInjectionRound(chatKey: string, backlog: readonly EngageBacklogItem[]): Promise<void> {
   console.log(`[鱼缸] ${chatKey} 携话窗口 → open（积压 ${backlog.length} 条）`);
   // 沉默递进档位（T8）：每窗现读，进入即定（窗内计数不变动，开口要等关窗才结算）；
   // 文案档位用直接下标取（test/prompts.test.ts 按 messages["key"] 逐字扫 src，间接拼 key 不算引用）
   const nudge = engageNudgeLevel(chatKey);
-  const nudgeText = nudge === 2
+  const nudgeTemplate = nudge === 2
     ? fish.prompts.messages["ctx_engage_nudge_2"]
     : fish.prompts.messages["ctx_engage_nudge_1"];
   if (backlog.length === 0) {
@@ -1230,10 +1375,14 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
       console.log(`[鱼缸] ${chatKey} nudge 注入放弃：忙（宁少勿答）`);
       return;
     }
+    // nudge-only 轮同样携带弹药段（T13）：未兑现数 {{n}} 就是这批弹药条数
+    const ammo = renderAmmoSection(await ammoOf(chatKey, conv));
+    const nudgeText = renderTemplate(nudgeTemplate ?? "", { n: String(ammo.count) });
     const content = [
       renderTemplate(fish.prompts.messages["ctx_engage_header"] ?? "", { count: "0" }),
-      fish.prompts.messages["ctx_engage_footer"] ?? "",
-      nudgeText ?? "",
+      engageFooterOf(),
+      ...ammo,
+      nudgeText,
     ].filter((line) => line.length > 0).join("\n");
     console.log(`[鱼缸] ${chatKey} nudge-only 轮提交（沉默递进档位 ${nudge}）`);
     await submitRound({
@@ -1255,14 +1404,20 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
   // 已读去重（决策 20）：剔除已进过模型的部分（重启后标记为空＝全未读，不会饿死注入）
   const fresh = backlog.filter((m) => m.arrivalSeq === undefined || m.arrivalSeq > seenSeqOf(conv.id));
   if (fresh.length === 0) return;
+  // 弹药栏（T13）：剖面承诺 + 记忆委托机械拼装；未兑现数喂给 nudge_2 的 {{n}}
+  const ammo = renderAmmoSection(await ammoOf(chatKey, conv));
+  const nudgeText = renderTemplate(nudgeTemplate ?? "", { n: String(ammo.count) });
   const content = [
     renderTemplate(fish.prompts.messages["ctx_engage_header"] ?? "", { count: String(fresh.length) }),
     ...renderEngageLines(chatKey, fresh),
-    fish.prompts.messages["ctx_engage_footer"] ?? "",
+    // footer 宵禁二态（T13 追加）：夜间纯搭话，白天自由发挥
+    engageFooterOf(),
     // 每次注入都携带（决策 20，不限于发生截减时）：引导结合历史理解这批背景
     fish.prompts.messages["ctx_seen_note"] ?? "",
+    // 弹药段（T13）：空则退化，整段不占位
+    ...ammo,
     // 沉默递进（T8）：连续零出口达阈值，尾部追加 nudge（2×阈值换更重的 nudge_2）
-    nudge > 0 ? nudgeText ?? "" : "",
+    nudge > 0 ? nudgeText : "",
   ].filter((line) => line.length > 0).join("\n");
   await submitRound({
     chatKey,
@@ -1279,8 +1434,9 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
 /**
  * open 窗 shard 轮（ambient）：每 10 秒一拍，把这一拍收集的全部发送者消息合成一轮
  * （多发送者逐行渲染，[m:id] 锚点照旧）。非必答：零出口合法、无 salvage、无强制
- * 引用；已读去重后注入、注入后推进标记；quoteIds = 本轮 shard 消息集。提交前会话
- * 又忙（状态机检查后的竞态）就放回收集器并入下一拍（绝不丢、绝不并发提交）。
+ * 引用；已读去重后注入、注入后推进标记；quoteIds = 本轮 shard 消息集；尾部 footer
+ * 随宵禁二态（engageFooterOf，T13 追加，与 injection 轮同一套窗口收尾文案）。
+ * 提交前会话又忙（状态机检查后的竞态）就放回收集器并入下一拍（绝不丢、绝不并发提交）。
  */
 async function submitShardRound(chatKey: string, items: readonly EngageShardItem[]): Promise<void> {
   if (items.length === 0) return;
@@ -1297,6 +1453,8 @@ async function submitShardRound(chatKey: string, items: readonly EngageShardItem
     renderTemplate(fish.prompts.messages["ctx_header"] ?? "", { count: String(fresh.length) }),
     ...renderEngageLines(chatKey, fresh),
     fish.prompts.messages["ctx_seen_note"] ?? "",
+    // 宵禁二态 footer（T13 追加）：与 injection 轮同一套窗口收尾，夜间纯搭话
+    engageFooterOf(),
   ].filter((line) => line.length > 0).join("\n");
   // 整拍里最近一条非空 bypass 段（整组语义：指令后面跟闲聊不丢指令）
   let payload: string | undefined;
@@ -1624,7 +1782,8 @@ async function runEvalCommand(
     type: pointed ? "指向型" : "范围型",
     target: pointed ? `「${targetSummary}」` : statsLine,
   });
-  return degraded ? `${receipt}\n${fish.prompts.messages["eval_unknown_target"] ?? ""}` : receipt;
+  // 拼接式而非模板字面量（\n 在模板内会破坏 prompt-lint 的栅栏号配对）
+  return degraded ? receipt + "\n" + (fish.prompts.messages["eval_unknown_target"] ?? "") : receipt;
 }
 
 async function handleCommand(msg: IncomingMessage): Promise<string | null> {
