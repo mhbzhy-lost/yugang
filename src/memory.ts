@@ -97,6 +97,10 @@ export interface MemoryState {
   /** 主人评价 fact（/评 批准落地）：自指记忆，独立于 people；渲染加权置顶。 */
   feedback?: MemoryFact[];
   lastExtractAt?: number;
+  /** 连续零提取页数（T11 抽取评价）：成功抽取出候选即清零，解析失败不动它。
+   *  计数持久化在公共 doc（key=人格名），达 MEMORY_ZERO_EXTRACT_PAGES 触发一次复查
+   *  与 /记忆 头部提示；由压缩链路的 savePendingMemories 读写。 */
+  zeroStreak?: number;
 }
 
 export interface MemoryPatchPerson {
@@ -176,6 +180,24 @@ export const MEMORY_CAPS: {
 
 /** 单条 fact 文本上限（抽取提示词同值：facts 每条一句话）。 */
 export const FACT_TEXT_CHARS = 40;
+
+/**
+ * 连续零提取页数阈值（T11，决策 17）：按人格累计，达阈值触发一次复查模式
+ * （宽松提示词重跑本页，只一次不循环；失败不清计数、不阻塞换页）与
+ * /记忆 待审头部的「近 N 页零提取」提示。常量写死，暂不配置化。
+ */
+export const MEMORY_ZERO_EXTRACT_PAGES = 5;
+
+/**
+ * 待审条目携带的抽取信号（T11）：两类机械可得项的计数——代码从 known 与候选
+ * 本身机械重算，不采信模型输出里的 signal 标注；只进待审列表展示，不参与 apply。
+ */
+export interface ExtractSignals {
+  /** 「命中 people 名单」：候选主体在已知记忆（公共+当前私有合并）的人物名单里。 */
+  people: number;
+  /** 「与现有 fact 冲突」：SUPERSEDE 候选且 factId 在已知事实里机械解析成功。 */
+  conflict: number;
+}
 
 /** 渲染段预算：群里的说法 ≤200，单人 ≤240，卡片 ≤240，主人评价 ≤300。 */
 const LORE_BUDGET = 200;
@@ -496,6 +518,7 @@ export function applyPatch(state: MemoryState, patch: MemoryPatch, now: number, 
     cards,
     ...(feedback.length > 0 ? { feedback } : {}),
     ...(state.lastExtractAt !== undefined ? { lastExtractAt: state.lastExtractAt } : {}),
+    ...(state.zeroStreak !== undefined ? { zeroStreak: state.zeroStreak } : {}),
   };
 }
 
@@ -576,6 +599,8 @@ export interface PendingMemoryEntry {
   feedback?: FeedbackMeta;
   /** 评价包的前 20 条会话全文：只存待审，批准后不进任何长期 doc（决策 12）。 */
   feedbackContext?: FeedbackContextItem[];
+  /** 抽取信号（T11）：机械重算的候选信号计数，待审列表（/记忆 与 npm run memory --pending）展示用。 */
+  signals?: ExtractSignals;
 }
 
 /** 待审库（fish.memory.pending）的 doc 值：每人格一个 family member，条目按时间正序。 */
@@ -643,6 +668,15 @@ export function buildFeedbackPending(input: {
 /** 评价类待审条目的摘要（/记忆 列表与脚本共用）：哪条（targetSummary）+ 哪天；哪群在列表行模板里。 */
 export function summarizeFeedback(meta: FeedbackMeta): string {
   return `评价${meta.direction}｜${meta.targetSummary}（${meta.day}）`;
+}
+
+/** 待审列表的 signal 标签（主人回执，非模型文案）：两类机械信号计数；零或缺失时返回空串。 */
+export function signalsSuffix(signals: ExtractSignals | undefined): string {
+  if (!signals || (signals.people <= 0 && signals.conflict <= 0)) return "";
+  const parts: string[] = [];
+  if (signals.people > 0) parts.push(`已知人物×${signals.people}`);
+  if (signals.conflict > 0) parts.push(`事实冲突×${signals.conflict}`);
+  return `（信号：${parts.join("、")}）`;
 }
 
 /**
@@ -1162,8 +1196,9 @@ function recencyRank(item: { hits: number }): number {
   return item.hits === 0 ? 0 : 1;
 }
 
-/** 时间锚点：YYYY-MM（本地时区）。渲染 fact/卡片时附带，让模型分得清陈年旧事与近况。 */
-function monthAnchor(at: number): string {
+/** 时间锚点：YYYY-MM（本地时区）。渲染 fact/卡片时附带，让模型分得清陈年旧事与近况；
+ *  压缩链路的 known 事实行同款消费（T11）。 */
+export function monthAnchor(at: number): string {
   const date = new Date(at);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }

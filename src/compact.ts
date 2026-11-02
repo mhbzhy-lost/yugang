@@ -14,8 +14,8 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Conversation, ConversationId } from "@earendil-works/pi-durable";
 import { renderTemplate, type PromptSet } from "./prompts.ts";
-import { extractMemories } from "./memory-extract.ts";
-import { MEMORY_EVAL_KIND, MEMORY_INBOUND_KIND, type EvalEventData, type MemoryInbound, type MemoryPatch } from "./memory.ts";
+import { extractMemories, type ExtractSaved } from "./memory-extract.ts";
+import { MEMORY_EVAL_KIND, MEMORY_INBOUND_KIND, MEMORY_ZERO_EXTRACT_PAGES, type EvalEventData, type MemoryInbound } from "./memory.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 
@@ -52,9 +52,17 @@ export interface CompactorOptions {
   extract?: { models: Models; model: { provider: string; modelId: string }; prompts: PromptSet };
   /** conversation → 该会话当前人格名（memory doc key）。未找到时跳过记忆抽取但照常 reset。 */
   memoryKeyOf?: (conversationId: ConversationId) => string | undefined;
-  knownMemory?: (memoryKey: string) => Promise<{ text: string; subjects: { subject: string; name: string }[] }>;
-  /** 只入待审库（携带来源人格 + 经 harness 映射解析的来源 chatKey）；批准时才由审批通道 apply 进公共或私有 doc。 */
-  savePendingMemories?: (memoryKey: string, patch: MemoryPatch, conversationId: ConversationId) => Promise<void>;
+  /** 人格名 + 会话 → 已知记忆（公共 doc 与该会话私有 doc 的合并渲染，事实行带 YYYY-MM 锚点，
+ *  附 factId→subject 机械解析所需的行结构）；不给就当空白。 */
+  knownMemory?: (memoryKey: string, conversationId: ConversationId) => Promise<{ text: string; subjects: { subject: string; name: string }[] }>;
+  /** 只入待审库（携带来源人格 + 经 harness 映射解析的来源 chatKey）；批准时才由审批通道 apply
+ *  进公共或私有 doc。返回更新后的连续零提取页数（驱动复查模式：达 MEMORY_ZERO_EXTRACT_PAGES
+ *  时用宽松提示词重跑本页一次）。 */
+  savePendingMemories?: (
+    memoryKey: string,
+    outcome: ExtractSaved,
+    conversationId: ConversationId,
+  ) => Promise<{ zeroStreak: number }>;
 }
 
 export interface CompactResult {
@@ -101,26 +109,56 @@ export function createCompactor(options: CompactorOptions): Compactor {
       try {
         const summary = (await summarizeBounded(options, transcript)).trim();
 
-        // 记忆抽取：在 summarize 成功之后、reset 之前。任何异常（含 knownMemory、
-        // savePendingMemories 和 onError 自身抛错）都不得阻止后面的 reset——宁可没记上，不能不换页。
+        // 记忆抽取（T11 抽取评价机制）：在 summarize 成功之后、reset 之前。任何异常（含
+        // knownMemory、savePendingMemories 和 onError 自身抛错）都不得阻止后面的 reset——
+        // 宁可没记上，不能不换页。解析失败（parse_failed）不计零提取、不推进 lastExtractAt，
+        // 单独走 MemoryExtractError 上报；零提取（empty）按人格累计，达阈值用宽松复查提示词
+        // 重跑本页一次（只一次不循环；复查失败不清计数、不阻塞换页）。
         const memoryKey = options.memoryKeyOf?.(conversation.id);
         if (memoryKey && options.extract && options.savePendingMemories) {
           try {
-            const known = options.knownMemory ? await options.knownMemory(memoryKey) : { text: "", subjects: [] };
+            const known = options.knownMemory
+              ? await options.knownMemory(memoryKey, conversation.id)
+              : { text: "", subjects: [] };
             const memoryTranscript = await renderMemoryTranscript(conversation);
-            const patch = await extractMemories(options.extract, {
+            const extractInput = {
               transcript: memoryTranscript.transcript,
               known: known.text,
               subjects: [...known.subjects, ...memoryTranscript.subjects],
-            });
-            if (patch) {
-              // 只入待审库，不直接 apply：未批准的 patch 不进任何记忆 doc；
-              // 空 patch 也推进 lastExtractAt（在待审写入的同一个 commit 里）
-              await options.savePendingMemories(memoryKey, patch, conversation.id);
+            };
+            const outcome = await extractMemories(options.extract, extractInput);
+            if (outcome.status === "parse_failed") {
+              // 解析失败不是零提取：单独上报，不写入计数，也不推进 lastExtractAt
+              throw new Error(`memory_extract_${outcome.status}:${outcome.reason}`);
+            }
+            // 只入待审库，不直接 apply：未批准的 patch 不进任何记忆 doc；
+            // 空 patch 也推进 lastExtractAt（在待审写入的同一个 commit 里），并累计零提取页数
+            const saved = await options.savePendingMemories(memoryKey, outcome, conversation.id);
+            if (outcome.status === "ok") {
               console.log(
-                `[鱼缸] 记忆抽取 人${patch.people?.length ?? 0} 说法${patch.lore?.length ?? 0} 卡片${patch.cards?.length ?? 0}`,
+                `[鱼缸] 记忆抽取 人${outcome.patch.people?.length ?? 0} 说法${outcome.patch.lore?.length ?? 0} 卡${outcome.patch.cards?.length ?? 0} skip${outcome.skipped}`,
               );
-            } else throw new Error("memory_extract_unavailable");
+            } else if (saved.zeroStreak >= MEMORY_ZERO_EXTRACT_PAGES) {
+              // 复查模式：连续零提取达阈值，宽松提示词重跑本页一次；失败不清计数、不阻塞换页
+              console.log(`[鱼缸] 记忆复查 零提取${saved.zeroStreak}页`);
+              try {
+                const review = await extractMemories(options.extract, extractInput, { review: true });
+                if (review.status === "ok") {
+                  await options.savePendingMemories(memoryKey, review, conversation.id);
+                  console.log(
+                    `[鱼缸] 复查命中 人${review.patch.people?.length ?? 0} 说法${review.patch.lore?.length ?? 0} 卡${review.patch.cards?.length ?? 0}`,
+                  );
+                } else if (review.status === "parse_failed") {
+                  console.error(`[鱼缸] 记忆复查失败 ${review.reason}`);
+                } else {
+                  console.log("[鱼缸] 记忆复查仍零提取");
+                }
+              } catch (error) {
+                console.error("[鱼缸] 记忆复查异常", error instanceof Error ? error.message : error);
+              }
+            } else {
+              console.log(`[鱼缸] 记忆零提取 连续${saved.zeroStreak}页`);
+            }
           } catch (error) {
             try {
               options.onError?.(new MemoryExtractError(error));
@@ -346,19 +384,25 @@ export async function renderMemoryTranscript(conversation: Conversation): Promis
         const userId = typeof data?.userId === "string" ? data.userId.trim() : "";
         const subject = /^\d{4,12}$/.test(userId) ? `qq:${userId}` : `name:${nickname.slice(0, 20)}`;
         if (!subjects.has(subject)) subjects.set(subject, nickname);
-        if (text) lines.push(`${nickname}(${subject}): ${text}`);
+        // 行首 [MM-DD]（T11）：lore 候选的首次出现时间锚点需要说话日期；拿不到可靠时间戳就不标
+        if (text) {
+          const stamp = dayStamp(entryTimestamp(entry));
+          lines.push(`${stamp ? `[${stamp}] ` : ""}${nickname}(${subject}): ${text}`);
+        }
       } else if (entry.kind === MEMORY_EVAL_KIND) {
         const data = entry.data as Partial<EvalEventData> | undefined;
         const direction = data?.direction === "差" ? "差" : "好";
         const masterText = typeof data?.masterText === "string" ? data.masterText.trim() : "";
         const target = typeof data?.targetSummary === "string" ? data.targetSummary.trim() : "";
         if (masterText || target) {
-          lines.push(`主人评价(${direction}): ${masterText}（针对：${target}${data?.degraded === true ? "，未定位" : ""}）`);
+          const stamp = typeof data?.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(data.day) ? data.day.slice(5) : "";
+          lines.push(`${stamp ? `[${stamp}] ` : ""}主人评价(${direction}): ${masterText}（针对：${target}${data?.degraded === true ? "，未定位" : ""}）`);
         }
       } else if (entry.kind === "fish.outbound") {
-        const data = entry.data as { items?: string[] } | undefined;
+        const data = entry.data as { items?: string[]; at?: unknown } | undefined;
+        const stamp = typeof data?.at === "number" ? dayStamp(data.at) : "";
         for (const text of data?.items ?? []) {
-          if (text.trim()) lines.push(`鱼: ${text}`);
+          if (text.trim()) lines.push(`${stamp ? `[${stamp}] ` : ""}鱼: ${text}`);
         }
       }
     }
@@ -370,4 +414,11 @@ export async function renderMemoryTranscript(conversation: Conversation): Promis
     transcript: lines.join("\n"),
     subjects: [...subjects.entries()].map(([subject, name]) => ({ subject, name })),
   };
+}
+
+/** 时间戳 → 本地「MM-DD」：抽取转录行的日期锚点（年份由提示词的 {{today}} 补全）。 */
+function dayStamp(ts: number | undefined): string {
+  if (ts === undefined || !Number.isFinite(ts)) return "";
+  const at = new Date(ts);
+  return `${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
 }

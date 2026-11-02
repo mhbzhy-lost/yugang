@@ -41,7 +41,7 @@ import { loadFishModels } from "../src/model-config.ts";
 import { createFishModels } from "../src/models.ts";
 import { loadPrompts } from "../src/prompts.ts";
 import { DEFAULT_PERSONA_KEY, memoryKeyOf, privateMemoryKeyOf } from "../src/memory-scope.ts";
-import { approvePending, rejectPending, deleteFactById, hasFact, summarizePatch, formatAgeShort, publicizePatch, type MemoryPatch, type MemoryState, type PendingMemoryEntry, type PendingMemoryState } from "../src/memory.ts";
+import { approvePending, rejectPending, deleteFactById, hasFact, summarizePatch, formatAgeShort, signalsSuffix, MEMORY_ZERO_EXTRACT_PAGES, publicizePatch, type MemoryPatch, type MemoryState, type PendingMemoryEntry, type PendingMemoryState } from "../src/memory.ts";
 import { MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc } from "../src/store.ts";
 
 const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
@@ -367,11 +367,15 @@ if (rawDeleteId !== undefined) {
       console.log(`待审队列（上限 MEMORY_PENDING_CAP，当前观察期不设限）：`);
       for (const { persona, state } of docs) {
         const entries = [...state.entries].sort((a, b) => a.at - b.at);
-        console.log(`${persona}  ${entries.length} 条  最早 ${formatAgeShort(Date.now() - entries[0].at)}前`);
+        // 零提取头部提示（T11）：与 /记忆 同款文案语义，达阈值（常量 5）才显示
+        const pub = publicMemories.find((m) => m.persona === persona);
+        const streak = pub?.state.zeroStreak ?? 0;
+        console.log(`${persona}  ${entries.length} 条  最早 ${formatAgeShort(Date.now() - entries[0].at)}前${streak >= MEMORY_ZERO_EXTRACT_PAGES ? `  近 ${streak} 页压缩零提取` : ""}`);
         for (const entry of entries) {
-          // 建议轨道只看来源：私聊来的最小可见面默认私有，群聊来的公共也合理（最终由主人定）
+          // 建议轨道只看来源：私聊来的最小可见面默认私有，群聊来的公共也合理（最终由主人定）；
+          // signal 标签（T11）是机械重算的计数：已知人物/事实冲突
           const suggest = entry.originChatKey.startsWith("qq:private:") ? "私有" : "公共或私有";
-          console.log(`  [${entry.id}] ${entry.originChatKey || "（无来源）"} · ${formatAgeShort(Date.now() - entry.at)}前 · ${summarizePatch(entry.patch)} · 建议 ${suggest}`);
+          console.log(`  [${entry.id}] ${entry.originChatKey || "（无来源）"} · ${formatAgeShort(Date.now() - entry.at)}前 · ${summarizePatch(entry.patch)}${signalsSuffix(entry.signals)} · 建议 ${suggest}`);
         }
       }
     }

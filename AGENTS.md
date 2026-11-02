@@ -325,6 +325,23 @@
   `prompt/people.md` 只保留主人/关系等静态设定（不属群友画像、不迁移），「群里的人/
   梗」类动态内容由记忆链路维护；抽取提示词（`prompt/memory-extract.md`）要求在与
   某人的交流中持续提炼对其的新印象，照旧只进待审、不直接落库
+- **抽取评价机制（2026-11，T11）**：抽取提示词是唯一源（`prompt/memory-extract.md`，
+  复查宽松版在 `prompt/memory-extract-review.md`，均接 `src/prompts.ts`）——试金石
+  「未来对话会受益吗」（durable ✅ / 不可证伪模糊断言 ❌）+ few-shot 正反例（正例含
+  新群友身份/梗的来历/主人的约定/对鱼的纠正/对某人的新印象/热梗缩写黑话 lore：
+  无法从字面理解且群友有解释或可推断，keys=原话≤10 字、text=释义≤60 字含首次出现
+  月份锚点；反例含「在吗」「哈哈哈」、纯情绪宣泄、一次性闲聊），confidence low
+  不报（计入 skipped，正常轮代码层也机械丢弃；复查轮放宽保留）。模型输出是
+  candidates 三分类对账：ADD / SUPERSEDE（factId 必填，subject 由 known 附带的
+  id→subject 映射机械解析、不采信模型写的 subject，未命中即弃）/ SKIP（仅计数不产出）。
+  `ExtractOutcome` 三态 ok/empty/parse_failed：解析失败单独上报、不计零提取也不推进
+  lastExtractAt（修正旧版把未知形状归一成空 patch 的误判）。known = 公共 doc +
+  当前会话私有 doc 的合并渲染（事实行带 YYYY-MM 锚点；SUPERSEDE 可能指向私有层事实，
+  /记忆 的「将失效」原文查找覆盖私有层）。零提取按人格连续计数（`MemoryState.zeroStreak`
+  持久化在公共 doc，阈值常量 `MEMORY_ZERO_EXTRACT_PAGES=5`）：达阈值 → /记忆 待审头部
+  打「近 N 页压缩零提取」+ 压缩链路用宽松提示词重跑本页一次（只一次不循环；失败不清
+  计数、不阻塞换页）。待审列表（/记忆 与 `npm run memory --pending`）展示 signal 标签
+  （已知人物/事实冲突，代码机械重算、不采信模型标注）；不自动 DELETE
 - **上限写死在 `src/memory.ts` 的 `MEMORY_CAPS`**：人 ≤12、每人事实 ≤8 且总字数 ≤320、
   names ≤5、style ≤120 字、口头禅 ≤8 条且每条 ≤24 字、lore ≤40（key ≤5 个且每个 ≤10 字、
   text ≤60 字）、cards ≤60（text ≤80 字、keys ≤5、subjects ≤8）、单次 section 渲染 ≤900 字、

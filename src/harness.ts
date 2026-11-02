@@ -42,14 +42,17 @@ import {
   hasFact,
   isPatchEmpty,
   mergeMemoryStates,
+  monthAnchor,
   newPendingId,
   rejectPending,
   renderMemorySection,
+  signalsSuffix,
   summarizeFeedback,
   summarizePatch,
   formatAgeShort,
   MEMORY_CAPS,
   MEMORY_PENDING_CAP,
+  MEMORY_ZERO_EXTRACT_PAGES,
   type MemoryCommand,
   type PendingMemoryEntry,
 } from "./memory.ts";
@@ -407,6 +410,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     "cmd_memory_deleted",
     "cmd_memory_delete_missing",
     "cmd_memory_supersede_note",
+    "cmd_memory_zero_extract",
   ]) {
     if (!prompts.messages[code]) throw new Error(`缺少文案 key：${code}（中心或 TOOL.md）`);
   }
@@ -517,18 +521,24 @@ export async function openFish(options: FishOptions): Promise<Fish> {
           prompts,
         },
         memoryKeyOf: (conversationId) => memoryKeyByConversation.get(String(conversationId)),
-        knownMemory: async (memoryKey) => {
-          const snapshot = await harness.snapshot(MemoryDoc, memoryKey, ctx);
-          if (!snapshot) return { text: "", subjects: [] };
-          const subjects = Object.values(snapshot.people).map((person) => ({
+        // 已知记忆（T11）：公共 doc + 当前会话私有 doc 的合并渲染（mergeMemoryStates，
+        // 同主体事实去重），行格式与抽取器的机械解析同构：主体行「subject 昵称/昵称」、
+        // 事实行「f-id YYYY-MM 事实」——SUPERSEDE 的 factId→subject 解析与 people 信号
+        // 都从这份结构里机械读出。known 只喂给一次内部抽取请求，不写入会话。
+        knownMemory: async (memoryKey, conversationId) => {
+          const originChatKey = chatKeyByConversation.get(String(conversationId));
+          const privKey = originChatKey ? privateMemoryKeyOf(memoryKey, originChatKey) : undefined;
+          const pubSnap = await harness.snapshot(MemoryDoc, memoryKey, ctx);
+          const privSnap = privKey !== undefined ? await harness.snapshot(MemoryPrivateDoc, privKey, ctx) : undefined;
+          const merged = mergeMemoryStates(pubSnap, privSnap);
+          const subjects = Object.values(merged.people).map((person) => ({
             subject: person.subject,
             name: person.names[0] ?? person.subject,
           }));
-          // 已知记忆只喂给一次内部抽取请求：行格式「subject 名单」与「factId 事实」，
-          // 总长封顶 knownChars；不写入 conversation、pi.user 或 handoff
-          const lines = Object.values(snapshot.people).flatMap((person) => [
+          // 已知记忆只喂给一次内部抽取请求；总长封顶 knownChars；不写入 conversation、pi.user 或 handoff
+          const lines = Object.values(merged.people).flatMap((person) => [
             `${person.subject} ${person.names.join("/")}`,
-            ...person.facts.filter((fact) => fact.invalidAt === undefined).map((fact) => `${fact.id} ${fact.text}`),
+            ...person.facts.filter((fact) => fact.invalidAt === undefined).map((fact) => `${fact.id} ${monthAnchor(fact.at)} ${fact.text}`),
           ]);
           const text = lines.reduce(
             (out, line) => (out.length + line.length + 1 <= MEMORY_CAPS.knownChars ? `${out}${out ? "\n" : ""}${line}` : out),
@@ -538,14 +548,24 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         },
         // 只入待审库：patch 不直接 apply，主人批准后才进公共/私有 doc（审批闸硬约束）。
         // originChatKey 由 harness 的 conversation→chatKey 映射解析；同一 commit 内读改
-        // 同一 family member，不能先在 commit 外 snapshot 再整份覆盖（后写会把先写的吃掉）
-        savePendingMemories: async (memoryKey, patch, conversationId) => {
+        // 同一 family member，不能先在 commit 外 snapshot 再整份覆盖（后写会把先写的吃掉）。
+        // 零提取计数（T11）：empty 累计、ok 清零（解析失败不进这里，不计零提取）；返回更新后的
+        // 计数驱动压缩链路的复查模式（达 MEMORY_ZERO_EXTRACT_PAGES 重跑本页一次）
+        savePendingMemories: async (memoryKey, outcome, conversationId) => {
           const originChatKey = chatKeyByConversation.get(String(conversationId)) ?? "";
+          let zeroStreak = 0;
           await harness.commit(async (tx) => {
             const extractedAt = now();
-            if (!isPatchEmpty(patch)) {
+            if (outcome.status === "ok" && !isPatchEmpty(outcome.patch)) {
               const pending = await tx.doc(MemoryPendingDoc, memoryKey, memoryKey);
-              pending.entries.push({ id: newPendingId(), patch, originChatKey, at: extractedAt });
+              pending.entries.push({
+                id: newPendingId(),
+                patch: outcome.patch,
+                originChatKey,
+                at: extractedAt,
+                // 抽取信号（T11）：机械重算的计数，只进待审列表展示；两类都为零时不占字段
+                ...(outcome.signals.people > 0 || outcome.signals.conflict > 0 ? { signals: outcome.signals } : {}),
+              });
               // 待审淘汰：超上限挤掉最旧（观察期 MEMORY_PENDING_CAP=Infinity 不生效）。
               // 只打 id 与人格名，被淘汰条目的内容不进日志（隐私）
               while (pending.entries.length > MEMORY_PENDING_CAP) {
@@ -553,10 +573,15 @@ export async function openFish(options: FishOptions): Promise<Fish> {
                 if (evicted !== undefined) console.log(`[鱼缸] 记忆待审淘汰 ${evicted.id} ${memoryKey}`);
               }
             }
-            // 空 patch 不进待审，但 lastExtractAt 照样推进（待审写入即推进）
+            // 空 patch 不进待审，但 lastExtractAt 照样推进（待审写入即推进）；
+            // 零提取累计 / 命中清零（解析失败不进这里，不计零提取）
             const doc = await tx.doc(MemoryDoc, memoryKey, memoryKey);
             doc.lastExtractAt = extractedAt;
+            const previous = typeof doc.zeroStreak === "number" ? doc.zeroStreak : 0;
+            zeroStreak = outcome.status === "empty" ? previous + 1 : 0;
+            doc.zeroStreak = zeroStreak;
           }, ctx);
+          return { zeroStreak };
         },
       })
     : undefined;
@@ -735,6 +760,21 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     return removed;
   }
 
+  /** 某人格的全部私有层 doc key（人格名@chatKey）：从 ChatsDoc 的映射键推导（chatKey 或
+   *  chatKey#人格 → 人格@chatKey）。known 是公共+当前私有的合并渲染（T11），supersede
+   *  id 可能指向私有层事实，/记忆 的「将失效」原文查找要覆盖它们。 */
+  async function privateKeysOf(persona: string): Promise<string[]> {
+    const chats = await harness.snapshot(ChatsDoc, ctx);
+    const keys = new Set<string>();
+    for (const mappingKey of Object.keys(chats?.chats ?? {})) {
+      const mark = mappingKey.lastIndexOf("#");
+      const owner = mark > 0 ? mappingKey.slice(mark + 1) : DEFAULT_PERSONA;
+      const base = mark > 0 ? mappingKey.slice(0, mark) : mappingKey;
+      if (owner === persona) keys.add(`${persona}@${base}`);
+    }
+    return [...keys];
+  }
+
   // 删除通道（/记忆 删除，仅主人私聊）：按全局唯一的 fact id 在该人格公共层与全部
   // 私有层 doc 里定位并真删除（从数组移除，区别于 supersede 的 invalidAt 失效）。
   // 私有层候选 key 由 ChatsDoc 的映射键推导（chatKey 或 chatKey#人格 → 人格@chatKey）；
@@ -815,27 +855,46 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         return renderTemplate(messages["cmd_memory_deleted"] ?? "", { id: command.id, doc: result.doc });
       }
       // 列表：全局单视图（所有人格），最旧在前——最先会被淘汰的排最前，头部给汇总行。
-      // 含 supersede 的条目附「将失效」行：原文从该人格公共 doc 现查（抽取器的 known
-      // 只来自公共 doc，supersede id 必然指向那里；查不到就只标 id）
+      // 含 supersede 的条目附「将失效」行：原文从该人格公共 doc 与各私有 doc 现查
+      // （T11 起 known 是公共+当前私有的合并渲染，supersede id 可能指向私有层事实；
+      // 查不到就只标 id）
       const views = await pendingMemoriesLocal();
       const entries = views
         .flatMap((view) => view.entries.map((entry) => ({ entry, persona: view.persona })))
         .sort((a, b) => a.entry.at - b.entry.at);
-      if (entries.length === 0) return messages["cmd_memory_empty"] ?? "";
+      // 零提取头部提示（T11）：全部注册人格里，连续零提取达阈值（常量 5）的在汇总头部
+      // 各打一行——抽取器长期零产出时主人应该第一眼看到（哪怕当前没有待审条目）
+      const zeroHints: string[] = [];
+      for (const persona of personaKeys) {
+        const snapshot = await harness.snapshot(MemoryDoc, persona, ctx);
+        const streak = snapshot?.zeroStreak ?? 0;
+        if (streak >= MEMORY_ZERO_EXTRACT_PAGES) {
+          zeroHints.push(renderTemplate(messages["cmd_memory_zero_extract"] ?? "", { pages: String(streak), persona }));
+        }
+      }
+      if (entries.length === 0) {
+        return zeroHints.length > 0 ? [...zeroHints, messages["cmd_memory_empty"] ?? ""].join("\n") : messages["cmd_memory_empty"] ?? "";
+      }
       const header = renderTemplate(messages["cmd_memory_list_header"] ?? "", {
         count: String(entries.length),
         age: formatAgeShort(now() - entries[0].entry.at),
       });
+      // fact id → 原文：公共 doc + 该人格全部私有 doc（ChatsDoc 映射键推导 persona@chatKey）
       const factTexts = new Map<string, Map<string, string>>();
       const factTextOf = async (persona: string, id: string): Promise<string> => {
         let table = factTexts.get(persona);
         if (!table) {
-          const snapshot = await harness.snapshot(MemoryDoc, persona, ctx);
           table = new Map(
-            Object.values(snapshot?.people ?? {}).flatMap((person) =>
+            Object.values((await harness.snapshot(MemoryDoc, persona, ctx))?.people ?? {}).flatMap((person) =>
               person.facts.map((fact) => [fact.id, fact.text] as const),
             ),
           );
+          for (const privKey of await privateKeysOf(persona)) {
+            const priv = await harness.snapshot(MemoryPrivateDoc, privKey, ctx);
+            for (const person of Object.values(priv?.people ?? {})) {
+              for (const fact of person.facts) if (!table.has(fact.id)) table.set(fact.id, fact.text);
+            }
+          }
           factTexts.set(persona, table);
         }
         return table.get(id) ?? "";
@@ -849,8 +908,9 @@ export async function openFish(options: FishOptions): Promise<Fish> {
             persona,
             origin: entry.originChatKey || "-",
             age: formatAgeShort(now() - entry.at),
-            // 评价类待审（/评）展示关联摘要：哪条（targetSummary）+ 哪天；哪群在 origin 列里
-            digest: entry.feedback ? summarizeFeedback(entry.feedback) : summarizePatch(entry.patch),
+            // 评价类待审（/评）展示关联摘要：哪条（targetSummary）+ 哪天；哪群在 origin 列里；
+            // 普通抽取条目附 signal 标签（T11：已知人物/事实冲突，机械重算的计数）
+            digest: (entry.feedback ? summarizeFeedback(entry.feedback) : summarizePatch(entry.patch)) + signalsSuffix(entry.signals),
           }),
         );
         for (const note of entry.patch.supersede ?? []) {
@@ -863,6 +923,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
       const rest = entries.length - shown.length;
       return [
         header,
+        ...zeroHints,
         ...lines,
         ...(rest > 0 ? [renderTemplate(messages["cmd_memory_more"] ?? "", { count: String(rest) })] : []),
       ].join("\n");

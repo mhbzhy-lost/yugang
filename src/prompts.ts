@@ -26,8 +26,10 @@ export interface PromptSet {
   persona: string;
   /** 上下文压缩用的备忘提示词，含 {{transcript}}。 */
   handoff: string;
-  /** 记忆抽取提示词（压缩链路用），含 {{transcript}} / {{known}} / {{subjects}}。 */
+  /** 记忆抽取提示词（压缩链路用），含 {{transcript}} / {{known}} / {{subjects}} / {{today}}。 */
   memoryExtract: string;
+  /** 记忆抽取的复查提示词（T11 零提取兜底：连续零提取达阈值时用宽松标准重跑本页一次），变量同上。 */
+  memoryExtractReview: string;
   /** 记忆公共化脱敏提示词（批准闸公共轨道用），含 {{patch}}。 */
   memoryPublicize: string;
   /** 群档案模板，建会话时渲染一次。 */
@@ -50,6 +52,7 @@ export function loadPrompts(root: string): PromptSet {
     persona: read(join(root, "persona.md")),
     handoff: read(join(root, "handoff.md")),
     memoryExtract: read(join(root, "memory-extract.md")),
+    memoryExtractReview: read(join(root, "memory-extract-review.md")),
     memoryPublicize: read(join(root, "memory-publicize.md")),
     groupProfile: read(join(root, "group-profile.md")),
     ops: read(join(root, "ops.md")),
@@ -130,7 +133,7 @@ export function renderTemplate(template: string, vars: Record<string, string>): 
 
 /** 审查用：列出所有 prompt 文件、大小与 sha256。工具说明在 src/tools/<name>/TOOL.md，不在 prompt/ 下。 */
 export function auditPrompts(root: string): { file: string; bytes: number; sha256: string }[] {
-  const files = ["runtime.md", "persona.md", "ops.md", "handoff.md", "memory-extract.md", "memory-publicize.md", "group-profile.md", "people.md", "messages.md"];
+  const files = ["runtime.md", "persona.md", "ops.md", "handoff.md", "memory-extract.md", "memory-extract-review.md", "memory-publicize.md", "group-profile.md", "people.md", "messages.md"];
   const personasDir = join(root, "personas");
   if (existsSync(personasDir)) {
     for (const entry of readdirSync(personasDir).sort()) {
