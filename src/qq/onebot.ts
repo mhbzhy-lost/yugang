@@ -94,6 +94,18 @@ export interface SendOptions {
   delayMs?: () => number;
 }
 
+/** OneBot 客户端选项：出站配速与逐条发送回调（宿主在构造时接线）。 */
+export interface OneBotOptions {
+  /** 出站配速（秒）：同会话相邻两次**物理消息**实际发送的最小间隔（0 = 关闭）；传函数则每次现取（热加载）。
+   *  等待在每条消息实际发送前按会话键（qq:group:<id> / qq:private:<id>）进行，发送成功才记钟——
+   *  一条 payload 拆出的多条物理消息彼此同样隔开，配速不再停留在 outbox 条目级。 */
+  pacingSeconds?: number | (() => number);
+  /** 每条物理消息实际发送成功的回调（参数是会话键 chatKey）：宿主用它逐条置末条自言标记
+   *  （决策 24 的置位锚点从「整个 emit 完成」下沉到「每条消息实际发送成功」，部分成功
+   *  语义 = 任一条成功即置位）。 */
+  onSent?: (chatKey: string) => void;
+}
+
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -123,10 +135,19 @@ export class OneBot {
 
   #mediaRoot?: string;
 
-  constructor(url: string, token?: string, mediaRoot?: string) {
+  /** 出站配速（秒）现取器；缺省未配置 = 不等待。 */
+  #pacingSeconds?: number | (() => number);
+  /** 逐条物理消息发送成功回调；缺省无。 */
+  #onSent?: (chatKey: string) => void;
+  /** 会话键 → 上一条物理消息实际发送成功的时刻：配速按它算等待（内存态，重启归零，首条不等待）。 */
+  #lastSentAt = new Map<string, number>();
+
+  constructor(url: string, token?: string, mediaRoot?: string, options: OneBotOptions = {}) {
     this.#url = url;
     this.#token = token;
     this.#mediaRoot = mediaRoot;
+    this.#pacingSeconds = options.pacingSeconds;
+    this.#onSent = options.onSent;
   }
 
   get selfId(): number {
@@ -324,23 +345,44 @@ export class OneBot {
     });
   }
 
-  /** 发语音：内容走 base64://，绕开 QQ 沙盒对本地路径的限制（已实测）。 */
+  /** 配速发送（决策 23 的下沉实现）：每条物理消息实际发送前按会话键等待 sendPacingSeconds，
+   *  发送成功才记钟并触发 onSent；失败不记钟（间隔只数相邻两次「实际发送」）。
+   *  与 sendGroup 条间的抖动延迟叠加：先抖动后配速等待，二者语义独立（抖动拟人、配速防刷屏）。 */
+  async #pacedSend<T>(chatKey: string, send: () => Promise<T>): Promise<T> {
+    const pacing = typeof this.#pacingSeconds === "function" ? this.#pacingSeconds() : this.#pacingSeconds;
+    if (pacing !== undefined && Number.isFinite(pacing) && pacing > 0) {
+      const last = this.#lastSentAt.get(chatKey);
+      const waitMs = last === undefined ? 0 : last + pacing * 1000 - Date.now();
+      if (waitMs > 0) await sleep(waitMs);
+    }
+    const result = await send();
+    this.#lastSentAt.set(chatKey, Date.now());
+    this.#onSent?.(chatKey);
+    return result;
+  }
+
+  /** 发语音：内容走 base64://，绕开 QQ 沙盒对本地路径的限制（已实测）。语音也是一条物理消息，同样配速。 */
   async sendVoiceGroup(groupId: number, bytes: Buffer): Promise<void> {
-    await this.call("send_group_msg", {
-      group_id: groupId,
-      message: [{ type: "record", data: { file: `base64://${bytes.toString("base64")}` } }],
-    });
+    await this.#pacedSend(`qq:group:${groupId}`, () =>
+      this.call("send_group_msg", {
+        group_id: groupId,
+        message: [{ type: "record", data: { file: `base64://${bytes.toString("base64")}` } }],
+      }),
+    );
   }
 
   async sendVoicePrivate(userId: number, bytes: Buffer): Promise<void> {
-    await this.call("send_private_msg", {
-      user_id: userId,
-      message: [{ type: "record", data: { file: `base64://${bytes.toString("base64")}` } }],
-    });
+    await this.#pacedSend(`qq:private:${userId}`, () =>
+      this.call("send_private_msg", {
+        user_id: userId,
+        message: [{ type: "record", data: { file: `base64://${bytes.toString("base64")}` } }],
+      }),
+    );
   }
 
   /** 按顺序发几条文本，中间加抖动；第一句可以引用触发消息。逐条返回实际 message_id
-   *  （OneBot v11 send_group_msg 响应；中途失败时已成功条目挂在错误的 sentIds 上）。 */
+   *  （OneBot v11 send_group_msg 响应；中途失败时已成功条目挂在错误的 sentIds 上）。
+   *  每条文本都是一条物理消息：发送前按会话配速等待，成功即触发 onSent（逐条置位）。 */
   async sendGroup(groupId: number, texts: readonly string[], options: SendOptions = {}): Promise<(number | string)[]> {
     const delay = options.delayMs ?? (() => 700 + Math.floor(Math.random() * 1200));
     const ids: (number | string)[] = [];
@@ -355,7 +397,11 @@ export class OneBot {
       }
       segments.push({ type: "text", data: { text } });
       try {
-        const id = messageIdOf(await this.call("send_group_msg", { group_id: groupId, message: segments }));
+        const id = messageIdOf(
+          await this.#pacedSend(`qq:group:${groupId}`, () =>
+            this.call("send_group_msg", { group_id: groupId, message: segments }),
+          ),
+        );
         if (id !== undefined) ids.push(id);
       } catch (error) {
         // 部分失败：已成功条目随错误上抛（/评 定位链路只记成功条，见 fish.sentmap）
@@ -367,24 +413,26 @@ export class OneBot {
     return ids;
   }
 
-  /** 私聊不接收 mentions：私聊里没有「@谁」这回事，出口层已经拒绝带 @ 的私聊发送。 */
+  /** 私聊不接收 mentions：私聊里没有「@谁」这回事，出口层已经拒绝带 @ 的私聊发送。每条文本同样配速。 */
   async sendPrivate(userId: number, texts: readonly string[]): Promise<void> {
     for (const text of texts) {
-      await this.call("send_private_msg", { user_id: userId, message: text });
+      await this.#pacedSend(`qq:private:${userId}`, () => this.call("send_private_msg", { user_id: userId, message: text }));
     }
   }
 
   async sendImagePrivate(userId: number, filePath: string): Promise<void> {
     const { readFileSync } = await import("node:fs");
     const data = readFileSync(filePath).toString("base64");
-    await this.call("send_private_msg", {
-      user_id: userId,
-      message: [{ type: "image", data: { file: `base64://${data}` } }],
-    });
+    await this.#pacedSend(`qq:private:${userId}`, () =>
+      this.call("send_private_msg", {
+        user_id: userId,
+        message: [{ type: "image", data: { file: `base64://${data}` } }],
+      }),
+    );
   }
 
   /** 发群图片：段顺序与 sendGroup 一致（quote → at → image），无字纯图也走这里；私聊发图不变。
-   *  成功时返回该消息实际 message_id（同 sendGroup，供 /评 定位链路记账）。 */
+   *  成功时返回该消息实际 message_id（同 sendGroup，供 /评 定位链路记账）。图片也是一条物理消息：配速与 onSent 同样适用。 */
   async sendImageGroup(groupId: number, filePath: string, options: { quote?: number | string; mentions?: readonly string[] } = {}): Promise<number | string | undefined> {
     // QQ 是沙盒应用，读不了容器外的本地文件（EPERM）；自己读好后以 base64 传入，
     // NapCat 直接用数据发图，不经文件系统。局域网 WS 内传几 MB 无压力。
@@ -394,7 +442,11 @@ export class OneBot {
     if (options.quote !== undefined) segments.push({ type: "reply", data: { id: String(options.quote) } });
     for (const qq of options.mentions ?? []) segments.push({ type: "at", data: { qq } });
     segments.push({ type: "image", data: { file: `base64://${data}` } });
-    return messageIdOf(await this.call("send_group_msg", { group_id: groupId, message: segments }));
+    return messageIdOf(
+      await this.#pacedSend(`qq:group:${groupId}`, () =>
+        this.call("send_group_msg", { group_id: groupId, message: segments }),
+      ),
+    );
   }
 
   /** 贴表情回应（NapCat 扩展）。 */

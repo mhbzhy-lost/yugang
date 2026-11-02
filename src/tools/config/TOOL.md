@@ -79,10 +79,11 @@ fish.config.json 受控字段白名单（生效时机逐字段标注）：
 
 | 字段 | 类型 | 生效时机 | 说明与取值 |
 | --- | --- | --- | --- |
-| engagement | 字符串 | 热加载 | 搭话总开关，只认 legacy / next |
-| engage | 对象 | 热加载 | 自由交流窗口参数，只认 closedMinutes / openMinutes / windowSize / mentionContextSize / silenceThreshold / windowRelaxCap 六个键，取值 1–1440 |
+| engagement | 字符串 | 热加载 | 搭话总开关，只认 legacy / next；next 的生效范围还叠加 engage.groups 白名单（开关 & 白名单双闸） |
+| engage | 对象 | 热加载 | 自由交流窗口参数，只认八个键：closedMinutes 1–240（closed 分钟）、openMinutes 1–120（open 分钟）、windowSize 1–100（开窗积压注入上限）、mentionContextSize 1–30（@ 轮背景条数）、silenceThreshold 1–50（连续零出口 nudge 阈值）、windowRelaxCap 10–100（零出口超阈值后的积压放宽上限）、shardSeconds 5–120（open 态分片节拍，秒）、groups（群号字符串数组，白名单语义：engagement=next 只对这些群生效，空数组 = 任何群都不进 next，fail-safe）；未知键告警并忽略，全部非法才整块拒绝 |
 | ambientMinIntervalSeconds | 数值 | 热加载 | 5–3600，非 @ 消息的最短处理间隔（秒） |
 | watchAmbientChance | 数值 | 热加载 | 0–1，特别关注者被搭话的概率 |
+| sendPacingSeconds | 数值 | 热加载 | 0–60，出站配速：同会话相邻两条物理消息实际发送的最小间隔（秒），每条消息发送前生效，0 = 关闭 |
 | compact | 对象 | 热加载 | 换页阈值：maxEntries 1–5000、maxChars 1000–200000 |
 | memeCooldownMinutes | 数值 | 热加载 | 0–240，表情包跨轮冷却（分钟） |
 | salvagePlainReply | 布尔 | 热加载 | 必答轮忘调出口工具时的正文兜底开关 |

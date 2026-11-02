@@ -132,6 +132,8 @@ cmd_memory_list_header: 待审 {{count}} 条 / 最早 {{age}}前（同意缺省�
 cmd_memory_zero_extract: 近 {{pages}} 页压缩零提取（{{persona}}），值得看看是不是漏记了
 cmd_memory_entry: [{{id}}] {{persona}} · {{origin}} · {{age}}前 · {{digest}}
 cmd_memory_supersede_note:   将失效：{{id}} {{text}}
+# 评价类待审的引用链缺失标注（终审 #6）：/记忆 列表行尾追加，紧跟 summarizeFeedback 的摘要
+memory_feedback_missing_quote: （被引消息不可回溯）
 cmd_memory_more: 还有 {{count}} 条更新的没显示，先处理完这些再列
 cmd_memory_ok: 已并入{{track}}记忆：{{digest}}
 cmd_memory_publicize_failed: 这条公共记忆的 AI 脱敏没有通过，没有入库：可以重发一次 /记忆 同意 {{id}} 公共，或改批私有

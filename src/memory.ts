@@ -262,6 +262,9 @@ export interface EvalEventData {
   target?: EvalTargetSnapshot;
   /** 引用链：鱼当时回的那条原始消息（按 quoteId 从 recent 解析）；不可得时缺省 = 标注缺失。 */
   quotedFrom?: { qq: string; nickname: string; text: string };
+  /** 引用链缺失的显式标注（终审 #6）：true = 这次评价没有可回溯的引用链（sentmap 未命中、
+   *  私聊/语音出口不在 sentmap、recent 里查不到被引原文），与「没带 quotedFrom 字段」区分开。 */
+  quotedFromMissing?: true;
   /** 前 20 条会话摘要（结构化）。 */
   context: FeedbackContextItem[];
   /** 涉及群员清单（被引消息作者 + 上下文成员，结构化快照）。 */
@@ -292,6 +295,9 @@ export interface FeedbackMeta {
   statsLine: string;
   /** 引用链摘要（鱼当时回的那条原始消息，短字符串）；不可得时缺省 = 标注缺失。 */
   quotedFrom?: string;
+  /** 引用链缺失的显式标注（终审 #6）：与 quotedFrom 互斥，/记忆 列表按它补「被引消息不可回溯」。
+   *  只留在待审条目上（展示用），不进长期 doc（FeedbackFactMeta 保持冻结口径）。 */
+  quotedFromMissing?: true;
   /** 前 20 条会话的 entry 引用（内容全文在待审条目的 feedbackContext）。 */
   contextRefs: string[];
   chatKey: string;
@@ -620,6 +626,9 @@ export function buildFeedbackPending(input: {
   targetSummary: string;
   statsLine: string;
   quotedFrom?: string;
+  /** 引用链缺失的显式标注（终审 #6）：true 时待审 feedback 结构带上 quotedFromMissing，
+   *  /记忆 列表据此展示「被引消息不可回溯」。 */
+  quotedFromMissing?: true;
   context: FeedbackContextItem[];
   originChatKey: string;
   chatKey: string;
@@ -655,6 +664,7 @@ export function buildFeedbackPending(input: {
       targetSummary: clip(input.targetSummary, FEEDBACK_TARGET_SUMMARY_CHARS),
       statsLine: clip(input.statsLine, 120),
       ...(quoted && quoted.length > 0 ? { quotedFrom: quoted } : {}),
+      ...(input.quotedFromMissing === true ? { quotedFromMissing: true as const } : {}),
       contextRefs: input.context.map((item) => item.ref),
       chatKey: input.chatKey,
       persona: input.persona,

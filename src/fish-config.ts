@@ -214,6 +214,7 @@ function checkEngageBlock(raw: unknown): FieldCheck {
   const parsed: Partial<EngageConfig> = {};
   const problems: string[] = [];
   let any = false;
+  const known = new Set<string>(specs.map(([key]) => key));
   if (e["groups"] !== undefined) {
     const g = e["groups"];
     if (Array.isArray(g) && g.every((x) => typeof x === "string" && /^\d+$/.test(x))) {
@@ -233,6 +234,11 @@ function checkEngageBlock(raw: unknown): FieldCheck {
     } else {
       problems.push(`${reason}，已回默认`);
     }
+  }
+  // 未知嵌套键显式告警（终验 #8）：拼错的键名不再静默——保留忽略语义，但 problems 必须可见
+  for (const key of Object.keys(e)) {
+    if (known.has(key)) continue;
+    problems.push(`engage.${key} 不是受控字段，已忽略`);
   }
   if (!any) {
     return { ok: false, reason: problems.length > 0 ? `engage 至少要有一个合法参数（${problems.join("；")}）` : "engage 至少要有一个合法参数" };

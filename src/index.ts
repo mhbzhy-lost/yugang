@@ -208,7 +208,14 @@ const inlineVisionOn = (): boolean =>
   && modelSelection.vision.modelId === modelSelection.main.modelId
   && INLINE_IMAGE_APIS.has(modelSelection.main.api);
 
-const onebot = new OneBot(config.onebotUrl, config.onebotToken, config.mediaRoot);
+const onebot = new OneBot(config.onebotUrl, config.onebotToken, config.mediaRoot, {
+  // 出站配速下沉到 onebot 发送层（终验 #3）：每条物理消息实际发送前按会话等待，
+  // 热读取 fishConfig（改配置下一拍生效）；0 = 关闭
+  pacingSeconds: () => fishConfig().config.sendPacingSeconds,
+  // 末条自言标记（决策 24，终验 #7）的置位错点 = 每条物理消息实际发送成功（不是整个 emit
+  // 完成）：部分成功（文本发了、图挂了）也置 true——任一条成功即置位，末条至少有一条是鱼的话
+  onSent: (chatKey) => lastWasFish.add(chatKey),
+});
 const chatlog = createChatlog(join(HOME, "chatlog"));
 const usage = createUsageLedger(join(HOME, "usage"));
 
@@ -395,8 +402,6 @@ const fish = await openFish({
   ...(modelSelection.transport ? { streamTransport: modelSelection.transport } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时
   memeCooldownMs: () => Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
-  // 出站配速（T14，决策 23）：drain 同会话相邻两次实际发送至少隔 sendPacingSeconds（0 = 关闭）
-  sendPacingSeconds: () => fishConfig().config.sendPacingSeconds,
   // 语音：按会话所在人格取配置（只认 fish.config 的 voices，没配就是没有语音）
   ttsOf: (conversationId) => voiceConfigFor(mappingKeys.get(String(conversationId)) ?? ""),
   // look / video 的视觉描述模型：models.vision；省略时与 models.main 相同
@@ -584,9 +589,9 @@ const fish = await openFish({
     // 紧接着发送就记，不等下面的日志：日志写失败不能让 drain 重发一遍（宁可少一条日志，不要重复发言）。
     markSent(payload.key);
 
-    // 末条自言标记（决策 24）：这条消息实际发送成功，群里最新一条就是鱼自己说的了。
-    // 幂等重放的早退路径到不了这里（重放没真发，不该覆盖入站刚清掉的标记）。
-    lastWasFish.add(chatKey);
+    // 末条自言标记（决策 24）已下沉到 onebot 层逐条置位（构造参数 onSent）：置位错点
+    // 从「整个 emit 完成」改为「每条物理消息实际发送成功」，部分成功也置 true；
+    // 幂等重放的早退路径到不了发送层，不会覆盖入站刚清掉的标记。
 
     for (const text of payload.items) {
       chatlog.append({ at: payload.at, chat: chatKey, from: "fish", text, kind: "out" });
@@ -1403,6 +1408,8 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
     const content = [
       renderTemplate(fish.prompts.messages["ctx_engage_header"] ?? "", { count: "0" }),
       engageFooterOf(),
+      // 该轮也是注入轮（终验 #5）：已读引导照常携带，与常规 injection 轮同位序
+      fish.prompts.messages["ctx_seen_note"] ?? "",
       ...ammo,
       nudgeText,
     ].filter((line) => line.length > 0).join("\n");
@@ -1783,7 +1790,9 @@ async function runEvalCommand(
     direction: cmd.direction,
     targetSummary,
     statsLine,
-    ...(quotedFrom ? { quotedFrom: `${quotedFrom.nickname}：${quotedFrom.text.slice(0, 24)}` } : {}),
+    // 引用链摘要与缺失标注互斥（终验 #6）：待审 feedback 结构保留 quotedFromMissing，
+    // /记忆 列表据此补「被引消息不可回溯」
+    ...(quotedFrom ? { quotedFrom: `${quotedFrom.nickname}：${quotedFrom.text.slice(0, 24)}` } : { quotedFromMissing: true as const }),
     context,
     originChatKey: baseChatKey(evalChatKey),
     chatKey: evalChatKey,
@@ -1935,7 +1944,10 @@ async function drainLoop(): Promise<void> {
 // open 态的 free_pass 消息由 onMessage 路由进它的 shard 收集器，每 engage.shardSeconds
 // （缺省 20 秒）一拍经 onShard 合并提交（ambient）；closed 进入只留相位日志。
 const engageNext = createEngageNext({
-  groups: () => [...new Set(config.groups.filter((g) => fishConfig().config.engage.groups.includes(g)))],
+  // 直接枚举 engage.groups（终验 #1）：状态机只为白名单群维护相位；之前从 GROUPS 过滤，
+  // GROUPS 环境变量为空时这里永远是空集，状态机永不维护任何群。白名单群本身应在
+  // GROUPS 里，不在也无妨——没有消息就不会有相位消费。群号在 checkEngageBlock 已去重。
+  groups: () => fishConfig().config.engage.groups.map((g) => "qq:group:" + g),
   recentOf: (chatKey) => recent.get(chatKey) ?? [],
   backlogOf: (chatKey, afterSeq) => engageBacklogOf(chatKey, afterSeq),
   busy: (chatKey) => {

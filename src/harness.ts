@@ -253,8 +253,6 @@ export interface FishOptions {
   onWatchChanged?: (conversationId: string, people: import("./store.ts").WatchedPerson[]) => void;
   /** 表情包跨轮冷却（毫秒）；传函数则每次现取，改配置立即生效。 */
   memeCooldownMs?: number | (() => number);
-  /** 出站配速（秒）：outbox drain 同会话相邻两次实际发送的最小间隔（0 = 关闭）；传函数则每次现取，改配置立即生效。 */
-  sendPacingSeconds?: number | (() => number);
   /** 单次工具调用超时（秒），缺省 30。 */
   toolTimeoutSeconds?: number;
   /** 个别工具的单独超时（秒）：只放宽指定工具，其余仍按 toolTimeoutSeconds。 */
@@ -421,6 +419,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     "cmd_memory_delete_missing",
     "cmd_memory_supersede_note",
     "cmd_memory_zero_extract",
+    "memory_feedback_missing_quote",
   ]) {
     if (!prompts.messages[code]) throw new Error(`缺少文案 key：${code}（中心或 TOOL.md）`);
   }
@@ -599,9 +598,6 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   const groups = new Map<string, Promise<Conversation>>();
   const sending = new Set<string>();
 
-  /** 出站配速的「上次实际发送时刻」按会话记在内存里：重启归零（首条不等待），进程内各次 drain 共享。 */
-  const lastSentAt = new Map<string, number>();
-
   /** sentmap 保留窗口：30 天滚动清理（drain 写入时顺手淘汰过期项）。 */
   const SENTMAP_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -668,16 +664,10 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         continue;
       }
 
-      // 出站配速（决策 23，T14）：同会话相邻两次实际发送至少隔 sendPacingSeconds（0 = 关闭；
-      // @ 轮/环境轮/机械回执同走 outbox，全部配速）。等待放在标 sending 之前：等待中进程退出，
-      // 这条消息还是 queued，重启按既有补发语义处理；等待期间队首不会变（同会话 drain 互斥、
-      // enqueue 只追加），不丢、不重排，两阶段语义不动。
-      const pacing = typeof options.sendPacingSeconds === "function" ? options.sendPacingSeconds() : options.sendPacingSeconds;
-      if (pacing !== undefined && Number.isFinite(pacing) && pacing > 0) {
-        const last = lastSentAt.get(String(conversationId));
-        const waitMs = last === undefined ? 0 : last + pacing * 1000 - now();
-        if (waitMs > 0) await new Promise<void>((resolveSleep) => setTimeout(resolveSleep, waitMs));
-      }
+      // 出站配速已下沉到 onebot 实际发送层（每条物理消息发送前按会话等待，见 src/qq/onebot.ts
+      // 的 #pacedSend）：条目级等待只隔开 outbox 条目，挡不住一条 payload 拆出的多条物理消息。
+      // 等待窗口随之下挪进发送段（标 sending 之后）：等待中进程退出，这条消息停在 sending
+      // 不重发（宁少勿答）——两阶段语义不变，崩溃窗口从「等待中」变成「等待+发送中」。
 
       // 先标 sending 再发：崩在这中间的消息状态是"不确定"，重启时不重发（宁可少发不重复）
       await harness.commit(async (tx) => {
@@ -722,9 +712,8 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         return sent;
       }
 
-      // 实际发送成功才推进配速时钟；发送失败已停在 sending（队首不动，无相邻发送），不记
-      lastSentAt.set(String(conversationId), now());
-
+      // 实际发送成功的记账收尾：配速时钟与末条自言标记都已在 onebot 层逐条处理
+      // （#pacedSend 记钟 + onSent 逐条回调），drain 只负责摘除队列条目。
       await harness.commit(async (tx) => {
         const doc = await tx.doc(OutboxDoc, conversationId);
         const index = doc.queue.findIndex((item) => item.key === head.key);
@@ -936,8 +925,12 @@ export async function openFish(options: FishOptions): Promise<Fish> {
             origin: entry.originChatKey || "-",
             age: formatAgeShort(now() - entry.at),
             // 评价类待审（/评）展示关联摘要：哪条（targetSummary）+ 哪天；哪群在 origin 列里；
+            // 引用链查不到的评价保留「被引消息不可回溯」标注（终验 #6，文案 key 化）；
             // 普通抽取条目附 signal 标签（T11：已知人物/事实冲突，机械重算的计数）
-            digest: (entry.feedback ? summarizeFeedback(entry.feedback) : summarizePatch(entry.patch)) + signalsSuffix(entry.signals),
+            digest: (entry.feedback
+              ? summarizeFeedback(entry.feedback)
+                + (entry.feedback.quotedFromMissing === true ? messages["memory_feedback_missing_quote"] ?? "" : "")
+              : summarizePatch(entry.patch)) + signalsSuffix(entry.signals),
           }),
         );
         for (const note of entry.patch.supersede ?? []) {

@@ -20,7 +20,8 @@
  * 收集的**全部发送者**消息合成一轮交给
  * onShard 提交（ambient 轮，多发送者逐行渲染）。背压：到期时会话忙（在途
  * ambient/injection 轮、换页、收图）就不提交，消息累积并入下一拍——绝不丢、绝不
- * 并发提交、绝不向 pi 的 steering 队列塞多条。关窗时收集器里还有整拍消息就补交一拍
+ * 并发提交、绝不向 pi 的 steering 队列塞多条；提交失败（onShard 抛错 / Promise reject）
+ * 同样把整拍原子回收进收集器并入下一拍。关窗时收集器里还有整拍消息就补交一拍
  * （忙则丢弃并留日志，宁少勿答）；热切换离开 next / stop 同样清掉。@ 消息不走 shard，
  * 仍由 debounce 的 burst 即时路径提交（answer 轮）。
  *
@@ -178,7 +179,10 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     clearShard(state);
   };
 
-  /** shard 到期：会话忙就不提交（消息累积并入下一拍，背压）；final 只在关窗收尾时为 true。 */
+  /** shard 到期：会话忙就不提交（消息累积并入下一拍，背压）；final 只在关窗收尾时为 true。
+   *  提交成功才算数：onShard 同步抛错或 Promise reject（onError 路径）时，整拍消息原子放回
+   *  收集器队首（保持到达序）并入下一拍，绝不丢；收集器已被关窗/热切换清掉就重建承接
+   *  （下次开窗的 scheduleShard 会复用并补交；engagement 切离后的整份清除仍按既有语义丢弃）。 */
   const flushShard = (chatKey: string, state: GroupPhase, final: boolean): void => {
     const shard = state.shard;
     if (!shard || shard.messages.length === 0) return;
@@ -188,11 +192,18 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     }
     const messages = shard.messages;
     shard.messages = [];
+    /** 提交失败的原子回收：整拍消息放回收集器队首，下一拍先提交它们（新到的照旧排在后面）。 */
+    const recycle = (error: unknown): void => {
+      deps.onError?.(error);
+      const target = state.shard ?? { messages: [] as EngageShardItem[] };
+      state.shard = target;
+      target.messages = [...messages, ...target.messages];
+    };
     try {
       const result = deps.onShard?.(chatKey, messages);
-      if (result instanceof Promise) result.catch((error: unknown) => deps.onError?.(error));
+      if (result instanceof Promise) result.then(() => {}, recycle);
     } catch (error) {
-      deps.onError?.(error);
+      recycle(error);
     }
   };
 
@@ -215,10 +226,18 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     state.phaseSince = at;
     // 关窗即懒定基线：open 期的消息已进过模型（injection / shard），不再算积压
     state.lastCloseSeq = lastSeqOf(deps.recentOf(chatKey));
-    // 收集器里还有整拍消息就补交一拍；忙则丢弃留日志（宁少勿答）
+    // 收集器里还有整拍消息就补交一拍；忙则丢弃留日志（宁少勿答）。
+    // 收尾后只有提交失败的回收残留在收集器里：留窗承接（下次开窗补交），摘掉节拍定时器
+    // （相位守卫会让它空转一拍，不如摘净）；空了才清。
     if (state.shard) {
       flushShard(chatKey, state, true);
-      clearShard(state);
+      const leftover = state.shard;
+      if (leftover === undefined || leftover.messages.length === 0) {
+        clearShard(state);
+      } else if (leftover.timer !== undefined) {
+        clearTimer(leftover.timer);
+        leftover.timer = undefined;
+      }
     }
     // T8 沉默结算：本窗有 ambient/injection 轮开口（settle 观测）→ 计数清零；
     // 全程零出口 → +1。关窗后的残轮 settle 找不到 open 窗，不影响结算。
