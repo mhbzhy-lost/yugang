@@ -780,6 +780,11 @@ async function submitRound(input: {
       .filter(Boolean)
       .join(" · ");
     console.error(`[鱼缸] ${chatKey} 这一轮没答上来：${why}`);
+    // 模型错误轮也要尝试换页：中毒页每轮都失败时，轮后自动换页是唯一自愈入口
+    const compacted = await compactWithGuard(conv, false, chatKey);
+    if (compacted.compacted) {
+      console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
+    }
     return;
   }
 
