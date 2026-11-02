@@ -11,9 +11,9 @@ description: 往当前会话说一句话：文字出口，一次一条消息。
         "type": "string",
         "description": "要说的话，一条消息，群里说出口的样子：短、口语、最多两行、不带 markdown"
       },
-      "quote": {
-        "type": "boolean",
-        "description": "可选：引用你正在回的那条消息。回应某人具体发言时建议传 true（对方能看出你在回谁）；泛泛插话才省略"
+      "quoteMsgId": {
+        "type": "string",
+        "description": "可选：要引用哪条消息，填那行消息开头 [m:…] 里的数字（填裸数字或整个 [m:123] 都行）；只能填本轮上下文里出现过的消息，填了别的会被拒且不占这轮开口额度；不传就不引用"
       },
       "mentions": {
         "type": "array",

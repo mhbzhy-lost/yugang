@@ -29,7 +29,7 @@ import { OutboundEntry, type OutboundPayload } from "./tools/say-shared.ts";
 import { loadPrompts, renderTemplate, type PromptSet } from "./prompts.ts";
 import { loadToolSurface } from "./tools/loader.ts";
 import { renderToolCatalog } from "./tools/catalog.ts";
-import type { RoundTrigger, ToolManifest, ToolPackageDeps } from "./tools/types.ts";
+import type { RoundKind, RoundTrigger, ToolManifest, ToolPackageDeps } from "./tools/types.ts";
 import type { EngagementMode } from "./fish-config.ts";
 import { withToolTimeout } from "./tools/timeout.ts";
 import { WatchDoc } from "./store.ts";
@@ -196,10 +196,12 @@ export interface FishOptions {
   /** conversationId → 原始 chatKey（不带人格后缀）：config 工具判定「主人私聊轮」用。 */
   chatKeyOf?: (conversationId: string) => string | undefined;
   /**
-   * 主动 @ 的身份闸：由宿主机械提供（私聊 = not_group；群内主人/特别关注者 = allow）。
+   * 主动 @ 的身份闸：由宿主机械提供（私聊 = not_group；群内白名单 = allow），按轮类型
+   * （决策 7）：answer/legacy 轮 userId 是本轮触发者；ambient/injection 环境轮对每个
+   * @ 目标各调一次、userId 携带目标 QQ，白名单同为 {主人} ∪ 本群 watched（宿主记审计）。
    * 同时交给 say_*（出口校验）使用；不提供时主动 @ 一律 fail closed。
    */
-  mentionPolicyOf?: (conversationId: string, triggerUserId: number | undefined) => "allow" | "not_group" | "not_privileged";
+  mentionPolicyOf?: (conversationId: string, userId: number | undefined, kind: RoundKind) => "allow" | "not_group" | "not_privileged";
   /**
    * 会话 → 当前群成员名单：say_*（主动 @ 目标校验）与 watch（关注对象校验）共用同一条链路。
    * 群号必须由宿主自己从映射键解析，不能采信模型给的号码。

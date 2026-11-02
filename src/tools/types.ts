@@ -108,8 +108,13 @@ export interface ToolPackageDeps {
   react?: (conversationId: ConversationId, emoji: string, messageId?: number | string) => void | Promise<void>;
   /** 出口工具主动 @ 用的群成员名单（宿主从当前群现拉）；与 watch 的 groupMembersOf 同源，字段名保持原样。 */
   membersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
-  /** 主动 @ 的身份闸；未提供回调时 fail closed。 */
-  mentionPolicyOf?: (conversationId: string, triggerUserId: number | undefined) => "allow" | "not_group" | "not_privileged";
+  /**
+   * 主动 @ 的身份闸（按轮类型，决策 7）；未提供回调时 fail closed。
+   * answer/legacy 轮 userId 是本轮触发者（被点名才可 @，语义不变）；ambient/injection
+   * 环境轮没有锚点身份，出口层对每个 @ 目标各调一次、userId 携带目标 QQ，白名单同为
+   * {主人} ∪ 本群 watched（成员名单校验在出口层照旧）。宿主对环境轮的放行/越界拒绝记审计。
+   */
+  mentionPolicyOf?: (conversationId: string, userId: number | undefined, kind: RoundKind) => "allow" | "not_group" | "not_privileged";
   /** 语音合成配置（按会话现取：一个会话一个人格，音色跟着人格走）。 */
   ttsOf?: (conversationId: string) => import("../tts.ts").TtsConfig | undefined;
   /** 语音合成实现；测试可注入桩，线上用 synthesizeToMedia。 */

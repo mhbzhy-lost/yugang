@@ -464,15 +464,22 @@ const fish = await openFish({
     // 整份替换：删掉的人（含已退群、watch remove 掉的）立刻失去主动 @ 权限与随机门加权
     applyWatched(chatKey, people);
   },
-  // 主动 @ 的身份闸（机械判定）：私聊没有 @ 这回事；群内只有主人或本群特别关注者能点名别人。
-  // 成员名单必须从 chatKeys 映射回当前群号再拉，绝不采信模型给的号码。
-  mentionPolicyOf: (conversationId, triggerUserId) => {
+  // 主动 @ 的身份闸（机械判定，按轮类型，决策 7）：私聊没有 @ 这回事。answer/legacy 轮
+  // userId 是本轮触发者——只有主人或本群特别关注者「被点名」时可 @（语义零变化）；next 的
+  // ambient/injection 环境轮没有锚点身份，出口层对每个 @ 目标各调一次、userId 携带的是
+  // 目标 QQ，白名单同为 {主人} ∪ 本群 watched——这是接受的放宽面（open 窗内普通群友可诱导
+  // 鱼 @ 主人/watched），放行与越界拒绝都记审计日志。成员名单校验在出口层照旧。
+  mentionPolicyOf: (conversationId, userId, kind) => {
     const chatKey = chatKeyFor(conversationId);
     if (!chatKey || !chatKey.startsWith("qq:group:")) return "not_group";
-    if (triggerUserId === undefined) return "not_privileged";
-    const userId = String(triggerUserId);
-    if (config.master && userId === config.master) return "allow";
-    return watchedByChat.get(baseChatKey(chatKey))?.has(userId) ? "allow" : "not_privileged";
+    if (userId === undefined) return "not_privileged";
+    const id = String(userId);
+    const allowed = (config.master && id === config.master)
+      || (watchedByChat.get(baseChatKey(chatKey))?.has(id) ?? false);
+    if (kind === "ambient" || kind === "injection") {
+      console.log(`[鱼缸] 审计 ${chatKey} ${kind} 轮主动 @ ${id} → ${allowed ? "白名单放行" : "白名单外拒绝"}`);
+    }
+    return allowed ? "allow" : "not_privileged";
   },
   groupMembersOf: async (conversationId) => {
     const chatKey = chatKeyFor(conversationId);
@@ -827,9 +834,10 @@ async function submitRound(input: {
   lastReply.set(conv.id, input.reply);
 
   let content = input.content;
-  // 语音提示的 0.3 概率门：主人/特别关注对象过闸的轮里，三成概率追加一行
+  // 语音提示的 0.3 概率门（仅 answer 轮，决策 7）：主人/特别关注对象过闸的轮里，三成概率追加一行
   // 「这一条必须用语音回」。只是提示，不是门禁——用不用由鱼自己判断（说没配音色就不提示）。
-  if (voiceConfigFor(mappingKeys.get(String(conv.id)) ?? chatKey) && isVoiceVip(chatKey, trigger.userId) && Math.random() < 0.3) {
+  // ambient/injection 环境轮一律不掷：零出口合法的轮不该被语音义务逼着开口。
+  if (roundKind === "answer" && voiceConfigFor(mappingKeys.get(String(conv.id)) ?? chatKey) && isVoiceVip(chatKey, trigger.userId) && Math.random() < 0.3) {
     const hint = fish.prompts.messages["voice_hint"] ?? "";
     if (hint) content = content + "\n" + hint;
   }

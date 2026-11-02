@@ -16,14 +16,18 @@ import {
   enqueueOutbound,
   inMemeInbox,
   pickMeme,
+  resolveQuoteArg,
   resolveSayContext,
   throwSayRejection,
   type OutboundPayload,
 } from "../say-shared.ts";
 
-/** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
+/** args 静态类型：与 TOOL.md 的参数 Schema 对应（quote 是 schema 已移除的旧布尔，运行时容忍）；
+ *  运行时 Schema 只有 manifest 这一份。 */
 interface SayMemeArgs {
   meme: string;
+  quoteMsgId?: string;
+  /** 旧参数：schema 不再暴露；模型仍输出 quote:true 时按「引用本轮锚点」容忍，不报错。 */
   quote?: boolean;
   mentions?: string[];
 }
@@ -59,6 +63,11 @@ export function createSayMemeTool(manifest: ToolManifest, deps: ToolPackageDeps)
         throw new Error(deps.prompts.messages["say_media_inbox"] ?? "say_media_inbox");
       }
 
+      // 引用参数（决策 6）：quoteMsgId 属本轮 quoteIds 窗口才有效，无效在开口计数前拒绝
+      // 不占额度；旧 quote:true 运行时容忍（引用本轮锚点），机械必答引用链（quoteForce）
+      // 不受模型参数影响
+      const quoteArg = resolveQuoteArg(deps, trigger, args.quoteMsgId, args.quote);
+
       const mentions = [...new Set((args.mentions ?? []).map((qq) => qq.trim()))];
       await assertMentions(deps, api, trigger, mentions);
 
@@ -74,8 +83,8 @@ export function createSayMemeTool(manifest: ToolManifest, deps: ToolPackageDeps)
         items: [],
         media,
         ...(mentions.length === 0 ? {} : { mentions }),
-        quote: args.quote === true,
-        ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
+        quote: quoteArg.quote,
+        ...(quoteArg.quoteId !== undefined ? { quoteId: quoteArg.quoteId } : {}),
         ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
         at: ts,
         key: `${api.conversationId}:${api.callId}`,

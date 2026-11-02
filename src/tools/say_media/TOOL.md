@@ -11,9 +11,9 @@ description: 往当前会话发一张图：图片出口，路径相对媒体目�
         "type": "string",
         "description": "要发的图片路径，相对媒体目录（如 gen/xxx.png、personas/名字.png、memes/xxx.gif）；meme-inbox/ 待收目录里的不能直接发，必须先收进表情包库"
       },
-      "quote": {
-        "type": "boolean",
-        "description": "可选：引用你正在回的那条消息。回应某人具体发言时建议传 true（对方能看出你在回谁）；泛泛插话才省略"
+      "quoteMsgId": {
+        "type": "string",
+        "description": "可选：要引用哪条消息，填那行消息开头 [m:…] 里的数字（填裸数字或整个 [m:123] 都行）；只能填本轮上下文里出现过的消息，填了别的会被拒且不占这轮开口额度；不传就不引用"
       },
       "mentions": {
         "type": "array",

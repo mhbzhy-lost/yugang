@@ -16,7 +16,7 @@ import { LiveDoc, defineEntry } from "@earendil-works/pi-durable";
 import { renderTemplate } from "../prompts.ts";
 import { OutboxDoc } from "../store.ts";
 import type { Rejection } from "../egress/policy.ts";
-import type { ToolPackageDeps } from "./types.ts";
+import type { RoundKind, RoundTrigger, ToolPackageDeps } from "./types.ts";
 
 export interface OutboundPayload {
   /** 按顺序发出的几条文本。 */
@@ -24,14 +24,15 @@ export interface OutboundPayload {
   media?: string;
   /** 语音文件（相对 mediaRoot），与 media 互斥。 */
   voice?: string;
-  /** 是否引用触发这一轮的那条消息。 */
+  /** 是否引用（quoteMsgId 命中窗口 / 旧 quote:true 兼容时置位；emit 层四条件之一）。 */
   quote: boolean;
   /** 主动 @ 的 QQ 号（已去重的纯数字，出口层验过身份与群成员）；只挂在第一条文本（或唯一一条附件消息）上。 */
   mentions?: string[];
   at: number;
   /** 幂等键：重放时用同一个，发送侧据此去重。 */
   key: string;
-  /** 本轮触发消息的 id（由宿主在 submit 时绑定），引用不再串到别人的消息。 */
+  /** 引用目标的消息 id：缺省钉在本轮触发消息上（宿主 submit 时绑定，引用不串到别人的
+   *  消息）；quoteMsgId 命中本轮窗口时是模型点名的窗口消息 id。 */
   quoteId?: number | string;
   /** 本轮触发是否@了鱼：被@必引用，出口层兜底。 */
   quoteForce?: boolean;
@@ -53,12 +54,12 @@ export interface SayTx {
   doc: (doc: unknown, id: string) => Promise<{ queue: OutboundPayload[] }>;
 }
 
-/** 一轮的出口上下文：轮标识与钉在它上面的触发消息。 */
+/** 一轮的出口上下文：轮标识与钉在它上面的触发消息（含轮类型与 quoteMsgId 窗口）。 */
 export interface SayRound {
   /** LiveDoc 的 run.inputs[0]；拿不到轮标识时为 undefined（计数与引用绑定都跳过）。 */
   round: unknown;
-  /** 本轮触发消息：主动 @ 的身份闸和引用目标都钉在它上面。 */
-  trigger: { messageId?: number | string; mentionsBot: boolean; userId?: number } | undefined;
+  /** 本轮触发消息：主动 @ 的身份闸、轮类型与引用窗口都钉在它上面。 */
+  trigger: RoundTrigger | undefined;
 }
 
 /**
@@ -82,7 +83,7 @@ export async function resolveSayContext(api: SayApi, deps: ToolPackageDeps, cont
 }
 
 /**
- * 主动 @ 的机械校验：去重 → 禁 all/非数字 → 身份闸 → 群成员核对，任何一环缺失都
+ * 主动 @ 的机械校验：去重 → 禁 all/非数字 → 身份闸（按轮类型）→ 群成员核对，任何一环缺失都
  * fail closed（文案来自 prompt/messages.md）。语音工具没有 mentions 参数，不经过这里。
  */
 export async function assertMentions(
@@ -99,11 +100,23 @@ export async function assertMentions(
   }
   if (list.length > 3) throw new Error(deps.prompts.messages["say_mention_too_many"] ?? "say_mention_too_many");
   if (trigger === undefined) throw new Error(deps.prompts.messages["say_mention_no_trigger"] ?? "say_mention_no_trigger");
-  const policy = deps.mentionPolicyOf?.(String(api.conversationId), trigger.userId);
-  if (policy === "not_group") throw new Error(deps.prompts.messages["say_mention_private"] ?? "say_mention_private");
-  if (policy !== "allow") {
-    throw new Error(deps.prompts.messages["say_mention_not_privileged"] ?? "say_mention_not_privileged");
+  const kind: RoundKind = trigger.kind ?? "answer";
+  // 身份闸按轮类型（决策 7）：answer/legacy 看触发者（被点名才可 @，语义零变化）；
+  // ambient/injection 环境轮没有锚点身份（injection 连 messageId 都没有），改为对每个
+  // @ 目标各过一次白名单（{主人} ∪ 本群 watched，宿主实现并记审计）——按轮类型放行而非拒绝
+  const ensureAllowed = (userId: number | undefined) => {
+    const policy = deps.mentionPolicyOf?.(String(api.conversationId), userId, kind);
+    if (policy === "not_group") throw new Error(deps.prompts.messages["say_mention_private"] ?? "say_mention_private");
+    if (policy !== "allow") {
+      throw new Error(deps.prompts.messages["say_mention_not_privileged"] ?? "say_mention_not_privileged");
+    }
+  };
+  if (kind === "ambient" || kind === "injection") {
+    for (const qq of list) ensureAllowed(Number(qq));
+  } else {
+    ensureAllowed(trigger.userId);
   }
+  // 群成员名单核对照旧（两个分支共用；拿不到名单拒）
   const members = deps.membersOf ? await deps.membersOf(String(api.conversationId)) : undefined;
   if (!members || members.length === 0) {
     throw new Error(deps.prompts.messages["say_mention_members_missing"] ?? "say_mention_members_missing");
@@ -113,6 +126,33 @@ export async function assertMentions(
   if (missing.length > 0) {
     throw new Error(renderTemplate(deps.prompts.messages["say_mention_not_member"] ?? "", { userIds: missing.join("、") }));
   }
+}
+
+/**
+ * 模型侧引用参数解析（决策 6，say_words/say_media/say_meme 共用；say_voice 不走这里）：
+ * - quoteMsgId（接受 [m:123] 或裸数字，机械剥掉包装）属本轮 quoteIds 窗口 → 有效：返回该 id
+ *   并等效 quote=true（防 emit 层四条件静默丢弃）；
+ * - 不在窗口（含拿不到窗口）→ quote_msg_invalid tool 错误；调用方须在 chargeSayRound 之前
+ *   调用本函数，被拒的尝试不占开口额度；
+ * - 缺省不传 = 不引用：quoteId 仍钉在本轮锚点上（机械必答引用链照旧消费它），现行为不变；
+ * - 旧 quote:true 字段 schema 已移除、运行时容忍：模型若仍输出，按「引用本轮锚点」处理，
+ *   行为与 legacy 一致，不报错不忽略；机械必答引用（quoteForce/@ 必答）不受模型参数影响。
+ */
+export function resolveQuoteArg(
+  deps: ToolPackageDeps,
+  trigger: SayRound["trigger"],
+  quoteMsgId: unknown,
+  legacyQuote: unknown,
+): { quote: boolean; quoteId?: number | string } {
+  const raw = (typeof quoteMsgId === "string" ? quoteMsgId : quoteMsgId == null ? "" : String(quoteMsgId)).trim();
+  const id = raw.startsWith("[m:") && raw.endsWith("]") ? raw.slice(3, -1).trim() : raw;
+  if (id.length > 0) {
+    if (trigger?.quoteIds?.has(id)) return { quote: true, quoteId: id };
+    throw new Error(deps.prompts.messages["quote_msg_invalid"] ?? "quote_msg_invalid");
+  }
+  const anchor = trigger?.messageId;
+  if (legacyQuote === true && anchor !== undefined) return { quote: true, quoteId: anchor };
+  return { quote: false, ...(anchor !== undefined ? { quoteId: anchor } : {}) };
 }
 
 /** 出口校验拒绝 → 以 tool 错误返回给模型（不静默丢弃），文案渲染自 prompt/messages.md。 */
