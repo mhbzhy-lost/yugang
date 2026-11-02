@@ -52,6 +52,18 @@ import { memoryKeyOf, privateMemoryKeyOf, pushScope, shiftScope } from "./memory
 import { OutboundEntry, type OutboundPayload } from "./tools/say-shared.ts";
 import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
+// —— 外部信息源基础设施挂载点（docs/plans/2026-11-02-external-ammo.md Task E1）——
+// 只立槽位不接业务：scheduler 实例化与 onJob 接线在 E4（逛轮编排）落位，E7（新闻播报）复用
+// 同一调度器（slots 追加 10:30）。接线形态：
+//   externalScheduler = createScheduler({
+//     slots: () => fishConfig().config.ammo?.slots ?? [...], onJob,
+//     now: () => new Date(), ...nodeTimers, jobTimeoutMs,
+//     jobs: jobsHandleOf(fish.harness),
+//   }).start();
+// 退出钩子（文件尾 SIGTERM）里 .stop()。频控客户端与筛选配置见 src/external/bili-client.ts，
+// 不可信文本清洗见 src/external/sanitize.ts。
+import type { Scheduler } from "./external/scheduler.ts";
+let externalScheduler: Scheduler | undefined; // E4 赋值并 .start()；未接线前保持 undefined
 
 // 每条入站消息的原始文本（卡片渲染 / bypass 剥离之前取）：记忆 entry 只存群友原话，
 // 不把 card_bilibili / ctx_header 等宿主文案写进 fish.inbound。WeakMap 键是消息对象，
