@@ -311,10 +311,20 @@
   兜底。日志只带 id 与结果状态（`[鱼缸] 记忆公共化脱敏 <id> ok|failed <reason>`），不打印内容
 - **只经 system section 注入**：记忆文本只从 `memory` section 进模型，**绝不允许拼进 user
   message**；当前会话可见 = 公共 doc + 本会话私有 doc 现算 key 后合并渲染
-  （`mergeMemoryStates`，总预算 ≤900 字、排序规则不变），私有层绝不注入非来源会话；
+  （`mergeMemoryStates`，总预算 ≤900 字；块序 = 机械优先级：主人评价 → 在场画像 →
+  说法 → 卡片），私有层绝不注入非来源会话；
   渲染只读（不写 `lastUsedAt`）；无 scope 或无可渲染内容时不占位。抽取器只读结构化
   原始 entry（`fish.inbound` 的 data / `fish.outbound` 的 items），必须排除 `pi.system`、
   宿主任务文案、工具结果与收图轮（`fish.gif_ingest`），否则「记忆→抽取→记忆」的自我污染闭环会复活
+- **群友画像（2026-11，T10）**：画像的唯一载体是 `fish.memory` 的 people 结构——
+  subject=QQ 号（`qq:NNN`），印象条目按 QQ 键累积叠加（同 subject 合并去重、fact 自带
+  at 时间戳、渲染附 YYYY-MM 锚点），享既有 supersede / MEMORY_CAPS 上限与 at+hits
+  淘汰（大群旧画像按 updatedAt 让位），**不建第二套画像存储**。渲染在场优先：当前轮
+  在场说话人（scope.speakers，锚点在前、最多 5 位）的画像块在 ≤900 字预算内先于
+  说法/卡片可见（纯机械加权，feedback 置顶不变，渲染只读）。
+  `prompt/people.md` 只保留主人/关系等静态设定（不属群友画像、不迁移），「群里的人/
+  梗」类动态内容由记忆链路维护；抽取提示词（`prompt/memory-extract.md`）要求在与
+  某人的交流中持续提炼对其的新印象，照旧只进待审、不直接落库
 - **上限写死在 `src/memory.ts` 的 `MEMORY_CAPS`**：人 ≤12、每人事实 ≤8 且总字数 ≤320、
   names ≤5、style ≤120 字、口头禅 ≤8 条且每条 ≤24 字、lore ≤40（key ≤5 个且每个 ≤10 字、
   text ≤60 字）、cards ≤60（text ≤80 字、keys ≤5、subjects ≤8）、单次 section 渲染 ≤900 字、

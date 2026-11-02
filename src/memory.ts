@@ -183,6 +183,10 @@ const PERSON_BUDGET = 240;
 const CARDS_BUDGET = 240;
 const FEEDBACK_BUDGET = 300;
 
+/** 在场画像最多渲染几位说话人（T10 画像在场优先）：scope.speakers 由宿主构造
+ *  （锚点发送者 + 最近背景发言者，顺序即优先级），这里再机械封顶。 */
+const PRESENCE_SPEAKERS_CAP = 5;
+
 /** 结构化入站 entry：记忆抽取只读它，不读宿主拼装的 user content。 */
 export interface MemoryInbound {
   chatKey: string;
@@ -1060,7 +1064,9 @@ function mergeByIdentity<T extends { at: number }>(
 
 /**
  * 渲染本轮相关的记忆（只读）。没有 scope 时返回 undefined——历史 cards 不主动展示。
- * 输出按预算组装：群里的说法 → 关于在场的人 → 你还记得；总长超 renderChars 时按完整行从后往前裁。
+ * 输出按预算组装：主人评价 → 关于在场的人 → 群里的说法 → 你还记得；总长超 renderChars
+ * 时按完整行从后往前裁。块序即机械优先级（T10 画像在场优先）：当前轮/当前群在场说话人
+ * 的画像块排在说法与卡片之前，预算紧张时先保住的是在场画像；主人评价永远最前（T7）。
  */
 export function renderMemory(state: MemoryState, scope: RoundScope | undefined, messages: Record<string, string>): string | undefined {
   if (!scope) return undefined;
@@ -1087,6 +1093,21 @@ export function renderMemory(state: MemoryState, scope: RoundScope | undefined, 
   }
   if (feedbackLines.length > 0) blocks.push(feedbackLines);
 
+  // 关于在场的人（画像在场优先，T10）：scope.speakers 顺序 = 注入优先级（锚点发送者
+  // 在前、最近背景发言者其后），机械封顶 PRESENCE_SPEAKERS_CAP 位；每人 ≤240 字
+  // （最近 3 条有效事实 + style + 口头禅，personBlock 自限 PERSON_BUDGET，事实带
+  // YYYY-MM 锚点）。本块排在说法/卡片之前：renderChars 从后往前裁时，先保住的正是在场画像
+  const speakers = scope.speakers.slice(0, PRESENCE_SPEAKERS_CAP);
+  const peopleLines: string[] = [];
+  if (peopleHeader) peopleLines.push(peopleHeader);
+  for (const speaker of speakers) {
+    const person = matchPerson(state.people, speaker);
+    if (!person) continue;
+    const block = personBlock(person, speaker.name);
+    if (block) peopleLines.push(block);
+  }
+  if (peopleLines.length > (peopleHeader ? 1 : 0)) blocks.push(peopleLines);
+
   // 群里的说法：scope.text 命中任一 keys，最多 5 条，≤200 字。排序与淘汰同口径：
   // 零命中的沉底（at+hits 组合），其余更新在前
   const loreLines: string[] = [];
@@ -1101,20 +1122,6 @@ export function renderMemory(state: MemoryState, scope: RoundScope | undefined, 
     loreLines.push(line);
   }
   if (loreLines.length > (loreHeader ? 1 : 0)) blocks.push(loreLines);
-
-  // 关于在场的人：前 3 位说话人，每人 ≤240 字（最近 3 条有效事实 + style + 口头禅）
-  const speakers = scope.speakers.slice(0, 3);
-  const peopleLines: string[] = [];
-  if (peopleHeader) peopleLines.push(peopleHeader);
-  for (const speaker of speakers) {
-    const person = matchPerson(state.people, speaker);
-    if (!person) continue;
-    const block = personBlock(person, speaker.name);
-    if (block && peopleLines.join("\n").length + block.length + 1 <= PERSON_BUDGET + (peopleHeader ? peopleHeader.length + 1 : 0)) {
-      peopleLines.push(block);
-    }
-  }
-  if (peopleLines.length > (peopleHeader ? 1 : 0)) blocks.push(peopleLines);
 
   // 你还记得：只取当前 text/subject 相关的 cards，importance 降序最多 2 条，≤240 字
   const cardLines: string[] = [];

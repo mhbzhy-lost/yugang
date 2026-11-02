@@ -9,7 +9,7 @@
 | `runtime.md` | system prompt 的 `runtime` section：输入信任边界、出口协议、渐进加载，人格无关 | 每次请求 |
 | `persona.md` | system prompt 的 `persona` section | 每次请求 |
 | `ops.md` | 运维书，管理工具（`config` / `restart`）的使用约束，system section `ops` | 每次请求 |
-| `people.md` | 人物档，随每条请求注入（system section `people`） | 每次请求 |
+| `people.md` | 人物档（仅主人/关系等静态设定），随每条请求注入（system section `people`）；群友动态画像与群梗不在此文件维护——走长期记忆链路（fish.memory 的 people/lore，抽取只进待审） | 每次请求 |
 | `group-profile.md` | 群档案模板，建会话时渲染一次写进 transcript | 每个群第一次 |
 | `handoff.md` | 上下文压缩时让模型写备忘的提示词，`{{transcript}}` 处填入对话 | 换页时 |
 | `messages.md` | 宿主/共享层文案：出口策略码与回执、fs 共用拒绝、section 标签（含 tool_catalog 模板行）、`ctx_*` 标注、`/` 指令回执。工具专属回执不在本文件——在各自 `TOOL.md` 的 `---tool-messages` 块里，loader 启动时合并成全局 messages 视图（两边 key 不许重复，撞车直接启动失败） | 被拒/成功时 |
