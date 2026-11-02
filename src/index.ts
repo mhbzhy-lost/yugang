@@ -484,7 +484,7 @@ async function conversationFor(chatKey: string): Promise<Conversation> {
  * 惰性建默认会话，属可接受副作用）；切换动作本身绝不预建目标人格会话。
  */
 /**
- * 上下文拼装与 5 秒连续发言合并都不在这里：状态机与 withContext 在 src/qq/debounce.ts，
+ * 上下文拼装与 10 秒连续发言合并都不在这里：状态机与 withContext 在 src/qq/debounce.ts，
  * 这里只负责把 flush / submit 接上，并做轮级清账与记账。
  */
 /**
@@ -815,7 +815,7 @@ async function compactWithGuard(conv: Conversation, force = false): Promise<Comp
 }
 
 /**
- * 5 秒静默到期：整组一起进模型。
+ * 10 秒静默到期：整组一起进模型。
  *
  * 锚点 = 这一组按收到顺序最后一条（A-B-A 里 B 只出现在背景，不可能顶掉 A）；整组里任意一条 @鱼
  * 就整组必答；引用只看锚点。提交前重新检查会话忙：换页 / 收图轮期间不提交旧上下文，
@@ -826,7 +826,7 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
   // 本组的必答标记整组消费一次（正文兜底判据）：窗口已随 timer 摘除，走哪条分支都不残留
   const mustAnswer = burstMustAnswer.get(windowKey(burst.chatKey, burst.userId)) ?? false;
   burstMustAnswer.delete(windowKey(burst.chatKey, burst.userId));
-  // 会话/人格只认首次 push 那一份：5 秒窗口里主人 /切换人格 也改不了这一组的落点
+  // 会话/人格只认首次 push 那一份：10 秒窗口里主人 /切换人格 也改不了这一组的落点
   const conv = (burst.binding as Conversation | undefined) ?? (await conversationFor(anchor.chatKey));
 
   // 换页 / 收图轮进行中：不再受理新提交（根治换页竞态把活跃轮吃掉的问题）
@@ -1064,10 +1064,12 @@ const gate = createGate({
   ambientMinIntervalMs: fishConfig().config.ambientMinIntervalSeconds * 1000,
   // 特别关注者发言时的放行概率（走随机门，照顾到但不是必答）
   watchedChance: fishConfig().config.watchAmbientChance,
-  // 每轮现取：改 fish.config.json 下一轮就生效，不用重启
+  // 搭话总开关：legacy = 现行全部判定；next = 群里只认 @ 鱼，非 @ 群消息统一 skip:next_pending
+  engagement: fishConfig().config.engagement,
+  // 每轮现取：改 fish.config.json 下一轮就生效，不用重启（engagement 同样热切换）
   chances: () => {
     const c = fishConfig().config;
-    return { minIntervalMs: c.ambientMinIntervalSeconds * 1000, watched: c.watchAmbientChance };
+    return { minIntervalMs: c.ambientMinIntervalSeconds * 1000, watched: c.watchAmbientChance, engagement: c.engagement };
   },
 });
 
@@ -1126,8 +1128,8 @@ const lastSpoke = new Map<string, number>();
 const spokenToday = new Map<string, { day: string; count: number }>();
 const today = () => new Date().toISOString().slice(0, 10);
 
-// 群消息按「群 + 发送者」攒 5 秒：同一个人还在打字就一直往后延，静默满 5 秒才整组提交。
-// 窗口固定 5000ms，不设环境变量也不设最长等待；重启时没 flush 的窗口直接丢弃。
+// 群消息按「群 + 发送者」攒 10 秒：同一个人还在打字就一直往后延，静默满 10 秒才整组提交。
+// 窗口固定 10000ms，不设环境变量也不设最长等待；重启时没 flush 的窗口直接丢弃。
 const debouncer = createDebouncer({
   windowMs: DEBOUNCE_WINDOW_MS,
   onFlush: (burst) => flushBurst(burst),
@@ -1225,8 +1227,8 @@ onebot.onMessage((raw) => {
       return;
     }
 
-    // 群消息：gate 放行不立即提交，等 5 秒静默把整组一起送进 loop（flushBurst）。
-    // 会话在这里先定下来（人格按当下解析）并绑到窗口上：5 秒里 `/切换人格` 也改不了落点。
+    // 群消息：gate 放行不立即提交，等 10 秒静默把整组一起送进 loop（flushBurst）。
+    // 会话在这里先定下来（人格按当下解析）并绑到窗口上：10 秒里 `/切换人格` 也改不了落点。
     if (msg.chatKey.startsWith("qq:group:")) {
       // 必答放行随窗口累积（flush 时整组消费）：任一条必答进闸，整组都算必答
       const key = windowKey(msg.chatKey, msg.userId);

@@ -1,6 +1,7 @@
 {
   "ambientMinIntervalSeconds": 30,
   "watchAmbientChance": 0.5,
+  "engagement": "legacy",
   "thinkingLevel": "low",
   "compact": {
     "maxEntries": 200,
@@ -17,6 +18,7 @@
     }
   },
   "toolTimeoutSeconds": 30,
+  "_engagement": "注释：搭话总开关。legacy = 现行全部搭话判定；next = 群里只认 @ 鱼必答，其余非 @ 群消息一律 skip:next_pending 不进模型（私聊、/ 指令、GIF 收图轮与记账不受影响）。热生效，只认 legacy/next，非法值保留缺省并告警",
   "_salvagePlainReply": "注释：模型忘调 say 时的正文兜底，仅必答轮（私聊/被@/回复合集）生效——零 say 时取正文首行截 120 字补发；误发可把下面的键改成 false 关掉",
   "salvagePlainReply": true
 }

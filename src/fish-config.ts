@@ -16,11 +16,18 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 
 const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+/** 搭话总开关：legacy = 现行全部搭话判定；next = 群里只认 @ 鱼，其余非 @ 群消息统一 skip。 */
+export type EngagementMode = "legacy" | "next";
+
+const ENGAGEMENT_MODES: readonly EngagementMode[] = ["legacy", "next"];
+
 export interface FishConfig {
   /** 非 @、非特别关注的消息：同一群两条被处理消息之间的最短间隔（秒）。 */
   ambientMinIntervalSeconds: number;
   /** 特别关注者发言的概率（0–1）。 */
   watchAmbientChance: number;
+  /** 搭话总开关：legacy（缺省）= 现行判定照旧；next = 群里除「直接 @ 鱼」外一切搭话判定失效，非 @ 统一 skip:next_pending。 */
+  engagement: EngagementMode;
   /** 思考档位；启动时写进会话 agent，改完重启才生效。 */
   thinkingLevel: ThinkingLevel;
   /** 换页阈值：条目数 / 字符数。 */
@@ -72,6 +79,14 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
   const watched = chance(src["watchAmbientChance"]);
   if (watched !== undefined) out.watchAmbientChance = watched;
   else if (src["watchAmbientChance"] !== undefined) problems.push("watchAmbientChance 必须是 0–1，已忽略");
+
+  const engagement = src["engagement"];
+  if (typeof engagement === "string") {
+    if (ENGAGEMENT_MODES.includes(engagement as EngagementMode)) out.engagement = engagement as EngagementMode;
+    else problems.push(`engagement 只认 legacy/next：${engagement}，已忽略`);
+  } else if (engagement !== undefined) {
+    problems.push("engagement 必须是 legacy/next，已忽略");
+  }
 
   const level = src["thinkingLevel"];
   if (typeof level === "string") {
@@ -170,6 +185,7 @@ function parseEnv(env: NodeJS.ProcessEnv, problems: string[]): Partial<FishConfi
 const DEFAULTS: FishConfig = {
   ambientMinIntervalSeconds: 60,
   watchAmbientChance: 0.5,
+  engagement: "legacy",
   thinkingLevel: "low",
   compact: { maxEntries: 200, maxChars: 50_000 },
   memeCooldownMinutes: 8,
