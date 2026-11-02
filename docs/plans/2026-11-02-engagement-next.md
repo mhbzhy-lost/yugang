@@ -42,8 +42,9 @@
 | F12 | 统一配置工具 `config`（仅主人私聊轮，群内一律拒绝）：fish.config.json 受控字段（热加载类）+ config/models.json 角色表（restart 生效类，迁移自 model 工具）；旧 model 工具移除且全仓无残留引用（含 test/tools.test.ts、README、AGENTS 第 1/2/3 节、types/harness 注释）；审计日志；非法/越界拒绝 | 工具单测 + prompts 审查 | 仅主人私聊生效、两类配置生效语义正确、model 无残留、config 进 deferred 名单断言 | 测试输出 | T9 |
 | F13 | 群友画像并入长期记忆（people 为唯一载体，**在场/活跃优先、受既有 MEMORY_CAPS 约束**——大群允许旧画像按既有淘汰规则让位）；people.md 的主人/关系**静态设定保留**（不属群友画像），仅「群里的人/梗」类动态画像并入；无第二套画像存储 | 记忆链路单测 + npm run memory | 画像累积叠加、同 QQ 合并、静态设定不受影响 | 测试输出 | T10 |
 | F14 | 抽取评价机制：试金石提示词（few-shot+受益判准+confidence low 不报+signal 标注，signal 仅保留机械可得的「命中 people 名单/与现有 fact 冲突」两类）；对账三分类 ADD/SUPERSEDE（含 subject，factId→subject 由渲染 known 时附带 id→subject 映射机械解析）/SKIP（仅计数不产出）；空 patch 与解析失败可判别；零提取计数（阈值常量 5）+ 一次复查模式（不阻塞换页）；待审列表展示 signal 标签与零提取头部提示 | 抽取器单测 + npm run prompts | 三分类被 sanitize 通过、判别正确、计数与复查路径正确 | 测试输出 | T11 |
+| F15 | 换页新页结构 = 剖面卡片（≤300 字，字段化：时间范围/活跃成员机械生成，话头/梗/承诺逐字引用可校验，氛围一行）+ 被压缩页尾部 30-50 条原文（机械截取，来源仅限 transcript 不含未见消息）；逐字引用校验、事务性、失败走机械降级换页；跨页合并字段级覆盖不重新叙事 | compact 单测（随授权）+ 生产验证（换页后新页开头形态） | 尾巴来源正确、引用可校验、失败降级、无 summary-of-summary | 测试输出 | T12 |
 
-**完成规则：** F1-F14 全部满足且证据对应当前版本才完成；步骤勾选不替代终态验证。
+**完成规则：** F1-F15 全部满足且证据对应当前版本才完成；步骤勾选不替代终态验证。
 
 **未满足时：** 授权范围内 fix → test → 对照终态；阻塞记录未完成与恢复路径。
 
@@ -90,7 +91,8 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 - Wave 3：T4 → T5 → T6（串行链，均涉 index.ts）
 - Wave 4：T7、T9（并行，文件不重叠）
 - Wave 5：T8、T10、T11（T10/T11 串行：T10 → T11；T8 与其并行）
-- 收口：主会话对照 F1-F14 终态核对（统一 `npm test` + `npm run prompts`）
+- Wave 6：T12
+- 收口：主会话对照 F1-F15 终态核对（统一 `npm test` + `npm run prompts`）
 
 **关键路径：** T1/T2 → T3 → T5 → T6 → 收口。
 
@@ -324,6 +326,38 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 
 ---
 
+### Task 12：压缩结构重构（剖面卡片 + transcript 尾巴）
+
+**Deps：** `none`（与搭话机制无关；建议在 T11 后串行排程，同改 prompt/ 与记忆链路相邻）
+
+**WritePaths：**
+- `prompt/handoff.md`（重写为剖面卡片模板）
+- `prompt/messages.md`（如需新 key：机械时间头等）
+- `src/compact.ts`（剖面生成、逐字引用校验、事务性与降级衔接、尾巴截取）
+- `AGENTS.md`（第 5 节压缩语义更新）
+- `test/compact-profile.test.ts`（随授权）
+
+**背景**：2026-11 社区调研结论——群聊无一家用纯叙事摘要；主流为「原文滑窗尾巴 + 结构化记忆」。旧叙事 handoff 在多线并行群聊下拼成混乱叙事（DIGEST 结论）且 summary-of-summary 漂移。另外生产已发生过换页死锁事故（主模型 1301 → 换页摘要同源失败 → 死循环），已单独修复机械降级换页，本任务在其上重构正常路径。
+
+**接口契约：**
+- Consumes：换页链路；已修复的机械降级换页（失败兑底，正常路径不碰）；长期记忆链路（人/约定/lore 已另链路沉淀，压缩不再重复承担）
+- Produces：**换页新页结构 = `[剖面卡片 ≤300 字] + [被压缩页尾部最近 30-50 条原文（机械截取）]`**：
+  1. **尾巴来源硬约束（用户已定）**：尾巴**只从被压缩页的 transcript 尾部取**（model-seen 内容），不从 recent/chatlog 原始流水取——保持不变式「transcript entry = 模型见过的内容」，不把鱼没见过的消息伪装成已读上下文；尾巴保持原 entry 顺序与标注格式（[m:id]/打标/背景板声明），不二次渲染
+  2. **剖面卡片字段**：本页时间范围（纯机械）；活跃成员 top≤5（纯机械统计）；进行中的话头/梗 ≤5 条（LLM，**逐字引用原文短语**附消息 id 锚点，禁转述）；鱼的未完话头与承诺（LLM，逐字引用）；氛围一行（LLM）
+  3. **三道机械防线**：逐字引用校验（substring 命中本页 transcript，否则丢字段或整次失败）；事务性（字段校验通过才换页，失败保留原页）；重试上限后走既有机械降级换页
+  4. **抗漂移**：跨页合并为字段级覆盖（旧剖面作输入，活跃梗/未兑现承诺 verbatim 带入，完结的标掉），不重新叙事、不 summary-of-summary
+  5. 摘要仍只收群友的话 + 鱼发的话（thinking/tool 照旧排除）
+- 可选后置（本任务不做，记录方向）：话题卡片账本（方案二）与旧页回读指针（方案三），实证「跨页旧梗接不上」后再议
+
+**终态关联：** F15。
+
+**验收标准：**
+- [ ] 核对 compact.ts 现行 handoff 生成、降级换页接口、transcript entry 格式
+- [ ] 实现剖面卡片（含逐字校验）+ 尾巴截取 + 字段级合并
+- [ ] `npm test` 绿（收口统一跑）；`npm run prompts` 干净；`npm run prompts` 确认 handoff.md 变更
+
+---
+
 **新增测试清单（前置条件 2，须用户明确授权后创建）：**
 - `test/engage-next.test.ts`：状态机迁移（含无消息热切换）、closed skip/open free_pass、backlog（pending 排除、过滤、截断）、懒基线、isOpen 缺省 closed、注入时钟
 - injection 渲染（打标/[m:id]）、entry kind 排除但计入换页阈值、互斥分级（@ 排队 60s/ambient 丢弃/injection 放弃）
@@ -335,4 +369,5 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 - `test/config-tool.test.ts`：仅主人私聊、两类配置生效语义、model 无残留
 - `test/memory-people.test.ts`：画像叠加/在场优先/静态设定保留
 - `test/compact-extract.test.ts`：三分类、空 patch vs 解析失败判别、零提取计数与复查
+- `test/compact-profile.test.ts`：剖面字段、逐字引用校验、尾巴来源约束、字段级合并、失败降级
 - 配置解析测试（engage 块缺省/非法/热加载，F7）
