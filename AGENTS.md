@@ -19,7 +19,7 @@
 文字/图片/表情包/语音各一个，可引用，除语音外可点名 @ 群友）、`react`（只贴表情）、
 `look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`meme_import`（主人本地批量导入的登记入口）、
 `draw`（本地 SD 生图）、`gpt_image`（GPT Image 2 透传）、`search`/`video`（联网查）、`tags`（danbooru 词表）；
-以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`model`（切换各类能力使用的模型）、`watch`（特别关注）
+以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
 
 ## 硬约束
@@ -65,7 +65,7 @@
 3. src/tools/loader.ts          FACTORIES 名单里加一行
 ```
 
-- 主人专属工具（`read`/`grep`/`write`/`tree`/`model`/`restart`/`watch`/`meme_add`/`meme_import`）
+- 主人专属工具（`read`/`grep`/`write`/`tree`/`config`/`restart`/`watch`/`meme_add`/`meme_import`）
   没配 `MASTER_QQ` 时 factory 返回 `undefined`，不进 `agent.tools` / `agent.deferred` / `tool_catalog`；
   `TOOL.md` 仍随包存在，注册与否由 loader 按依赖现判，执行内核里的二次身份校验不变
 - 旧 `prompt/tools/*.md` 平铺文档已删除，不要再建；工具专属回执/拒绝文案走各自 `TOOL.md` 的
@@ -77,10 +77,10 @@
 
 ### 3. 能力面必须是可枚举的窄接口（2026-10 修订：主人解锁下有限自改）
 
-禁止 shell / 脚本执行 / MCP server。读写与自改另设语义工具（`read`/`grep`/`write`/`tree`/`model`/`restart`）：
+禁止 shell / 脚本执行 / MCP server。读写与自改另设语义工具（`read`/`grep`/`write`/`tree`/`config`/`restart`）：
 - `read` / `grep`：可读仓库与 `/tmp/yugang`；.env、config/auth.json、.git、node_modules、.trash 硬封禁
 - `write`：**只能写 `/tmp/yugang`**（鱼的草稿区），仓库文件写不进去
-- `model`：只改 `config/models.json` 的 `models` 角色表（main / vision / image），写完靠 `restart` 生效
+- `config`：统一配置工具，仅主人私聊轮可用（群内轮拒绝）；改 `fish.config.json` 受控字段（白名单制，逐字段标注热加载 / 需重启，非法值拒绝不落盘）与 `config/models.json` 的 `models` 角色表（main / vision / image，写完靠 `restart` 生效）
 - 身份闸（机械判定）：仅主人（MASTER_QQ）触发的轮里可用，execute 内核对 triggerOf 的 userId
 - 全部操作打审计日志；自改大事故靠 git 回滚
 - `meme_import`：只扫**固定目录** `<MEDIA_ROOT>/meme-inbox/`（不接受任何路径参数），只认图片直系子文件，

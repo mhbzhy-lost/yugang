@@ -26,6 +26,7 @@ import { join } from "node:path";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { loadToolManifests } from "./manifest.ts";
 import type { ToolPackageDeps, ToolPackageFactory, ToolManifest } from "./types.ts";
+import { createConfigTool } from "./config/tool.ts";
 import { createDrawTool } from "./draw/tool.ts";
 import { createGptImageTool } from "./gpt_image/tool.ts";
 import { createGrepTool } from "./grep/tool.ts";
@@ -33,7 +34,6 @@ import { createLookTool } from "./look/tool.ts";
 import { createMemeTool } from "./meme/tool.ts";
 import { createMemeAddTool } from "./meme_add/tool.ts";
 import { createMemeImportTool } from "./meme_import/tool.ts";
-import { createModelTool } from "./model/tool.ts";
 import { createReactTool } from "./react/tool.ts";
 import { createReadTool } from "./read/tool.ts";
 import { createRestartTool } from "./restart/tool.ts";
@@ -51,6 +51,7 @@ import { createWriteTool } from "./write/tool.ts";
 
 /** 22 个工具包的 Node factory；与 src/tools/<name>/TOOL.md 一一对应，两边都不允许孤儿。 */
 const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
+  config: createConfigTool,
   draw: createDrawTool,
   gpt_image: createGptImageTool,
   grep: createGrepTool,
@@ -58,7 +59,6 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
   meme: createMemeTool,
   meme_add: createMemeAddTool,
   meme_import: createMemeImportTool,
-  model: createModelTool,
   react: createReactTool,
   read: createReadTool,
   restart: createRestartTool,

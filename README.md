@@ -19,7 +19,7 @@
 ```
 
 其余是可枚举的能力工具（`look` / `meme` / `search` / `video` / `draw` / `gpt_image` / `tags`）
-和主人专属的工具（`meme_add` / `meme_import` / `read` / `grep` / `write` / `tree` / `model` / `restart` / `watch`）。
+和主人专属的工具（`meme_add` / `meme_import` / `read` / `grep` / `write` / `tree` / `config` / `restart` / `watch`）。
 完整清单就是 `src/tools/loader.ts` 里那份 factory 名单。
 
 ## 为什么出口是一个 tool
@@ -49,7 +49,7 @@
   得有人显式写一行危险的代码，而不是模型自己拼一条命令。
 - **`read` / `grep` 能读仓库和 `/tmp/yugang`**；`.env`、`config/auth.json`、`.git`、`node_modules`、`.trash` 硬封禁。
 - **`write` 只能写 `/tmp/yugang`**（鱼自己的草稿区），仓库文件写不进去；
-  改模型配置用 `model` 管理工具，改完靠 `restart` 生效。
+  改行为参数与模型配置用 `config` 管理工具，需重启类改动靠 `restart` 生效。
 - **工具说明全在 `src/tools/<name>/TOOL.md`**：加一个工具 = 一个工具包目录 + loader 名单一行，没有第三种位置。
 
 **唯一能读媒体图片的是 `look`**，它只能读 `MEDIA_ROOT` 里的图片，**普通一轮最多 2 张**。
@@ -224,7 +224,7 @@ Node 的 WS 不吃 `--use-env-proxy`，过代理时必须写 `"sse"`。
 `providers.<name>.proxy`（只认 http/https）让这一个 provider 的全部请求走隧道（模型流 / 生图 / token 刷新），
 其它 provider 仍直连；codex 过代理必须同时写 `transport: "sse"`。
 
-鱼自己能 `read` 这个文件；主人可以让它用 `model` 工具切换三个角色，改完用 `restart` 生效（`vision_fallback` 不在 model 工具的开关里，只能手改文件）。
+鱼自己能 `read` 这个文件；主人可以让它用 `config` 工具切换三个角色，改完用 `restart` 生效（`vision_fallback` 不在 config 工具的开关里，只能手改文件）。
 
 凭据只导一次，之后运行时不碰任何外部配置：
 

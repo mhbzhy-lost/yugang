@@ -86,8 +86,10 @@ export interface ToolPackageDeps {
   searchKey?: string;
   /** 主人 QQ：主人专属工具的身份闸；缺省则这些 factory 返回 undefined。 */
   master?: string;
-  /** config/models.json 路径；model 工具写回时用。 */
+  /** config/models.json 路径；config 工具写回 models 角色表时用。 */
   modelsPath?: string;
+  /** conversationId → 原始 chatKey（不带人格后缀）；config 工具用它判定「会话为主人私聊」，缺省时 fail closed。 */
+  chatKeyOf?: (conversationId: string) => string | undefined;
   /** 会话 → 群成员名单；watch 用它校验被关注人真的在群里。 */
   groupMembersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
   /** watch 名单变更回调。 */

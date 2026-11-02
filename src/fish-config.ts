@@ -77,6 +77,22 @@ export interface ConfigLoadResult {
   problems: string[];
 }
 
+/** 受控字段生效语义：hot = fish.config.json 热加载（mtime 变了下一轮生效）；restart = 写盘后需重启进程。 */
+export type FishConfigEffect = "hot" | "restart";
+
+/** 单字段校验结果：ok 时 value 是规整后可直接写盘的值；失败 reason 是完整告警文案（不含结尾「，已忽略」）。 */
+export type FieldCheck = { ok: true; value: unknown } | { ok: false; reason: string };
+
+/** fish.config.json 受控字段规格：config 工具的白名单与 parseFile 共用这一份，别处不得另写校验。 */
+export interface FishConfigFieldSpec {
+  /** 顶层字段名（白名单 key）。 */
+  name: string;
+  /** 生效语义：config 工具的 read 清单与 set 回执按它标注。 */
+  effect: FishConfigEffect;
+  /** 校验并规整一个值。 */
+  check: (raw: unknown) => FieldCheck;
+}
+
 function num(raw: unknown): number | undefined {
   const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
   return Number.isFinite(n) ? n : undefined;
@@ -87,6 +103,128 @@ function chance(raw: unknown): number | undefined {
   return n !== undefined && n >= 0 && n <= 1 ? n : undefined;
 }
 
+/** 数值范围校验；floor 为真时向下取整（compact 子字段的现行行为）。 */
+function numberIn(reason: string, min: number, max: number, floor = false) {
+  return (raw: unknown): FieldCheck => {
+    const n = num(raw);
+    if (n === undefined || n < min || n > max) return { ok: false, reason };
+    return { ok: true, value: floor ? Math.floor(n) : n };
+  };
+}
+
+/** 枚举校验：只认 values 里的字符串值，其余（含非字符串）拒绝并带上收到的值。 */
+function oneOf(body: string, values: readonly string[]) {
+  return (raw: unknown): FieldCheck => {
+    if (typeof raw === "string" && values.includes(raw)) return { ok: true, value: raw };
+    return { ok: false, reason: typeof raw === "string" ? `${body}：${raw}` : body };
+  };
+}
+
+function checkCompact(raw: unknown): FieldCheck {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "compact 必须是对象" };
+  const c = raw as Record<string, unknown>;
+  const maxEntries = num(c["maxEntries"]);
+  const maxChars = num(c["maxChars"]);
+  if (c["maxEntries"] !== undefined && (maxEntries === undefined || maxEntries < 1 || maxEntries > 5000)) {
+    return { ok: false, reason: "compact.maxEntries 必须在 1–5000" };
+  }
+  if (c["maxChars"] !== undefined && (maxChars === undefined || maxChars < 1000 || maxChars > 200_000)) {
+    return { ok: false, reason: "compact.maxChars 必须在 1000–200000" };
+  }
+  if (maxEntries === undefined && maxChars === undefined) return { ok: false, reason: "compact 至少要有 maxEntries 或 maxChars" };
+  return {
+    ok: true,
+    value: { maxEntries: maxEntries !== undefined ? Math.floor(maxEntries) : 200, maxChars: maxChars !== undefined ? Math.floor(maxChars) : 50_000 },
+  };
+}
+
+function checkSalvage(raw: unknown): FieldCheck {
+  if (typeof raw === "boolean") return { ok: true, value: raw };
+  return { ok: false, reason: "salvagePlainReply 必须是 true/false" };
+}
+
+function checkVoices(raw: unknown): FieldCheck {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "voices 必须是对象" };
+  const voices: Record<string, { url: string; referWav?: string; referText?: string; referLanguage?: string; speed?: number }> = {};
+  for (const [persona, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, reason: `voices.${persona} 必须是对象` };
+    const v = value as Record<string, unknown>;
+    const url = typeof v["url"] === "string" ? v["url"].trim() : "";
+    if (!url) return { ok: false, reason: `voices.${persona}.url 缺失` };
+    const speedRaw = num(v["speed"]);
+    const speed = speedRaw !== undefined && speedRaw >= 0.5 && speedRaw <= 2 ? speedRaw : undefined;
+    if (speedRaw !== undefined && speed === undefined) return { ok: false, reason: `voices.${persona}.speed 必须在 0.5–2.0` };
+    voices[persona] = {
+      url,
+      ...(typeof v["referWav"] === "string" ? { referWav: v["referWav"] } : {}),
+      ...(typeof v["referText"] === "string" ? { referText: v["referText"] } : {}),
+      ...(typeof v["referLanguage"] === "string" ? { referLanguage: v["referLanguage"] } : {}),
+      ...(speed !== undefined ? { speed } : {}),
+    };
+  }
+  return { ok: true, value: voices };
+}
+
+function checkWeeklyGroup(raw: unknown): FieldCheck {
+  if (raw === "") return { ok: true, value: "" }; // 空串 = 不发周报
+  if (typeof raw === "string" && /^\d+$/.test(raw.trim())) return { ok: true, value: raw.trim() };
+  return { ok: false, reason: "weeklyGroupId 必须是群号（纯数字）" };
+}
+
+/**
+ * 受控字段白名单（config 工具与 parseFile 的唯一来源）。
+ * 逐字段的说明文案在 src/tools/config/TOOL.md 的字段表，两边必须同步改。
+ * 注意：engage 块的规格由 src/tools/config/tool.ts 自带（字段属搭话状态机，见该文件注释）。
+ */
+/** engage 块的 parseFile 级校验（与 src/tools/config/tool.ts 的 ENGAGE_KEYS 同字段集，区间以此处为准）。 */
+function checkEngageBlock(raw: unknown): FieldCheck {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "engage 必须是对象" };
+  const e = raw as Record<string, unknown>;
+  const specs: Array<[keyof EngageConfig, string]> = [
+    ["closedMinutes", "engage.closedMinutes 必须在 1–240"],
+    ["openMinutes", "engage.openMinutes 必须在 1–120"],
+    ["windowSize", "engage.windowSize 必须在 1–100"],
+    ["mentionContextSize", "engage.mentionContextSize 必须在 1–30"],
+    ["silenceThreshold", "engage.silenceThreshold 必须在 1–50"],
+    ["windowRelaxCap", "engage.windowRelaxCap 必须在 10–100"],
+  ];
+  const ranges: Record<string, [number, number]> = {
+    closedMinutes: [1, 240],
+    openMinutes: [1, 120],
+    windowSize: [1, 100],
+    mentionContextSize: [1, 30],
+    silenceThreshold: [1, 50],
+    windowRelaxCap: [10, 100],
+  };
+  const parsed: Partial<EngageConfig> = {};
+  let any = false;
+  for (const [key, reason] of specs) {
+    if (e[key] === undefined) continue;
+    const [lo, hi] = ranges[key];
+    const r = numberIn(reason, lo, hi, true)(e[key]);
+    if (r.ok) {
+      (parsed as Record<string, number>)[key] = r.value as number;
+      any = true;
+    }
+  }
+  if (!any) return { ok: false, reason: "engage 至少要有一个合法参数" };
+  return { ok: true, value: { ...ENGAGE_DEFAULTS, ...parsed } };
+}
+
+export const FISH_CONFIG_FIELDS: readonly FishConfigFieldSpec[] = [
+  { name: "ambientMinIntervalSeconds", effect: "hot", check: numberIn("ambientMinIntervalSeconds 必须在 5–3600", 5, 3600) },
+  { name: "watchAmbientChance", effect: "hot", check: numberIn("watchAmbientChance 必须是 0–1", 0, 1) },
+  { name: "engagement", effect: "hot", check: oneOf("engagement 只认 legacy/next", ENGAGEMENT_MODES as readonly string[]) },
+  { name: "engage", effect: "hot", check: checkEngageBlock },
+  { name: "thinkingLevel", effect: "restart", check: oneOf("thinkingLevel 不认识", THINKING_LEVELS as readonly string[]) },
+  { name: "compact", effect: "hot", check: checkCompact },
+  { name: "toolTimeoutSeconds", effect: "restart", check: numberIn("toolTimeoutSeconds 必须在 5–600", 5, 600) },
+  { name: "memeCooldownMinutes", effect: "hot", check: numberIn("memeCooldownMinutes 必须在 0–240", 0, 240) },
+  { name: "salvagePlainReply", effect: "hot", check: checkSalvage },
+  { name: "voices", effect: "hot", check: checkVoices },
+  { name: "weeklyGroupId", effect: "hot", check: checkWeeklyGroup },
+];
+
 function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
   if (!raw || typeof raw !== "object") {
     problems.push("fish.config.json 不是对象，整份忽略");
@@ -95,124 +233,18 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
   const src = raw as Record<string, unknown>;
   const out: Partial<FishConfig> = {};
 
-  const interval = num(src["ambientMinIntervalSeconds"]);
-  if (interval !== undefined && interval >= 5 && interval <= 3600) out.ambientMinIntervalSeconds = interval;
-  else if (src["ambientMinIntervalSeconds"] !== undefined) problems.push("ambientMinIntervalSeconds 必须在 5–3600，已忽略");
-
   if (src["ambientChance"] !== undefined || src["ambientChanceByGroup"] !== undefined) {
     problems.push("ambientChance[/ByGroup] 已废弃: 限流模式, 可删除");
   }
 
-  const watched = chance(src["watchAmbientChance"]);
-  if (watched !== undefined) out.watchAmbientChance = watched;
-  else if (src["watchAmbientChance"] !== undefined) problems.push("watchAmbientChance 必须是 0–1，已忽略");
-
-  const engagement = src["engagement"];
-  if (typeof engagement === "string") {
-    if (ENGAGEMENT_MODES.includes(engagement as EngagementMode)) out.engagement = engagement as EngagementMode;
-    else problems.push(`engagement 只认 legacy/next：${engagement}，已忽略`);
-  } else if (engagement !== undefined) {
-    problems.push("engagement 必须是 legacy/next，已忽略");
+  // 白名单循环：不在 FISH_CONFIG_FIELDS 里的顶层键一律不认；字段校验与告警文案只有这一份
+  for (const spec of FISH_CONFIG_FIELDS) {
+    const rawValue = src[spec.name];
+    if (rawValue === undefined) continue;
+    const result = spec.check(rawValue);
+    if (result.ok) (out as Record<string, unknown>)[spec.name] = result.value;
+    else problems.push(`${result.reason}，已忽略`);
   }
-
-  const engage = src["engage"];
-  if (engage !== undefined) {
-    if (engage && typeof engage === "object" && !Array.isArray(engage)) {
-      const e = engage as Record<string, unknown>;
-      const parsed: Partial<EngageConfig> = {};
-      const minutes = num(e["closedMinutes"]);
-      if (minutes !== undefined && minutes >= 1 && minutes <= 240) parsed.closedMinutes = Math.floor(minutes);
-      else if (e["closedMinutes"] !== undefined) problems.push("engage.closedMinutes 必须在 1–240，已忽略");
-
-      const open = num(e["openMinutes"]);
-      if (open !== undefined && open >= 1 && open <= 120) parsed.openMinutes = Math.floor(open);
-      else if (e["openMinutes"] !== undefined) problems.push("engage.openMinutes 必须在 1–120，已忽略");
-
-      const windowSize = num(e["windowSize"]);
-      if (windowSize !== undefined && windowSize >= 1 && windowSize <= 100) parsed.windowSize = Math.floor(windowSize);
-      else if (e["windowSize"] !== undefined) problems.push("engage.windowSize 必须在 1–100，已忽略");
-
-      const mentionContext = num(e["mentionContextSize"]);
-      if (mentionContext !== undefined && mentionContext >= 1 && mentionContext <= 30) parsed.mentionContextSize = Math.floor(mentionContext);
-      else if (e["mentionContextSize"] !== undefined) problems.push("engage.mentionContextSize 必须在 1–30，已忽略");
-
-      const silence = num(e["silenceThreshold"]);
-      if (silence !== undefined && silence >= 1 && silence <= 50) parsed.silenceThreshold = Math.floor(silence);
-      else if (e["silenceThreshold"] !== undefined) problems.push("engage.silenceThreshold 必须在 1–50，已忽略");
-
-      const relaxCap = num(e["windowRelaxCap"]);
-      if (relaxCap !== undefined && relaxCap >= 10 && relaxCap <= 100) parsed.windowRelaxCap = Math.floor(relaxCap);
-      else if (e["windowRelaxCap"] !== undefined) problems.push("engage.windowRelaxCap 必须在 10–100，已忽略");
-
-      // 合法字段并入缺省（部分非法只丢非法项），全非法则整块走缺省
-      if (Object.keys(parsed).length > 0) out.engage = { ...ENGAGE_DEFAULTS, ...parsed };
-    } else {
-      problems.push("engage 必须是对象，已忽略");
-    }
-  }
-
-  const level = src["thinkingLevel"];
-  if (typeof level === "string") {
-    if (THINKING_LEVELS.includes(level as ThinkingLevel)) out.thinkingLevel = level as ThinkingLevel;
-    else problems.push(`thinkingLevel 不认识：${level}，已忽略`);
-  }
-
-  const compact = src["compact"];
-  if (compact && typeof compact === "object" && !Array.isArray(compact)) {
-    const c = compact as Record<string, unknown>;
-    const maxEntries = num(c["maxEntries"]);
-    const maxChars = num(c["maxChars"]);
-    const next: { maxEntries?: number; maxChars?: number } = {};
-    if (maxEntries !== undefined && maxEntries >= 1 && maxEntries <= 5000) next.maxEntries = Math.floor(maxEntries);
-    else if (c["maxEntries"] !== undefined) problems.push("compact.maxEntries 必须在 1–5000，已忽略");
-    if (maxChars !== undefined && maxChars >= 1000 && maxChars <= 200_000) next.maxChars = Math.floor(maxChars);
-    else if (c["maxChars"] !== undefined) problems.push("compact.maxChars 必须在 1000–200000，已忽略");
-    if (next.maxEntries !== undefined || next.maxChars !== undefined) {
-      out.compact = { maxEntries: next.maxEntries ?? 200, maxChars: next.maxChars ?? 50_000 };
-    }
-  }
-
-  const timeout = num(src["toolTimeoutSeconds"]);
-  if (timeout !== undefined && timeout >= 5 && timeout <= 600) out.toolTimeoutSeconds = timeout;
-  else if (src["toolTimeoutSeconds"] !== undefined) problems.push("toolTimeoutSeconds 必须在 5–600，已忽略");
-
-  const cooldown = num(src["memeCooldownMinutes"]);
-  if (cooldown !== undefined && cooldown >= 0 && cooldown <= 240) out.memeCooldownMinutes = cooldown;
-  else if (src["memeCooldownMinutes"] !== undefined) problems.push("memeCooldownMinutes 必须在 0–240，已忽略");
-
-  const salvage = src["salvagePlainReply"];
-  if (typeof salvage === "boolean") out.salvagePlainReply = salvage;
-  else if (salvage !== undefined) problems.push("salvagePlainReply 必须是 true/false，已忽略");
-
-  const rawVoices = src["voices"];
-  if (rawVoices && typeof rawVoices === "object" && !Array.isArray(rawVoices)) {
-    const voices: FishConfig["voices"] = {};
-    for (const [persona, value] of Object.entries(rawVoices as Record<string, unknown>)) {
-      if (!value || typeof value !== "object") continue;
-      const v = value as Record<string, unknown>;
-      const url = typeof v["url"] === "string" ? v["url"].trim() : "";
-      if (!url) {
-        problems.push(`voices.${persona}.url 缺失，已忽略`);
-        continue;
-      }
-      const speedRaw = num(v["speed"]);
-      const speed = speedRaw !== undefined && speedRaw >= 0.5 && speedRaw <= 2 ? speedRaw : undefined;
-      if (speedRaw !== undefined && speed === undefined) problems.push(`voices.${persona}.speed 必须在 0.5–2.0，已忽略`);
-      voices[persona] = {
-        url,
-        ...(typeof v["referWav"] === "string" ? { referWav: v["referWav"] } : {}),
-        ...(typeof v["referText"] === "string" ? { referText: v["referText"] } : {}),
-        ...(typeof v["referLanguage"] === "string" ? { referLanguage: v["referLanguage"] } : {}),
-        ...(speed !== undefined ? { speed } : {}),
-      };
-    }
-    out.voices = voices;
-  }
-
-  const weekly = src["weeklyGroupId"];
-  if (typeof weekly === "string" && /^\d+$/.test(weekly.trim())) out.weeklyGroupId = weekly.trim();
-  else if (weekly !== undefined && weekly !== "") problems.push("weeklyGroupId 必须是群号（纯数字），已忽略");
-
   return out;
 }
 

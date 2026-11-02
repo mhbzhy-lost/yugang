@@ -788,7 +788,7 @@ try {
                 reacts.push({ emoji, messageId, sink: "fish2" });
               },
             });
-            const MASTER_TOOLS = ["read", "grep", "write", "tree", "model", "restart", "watch", "meme_add", "meme_import"];
+            const MASTER_TOOLS = ["read", "grep", "write", "tree", "config", "restart", "watch", "meme_add", "meme_import"];
             const conv2 = await fish2.group("smoke:group:2", { name: "无主人验收群", groupId: "999998", count: MEMBERS.length, owner: "100000", master: "", members: MEMBERS });
             const agent2 = await conv2.agent(ctx);
             const visible = [...agent2.tools.map((t) => t.name), ...agent2.deferred.map((t) => t.name)];

@@ -404,8 +404,10 @@ const fish = await openFish({
         ...(modelSelection.image.proxy ? { proxy: modelSelection.image.proxy } : {}),
       }
     : undefined,
-  // model 管理工具写回同一个文件
+  // config 工具写回 models 角色表用同一份文件
   modelsPath: modelSelection.main.configSource,
+  // config 工具判定「主人私聊轮」用：与 chatKeyFor 同源（两种历史键写法都认）
+  chatKeyOf: (conversationId) => chatKeyFor(conversationId),
   sdUrl: process.env.SD_WEBUI_URL,
   // （sdUrl 存在时见启动处的邻居保温定时器）
   tagsCsv: join(HOME, "danbooru.csv"),

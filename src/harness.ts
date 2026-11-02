@@ -183,16 +183,18 @@ export interface FishOptions {
   searchKey?: string;
   /** ChatGPT/Codex 图片通道（models.image）：authPath + provider 决定登录凭据，model 是默认模型名；proxy 只给这条通道用。 */
   gptImage?: { authPath: string; provider: string; model: string; proxy?: string };
-  /** config/models.json 路径；model 管理工具写回时用。 */
+  /** config/models.json 路径；config 工具写回 models 角色表时用。 */
   modelsPath?: string;
   /** SD WebUI（Windows 宿主机）的 baseUrl；给了才有本地画图。 */
   sdUrl?: string;
   /** danbooru.csv 路径；给了才能查 tag 词表。 */
   tagsCsv?: string;
-  /** 主人 QQ：fs/restart 自改工具的身份闸，给了才注册这些工具。 */
+  /** 主人 QQ：fs/config/restart 自改工具的身份闸，给了才注册这些工具。 */
   master?: string;
   /** submissionId → 本轮触发消息（轮类型 + quoteIds 窗口）；把回复引用绑在轮上，防串线。 */
   triggerOf?: (roundId: unknown) => RoundTrigger | undefined;
+  /** conversationId → 原始 chatKey（不带人格后缀）：config 工具判定「主人私聊轮」用。 */
+  chatKeyOf?: (conversationId: string) => string | undefined;
   /**
    * 主动 @ 的身份闸：由宿主机械提供（私聊 = not_group；群内主人/特别关注者 = allow）。
    * 同时交给 say_*（出口校验）使用；不提供时主动 @ 一律 fail closed。
@@ -318,6 +320,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     ...(options.searchKey === undefined ? {} : { searchKey: options.searchKey }),
     ...(options.master === undefined ? {} : { master: options.master }),
     ...(options.modelsPath === undefined ? {} : { modelsPath: options.modelsPath }),
+    ...(options.chatKeyOf ? { chatKeyOf: options.chatKeyOf } : {}),
     // 同一条链路两用：watch 校验关注对象、say_* 校验主动 @ 的目标
     ...(options.groupMembersOf ? { groupMembersOf: options.groupMembersOf, membersOf: options.groupMembersOf } : {}),
     ...(options.onWatchChanged ? { onWatchChanged: options.onWatchChanged } : {}),
