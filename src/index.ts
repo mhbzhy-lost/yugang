@@ -331,11 +331,6 @@ function maxArrivalSeq(messages: readonly { arrivalSeq?: number }[]): number | u
   return best;
 }
 
-/** 流水末条的 arrivalSeq（已按到达序排好）。 */
-function lastArrivalSeq(messages: readonly { arrivalSeq?: number }[]): number | undefined {
-  return messages.length > 0 ? messages[messages.length - 1]?.arrivalSeq : undefined;
-}
-
 /** 本轮注入窗口的合法引用目标（T4 quoteMsgId 消费）：渲染处现算的 [m:id] 集合。 */
 function quoteIdsOf(messages: readonly { messageId?: number | string }[]): Set<string> {
   return new Set(messages.flatMap((m) => (m.messageId !== undefined ? [String(m.messageId)] : [])));
@@ -1373,7 +1368,8 @@ function renderAmmoSection(items: readonly AmmoCandidate[]): { lines: string[]; 
 /**
  * 开窗注入轮（injection，背景板语义）：open 进入瞬间把积压一轮注入。这些消息只是
  * 背景板——无必答、无 salvage、模型不必逐条回应也不必补回复任何人；遇忙放弃
- * （宁少勿答，积压不重放）；注入后已读标记推进到 recent 末条（决策 3：之后归 shard，
+ * （宁少勿答，积压不重放）；注入后已读标记只推进到本轮实际注入集合（fresh）的
+ * maxArrivalSeq——提交等待期间新到的未注入消息不算已读，仍归下一窗（决策 3：之后归 shard，
  * 不重复注入）。entry kind = fish.engage_tick（不写 fish.inbound、不进摘要与抽取，
  * 但计入换页阈值）；不附 inline 图；quoteIds = 本轮注入的积压消息集。
  * 沉默递进（T8）：连续零出口达阈值时注入尾部追加 nudge 文案（2×阈值换 nudge_2，
@@ -1454,7 +1450,9 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
     entryKind: MEMORY_ENGAGE_KIND,
     quoteIds: quoteIdsOf(fresh),
   });
-  advanceSeenSeq(conv.id, lastArrivalSeq(recent.get(chatKey) ?? []));
+  // 已读标记只推进到本轮实际注入的 fresh 集合：若推进到 recent 末条，提交等待期间
+  // 新到的未注入消息会被误标已读、永远饿死注入（终审 #1）
+  advanceSeenSeq(conv.id, maxArrivalSeq(fresh));
 }
 
 /**
@@ -1732,7 +1730,10 @@ async function runEvalCommand(
     text: turn.text,
   }));
 
-  // ④ 引用链：鱼当时回的那条原始消息（quoteId 从 recent 流水解析；不可得 = 标注缺失）
+  // ④ 引用链：鱼当时回的那条原始消息（quoteId 从 recent 流水解析）。不可得时不静默省略：
+  // 事件里用 quotedFromMissing 显式标注（终审 #6）。sentmap 覆盖口径（现状，本期不扩）：
+  // sentmap 只记群内 say_* 出口的发送记录，私聊与语音出口不在内——指向型评价私聊/语音
+  // 消息时按「未命中降级最近一条」走，引用链多数不可得，按缺失标注呈现
   const quoteTarget = target?.snapshot.quoteId;
   const quotedFrom = quoteTarget !== undefined
     ? (() => {
@@ -1769,7 +1770,9 @@ async function runEvalCommand(
     targetSummary,
     degraded,
     ...(target ? { target: target.snapshot } : {}),
-    ...(quotedFrom ? { quotedFrom } : {}),
+    // 引用链缺失的显式标注：对象展开不会被多余属性检查拒绝，也避免了在 event 类型上撒谎的强转；
+    // 下游用 quotedFromMissing === true 区分「没有引用链」与「引用链查不到」
+    ...(quotedFrom ? { quotedFrom } : { quotedFromMissing: true }),
     context,
     members,
     chatKey: evalChatKey,

@@ -95,9 +95,9 @@ export function createWatchTool(manifest: ToolManifest, deps: ToolPackageDeps): 
       }
 
       // 主人不入特别关注名单（F9）：主人是「你主人」，名单只收群友；装载侧 applyWatched
-      // 还会再滤一次（双保险）。文案表暂无此 key，回落文案短于 prompt-lint 阈值（12 汉字）。
+      // 还会再滤一次（双保险）。文案 key 在中心 prompt/messages.md（终审 #8 key 化）
       if (userId === deps.master) {
-        throw new Error(deps.prompts.messages["watch_is_master"] ?? "主人不入特别关注名单");
+        throw new Error(deps.prompts.messages["watch_is_master"] ?? "watch_is_master");
       }
 
       // 号码校验（只约束 add）：只能关注本群真实存在的人（模型偶尔会抄错号，抄错了永远命中不了）

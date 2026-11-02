@@ -39,41 +39,9 @@ interface ConfigArgs {
 
 const ROLES: readonly ModelRole[] = ["main", "vision", "image"];
 
-/**
- * engage 块的受控键与校验：字段名以计划契约（docs/plans/2026-11-02-engagement-next.md Task 2/Task 14）
- * 为准；engage 的解析与 FishConfig 归搭话状态机所有（与 config 工具不同一写路径），落地若有出入
- * 集成时在这里对齐。只认七个已知键、数值 1–1440，空对象与未知键拒绝。
- */
-const ENGAGE_KEYS: readonly string[] = [
-  "closedMinutes",
-  "openMinutes",
-  "windowSize",
-  "mentionContextSize",
-  "silenceThreshold",
-  "windowRelaxCap",
-  "shardSeconds",
-  "groups",
-];
-
-function checkEngage(raw: unknown): FieldCheck {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "engage 必须是对象" };
-  const src = raw as Record<string, unknown>;
-  const out: Record<string, number> = {};
-  for (const [key, value] of Object.entries(src)) {
-    if (!ENGAGE_KEYS.includes(key)) return { ok: false, reason: `engage 不认识 ${key}` };
-    const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-    if (!Number.isFinite(n) || n < 1 || n > 1440) return { ok: false, reason: `engage.${key} 必须在 1–1440` };
-    out[key] = n;
-  }
-  if (Object.keys(out).length === 0) return { ok: false, reason: "engage 至少要有一个参数" };
-  return { ok: true, value: out };
-}
-
-/** config 工具的字段白名单：fish.config 的共享规格 + engage 块。 */
-const CONFIG_FIELDS: readonly FishConfigFieldSpec[] = [
-  ...FISH_CONFIG_FIELDS,
-  { name: "engage", effect: "hot", check: checkEngage },
-];
+/** config 工具的字段白名单：与 parseFile 同源（../../fish-config.ts 的 FISH_CONFIG_FIELDS，
+ *  engage 块也在其中，终审 #7：不再另持一份字段集与校验）。 */
+const CONFIG_FIELDS: readonly FishConfigFieldSpec[] = FISH_CONFIG_FIELDS;
 
 /** 值的回执显示：字符串裸显，其余 JSON 化。 */
 function show(value: unknown): string {
@@ -173,6 +141,8 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
       }));
     }
     console.log(`[鱼缸] config set fish.config.json ${spec.name}=${show(result.value)} (${spec.effect})`);
+    // 部分字段非法已回默认的（engage 块逐字段校验）：告警进审计日志与 set 回执（终审 #5/#7）
+    for (const problem of result.problems ?? []) console.warn(`[鱼缸] 配置 ${problem}`);
     return result;
   }
 
@@ -253,6 +223,10 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
         value: show(result.value),
         effect: effectLabel(spec.effect),
       })];
+      // 部分字段非法已回默认：逐字段告警附在回执里（终审 #5，复用 read 的告警模板）
+      if (result.problems?.length) {
+        lines.push(renderTemplate(p.messages["config_read_problems"] ?? "{{problems}}", { problems: result.problems.join("；") }));
+      }
       if (spec.effect === "restart") lines.push(p.messages["config_restart_reminder"] ?? "");
       return { output: [{ type: "text", text: lines.filter((line) => line.length > 0).join("\n") }] };
     },

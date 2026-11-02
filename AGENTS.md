@@ -175,8 +175,12 @@
   `next` = 定时开窗两态（`src/engage-next.ts` 状态机按群循环，每 tick 现读配置，无消息期也能
   热切换 start/stop）——closed 态（默认 10 分钟，`engage.closedMinutes`）@ 必答不变，非 @ 群
   消息统一 `skip:next_pending` 不进模型（回复鱼的内容只是引用动作，决定回复的是 @）；open 态
-  （默认 3 分钟，`engage.openMinutes`）非 @ 群消息 `enter:free_pass` 走既有 10 秒合并管线
-  （非必答：不 markHandled、不刷限流冷却、不触发正文兜底，零出口合法）。私聊（主人）、`/` 指令、
+  （默认 3 分钟，`engage.openMinutes`）非 @ 群消息 `enter:free_pass` 按 `engage.shardSeconds`
+  （缺省 20 秒）分片——每拍把窗内**全部发送者**的新消息合并成一轮 ambient 提交（在途时并入
+  下一拍，不并发；非必答：不 markHandled、不刷限流冷却、不触发正文兜底，零出口合法）。
+  私聊（主人）、`/` 指令、
+  `next` 还要过 `engage.groups` 群白名单：开关 & 白名单双闸，只有名单内的群才进 next
+  （缺省空名单 = 任何群都不进 next，fail-safe）。
   GIF 静默收图轮在闸前各有自己的通道不受影响；recent 流水（上限 max(30, `engage.windowRelaxCap`)，
   缺省仍 30）、chatlog、昵称映射、`#recentForward` 合集 id 缓存等旁路记账也照常。`@全体成员` /
   `@别人` 不置 mentionsBot，天然按非 @ 处理。非法值保留缺省并告警。
@@ -184,6 +188,8 @@
 - **开窗注入尾部三件可选附件（仅 next，都不产生必答义务）**：① footer 宵禁二态（本地 00:00–09:00 用 `ctx_engage_footer_night` 夜间版——纯搭话模式：不鼓励主动开腔，别起话题别 @ 人别分享素材；其余时间用 `ctx_engage_footer` 白天版——鼓励自由发挥；纯文案层机械切换，@ 白名单等硬机制不动，injection / shard 轮尾部都带）；② 弹药栏（T13，决策 21：injection / nudge-only 轮尾部可选追加「旧账」段——上一页剖面还开着的未兑现承诺/话头（T12 卡片从 pi.reset head 机械回读）+ 记忆（公共+私有合并）里命中委托标记（托你查/帮我查/等我问问类，机械子串匹配、不做语义检索）的 lore/people 文本，逐条一行「N 天前…还没下文」式；只机械拼装不语义生成；空弹药整段不注入不占位（退化到纯背景板）；段预算机械裁决，超限丢条目；有弹药时 runtime 引导主动分享）；③ nudge（T8）的二级文案 `ctx_engage_nudge_2` 带 {{n}} 未兑现数（当前拼出的弹药条数）。
 - **闸放行 ≠ 立刻提交**：放行的群消息按「群 + 发送者」攒 **10 秒静默**（窗口固定，没有环境变量、没有最长等待），
   同一发送者的新消息取消旧计时并继续加长，不同发送者互不干扰；静默满 10 秒才把整组提交一次
+  （这套按发送者的合并只管 @ / legacy 必答轮；next 的 open 态非 @ 消息不进这里，改投 shard
+  收集器，按 `engage.shardSeconds`（缺省 20 秒）分片、全部发送者合并成一轮）
 - 整组语义：**最后一条是引用锚点**（A-B-A 里 B 只能进背景，不可能顶掉 A 的位置）；整组里任意一条 @鱼 → 整组必答；
   整组里任意一条是回复 → 这一轮仍然引用。锚点之前的群消息最多取 **10 条**做背景，整组不会在背景里重复出现。
   engagement=next 时 @（answer）轮背景缩为 `engage.mentionContextSize`（默认 5，热加载），且先取 N 条再

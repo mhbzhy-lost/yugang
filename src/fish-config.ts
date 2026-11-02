@@ -88,8 +88,9 @@ export interface ConfigLoadResult {
 /** 受控字段生效语义：hot = fish.config.json 热加载（mtime 变了下一轮生效）；restart = 写盘后需重启进程。 */
 export type FishConfigEffect = "hot" | "restart";
 
-/** 单字段校验结果：ok 时 value 是规整后可直接写盘的值；失败 reason 是完整告警文案（不含结尾「，已忽略」）。 */
-export type FieldCheck = { ok: true; value: unknown } | { ok: false; reason: string };
+/** 单字段校验结果：ok 时 value 是规整后可直接写盘的值；失败 reason 是完整告警文案（不含结尾「，已忽略」）。
+ *  ok 且 problems 非空 = 部分字段非法已回默认（终审 #5）：合法字段照用，逐字段告警由 parseFile / config 工具透出。 */
+export type FieldCheck = { ok: true; value: unknown; problems?: string[] } | { ok: false; reason: string };
 
 /** fish.config.json 受控字段规格：config 工具的白名单与 parseFile 共用这一份，别处不得另写校验。 */
 export interface FishConfigFieldSpec {
@@ -182,9 +183,12 @@ function checkWeeklyGroup(raw: unknown): FieldCheck {
 /**
  * 受控字段白名单（config 工具与 parseFile 的唯一来源）。
  * 逐字段的说明文案在 src/tools/config/TOOL.md 的字段表，两边必须同步改。
- * 注意：engage 块的规格由 src/tools/config/tool.ts 自带（字段属搭话状态机，见该文件注释）。
  */
-/** engage 块的 parseFile 级校验（与 src/tools/config/tool.ts 的 ENGAGE_KEYS 同字段集，区间以此处为准）。 */
+/**
+ * engage 块的校验（config 工具 set 与 parseFile 共用这一份，区间以此处为准）：
+ * 逐字段校验，非法字段回默认并记入 problems（终审 #5：保留「非法回默认、合法照用」
+ * 语义但必须告警）；全部非法才整块拒绝。
+ */
 function checkEngageBlock(raw: unknown): FieldCheck {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "engage 必须是对象" };
   const e = raw as Record<string, unknown>;
@@ -208,12 +212,15 @@ function checkEngageBlock(raw: unknown): FieldCheck {
     shardSeconds: [5, 120],
   };
   const parsed: Partial<EngageConfig> = {};
+  const problems: string[] = [];
   let any = false;
   if (e["groups"] !== undefined) {
     const g = e["groups"];
     if (Array.isArray(g) && g.every((x) => typeof x === "string" && /^\d+$/.test(x))) {
       parsed.groups = [...new Set(g)];
       any = true;
+    } else {
+      problems.push("engage.groups 必须是群号数组，已回默认");
     }
   }
   for (const [key, reason] of specs) {
@@ -223,10 +230,14 @@ function checkEngageBlock(raw: unknown): FieldCheck {
     if (r.ok) {
       (parsed as Record<string, number>)[key] = r.value as number;
       any = true;
+    } else {
+      problems.push(`${reason}，已回默认`);
     }
   }
-  if (!any) return { ok: false, reason: "engage 至少要有一个合法参数" };
-  return { ok: true, value: { ...ENGAGE_DEFAULTS, ...parsed } };
+  if (!any) {
+    return { ok: false, reason: problems.length > 0 ? `engage 至少要有一个合法参数（${problems.join("；")}）` : "engage 至少要有一个合法参数" };
+  }
+  return { ok: true, value: { ...ENGAGE_DEFAULTS, ...parsed }, ...(problems.length > 0 ? { problems } : {}) };
 }
 
 export const FISH_CONFIG_FIELDS: readonly FishConfigFieldSpec[] = [
@@ -261,8 +272,11 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
     const rawValue = src[spec.name];
     if (rawValue === undefined) continue;
     const result = spec.check(rawValue);
-    if (result.ok) (out as Record<string, unknown>)[spec.name] = result.value;
-    else problems.push(`${result.reason}，已忽略`);
+    if (result.ok) {
+      (out as Record<string, unknown>)[spec.name] = result.value;
+      // 部分字段非法已回默认的（engage 块），逐字段告警照常透出（终审 #5）
+      for (const problem of result.problems ?? []) problems.push(problem);
+    } else problems.push(`${result.reason}，已忽略`);
   }
   return out;
 }

@@ -29,8 +29,8 @@
     }
   },
   "toolTimeoutSeconds": 30,
-  "_engagement": "注释：搭话总开关。legacy = 现行全部搭话判定；next = 定时开窗两态——closed 态非 @ 群消息 skip:next_pending 不进模型，open 态（每 closedMinutes 分钟开 openMinutes 分钟）非 @ 群消息 free_pass 走合并管线（@ 恒必答；私聊、/ 指令、GIF 收图轮与记账不受影响）。热生效，只认 legacy/next，非法值保留缺省并告警",
-  "_engage": "注释：next 搭话开窗参数，仅 engagement=next 时消费。closedMinutes=关窗时长（分钟）、openMinutes=开窗时长、windowSize=开窗积压注入上限（条）、mentionContextSize=@ 轮背景条数（legacy 恒 10 不变）、silenceThreshold=连续多少个开窗零出口后注入 nudge、windowRelaxCap=零出口翻倍后积压放宽上限（recent 流水上限同步提升为 max(30, windowRelaxCap)）、shardSeconds=open 态分片节拍（秒）——每拍把窗内全部发送者的新消息合成一轮提交，在途时累积不并发。逐字段校验，非法值告警保留缺省，热生效",
+  "_engagement": "注释：搭话总开关。legacy = 现行全部搭话判定；next = 定时开窗两态——closed 态非 @ 群消息 skip:next_pending 不进模型，open 态（每 closedMinutes 分钟开 openMinutes 分钟）非 @ 群消息 free_pass 按 shardSeconds 分片、全部发送者合并一轮（@ 恒必答；私聊、/ 指令、GIF 收图轮与记账不受影响）；next 还要过 engage.groups 群白名单：开关 & 白名单双闸，缺省空名单 = 任何群都不进 next（fail-safe）。热生效，只认 legacy/next，非法值保留缺省并告警",
+  "_engage": "注释：next 搭话开窗参数，仅 engagement=next 时消费。closedMinutes=关窗时长（分钟）、openMinutes=开窗时长、windowSize=开窗积压注入上限（条）、mentionContextSize=@ 轮背景条数（legacy 恒 10 不变）、silenceThreshold=连续多少个开窗零出口后注入 nudge、windowRelaxCap=零出口翻倍后积压放宽上限（recent 流水上限同步提升为 max(30, windowRelaxCap)）、shardSeconds=open 态分片节拍（秒，缺省 20）——每拍把窗内全部发送者的新消息合成一轮提交，在途时累积不并发、groups=群白名单（群号字符串数组），engagement=next 仅对这些群生效，空 = 不生效。逐字段校验，非法值告警保留缺省，热生效",
   "_sendPacingSeconds": "注释：出站配速（秒）——发送队列同会话相邻两次实际发送至少隔这么多秒，防连珠炮；0 = 关闭。对全部消息生效（@ 轮/环境轮/机械回执一样配速），改完下一拍生效。合法 0–60，非法告警保留缺省",
   "_salvagePlainReply": "注释：模型忘调 say 时的正文兜底，仅必答轮（私聊/被@/回复合集）生效——零 say 时取正文首行截 120 字补发；误发可把下面的键改成 false 关掉",
   "salvagePlainReply": true

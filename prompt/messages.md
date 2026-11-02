@@ -38,6 +38,10 @@ fs_binary: 二进制文件不读
 fs_link: 路径里有符号链接，不跟（链接可能指到允许范围外），换成真实文件的路径再试
 fs_too_big: 文件太大
 
+# watch 工具（特别关注）的主人闸拒绝（终审 #8 补 key 化；其余 watch_* 文案在
+# src/tools/watch/TOOL.md 的 ---tool-messages 块）
+watch_is_master: 你是我的主人，不入特别关注名单——名单只收群友
+
 # 合集与静默收图轮
 forward_recent_prefix: 以下是这个群刚才那条没展开的合集内容：
 forward_collapsed: [转发合集（内容略）]

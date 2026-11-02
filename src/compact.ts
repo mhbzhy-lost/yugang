@@ -97,13 +97,15 @@ export function createCompactor(options: CompactorOptions): Compactor {
       if (counted.length === 0) return { compacted: false, reason: "empty" };
 
       const entries = counted.length;
-      const chars = transcript.length;
+      // 阈值字符数按 CountedEntry.chars 累加：engage_tick 背景板行不进摘要（lines 空）
+      // 但字符计入阈值（终审 #2），否则背景板永远顶不动 maxChars
+      const chars = counted.reduce((sum, entry) => sum + entry.chars, 0);
       const limits = options.limits ? options.limits() : { maxEntries: options.maxEntries, maxChars: options.maxChars };
       if (!force && entries < limits.maxEntries && chars < limits.maxChars) {
         return { compacted: false, reason: "below_threshold", entries, chars };
       }
 
-      // 页里只有 engage_tick 这类无文本 entry（背景板轮把条数顶到阈值）时没有可摘要的内容：
+      // 页里只有 engage_tick 这类无文本 entry（背景板轮把条数/字符阈值顶到）时没有可摘要的内容：
       // 直接机械降级换页（时间头照旧），不做三次注定失败的摘要尝试
       if (transcript.trim().length === 0) {
         try {
@@ -238,9 +240,9 @@ const PROFILE_QUOTE_CHARS = 40;
 /** 逐字条目每类（话头 / 承诺）的上限。 */
 const PROFILE_ITEM_CAP = 5;
 
-/** 机械时间头的兑底模板（prompt/messages.md 缺 key 时用）：纯时间戳拼接， */
-/** 降级路径必须无条件可渲染，不许因文案缺失卡死换页。 */
-const TIME_HEADER_FALLBACK = "（前情 {{count}} 条 · {{start}} ~ {{end}}）";
+/** 机械时间头的兑底模板（prompt/messages.md 缺 key 时用）：纯数字/时间戳拼接、不含中文 */
+/**（终审 #8：机械降级路径不内嵌中文文案），必须无条件可渲染，不许因文案缺失卡死换页。 */
+const TIME_HEADER_FALLBACK = "{{count}} · {{start}} ~ {{end}}";
 
 /** 条目状态词（卡片渲染与旧剖面回读共用同一套词，改词要同步 extractPreviousProfile 的解析）。 */
 const THREAD_STATUS = { open: "进行中", done: "已完结" } as const;
@@ -388,7 +390,7 @@ async function profileBounded(
  * 来源硬约束：只从被压缩页的 transcript 取——不碰 recent / chatlog，不把鱼没见过的
  * 消息伪装成已读上下文。engage_tick（开窗积压 / shard 背景板）行包含在内：T12 裁定
  * 背景板也是模型见过的内容，行进尾巴；但它们不进摘要输入（renderCountedEntries 的
- * lines 仍为空，摘要/阈值字符数零变化）。
+ * lines 仍为空，摘要零变化；阈值字符数经 chars 计入，终审 #2）。
  */
 export function mechanicalTail(counted: CountedEntry[], limit: number): { lines: string[]; entries: number; start: string; end: string } {
   const tail = counted.slice(-limit);
@@ -597,7 +599,7 @@ export interface RenderedTranscript {
  * 群消息的 entry 有两种 kind：存量 pi.user，以及带结构化原始数据的 fish.inbound
  * （记忆入口）；两者部读 entry.model（宿主拼装的 user message），handoff 行为不变。
  * fish.gif_ingest（收图任务）与 fish.engage_tick（开窗积压 / shard 轮）不是群友原话，
- * 不进摘要（engage_tick 仍计入换页阈值、原文行进换页尾巴，见 renderCountedEntries）；
+ * 不进摘要（engage_tick 仍计入换页阈值的条数与字符数、原文行进换页尾巴，见 renderCountedEntries）；
  * fish.eval（主人评价事件）同被排除（决策 11b，只进抽取白名单）。
  */
 export async function renderTranscript(conversation: Conversation): Promise<RenderedTranscript> {
@@ -608,12 +610,14 @@ export async function renderTranscript(conversation: Conversation): Promise<Rend
 
 /**
  * 一条入册 entry 摊平后的行与它的时间戳（时间头 / 尾巴用；没有可靠时间戳时为 undefined）。
- * lines 进摘要输入（剖面生成的 transcript）与阈值字符数；tailLines 只进换页尾巴
- * （mechanicalTail，engage_tick 背景板原文：模型见过、但不是群友原话，不进摘要）；
+ * lines 进摘要输入（剖面生成的 transcript）；chars 是计入换页阈值的字符数——engage_tick
+ * 的 tailLines 不进摘要但同样计入 chars（终审 #2：背景板行必须能顶动 maxChars 阈值）；
  * speaker（fish.inbound 的结构化数据）供剖面卡片的活跃成员纯机械统计。
  */
 export interface CountedEntry {
   lines: string[];
+  /** 计入换页阈值的字符数（lines 与 tailLines 的正文，不含宿主拼接的分隔换行）。 */
+  chars: number;
   at?: number;
   tailLines?: string[];
   speaker?: { userId: string; nickname: string };
@@ -639,7 +643,8 @@ function entryTimestamp(entry: { kind: string; model?: unknown; data?: unknown }
  * 群消息的 entry 有两种 kind：存量 pi.user，以及带结构化原始数据的 fish.inbound
  * （记忆入口）；两者部读 entry.model（宿主拼装的 user message），handoff 行为不变。
  * fish.gif_ingest（收图任务）不是群友原话，不进摘要；fish.engage_tick（开窗积压 /
- * shard 轮）计入换页阈值（entries），不进摘要输入（决策 4：背景板不进摘要），但
+ * shard 轮）计入换页阈值（entries 与 chars：tailLines 字符数也算，终审 #2），不进摘要输入
+ * （决策 4：背景板不进摘要），但
  * 原文行进换页尾巴（T12 裁定：背景板也是模型见过的内容，tailLines）；
  * fish.eval（主人评价事件，T6）是书记性 entry（无 model 字段、不占模型上下文），
  * 既不计数也不进 handoff（决策 11b：排除摘要，只进抽取白名单）。
@@ -660,16 +665,24 @@ async function renderCountedEntries(conversation: Conversation): Promise<Counted
           typeof data?.userId === "string" && data.userId.trim() && typeof data?.nickname === "string"
             ? { userId: data.userId.trim(), nickname: data.nickname.trim() }
             : undefined;
-        counted.push({ lines: text ? [`群友: ${text}`] : [], at: entryTimestamp(entry), ...(speaker ? { speaker } : {}) });
+        const lines = text ? [`群友: ${text}`] : [];
+        counted.push({ lines, chars: lines.join("\n").length, at: entryTimestamp(entry), ...(speaker ? { speaker } : {}) });
       } else if (entry.kind === MEMORY_ENGAGE_KIND) {
-        // engage_tick：计入阈值（entries），不进摘要输入；原文行只进换页尾巴（tailLines），
+        // engage_tick：计入阈值（entries 与 chars），不进摘要输入；原文行只进换页尾巴（tailLines），
         // 时间戳保留给时间头
         const text = entryText(entry.model);
-        counted.push({ lines: [], at: entryTimestamp(entry), ...(text ? { tailLines: [text] } : {}) });
+        counted.push({
+          lines: [],
+          chars: text.length,
+          at: entryTimestamp(entry),
+          ...(text ? { tailLines: [text] } : {}),
+        });
       } else if (entry.kind === "fish.outbound") {
         const data = entry.data as { items?: string[]; at?: unknown } | undefined;
+        const lines = (data?.items ?? []).map((text) => `鱼: ${text}`);
         counted.push({
-          lines: (data?.items ?? []).map((text) => `鱼: ${text}`),
+          lines,
+          chars: lines.join("\n").length,
           at: typeof data?.at === "number" ? data.at : undefined,
         });
       }

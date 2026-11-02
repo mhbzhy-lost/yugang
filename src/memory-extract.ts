@@ -5,8 +5,8 @@
  * type: fact|profile|lore|card, subject, factId?(SUPERSEDE 必填), text, signal[], confidence}；
  * SKIP 由模型报进 skipped 计数，不产出。SUPERSEDE 的 subject 不采信模型——由 known
  * 附带的 factId→subject 映射机械解析（解析不到就弃）。signal 两类（命中 people 名单 /
- * 与现有 fact 冲突）由代码机械重算，模型标注只作教学不作数据。confidence low 在正常
- * 轮机械丢弃（复查轮放宽保留）。
+ * 与现有 fact 冲突）由代码机械重算，模型标注只作教学不作数据。confidence 只认
+ * high/medium/low，缺失或未知值弃该条；low 在正常轮机械丢弃（复查轮放宽保留）。
  *
  * 安全边界：
  *   - transcript 由 compact.ts 的 renderMemoryTranscript 产生，只含
@@ -36,6 +36,8 @@ const FACT_SOURCES: readonly FactSource[] = ["stated", "observed", "reported"];
 const LORE_KINDS = ["word", "meme", "rule"] as const;
 const CANDIDATE_ACTIONS = ["ADD", "SUPERSEDE"] as const;
 const CANDIDATE_TYPES = ["fact", "profile", "lore", "card"] as const;
+/** confidence 枚举（终审 #3 加严）：缺失或不认识的值整条丢弃，不再默认放行。 */
+const CONFIDENCE_LEVELS = ["high", "medium", "low"] as const;
 
 /** 所有字段共用的明显隐私模式：手机号/连续 7 位以上数字、邮箱、URL、密钥样式。 */
 const PRIVACY_RES: readonly RegExp[] = [
@@ -151,9 +153,11 @@ interface Reconciled {
  *   - 顶层形状不合格（不是对象 / candidates 不是数组）→ undefined（parse_failed）；
  *   - 每条候选逐个 sanitize：action 只认 ADD/SUPERSEDE，type 只认 fact/profile/lore/card，
  *     任一字段不合格就弃该条（不影响其它条）；
+ *   - SUPERSEDE 仅允许 type=fact（终审 #3：profile/lore/card 一律丢弃，不降级成 ADD）；
  *   - SUPERSEDE：factId 必须在 known 的 id→subject 映射里命中，subject 以机械解析为准，
  *     模型写的 subject 不采信；未命中就弃（没命中 known 里的 id 就不写）；
- *   - confidence low：正常轮机械丢弃（复查轮放宽保留——复查正是为零提取兜底）；
+ *   - confidence 只认 high/medium/low，缺失或未知值弃该条；low 正常轮机械丢弃
+ *     （复查轮放宽保留——复查正是为零提取兜底）；
  *   - signal 机械重算：people = 候选主体命中已知人物名单（card 看任一 subject），
  *     conflict = SUPERSEDE 有效解析；模型标注的 signal 不采信。
  */
@@ -186,8 +190,13 @@ function reconcileCandidates(
     if (typeof action !== "string" || !CANDIDATE_ACTIONS.includes(action as (typeof CANDIDATE_ACTIONS)[number])) continue;
     if (typeof type !== "string" || !CANDIDATE_TYPES.includes(type as (typeof CANDIDATE_TYPES)[number])) continue;
     const confidence = candidate["confidence"];
-    // confidence low 不报（试金石的机械兜底）；复查轮放宽：low 也收，交主人筛
+    // confidence 加严（终审 #3）：只认枚举值，缺失/未知值弃该条；
+    // low 正常轮机械丢弃（试金石的机械兜底）；复查轮放宽：low 也收，交主人筛
+    if (typeof confidence !== "string" || !CONFIDENCE_LEVELS.includes(confidence as (typeof CONFIDENCE_LEVELS)[number])) continue;
     if (confidence === "low" && !mode.review) continue;
+    // SUPERSEDE 只允许 type=fact（终审 #3）：profile/lore/card 没有可被取代的 id，
+    // 越权标注一律丢弃、不降级成 ADD（prompt/memory-extract.md 也只对 fact 定义 SUPERSEDE）
+    if (action === "SUPERSEDE" && type !== "fact") continue;
 
     if (type === "fact") {
       const fact = readFact(candidate, action, known);

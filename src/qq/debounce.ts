@@ -302,7 +302,7 @@ export interface ContextOptions {
   backgroundLimit?: number;
   /** 已读标记（决策 20）：背景板先取上限再剔除 arrivalSeq ≤ 它的行（已进过模型的不重复注入）；缺省不去重（legacy 零变化）。 */
   seenSeq?: number;
-  /** 背景板注入时紧跟其后的引导行文案（ctx_seen_note，next 每次都带，不限于发生截减时）；缺省不带。 */
+  /** 背景板注入时紧跟其后的引导行文案（ctx_seen_note，next 每次都带——不限于背景板非空或发生截减时）；缺省不带。 */
   seenNote?: string;
   /** 锚点行打标（next：[主人]/[特别关注]，master 优先互斥；「你主人」标注在行内保留）；缺省不打（legacy 零变化）。 */
   anchorMark?: string;
@@ -382,9 +382,10 @@ export function withContext(
       parts.push(withAnchor(line, renderTemplate(template, { who: line.nickname, qq: String(line.userId), text: line.text })));
       seen.push(seenOf(line));
     }
-    // 每次注入背景板都携带（不限于发生截减时）：引导结合历史理解这批「没看过的最新几条」
-    if (options.seenNote) parts.push(options.seenNote);
   }
+  // next 模式每次携带（终审 #4：不限于背景板非空——重启后首条 / 背景全已读时同样带，
+  // 引导模型把新消息接进历史而不是当孤立新话题）：legacy 不传 seenNote，行为零变化
+  if (options.seenNote) parts.push(options.seenNote);
 
   // 多才叫「连续发言」：一条就还是原来的「要你回应的就是这一条」
   if (burst.length > 1) {
