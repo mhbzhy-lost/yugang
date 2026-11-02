@@ -31,7 +31,7 @@
 | F1 | legacy 的**搭话行为**零变化（闸/合并/背景/出口/语音骰）；计划中与开关无关部分（评价→记忆、feedback 加权、画像、抽取机制、config 工具）在 legacy 同样生效，回退靠代码回滚 | `npm test` + 分项验收 | 搭话相关既有测试不变绿；记忆/工具测试不依赖开关 | 测试输出 | T1-T11 |
 | F2 | 状态机按群：closed 10 分钟（可配）→ open 3 分钟 → 循环；closed 态非 @ 群消息 skip:next_pending 不进模型（**边界**：open 窗末尾已存在的 pending burst，closed 后同发送者续话并入该组照常 flush，属期望——同组不拆）；open 态非 @ 消息 free_pass 走既有合并管线（mustAnswer=false 零出口合法）；`isOpen` 缺省 = closed；热切换（含无消息期）由状态机每 tick 现读配置驱动 start/stop | engage-next 单测 + gate 单测 + 日志 | 态迁移精确、closed 零新提交、open 走管线、无消息热切换生效 | 测试输出 | T2、T3 |
 | F3 | 开窗注入（**背景板语义**）：open 瞬间把「上次关窗以来」积压（排除 pending burst 内消息、过滤 `/` 指令与纯 GIF 收图消息、>windowSize 截最近 N）注入 injection 轮（每条 `[m:<messageId>]`，watched/master 打标）；文案明确这些**只是背景板，不构成需要回复的任务**：无必答、无 salvage、模型不逐条回应也不补回复任何人；无积压不注入 | 单测 | 积压一轮注入、过滤与截断正确、文案含背景板声明、无积压零提交 | 测试输出 | T3 |
-| F4 | @ 必答轮在 next 任何 phase 即时进，背景缩为最近 5 条（含整组）；必答/salvage/引用语义不变；@ 轮遇在途 ambient/injection 轮**排队等待**（上限 60s，超时 busy_reply），不丢弃 | 单测 + 既有必答回归 | 背景 ≤5；@ 在环境轮进行中到达能进（等待或 busy，不静默丢） | 测试输出 | T5 |
+| F4 | @ 必答轮在 next 任何 phase 即时进，背景缩为最近 5 条（含整组，**且剔除已进过模型的消息：如 5 条里 3 条已读过则只注入后 2 条，截减时附 ctx_seen_note 引导结合历史**）；必答/salvage/引用语义不变；@ 轮遇在途 ambient/injection 轮**排队等待**（上限 60s，超时 busy_reply），不丢弃 | 单测 + 既有必答回归 | 背景 ≤5、去重正确、标记推进、@ 在环境轮进行中到达能进（等待或 busy，不静默丢） | 测试输出 | T5 |
 | F5 | say_words/say_media/say_meme 新增 `quoteMsgId`（接受 `[m:…]` 或裸数字）；属本轮注入窗口才有效；有效时**同时**置 `payload.quote = true` 且 `payload.quoteId = 该消息 id`；无效 tool 错误不计数额度；缺省现行为不变（say_voice 不加此参数） | 单测 + schema 校验 | 合法挂 quote、非法拒、缺省零变化 | 测试输出 | T4 |
 | F6 | ambient/injection 轮零出口合法（无 salvage、无强制引用）；可 @ 目标 ∈ {主人} ∪ 本群 watched（成员校验照旧），越界拒绝并记审计；answer 轮与 legacy 的 @ 语义不变 | 单测 + runtime 文案核对 | 轮类型判定正确、@ 白名单生效、审计有痕 | 测试输出 | T3、T4、T1 |
 | F7 | engage 配置（closedMinutes=10 / openMinutes=3 / windowSize=20 / mentionContextSize=5 / silenceThreshold=3 / windowRelaxCap=30）缺省合法、非法告警保留缺省、热加载 | 配置解析单测 | 判据如左 | 测试输出 | T2 |
@@ -69,6 +69,7 @@
 17. **抽取评价机制**（调研方案一+二）：试金石提示词（few-shot 正反例 + 未来受益判准 + confidence low 不报 + signal 标注，signal 仅「命中 people 名单 / 与现有 fact 冲突」两类机械可得项）；对账三分类：候选 `{action: ADD|SUPERSEDE, subject, factId?(SUPERSEDE 必填), text, signal[], confidence}`，known = 公共 doc + 当前会话私有 doc 渲染结果（附 factId→subject 映射）；SKIP 仅计数不产出；**空 patch 与解析失败可判别**（解析失败按现行降级、不计零提取）；零提取阈值**常量 5**（src/memory.ts 常量，暂不配置化）；复查模式一次、宽松提示词、失败不清计数不阻塞换页；不自动 DELETE。方案三账本期不做。
 18. **开关覆盖边界**：T2/T3/T4/T5/T8 及 ctx_engage_*/nudge 文案仅 next 态生效（runtime.md 的「自由交流窗口」小节做成 engagement 条件注入——T3 补 harness 接线）；T6/T7/T9/T10/T11 与开关无关，上线即生效，回退靠代码回滚；runtime 软引导（特别关注/主人措辞）全局可见，属 F8/F9 口径内的措辞变化。
 19. **key 引用时序**：`test/prompts.test.ts` 断言新增 key 必须有 src 引用；T1 落 key 后到 T8 完成前 `npm test` 会红——**各任务验收只跑 `npm run prompts`，`npm test` 在收口（全任务完成）统一跑**；T1/T6/T9/T11 新增 key 的消费引用由对应消费任务落地。
+20. **已读标记与背景去重（用户已定）**：每会话维护唯一标记 **lastSeenByModel**（最后一条进入模型输入的消息 arrivalSeq，内存态即可，重启懒定）。所有把群消息注入模型输入的路径（@ 轮背景、ambient burst 背景、injection backlog）统一消费与维护它：背景板先按上限取最近 N 条，再**剔除 ≤ lastSeenByModel 的已读部分**（如 5 条里 3 条已进过模型则只注入后 2 条），注入后推进标记到本轮实际注入的末条。注：@ 轮整组（burst 本体）不属背景板，照常注入并推进标记。为对冲「只看到新增会以为只需关注新增」的误导，凡因去重而发生截减时，在注入文本头部追加 `ctx_seen_note` 文案（见 T1），引导鱼结合历史对话理解新消息。标记的去重仅用于背景板/bakclog，不改变换页 transcript 重放。
 
 ## DAG
 
@@ -107,6 +108,7 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
   - `ctx_engage_line`（`{{id}} {{name}} {{qq}} {{text}}`；主人 `[主人]`、特别关注 `[特别关注]`，master 优先互斥）
   - `ctx_engage_footer`——「说不说话你定：可以就背景里某条搭一句（quoteMsgId 填那行 [m:…] 里的数字）、可以只吐槽、可以 @ 你感兴趣的人（只能 @ 主人和特别关注的人；语音不能 @ 也不能用 quoteMsgId，但可以照常引用正在回的那条）、也可以什么都不说。这个窗口里新进来的话你都会看到」
   - `ctx_engage_nudge_1` / `ctx_engage_nudge_2`
+  - `ctx_seen_note`——背景去重后的引导行：「上面只列了你还没看过的最新几条；更早的对话你之前都看过，结合那些前后文来理解新消息，别把它们当成孤立的新话题」
   - `quote_msg_invalid`
   - `eval_rejected`（群内非主人 /评 拒绝）、`eval_unknown_target`（定位降级注明）、`eval_receipt`（/评 回执，含方向/类型/定位结果摘要）
 - Produces：runtime.md 两处——①「自由交流窗口」小节（**engagement 条件注入，T3 接线**；零出口合法、quoteMsgId 用法、@ 边界、语音限制）②特别关注/主人软引导（全局措辞）；`<watched>` section 保留
@@ -152,7 +154,7 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 **接口契约：**
 - Produces：**submitRound 增加 `entryKind` 参数**（默认现值，injection 用 `fish.engage_tick`）；compact renderTranscript 对 engage_tick **计入 entries/chars 阈值但不写 handoff 文本**
 - Produces：**轮类型**：triggerOf 值加 `kind: "ambient" | "injection" | "answer"`（legacy 全 answer）；ambient 轮 = free_pass burst flush（trigger.userId=anchor.userId，kind=ambient）；injection 轮 trigger 无 messageId、kind=injection；packageDeps/harness 透传
-- Produces：injection 注入轮（决策 4 格式 + backlog 过滤 `/` 指令与纯 GIF 消息）；遇忙放弃（宁少勿答）；quoteIds 窗口登记（决策 6 挂点，settle finally 清）
+- Produces：injection 注入轮（决策 4 格式 + backlog 过滤 `/` 指令与纯 GIF 消息 + **lastSeenByModel 去重与推进（决策 20）**，截减时加 `ctx_seen_note`）；遇忙放弃（宁少勿答）；quoteIds 窗口登记（决策 6 挂点，settle finally 清）；**lastSeenByModel 标记的存储与维护 helper 在本任务落地**（按会话 Map，供 T5 与 burst 背景消费）
 - Produces：**互斥分级**（决策 8）：ambient/injection in-flight 登记（并入 conversationBusy）；@ 轮 flushBurst 遇 in-flight **排队等待**（上限 60s 超时 busy_reply）；legacy 不登记零变化
 - Produces：runtime.md「自由交流窗口」小节的 engagement 条件注入接线（harness）
 - 注意：injection 不附 inline image block；@ 锚点行 watched/master 打标（T1 文案）
@@ -193,7 +195,7 @@ T2 ──> T9（无代码依赖，仅排程；T9 独立文件为主）
 **WritePaths：** `src/qq/debounce.ts`、`src/index.ts`、`src/tools/watch/tool.ts`、`test/watch*.test.ts`（随授权）、`AGENTS.md`
 
 **接口契约：**
-- Produces：next 下 **@ 轮（answer）背景** = mentionContextSize（默认 5）；ambient 轮背景沿用 10；legacy 恒 10；`backgroundFor` limit 改 ContextOptions 透传；GIF 轮 slice(-10) 不动
+- Produces：next 下 **@ 轮（answer）背景** = mentionContextSize（默认 5），且**背景板先取 5 条再剔除已进过模型的（lastSeenByModel，决策 20）**，截减时加 `ctx_seen_note`，注入后推进标记；ambient 轮背景同样消费标记；legacy 恒 10 且**不引入去重**（零变化）；`backgroundFor` limit 改 ContextOptions 透传；GIF 轮 slice(-10) 不动
 - Produces：**watch add 拒绝 master**（tool error）+ applyWatched 装载过滤 master；锚点行打标沿用 T1 文案（「你主人」保留）
 
 **终态关联：** F4、F8、F9。
