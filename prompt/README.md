@@ -46,7 +46,8 @@
   它自己的总结提示词，我们既看不到也改不了。
 - **system prompt 的 section 全部来自本项目扩展**。pi-durable 不添加任何内置 section，
   transcript 里的 `pi.system` 只会出现 `runtime` / `persona` / `tool_catalog` / `ops` / `people`
-  / `watched` / `meme_tags`（后两者按需占位）。
+  / `watched`（后两者按需占位）。表情包库存不进 system：动态库存提前注入会让
+  openai-completions 前缀缓存整轮失效，改为引导模型直接调 `meme` 检索（见其 TOOL.md）。
 - 剩下两处库内固定文本无法覆盖，已记录在此以备审查：
   - `Tool result unavailable: history ends before this call completed.`（上下文被截断时的占位）
   - 工具被 harness 拦下时写入的 `<harness>[error] ...</harness>` 包裹格式

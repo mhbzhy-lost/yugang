@@ -88,6 +88,9 @@ test("人物档作为常驻 section 出现", async () => {
     const sections = (await root.agent(ctx)).sections.map((s) => s.key);
     assert.ok(sections.includes("people"), "人物档没进 system prompt");
     assert.ok(sections.includes("persona"));
+    // 表情包库存已改为检索引导（src/tools/meme/TOOL.md），动态库存数不得再进 system：
+    // meme_tags section 必须不存在，否则表情库一有增减就打穿 openai-completions 前缀缓存
+    assert.ok(!sections.includes("meme_tags"), "meme_tags section 应已移除，动态库存不进 system");
   } finally {
     await fish.close();
   }

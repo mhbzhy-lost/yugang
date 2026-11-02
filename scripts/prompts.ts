@@ -104,7 +104,7 @@ for (const [name, book] of Object.entries(prompts.personas)) {
 
 console.log("\n== pi-durable 注入的 prompt\n");
 console.log("  compaction: 已禁用（默认会注入一段库自带的总结提示词）");
-console.log("  system prompt: 全部 section 来自本项目扩展（runtime / persona / tool_catalog / ops / people / watched / meme_tags）");
+console.log("  system prompt: 全部 section 来自本项目扩展（runtime / persona / tool_catalog / ops / people / watched）");
 
 // 顺手扫一遍源码，确认没有内嵌的 prompt 字面量
 const violations = scanDir(join(repoRoot, "src"));
