@@ -108,9 +108,9 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
 | 群档案 | transcript 里一条 `fish.group-profile` system 消息 | 整个会话 |
 | 人物档 | `prompt/people.md` → system section `people` | 永久（手工维护） |
 | 对话 | transcript | 到下一次换页 |
-| 换页备忘 | `prompt/handoff.md` 生成的 handoff | 跨换页 |
+| 换页剖面 | `prompt/handoff.md` 生成的剖面卡片 + 被压缩页尾部原文 | 跨换页 |
 
-## 上下文压缩：换页 + 备忘
+## 上下文压缩：换页 + 剖面卡片（2026-11 重构）
 
 群聊会一直长，而 pi-durable 自带的 compaction 会在中途注入一段它自己的提示词——看不到也改不了，所以关掉了。
 换页是自己实现的：
@@ -118,16 +118,22 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
 ```
 攒到阈值（默认 80 条 或 12000 字）
   → 把「群友说的话 + 鱼发出去的话」摊平（thinking / tool 调用 / tool 结果一律不进）
-  → 用一个便宜模型读 prompt/handoff.md，写一段备忘
-  → conversation.reset(handoff)   # 换一页，旧对话退出活跃上下文
+  → 用一个便宜模型读 prompt/handoff.md，产出严格字段化的剖面卡片
+  → conversation.reset(卡片 + 被压缩页尾部最近 50 条原文)   # 换一页，旧对话退出活跃上下文
 ```
 
 几个刻意的选择：
 
 - **摘要只收对话本身**。tool 结果里有路径、命令输出、外部返回，进摘要就是下一次泄漏的来源。
 - **换页发生在这一轮正常结束之后**，不在模型跑到一半时动上下文。
-- **摘要失败就不换页**，宁可继续攒着——半截的换页比不换页危险。
-- 备忘会被当成鱼自己的记忆（第一行固定「（前情）」），不是别人对它说的话。
+- **剖面卡片严格字段化**（≤300 字）：时间范围与活跃成员由代码纯机械生成，进行中的话头/梗与鱼的
+  未兑现承诺必须逐字引用原文（附 [m:id] 锚点，转述会被机械校验丢掉），氛围一行。
+- **逐字校验不过就不 reset**：有界重试耗尽后走机械降级换页（机械时间头 + 尾部原文，不经任何模型），
+  换页必须总能完成，不许在失败页死循环。
+- **跨页只做字段级合并**：上一页剖面从 pi.reset head 提取，开着的话头/承诺 verbatim 带入、完结的
+  标掉，不重新叙事、不 summary-of-summary。
+- **尾巴只从被压缩页 transcript 机械截取**：保持原 entry 顺序与标注格式，不把鱼没见过的消息伪装成
+  已读上下文。换页文本会被当成鱼自己的记忆，不是别人对它说的话。
 
 配置：`fish.config.json` 的 `compact.maxEntries` / `compact.maxChars`；摘要固定用主模型（`models.main`）。
 

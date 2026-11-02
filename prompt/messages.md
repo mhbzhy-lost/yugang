@@ -113,6 +113,7 @@ cmd_memory_group: 记忆审批在私聊里做，单独发我 /记忆 就行
 cmd_memory_usage: 用法：/记忆 看待审；/记忆 同意 <id> [公共|私有]；/记忆 拒绝 <id|全部>；/记忆 删除 <fact-id>
 cmd_memory_empty: 现在没有待审的记忆
 cmd_memory_list_header: 待审 {{count}} 条 / 最早 {{age}}前（同意缺省并入私有；公共=该人格全部会话可见）
+cmd_memory_zero_extract: 近 {{pages}} 页压缩零提取（{{persona}}），值得看看是不是漏记了
 cmd_memory_entry: [{{id}}] {{persona}} · {{origin}} · {{age}}前 · {{digest}}
 cmd_memory_supersede_note:   将失效：{{id}} {{text}}
 cmd_memory_more: 还有 {{count}} 条更新的没显示，先处理完这些再列
@@ -130,6 +131,16 @@ cmd_memory_delete_missing: 没有这条记忆：{{id}}
 salvage_skip: 兜底放弃：{{reason}}
 salvage_error: 兜底出错：{{error}}
 
+# 换页（compact）的机械时间头与剖面卡片渲染模板：降级换页与正常剖面页共用（src/compact.ts 消费）。
+# compact_time_header 是纯机械时间戳行（{{count}} 条数、{{start}}/{{end}} 起止时间）；
+# compact_profile_* 渲染剖面卡片正文（{{anchor}} 为空 = 该条无锚点；状态词进行中/已完结/未兑现/已兑现
+# 由代码注入，也是下一页回读旧剖面的解析依据，改词要同步 src/compact.ts）
+compact_time_header: （前情 {{count}} 条 · {{start}} ~ {{end}}）
+compact_profile_members: 活跃成员：{{members}}
+compact_profile_threads_header: 进行中的话头/梗：
+compact_profile_promises_header: 鱼的未完话头与承诺：
+compact_profile_line: - 「{{quote}}」{{anchor}}（{{status}}）
+compact_profile_mood: 氛围：{{mood}}
+
 # 换页降级告警（compact.ts 降级换页成功后由 index.ts 打）：宿主日志文案，不打印内容。
-# 机械时间头是短拼接文案（阈值内），直接在 compact.ts 里拼，不占文案 key
 compact_fallback_log: 换页摘要失败，降级机械换页 {{chatKey}} {{reason}}

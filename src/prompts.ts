@@ -24,7 +24,7 @@ export interface PromptSet {
   /** 人格无关的运行时协议（输入信任边界、出口、渐进加载）；常驻 section，tag false。 */
   runtime: string;
   persona: string;
-  /** 上下文压缩用的备忘提示词，含 {{transcript}}。 */
+  /** 上下文压缩用的剖面卡片提示词（T12），含 {{transcript}} / {{previous}}。 */
   handoff: string;
   /** 记忆抽取提示词（压缩链路用），含 {{transcript}} / {{known}} / {{subjects}} / {{today}}。 */
   memoryExtract: string;

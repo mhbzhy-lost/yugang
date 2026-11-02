@@ -92,15 +92,15 @@ test("到阈值才压，压完写到 pi.reset 里", async () => {
     ]);
     await (await root.submit({ type: "input", content: "干嘛呢" }, ctx)).wait(ctx);
 
-    // 第三次：模型给出备忘
-    faux.setResponses([fauxAssistantMessage("1. 群友在闲聊。2. 鱼说过自己在刷手机。")]);
+    // 第三次：模型给出剖面卡片的字段（严格 JSON：逐字引用经 substring 校验）
+    faux.setResponses([fauxAssistantMessage('{"threads":[],"promises":[{"quote":"刚在刷手机","status":"open"}],"mood":"闲聊"}')]);
     const done = await open.compact(root);
     assert.equal(done.compacted, true, "到阈值应该压");
 
     const view = await root.viewState(ctx);
     const reset = view.value.entries.find((e) => e.kind === "pi.reset");
     assert.ok(reset, "没有写入 pi.reset");
-    assert.match(JSON.stringify(reset.model ?? ""), /鱼说过自己在刷手机/, "handoff 没进 reset");
+    assert.match(JSON.stringify(reset.model ?? ""), /「刚在刷手机」（未兑现）/, "handoff 没进 reset");
     view.dispose();
 
     // 换页之后，上下文从备忘开始，旧对话不再在活跃 transcript 里

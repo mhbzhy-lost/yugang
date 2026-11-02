@@ -121,11 +121,14 @@
   当前群成员；来源本身靠 prompt 引导，代码不校验号码抄自哪句话
 - 结构校验与溯源校验都是机械判定，不做「看起来像不像 AI」的猜测
 
-### 5. 压缩走自己的实现
+### 5. 压缩走自己的实现（2026-11 重构：剖面卡片 + transcript 尾巴）
 
 - **禁止打开 pi-durable 内置的 compaction**（它会在中途注入库里写死的提示词，不可审查）
-- 压缩 = `src/compact.ts` 的换页 + `prompt/handoff.md` 的备忘
-- 摘要只收「群友的话 + 鱼发出去的话」；thinking、tool 调用、tool 结果一律不进摘要；inline 附图的 image block 同样不进（compact 的 entryText 只取 text block），随换页退出活跃上下文
+- 压缩 = `src/compact.ts` 的换页 + `prompt/handoff.md` 的剖面提示词 + `prompt/messages.md` 的渲染模板（时间头与卡片，降级与剖面共用）
+- 换页新页结构 = **剖面卡片（≤300 字）+ 被压缩页尾部最近 50 条原文**：卡片字段 = 本页时间范围（纯机械）、活跃成员 top≤5（纯机械统计 fish.inbound 结构化数据）、进行中的话头/梗 ≤5（LLM 逐字引用原文短语附 [m:id] 锚点，禁转述）、鱼的未完话头与承诺（LLM 逐字引用）、氛围一行（LLM）；**尾巴只从被压缩页 transcript 机械截取**（不碰 recent/chatlog，不把鱼没见过的消息伪装成已读），保持原 entry 顺序与标注格式不二次渲染；engage_tick 背景板行也进尾巴（T12 裁定：背景板也是模型见过的内容），但不进摘要输入
+- 三道机械防线：逐字引用 substring 校验（quote/锚点必须命中本页 transcript 或上一页剖面原文，否则丢条目）；事务性（卡片校验通过才 reset，失败保留原页）；有界重试（3 次）耗尽走机械降级换页（时间头 + 尾巴原文，共用 `mechanicalTail` 纯函数，任何模型不再参与），不许在失败页死循环
+- 跨页字段级合并：上一页剖面从 pi.reset head 提取（提取失败按首换页处理），还开着的话头/未兑现承诺 verbatim 带入、完结的标掉，不重新叙事、不 summary-of-summary
+- 摘要只收「群友的话 + 鱼发出去的话」；thinking、tool 调用、tool 结果、stopReason:error 的空 assistant entry 一律不进摘要也不进尾巴；inline 附图的 image block 同样不进（compact 的 entryText 只取 text block），随换页退出活跃上下文
 
 ### 6. 模型与凭据
 

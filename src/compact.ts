@@ -1,14 +1,23 @@
 /**
- * 上下文压缩：换页 + 备忘。
+ * 上下文压缩：换页 + 剖面卡片（T12：剖面 + transcript 尾巴）。
  *
  * pi-durable 自带的 compaction 会在中途注入一段库自带的提示词，我们关掉了（不可审查）。
- * 这里自己实现：攒到阈值后，让一个便宜模型读一遍最近的对话，写一段 handoff，
- * 然后 conversation.reset(handoff) —— 换一页，鱼只带着这段备忘继续。
+ * 这里自己实现：攒到阈值后，让一个便宜模型读一遍最近的对话，产出一张严格字段化的
+ * 剖面卡片，然后 conversation.reset(handoff)——换一页，鱼带着「卡片 + 被压缩页尾部
+ * 最近 50 条原文」继续。尾巴只从被压缩页的 transcript 机械截取（不碰 recent / chatlog，
+ * 不把鱼没见过的消息伪装成已读上下文），保持原 entry 顺序与标注格式，不二次渲染。
  *
- * 换页必须总能完成：摘要有界重试（上限 2 次）后仍失败（如网关内容拦截），
- * 机械降级换页——不生成摘要，新页起点 = 尾部最近 50 条 entry 原文 + 机械时间头。
+ * 三道机械防线：逐字引用校验（话头 / 承诺的 quote 与 [m:id] 锚点必须逐字命中本页
+ * transcript 或上一页剖面原文，否则丢条目）；事务性（卡片校验通过才 reset，失败保留
+ * 原页）；有界重试（3 次）耗尽后走既有机械降级换页——机械时间头 + 尾部原文，任何
+ * 模型都不再参与，不许在失败页上死循环。
  *
- * 摘要提示词在 prompt/handoff.md 里，降级告警文案在 prompt/messages.md，和其它 prompt 一起受审查。
+ * 跨页抗漂移：上一页剖面从 pi.reset head 提取，字段级合并（还开着的话头 / 未兑现
+ * 承诺 verbatim 带入、完结的标掉），不重新叙事、不 summary-of-summary；提取失败按
+ * 无旧剖面处理（首换页语义）。
+ *
+ * 剖面提示词在 prompt/handoff.md，卡片与机械时间头的渲染模板在 prompt/messages.md，
+ * 降级告警文案同在 prompt/messages.md，和其它 prompt 一起受审查。
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
@@ -38,7 +47,7 @@ export class MemoryExtractError extends Error {
 
 export interface CompactorOptions {
   models: Models;
-  /** 用来写备忘的模型；比主模型便宜一档即可。 */
+  /** 用来生成剖面卡片的模型；比主模型便宜一档即可。 */
   model: { provider: string; modelId: string };
   prompts: PromptSet;
   /** 攒够多少条就压。 */
@@ -72,7 +81,7 @@ export interface CompactResult {
   chars?: number;
   /** 机械降级换页：摘要有界重试全败后的兜底（新页 = 尾部原文 + 机械时间头），换页已完成。 */
   fallback?: boolean;
-  /** 摘要失败原因摘要（已脱敏，不含对话内容）；仅 fallback 时携带，供宿主告警日志使用。 */
+  /** 剖面生成失败原因摘要（已脱敏，不含对话内容）；仅 fallback 时携带，供宿主告警日志使用。 */
   detail?: string;
 }
 
@@ -98,7 +107,7 @@ export function createCompactor(options: CompactorOptions): Compactor {
       // 直接机械降级换页（时间头照旧），不做三次注定失败的摘要尝试
       if (transcript.trim().length === 0) {
         try {
-          await conversation.reset(mechanicalHandoff(counted), ctx);
+          await conversation.reset(mechanicalHandoff(counted, options.prompts.messages), ctx);
           return { compacted: true, entries, chars, fallback: true, detail: "no_summary_text" };
         } catch (error) {
           options.onError?.(error);
@@ -107,9 +116,14 @@ export function createCompactor(options: CompactorOptions): Compactor {
       }
 
       try {
-        const summary = (await summarizeBounded(options, transcript)).trim();
+        // T12 正常路径：剖面卡片（严格字段化 + 逐字校验），不再生成自由叙事摘要。
+        // 上一页剖面从 pi.reset head 提取作字段级合并的输入；提取失败按无旧剖面处理（首换页语义）。
+        const previous = await extractPreviousProfile(conversation);
+        const profile = await profileBounded(options, transcript, previous);
+        const handoff = buildProfileHandoff(profile, counted, options.prompts.messages);
 
-        // 记忆抽取（T11 抽取评价机制）：在 summarize 成功之后、reset 之前。任何异常（含
+        // 记忆抽取（T11 抽取评价机制）：在剖面生成成功之后、reset 之前（抽取行为零变化，
+        // 仍吃 renderMemoryTranscript 的结构化原始转录）。任何异常（含
         // knownMemory、savePendingMemories 和 onError 自身抛错）都不得阻止后面的 reset——
         // 宁可没记上，不能不换页。解析失败（parse_failed）不计零提取、不推进 lastExtractAt，
         // 单独走 MemoryExtractError 上报；零提取（empty）按人格累计，达阈值用宽松复查提示词
@@ -168,14 +182,14 @@ export function createCompactor(options: CompactorOptions): Compactor {
           }
         }
 
-        await conversation.reset(summary, ctx);
+        await conversation.reset(handoff, ctx);
         return { compacted: true, entries, chars };
       } catch (error) {
-        // 摘要有界重试全败：机械降级换页——换页必须总能完成，不许在失败页上死循环。
-        // 新页 = 机械时间头 + 被压缩页尾部最近 50 条 entry 的原文（顺序与格式照旧），
-        // 照常 reset；reset 失败则保持原行为：报错、保留原页。
+        // 剖面生成有界重试全败（含逐字校验/JSON 形状不过）：机械降级换页——换页必须总能
+        // 完成，不许在失败页上死循环。新页 = 机械时间头 + 被压缩页尾部最近 50 条 entry 的
+        // 原文（顺序与格式照旧），照常 reset；reset 失败则保持原行为：报错、保留原页。
         try {
-          await conversation.reset(mechanicalHandoff(counted), ctx);
+          await conversation.reset(mechanicalHandoff(counted, options.prompts.messages), ctx);
         } catch {
           options.onError?.(error);
           return { compacted: false, reason: "failed", entries, chars };
@@ -186,34 +200,178 @@ export function createCompactor(options: CompactorOptions): Compactor {
   };
 }
 
-async function summarize(options: CompactorOptions, transcript: string): Promise<string> {
-  const model = options.models.getModel(options.model.provider, options.model.modelId);
-  if (!model) throw new Error(`找不到总结用的模型：${options.model.provider}/${options.model.modelId}`);
+/** 剖面卡片的一个逐字引用字段：quote 必须逐字命中本页 transcript 或上一页剖面原文。 */
+export interface ProfileItem {
+  /** 逐字抄来的原文短语（禁转述）；机械校验 substring 命中才保留。 */
+  quote: string;
+  /** 话头所在消息的锚点（[m:<id>] 括号里的数字）；鱼自己的话没有锚点时缺省。 */
+  anchor?: string;
+  /** open = 还开着 / 未兑现；done = 本页内已完结 / 已兑现（不再跨页带入）。 */
+  status: "open" | "done";
+}
 
-  const prompt = renderTemplate(await loadHandoff(options), { transcript });
+/** 换页剖面（T12）：时间范围与活跃成员纯机械生成（不经过模型），话头 / 承诺逐字引用，氛围一行。 */
+export interface PageProfile {
+  threads: ProfileItem[];
+  promises: ProfileItem[];
+  mood: string;
+}
+
+/** 上一页剖面（字段级合并的输入）：profile 只保留还开着的条目；text 是旧页换页文本， */
+/** 作为带入条目逐字校验的 corpus（旧剖面里的 quote 在自己那页已经过同一道校验）。 */
+interface PreviousProfile {
+  profile: PageProfile;
+  text: string;
+}
+
+/** 换页尾巴（机械降级与剖面页共用）的条数：机械截取，不经过模型。 */
+const FALLBACK_TAIL_ENTRIES = 50;
+
+/** 剖面卡片（含时间头）的字数上限：机械裁决，超出时丢条目而不是放宽。 */
+const PROFILE_CARD_CHARS = 300;
+
+/** 剖面单条逐字引用的上限：短语级的“话头/梗”，不是整句搬运。 */
+const PROFILE_QUOTE_CHARS = 40;
+
+/** 逐字条目每类（话头 / 承诺）的上限。 */
+const PROFILE_ITEM_CAP = 5;
+
+/** 机械时间头的兑底模板（prompt/messages.md 缺 key 时用）：纯时间戳拼接， */
+/** 降级路径必须无条件可渲染，不许因文案缺失卡死换页。 */
+const TIME_HEADER_FALLBACK = "（前情 {{count}} 条 · {{start}} ~ {{end}}）";
+
+/** 条目状态词（卡片渲染与旧剖面回读共用同一套词，改词要同步 extractPreviousProfile 的解析）。 */
+const THREAD_STATUS = { open: "进行中", done: "已完结" } as const;
+const PROMISE_STATUS = { open: "未兑现", done: "已兑现" } as const;
+
+/** 消费 prompt/messages.md 的文案 key：缺 key 直接报错（被 maybeCompact 捕获后走机械降级）。 */
+function messageOf(text: string | undefined, key: string): string {
+  if (typeof text !== "string" || !text) throw new Error(`缺少文案 key：${key}`);
+  return text;
+}
+
+/** 单条逐字条目的机械校验：quote 逐字命中 corpus、锚点存在才保留，否则整条丢掉（F15：丢字段）。 */
+function profileItem(raw: unknown, corpus: string): ProfileItem | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const item = raw as { quote?: unknown; anchor?: unknown; status?: unknown };
+  if (typeof item.quote !== "string") return undefined;
+  const quote = item.quote.trim().slice(0, PROFILE_QUOTE_CHARS);
+  if (!quote || !corpus.includes(quote)) return undefined;
+  const status = item.status === "done" ? "done" : "open";
+  let anchor: string | undefined;
+  if (typeof item.anchor === "string" && item.anchor.trim()) {
+    const digits = /\d+/.exec(item.anchor)?.[0];
+    if (digits === undefined || !corpus.includes(`[m:${digits}]`)) return undefined;
+    anchor = digits;
+  }
+  return { quote, ...(anchor !== undefined ? { anchor } : {}), status };
+}
+
+/** 列表级的机械过滤：逐条校验 + 去重 + 截到上限（转述/伪锚点在这里无声丢掉）。 */
+function profileItems(raw: unknown, corpus: string): ProfileItem[] {
+  if (!Array.isArray(raw)) throw new Error("profile_bad_shape");
+  const out: ProfileItem[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    const item = profileItem(entry, corpus);
+    if (item === undefined || seen.has(item.quote)) continue;
+    seen.add(item.quote);
+    out.push(item);
+    if (out.length >= PROFILE_ITEM_CAP) break;
+  }
+  return out;
+}
+
+/**
+ * 模型输出的剖面 JSON 的严格解析与校验：只认 {threads, promises, mood} 形状；
+ * JSON / 形状坏了直接抛异常（算一次失败，有界重试后走机械降级）；条目级逐字校验
+ * 不过则丢条目（F15「丢字段或整次失败」两道都机械，不重新叙事、不事后补救）。
+ * corpus = 本页 transcript + 上一页剖面原文：带入条目的 quote / 锚点在旧页已过同一道
+ * 校验，逐字链不断。
+ */
+function parseProfileOutput(text: string, corpus: string): PageProfile {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("profile_no_json");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    throw new Error("profile_bad_json");
+  }
+  if (typeof parsed !== "object" || parsed === null) throw new Error("profile_bad_shape");
+  const shape = parsed as { threads?: unknown; promises?: unknown; mood?: unknown };
+  const mood = typeof shape.mood === "string" ? shape.mood.replace(/\s+/g, " ").trim().slice(0, 60) : "";
+  if (!mood) throw new Error("profile_bad_shape");
+  return {
+    threads: profileItems(shape.threads, corpus),
+    promises: profileItems(shape.promises, corpus),
+    mood,
+  };
+}
+
+/** 剖面生成尝试次数上限：首次 + 2 次重试。重试必须有界，耗尽后走机械降级而不是卡死换页。 */
+const PROFILE_ATTEMPTS = 3;
+
+/** 上一页剖面拼进提示词的形态：还开着的条目逐条一行（quote 一字不改），没有则“（无）”。 */
+function renderPreviousProfile(previous: PreviousProfile, messages: Record<string, string>): string {
+  const lines = [
+    ...previous.profile.threads.map((item) => profileLine(item, THREAD_STATUS[item.status], messages)),
+    ...previous.profile.promises.map((item) => profileLine(item, PROMISE_STATUS[item.status], messages)),
+  ];
+  return lines.length > 0 ? lines.join("\n") : "（无）";
+}
+
+/** 卡片条目行的渲染（模板 key 在 prompt/messages.md；旧剖面回读与卡片共用同一格式）。 */
+function profileLine(item: ProfileItem, status: string, messages: Record<string, string>): string {
+  return renderTemplate(messageOf(messages["compact_profile_line"], "compact_profile_line"), {
+    quote: item.quote,
+    anchor: item.anchor !== undefined ? `[m:${item.anchor}] ` : "",
+    status,
+  });
+}
+
+/**
+ * 让模型产出剖面卡片字段：提示词是 prompt/handoff.md（唯一源），输出只认严格 JSON；
+ * 网关拦截 / 断流不抛异常只回来一条空 content 的 error 消息，必须主动翻成异常，
+ * 否则空剖面会被当成失败而页永远压不动（12dab09 的教训）。
+ */
+async function buildProfile(
+  options: CompactorOptions,
+  transcript: string,
+  previous: PreviousProfile | undefined,
+): Promise<PageProfile> {
+  const model = options.models.getModel(options.model.provider, options.model.modelId);
+  if (!model) throw new Error(`找不到剖面生成用的模型：${options.model.provider}/${options.model.modelId}`);
+
+  const prompt = renderTemplate(await loadHandoff(options), {
+    transcript,
+    previous: previous ? renderPreviousProfile(previous, options.prompts.messages) : "（无）",
+  });
   const stream = options.models.streamSimple(model, { messages: [{ role: "user", content: prompt }] });
   const message = await stream.result();
-  // 网关拦截/断流不抛异常，只回来一条 error 消息（content 为空）：必须主动翻成异常，
-  // 否则空摘要会被当成失败而页永远压不动
   if (message.stopReason === "error" || message.stopReason === "aborted") {
-    throw new Error(message.errorMessage ?? `summary_${message.stopReason}`);
+    throw new Error(message.errorMessage ?? `profile_${message.stopReason}`);
   }
-  return message.content
+  const text = message.content
     .filter((block): block is { type: "text"; text: string } => block.type === "text")
     .map((block) => block.text)
     .join("\n");
+  const corpus = previous ? `${transcript}\n${previous.text}` : transcript;
+  return parseProfileOutput(text, corpus);
 }
 
-/** 摘要尝试次数上限：首次 + 2 次重试。重试必须有界，耗尽后走机械降级而不是卡死换页。 */
-const SUMMARY_ATTEMPTS = 3;
-
-/** 有界重试的摘要：空摘要与异常都算失败，耗尽上限后抛最后一次的原因。 */
-async function summarizeBounded(options: CompactorOptions, transcript: string): Promise<string> {
-  let lastError: unknown = new Error("empty_summary");
-  for (let attempt = 0; attempt < SUMMARY_ATTEMPTS; attempt++) {
+/** 有界重试的剖面生成：异常与形状失败都算失败，耗尽上限后抛最后一次的原因（机械降级兑底）。 */
+async function profileBounded(
+  options: CompactorOptions,
+  transcript: string,
+  previous: PreviousProfile | undefined,
+): Promise<PageProfile> {
+  let lastError: unknown = new Error("empty_profile");
+  for (let attempt = 0; attempt < PROFILE_ATTEMPTS; attempt++) {
     try {
-      const summary = await summarize(options, transcript);
-      if (summary.trim()) return summary;
+      const profile = await buildProfile(options, transcript, previous);
+      if (profile.mood.trim()) return profile;
     } catch (error) {
       lastError = error;
     }
@@ -221,21 +379,161 @@ async function summarizeBounded(options: CompactorOptions, transcript: string): 
   throw lastError;
 }
 
-/** 降级换页携带的尾部 entry 条数：机械截取，不经过模型。 */
-const FALLBACK_TAIL_ENTRIES = 50;
+/**
+ * 机械尾巴（挂点冻结的纯函数，12dab09/cbf5c41 起降级换页消费，T12 起正常剖面页共用）：
+ * 取被压缩页 transcript 尾部最近 limit 条 counted entry 的原文，顺序与模型见过的标注
+ * 格式（[m:id] 锚点 / [主人][特别关注] 打标 / 背景板声明）原样保留，不二次渲染。
+ * 来源硬约束：只从被压缩页的 transcript 取——不碰 recent / chatlog，不把鱼没见过的
+ * 消息伪装成已读上下文。engage_tick（开窗积压 / shard 背景板）行包含在内：T12 裁定
+ * 背景板也是模型见过的内容，行进尾巴；但它们不进摘要输入（renderCountedEntries 的
+ * lines 仍为空，摘要/阈值字符数零变化）。
+ */
+export function mechanicalTail(counted: CountedEntry[], limit: number): { lines: string[]; entries: number; start: string; end: string } {
+  const tail = counted.slice(-limit);
+  const stamps = tail.map((e) => e.at).filter((at): at is number => typeof at === "number");
+  return {
+    lines: tail.flatMap((e) => e.tailLines ?? e.lines),
+    entries: tail.length,
+    start: stamps.length ? formatStamp(Math.min(...stamps)) : "?",
+    end: stamps.length ? formatStamp(Math.max(...stamps)) : "?",
+  };
+}
 
 /**
- * 机械降级的新页起点：不生成摘要，直接把被压缩页尾部最近 50 条 entry 的原文
- * （顺序与 transcript 格式照旧）搬进新页，头部加一行机械时间说明（起止时间与条数，
- * 取自 entry 时间戳；短拼接文案，不占 prompt/messages.md 的 key）。任何模型都不再参与。
+ * 机械降级的新页起点：不生成摘要，直接消费 mechanicalTail（被压缩页尾部最近 50 条
+ * entry 的原文）搬进新页，头部加一行机械时间说明（起止时间与条数取自 entry 时间戳，
+ * 模板 key 在 prompt/messages.md，缺 key 时用纯时间戳拼接兑底——降级路径必须无条件
+ * 可渲染）。任何模型都不再参与。
  */
-function mechanicalHandoff(counted: CountedEntry[]): string {
-  const tail = counted.slice(-FALLBACK_TAIL_ENTRIES);
-  const stamps = tail.map((e) => e.at).filter((at): at is number => typeof at === "number");
-  const start = stamps.length ? formatStamp(Math.min(...stamps)) : "?";
-  const end = stamps.length ? formatStamp(Math.max(...stamps)) : "?";
-  const header = `（前情 ${tail.length} 条 · ${start} ~ ${end}）`;
-  return [header, ...tail.flatMap((e) => e.lines)].join("\n");
+function mechanicalHandoff(counted: CountedEntry[], messages: Record<string, string>): string {
+  const tail = mechanicalTail(counted, FALLBACK_TAIL_ENTRIES);
+  const header = renderTemplate(messages["compact_time_header"] ?? TIME_HEADER_FALLBACK, {
+    count: String(tail.entries),
+    start: tail.start,
+    end: tail.end,
+  });
+  return [header, ...tail.lines].join("\n");
+}
+
+/**
+ * 正常路径的新页起点（T12）：剖面卡片（≤300 字）+ 被压缩页尾部最近 50 条原文。
+ * 卡片与尾巴之间空一行；尾巴只从被压缩页 transcript 机械截取（mechanicalTail，与降级
+ * 共用同一纯函数）。时间范围与活跃成员由代码从 entry 时间戳 / fish.inbound 结构化数据
+ * 纯机械生成——模型不产出这两个字段，也就无从编造。
+ */
+export function buildProfileHandoff(profile: PageProfile, counted: CountedEntry[], messages: Record<string, string>): string {
+  return [...renderProfileCard(profile, counted, messages), "", ...mechanicalTail(counted, FALLBACK_TAIL_ENTRIES).lines].join("\n");
+}
+
+/** 剖面卡片的机械渲染：时间头（整页口径）+ 成员 + 话头 + 承诺 + 氛围，总长 ≤ PROFILE_CARD_CHARS。 */
+function renderProfileCard(profile: PageProfile, counted: CountedEntry[], messages: Record<string, string>): string[] {
+  const stamps = counted.map((e) => e.at).filter((at): at is number => typeof at === "number");
+  const header = renderTemplate(messages["compact_time_header"] ?? TIME_HEADER_FALLBACK, {
+    count: String(counted.length),
+    start: stamps.length ? formatStamp(Math.min(...stamps)) : "?",
+    end: stamps.length ? formatStamp(Math.max(...stamps)) : "?",
+  });
+  const members = activeMembers(counted);
+
+  let threads = profile.threads;
+  let promises = profile.promises;
+  const assemble = (): string[] => {
+    const lines = [header];
+    if (members.length > 0) lines.push(renderTemplate(messageOf(messages["compact_profile_members"], "compact_profile_members"), { members: members.join("、") }));
+    if (threads.length > 0) {
+      lines.push(messageOf(messages["compact_profile_threads_header"], "compact_profile_threads_header"));
+      lines.push(...threads.map((item) => profileLine(item, THREAD_STATUS[item.status], messages)));
+    }
+    if (promises.length > 0) {
+      lines.push(messageOf(messages["compact_profile_promises_header"], "compact_profile_promises_header"));
+      lines.push(...promises.map((item) => profileLine(item, PROMISE_STATUS[item.status], messages)));
+    }
+    lines.push(renderTemplate(messageOf(messages["compact_profile_mood"], "compact_profile_mood"), { mood: profile.mood }));
+    return lines;
+  };
+
+  let lines = assemble();
+  // 300 字上限是机械裁决：超了丢条目而不是放宽。优先丢已完结（历史包袱），再丢话头，
+  // 承诺（鱼自己的欠账）最后丢；全丢完还超就截氛围行。逐字条目本身有长度/数量上限，
+  // 这里兑底的是模型仍写出长引用的极端情况。
+  while (lines.join("\n").length > PROFILE_CARD_CHARS) {
+    if (threads.some((item) => item.status === "done")) {
+      const at = threads.findIndex((item) => item.status === "done");
+      threads = threads.filter((_, i) => i !== at);
+    } else if (promises.some((item) => item.status === "done")) {
+      const at = promises.findIndex((item) => item.status === "done");
+      promises = promises.filter((_, i) => i !== at);
+    } else if (threads.length > 0) {
+      threads = threads.slice(0, -1);
+    } else if (promises.length > 0) {
+      promises = promises.slice(0, -1);
+    } else {
+      break;
+    }
+    lines = assemble();
+  }
+  const overflow = lines.join("\n").length - PROFILE_CARD_CHARS;
+  if (overflow > 0) {
+    const body = lines.slice(0, -1);
+    const mood = lines[lines.length - 1];
+    const room = PROFILE_CARD_CHARS - body.join("\n").length - 1;
+    lines = room > 0 ? [...body, mood.slice(0, room)] : body;
+  }
+  return lines;
+}
+
+/** 活跃成员 top≤5（纯机械统计）：按 fish.inbound 结构化数据里的 QQ 号计数，昵称取最新一条。 */
+function activeMembers(counted: CountedEntry[]): string[] {
+  const stats = new Map<string, { nickname: string; n: number }>();
+  for (const entry of counted) {
+    if (entry.speaker === undefined) continue;
+    const hit = stats.get(entry.speaker.userId) ?? { nickname: entry.speaker.nickname, n: 0 };
+    hit.nickname = entry.speaker.nickname.slice(0, 12);
+    hit.n += 1;
+    stats.set(entry.speaker.userId, hit);
+  }
+  return [...stats.entries()]
+    .sort((a, b) => b[1].n - a[1].n)
+    .slice(0, 5)
+    .map(([userId, hit]) => `${hit.nickname}(${userId})`);
+}
+
+/**
+ * 从 pi.reset head 提取上一页剖面（字段级合并的输入）：reset 后 viewState 的首个 entry
+ * 就是携带换页文本的 pi.reset（head: self，model 里是那条 user message）；卡片条目行
+ * 按状态词（进行中/已完结/未兑现/已兑现）机械回读，只留还开着的条目。旧页是叙事摘要 /
+ * 机械降级页 / 解析不出条目时返回 undefined——按首换页处理，不报错不阻塞。
+ * text（整份旧换页文本）作为带入条目逐字校验的 corpus 一并返回。
+ */
+async function extractPreviousProfile(conversation: Conversation): Promise<PreviousProfile | undefined> {
+  try {
+    const view = await conversation.viewState(ctx);
+    let text = "";
+    try {
+      const head = view.value.entries.find((entry) => entry.kind === "pi.reset");
+      if (head) text = entryText(head.model);
+    } finally {
+      view.dispose();
+    }
+    const threads: ProfileItem[] = [];
+    const promises: ProfileItem[] = [];
+    for (const raw of text.split(/\r?\n/)) {
+      const match = /^- 「(.+)」(?:\[m:(\d+)\] )?（(进行中|已完结|未兑现|已兑现)）$/.exec(raw.trim());
+      if (!match) continue;
+      const done = match[3] === "已完结" || match[3] === "已兑现";
+      const item: ProfileItem = { quote: match[1], ...(match[2] !== undefined ? { anchor: match[2] } : {}), status: done ? "done" : "open" };
+      (match[3] === "未兑现" || match[3] === "已兑现" ? promises : threads).push(item);
+    }
+    const open: PageProfile = {
+      threads: threads.filter((item) => item.status === "open"),
+      promises: promises.filter((item) => item.status === "open"),
+      mood: "",
+    };
+    if (open.threads.length + open.promises.length === 0) return undefined;
+    return { profile: open, text };
+  } catch {
+    return undefined;
+  }
 }
 
 /** 时间戳 → 本地「YYYY-MM-DD HH:mm」；降级头与用量一样按本地时区展示。 */
@@ -270,8 +568,8 @@ export interface RenderedTranscript {
  * 群消息的 entry 有两种 kind：存量 pi.user，以及带结构化原始数据的 fish.inbound
  * （记忆入口）；两者部读 entry.model（宿主拼装的 user message），handoff 行为不变。
  * fish.gif_ingest（收图任务）与 fish.engage_tick（开窗积压 / shard 轮）不是群友原话，
- * 不进摘要（engage_tick 仍计入换页阈值，见 renderCountedEntries）；fish.eval（主人
- * 评价事件）同被排除（决策 11b，只进抽取白名单）。
+ * 不进摘要（engage_tick 仍计入换页阈值、原文行进换页尾巴，见 renderCountedEntries）；
+ * fish.eval（主人评价事件）同被排除（决策 11b，只进抽取白名单）。
  */
 export async function renderTranscript(conversation: Conversation): Promise<RenderedTranscript> {
   const counted = await renderCountedEntries(conversation);
@@ -279,10 +577,17 @@ export async function renderTranscript(conversation: Conversation): Promise<Rend
   return { transcript, entries: counted.length, chars: transcript.length };
 }
 
-/** 一条入册 entry 摊平后的行与它的时间戳（机械降级头用；没有可靠时间戳时为 undefined）。 */
-interface CountedEntry {
+/**
+ * 一条入册 entry 摊平后的行与它的时间戳（时间头 / 尾巴用；没有可靠时间戳时为 undefined）。
+ * lines 进摘要输入（剖面生成的 transcript）与阈值字符数；tailLines 只进换页尾巴
+ * （mechanicalTail，engage_tick 背景板原文：模型见过、但不是群友原话，不进摘要）；
+ * speaker（fish.inbound 的结构化数据）供剖面卡片的活跃成员纯机械统计。
+ */
+export interface CountedEntry {
   lines: string[];
   at?: number;
+  tailLines?: string[];
+  speaker?: { userId: string; nickname: string };
 }
 
 /** entry 时间戳：pi.user / fish.inbound 取首条 user message，fish.outbound 取 payload 的 at。 */
@@ -305,9 +610,12 @@ function entryTimestamp(entry: { kind: string; model?: unknown; data?: unknown }
  * 群消息的 entry 有两种 kind：存量 pi.user，以及带结构化原始数据的 fish.inbound
  * （记忆入口）；两者部读 entry.model（宿主拼装的 user message），handoff 行为不变。
  * fish.gif_ingest（收图任务）不是群友原话，不进摘要；fish.engage_tick（开窗积压 /
- * shard 轮）计入换页阈值（entries），但不写 handoff 文本（决策 4：背景板不进摘要）；
+ * shard 轮）计入换页阈值（entries），不进摘要输入（决策 4：背景板不进摘要），但
+ * 原文行进换页尾巴（T12 裁定：背景板也是模型见过的内容，tailLines）；
  * fish.eval（主人评价事件，T6）是书记性 entry（无 model 字段、不占模型上下文），
  * 既不计数也不进 handoff（决策 11b：排除摘要，只进抽取白名单）。
+ * stopReason:error 的空 assistant entry（生产观察：失败轮会留一条 content 空的错误
+ * entry 在活跃链，重放成噪音）在这里显式跳过，不进摘要也不进尾巴。
  */
 async function renderCountedEntries(conversation: Conversation): Promise<CountedEntry[]> {
   const view = await conversation.viewState(ctx);
@@ -315,12 +623,20 @@ async function renderCountedEntries(conversation: Conversation): Promise<Counted
 
   try {
     for (const entry of view.value.entries) {
+      if (isEmptyErrorAssistant(entry)) continue;
       if (entry.kind === "pi.user" || entry.kind === MEMORY_INBOUND_KIND) {
         const text = entryText(entry.model);
-        counted.push({ lines: text ? [`群友: ${text}`] : [], at: entryTimestamp(entry) });
+        const data = entry.kind === MEMORY_INBOUND_KIND ? (entry.data as Partial<MemoryInbound> | undefined) : undefined;
+        const speaker =
+          typeof data?.userId === "string" && data.userId.trim() && typeof data?.nickname === "string"
+            ? { userId: data.userId.trim(), nickname: data.nickname.trim() }
+            : undefined;
+        counted.push({ lines: text ? [`群友: ${text}`] : [], at: entryTimestamp(entry), ...(speaker ? { speaker } : {}) });
       } else if (entry.kind === MEMORY_ENGAGE_KIND) {
-        // engage_tick：计入阈值（entries），不写 handoff 文本——时间戳保留给降级头
-        counted.push({ lines: [], at: entryTimestamp(entry) });
+        // engage_tick：计入阈值（entries），不进摘要输入；原文行只进换页尾巴（tailLines），
+        // 时间戳保留给时间头
+        const text = entryText(entry.model);
+        counted.push({ lines: [], at: entryTimestamp(entry), ...(text ? { tailLines: [text] } : {}) });
       } else if (entry.kind === "fish.outbound") {
         const data = entry.data as { items?: string[]; at?: unknown } | undefined;
         counted.push({
@@ -352,6 +668,13 @@ function entryText(model: unknown): string {
     })
     .filter(Boolean)
     .join("\n");
+}
+
+/** 生产观察（T12）：模型错误轮会在活跃链里留下 content 空的 assistant entry（stopReason:error），
+ * 重放成噪音。renderCountedEntries / renderTranscript / 换页尾巴都显式跳过它们。 */
+function isEmptyErrorAssistant(entry: { kind: string; model?: unknown }): boolean {
+  if (entry.kind !== "pi.assistant" || !Array.isArray(entry.model) || entry.model.length === 0) return false;
+  return entry.model.every((message) => (message as { stopReason?: unknown }).stopReason === "error") && !entryText(entry.model);
 }
 
 export interface MemoryTranscript {
