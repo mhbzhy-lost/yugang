@@ -39,6 +39,7 @@
 | F9 | 主人不入特别关注列表，消息行带「[主人]」标记（互斥）；@ 轮锚点行「你主人」标注保留；runtime 软引导；无新增强制 | 单测 + runtime.md 核对 | 标记存在互斥 | 测试输出 | T1、T3、T5 |
 | F10 | 主人 `/评 好|差`（引用鱼消息定位，群友拒绝）生成待审记忆 patch，经审批闸入人格 doc；评价类条目渲染加权置顶；未批准永不注入 | 记忆链路单测 | 待审/批准/拒绝/群友拒绝/加权全覆盖 | 测试输出 | T6、T7 |
 | F11 | 连续 silenceThreshold 个 open 窗口全程零出口 → 下一窗注入尾部递进文案；超 2×阈值 → 下窗积压窗口放宽至 windowRelaxCap；模型任一轮开口清零；仅统计 open 窗口（@ 轮不计不清） | 单测 | 阈值触发文案与放宽 | 测试输出 | T8 |
+| F12 | 新增主人专属语义工具可改 engagement 开关与 engage 全部参数（写 fish.config.json，热加载即生效，无需 restart）；仅主人触发轮可用（execute 内核二次身份校验）；操作打审计日志；非法值拒绝 | 工具单测 + prompts 审查 | 仅主人轮生效、合法写入热加载生效、非法拒绝、TOOL.md 唯一文档源 | 测试输出 | T9 |
 
 **完成规则：** F1-F11 全部满足且证据对应当前版本才完成；步骤勾选不替代终态验证。
 
@@ -60,6 +61,7 @@
 12. **记忆提取/渲染考虑奖惩**：feedback 条目（`kind:"feedback"` 机械标记）渲染加权置顶（at+hits 机械规则保留）；抽取器纳入主人评价事件（仍只进待审）。
 13. **沉默递进**：连续 N 个 open 窗零出口 → 下窗注入尾部 nudge 文案；2N → 积压窗口放宽 windowRelaxCap；开口清零；仅统计 open 窗。
 14. **GIF 收图轮、`/` 指令、私聊、旁路记账** next 下不变（开关任务已保证）。
+15. **鱼可自改新配置**：engage 块与 engagement 开关由主人专属语义工具（新增 `src/tools/engage/` 工具包，范式同 `model` 工具）读写：写 fish.config.json 后靠 mtime 热加载生效，不依赖 restart；仅主人触发轮可用，execute 内核二次身份校验；操作打审计日志；非法值以 tool 错误拒绝且不落盘。
 
 ## DAG
 
@@ -70,6 +72,7 @@ T3 ──> T5 (@背景5条，串行同文件)
 T3 ──> T8 (沉默递进)
 T2 ──> T6 (评价→记忆)
 T6 ──> T7 (渲染/抽取奖惩)
+T2 ──> T9 (engage 自改工具)
 全部 ──> 回归（并入 T5 收尾后统一核对，见 T5 步骤 3 与完成规则）
 ```
 
@@ -78,7 +81,7 @@ T6 ──> T7 (渲染/抽取奖惩)
 - Wave 1：T1、T2（并行）
 - Wave 2：T3（T1+T2 完成后）
 - Wave 3：T4、T5（T4 并行 T5；T5 与 T3 串行已完成）、T6（可与 Wave 2 并行）
-- Wave 4：T7、T8
+- Wave 4：T7、T8、T9
 - 收口：全任务完成后主会话对照 F1-F11 终态核对（不设独立 T 任务，由主会话执行）
 
 **关键路径：** T1 → T3 → T4/T5 → 终态核对。
@@ -250,6 +253,31 @@ T6 ──> T7 (渲染/抽取奖惩)
 - [ ] 核对出口观测点（sayCalled per-round 同侧）
 - [ ] 实现计数/文案/放宽
 - [ ] `npm test` 绿
+
+---
+
+### Task 9：engage 配置自改工具（主人专属）
+
+**Deps：** `T2`（engage 配置块结构与合法性规则）
+
+**WritePaths：**
+- `src/tools/engage/TOOL.md`（新）
+- `src/tools/engage/tool.ts`（新）
+- `src/tools/loader.ts`
+- `prompt/ops.md`
+- `AGENTS.md`
+- `test/engage-tool.test.ts`（随前置条件 2 授权）
+
+**接口契约：**
+- Consumes：T2 的 engage 配置块（字段与校验同源，不另写一份合法性规则）
+- Produces：工具包 `engage`（严格遵循三处改动规范：TOOL.md 三元数据块 + tool.ts defineTool + loader FACTORIES 注册）：支持读现状与改 engagement/engage 参数（入参在 TOOL.md schema 定义，拒绝越界字段与非法值）；写 fish.config.json 仅限 engagement/engage 字段、不碰其它键；热加载生效；仅主人触发轮可用（factory 无 MASTER_QQ 返回 undefined，execute 内核二次校验）；审计日志；回执文案放 TOOL.md tool-messages 块；prompt/ops.md 同步操作说明；AGENTS.md 第 3 节能力面清单更新
+
+**终态关联：** F12。
+
+**验收标准：**
+- [ ] 步骤 1：核对 model 工具范式（factory/身份校验/审计/写回）与 loader 注册规范
+- [ ] 步骤 2：实现工具包三处改动 + ops.md + AGENTS.md
+- [ ] 步骤 3：`npm test` 绿；`npm run prompts` 新工具正确列出（deferred）且文案 key 无撞车
 
 ---
 
