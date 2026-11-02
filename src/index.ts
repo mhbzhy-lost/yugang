@@ -137,8 +137,11 @@ function voiceConfigFor(chatKey: string): { url: string; referWav?: string; refe
 // 启动时从文档装载，watch 工具变更后即时**整份替换**（增量合并会让 remove 撤不掉）。
 const watchedByChat = new Map<string, WatchedMap>();
 function applyWatched(chatKey: string, people: { userId: string; name?: string; note: string }[]): void {
+  // 主人不入特别关注名单（F9，双保险第二层）：watch add 已拒，装载/变更时再滤一次，
+  // 旧文档里的脏数据也拦在镜像外。过滤后为空的群照常删 key（整份替换语义不变）。
+  const kept = config.master ? people.filter((p) => p.userId !== config.master) : people;
   // 空名单会直接删 key：否则「这个群有特别关注」永远为真
-  replaceWatched(watchedByChat, baseChatKey(chatKey), people);
+  replaceWatched(watchedByChat, baseChatKey(chatKey), kept);
 }
 
 // 运行时数据目录：默认仓库 var/（按本文件位置解析，不依赖 cwd）；YUGANG_HOME 设置时完全胜出
@@ -296,8 +299,9 @@ async function waitAmbientClear(id: string | number, timeoutMs: number): Promise
 // ── 已读标记（决策 20）─────────────────────────────────────────────
 // conversationId → 最后一条进入模型输入的消息 arrivalSeq。内存态（重启即无＝什么都
 // 没看过，不会把没看过的当已读）；所有把群消息注入模型输入的路径统一维护：
-// injection backlog / shard 轮注入后推进、@ 轮整组（burst 本体）照常注入并推进。
-// 背景板去重（先取 N 再剔已读）由 T5 接入；@ 轮整组不属背景板，不受标记影响。
+// injection backlog / shard 轮注入后推进、@ 轮整组（burst 本体）照常注入并推进；
+// 背景板去重（先取 N 再剔已读）由 T5 接入（withContext 的 seenSeq，flushBurst 按 engagement 传值）。
+// @ 轮整组不属背景板，不受标记影响。
 const lastSeenByModel = new Map<string, number>();
 
 function seenSeqOf(id: string | number): number {
@@ -1032,9 +1036,11 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     }
   }
 
-  // 命中特别关注：在要回的那一行前面打标（机械匹配 QQ 号，不靠模型回忆）
+  // 命中特别关注：legacy 在要回的那行前面给 watch_inline 备注行（零变化）；next 改锚点行
+  // 打标（[主人]/[特别关注]，master 优先互斥，沿用 T1 文案；行内「你主人」标注保留）
+  const nextMode = fishConfig().config.engagement === "next";
   const watched = watchedByChat.get(anchor.chatKey)?.get(String(anchor.userId));
-  const watchedNote = watched
+  const watchedNote = !nextMode && watched
     ? renderTemplate(fish.prompts.messages["watch_inline"] ?? "", { who: anchor.nickname, note: watched.note })
     : "";
   // inline 附图选取：锚点图优先、burst 内按序补足，普通轮 ≤2 张；GIF 与缺失文件不附（也不占额度）
@@ -1043,6 +1049,15 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     master: config.master,
     messages: fish.prompts.messages,
     ...(watchedNote ? { watchedNote } : {}),
+    // next @（answer）轮背景（T5/决策 20）：上限缩为 engage.mentionContextSize（热加载）、
+    // 先取 N 再剔除已进过模型的（lastSeenByModel），每次携带 ctx_seen_note，注入后随
+    // 整组推进标记（下方 advanceSeenSeq）；legacy 不传这组选项 = 恒 10 条、不去重（零变化）
+    ...(nextMode ? {
+      backgroundLimit: fishConfig().config.engage.mentionContextSize,
+      seenSeq: seenSeqOf(conv.id),
+      seenNote: fish.prompts.messages["ctx_seen_note"] ?? "",
+      anchorMark: engageMarkOf(anchor.chatKey, anchor.userId),
+    } : {}),
     ...(inlinePick.attach.length > 0 ? { images: { attach: inlinePick.attach.length, more: inlinePick.more } } : {}),
   });
   let content = roundContext.content;

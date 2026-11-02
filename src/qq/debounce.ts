@@ -298,6 +298,14 @@ export interface ContextOptions {
   watchedNote?: string;
   /** inline 附图标注（宿主按图选取结果现算）：attach=已附张数，more=未附张数。缺省不标注。 */
   images?: { attach: number; more: number };
+  /** 背景板条数上限（T5）：缺省 10 = legacy 零变化；next 的 @（answer）轮传 engage.mentionContextSize。 */
+  backgroundLimit?: number;
+  /** 已读标记（决策 20）：背景板先取上限再剔除 arrivalSeq ≤ 它的行（已进过模型的不重复注入）；缺省不去重（legacy 零变化）。 */
+  seenSeq?: number;
+  /** 背景板注入时紧跟其后的引导行文案（ctx_seen_note，next 每次都带，不限于发生截减时）；缺省不带。 */
+  seenNote?: string;
+  /** 锚点行打标（next：[主人]/[特别关注]，master 优先互斥；「你主人」标注在行内保留）；缺省不打（legacy 零变化）。 */
+  anchorMark?: string;
 }
 
 /**
@@ -350,14 +358,23 @@ export function withContext(
   options: ContextOptions,
 ): RoundContext {
   const messages = options.messages;
-  const anchorLine = withAnchor(anchor, renderForModel(anchor, options.master, messages));
+  const renderedAnchor = withAnchor(anchor, renderForModel(anchor, options.master, messages));
+  // 锚点行打标（next）：[主人]/[特别关注]（master 优先互斥），放行首（[m:id] 之前）；
+  // 行内的「你主人」标注照旧保留。legacy 不传 anchorMark = 行零变化。
+  const anchorLine = options.anchorMark ? `${options.anchorMark} ${renderedAnchor}` : renderedAnchor;
   if (!anchor.chatKey.startsWith("qq:group:")) {
     return { content: anchorLine, seen: [seenOf(anchor)] };
   }
 
   const parts: string[] = [];
   const seen: SeenMessage[] = [];
-  const background = backgroundFor(anchor, bucket, burst);
+  // 背景板（决策 20）：先按上限取最近 N 条，再剔除已进过模型的部分（arrivalSeq ≤ seenSeq；
+  // 旧流水没有序号的没法判已读，保守保留）。legacy 不传 seenSeq = 整段不去重、恒 10 条。
+  let background = backgroundFor(anchor, bucket, burst, options.backgroundLimit ?? 10);
+  if (options.seenSeq !== undefined) {
+    const seenSeq = options.seenSeq;
+    background = background.filter((line) => line.arrivalSeq === undefined || line.arrivalSeq > seenSeq);
+  }
   if (background.length > 0) {
     parts.push(renderTemplate(messages["ctx_header"] ?? "", { count: String(background.length) }));
     const template = messages["ctx_bg_line"] ?? "";
@@ -365,6 +382,8 @@ export function withContext(
       parts.push(withAnchor(line, renderTemplate(template, { who: line.nickname, qq: String(line.userId), text: line.text })));
       seen.push(seenOf(line));
     }
+    // 每次注入背景板都携带（不限于发生截减时）：引导结合历史理解这批「没看过的最新几条」
+    if (options.seenNote) parts.push(options.seenNote);
   }
 
   // 多才叫「连续发言」：一条就还是原来的「要你回应的就是这一条」
