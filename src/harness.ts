@@ -239,6 +239,12 @@ export interface FishOptions {
    */
   mentionPolicyOf?: (conversationId: string, userId: number | undefined, kind: RoundKind) => "allow" | "not_group" | "not_privileged";
   /**
+   * 末条自言禁言（决策 24，T15）的宿主事实：conversationId → 该会话（chatKey 级）最新一条
+   * 消息是否鱼自己发的（drain 实际发送成功置 true，任一入站消息置 false，内存态重启归 false）。
+   * 交给 say_*（ambient/injection 轮的素材分享校验）使用；不提供时缺省放行（宁松勿严）。
+   */
+  lastWasFishOf?: (conversationId: string) => boolean;
+  /**
    * 会话 → 当前群成员名单：say_*（主动 @ 目标校验）与 watch（关注对象校验）共用同一条链路。
    * 群号必须由宿主自己从映射键解析，不能采信模型给的号码。
    */
@@ -370,6 +376,8 @@ export async function openFish(options: FishOptions): Promise<Fish> {
     ...(options.triggerOf ? { triggerOf: options.triggerOf } : {}),
     ...(options.bypassOf ? { bypassOf: options.bypassOf } : {}),
     ...(options.mentionPolicyOf ? { mentionPolicyOf: options.mentionPolicyOf } : {}),
+    // 末条自言禁言（决策 24）：宿主事实回调，say_* 的 ambient/injection 轮素材分享校验消费
+    ...(options.lastWasFishOf ? { lastWasFishOf: options.lastWasFishOf } : {}),
     ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}),
     ...(options.silentOf ? { silentOf: options.silentOf } : {}),
     ...(options.onSayCall ? { onSayCall: options.onSayCall } : {}),

@@ -10,7 +10,7 @@ import { validateOutbound } from "../../egress/policy.ts";
 import { ledgerOf, recordSent } from "../../egress/ledger.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { assertMentions, chargeSayRound, enqueueOutbound, normalizeTextInput, resolveQuoteArg, resolveSayContext, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
+import { assertMentions, assertShareAllowed, chargeSayRound, enqueueOutbound, normalizeTextInput, resolveQuoteArg, resolveSayContext, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 对应（quote 是 schema 已移除的旧布尔，运行时容忍）；
  *  运行时 Schema 只有 manifest 这一份。 */
@@ -19,6 +19,8 @@ interface SayWordsArgs {
   quoteMsgId?: string;
   /** 旧参数：schema 不再暴露；模型仍输出 quote:true 时按「引用本轮锚点」容忍，不报错。 */
   quote?: boolean;
+  /** 素材分享声明（决策 24）：ambient/injection 轮末条自言时必须为 true 才放行。 */
+  share?: boolean;
   mentions?: string[];
 }
 
@@ -35,6 +37,10 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
     parameters: manifestParameters<SayWordsArgs>(manifest),
     execute: async (args, api, context) => {
       const { round, trigger } = await resolveSayContext(api, deps, context);
+
+      // 末条自言禁言（决策 24）：群里最后一条是自己发的时，ambient/injection 轮只放行带
+      // share 的素材分享；必须在开口计数前（被拒不占额度），answer 轮天然豁免
+      assertShareAllowed(deps, api, trigger, args.share);
 
       const text = normalizeTextInput(args.text);
       if (!text) throw new Error(deps.prompts.messages["empty"] ?? "empty");

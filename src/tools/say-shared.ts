@@ -129,6 +129,32 @@ export async function assertMentions(
 }
 
 /**
+ * 末条自言禁言（决策 24）的工具侧依赖形状：在 ToolPackageDeps 之上补一个宿主回调。
+ * 字段的运行时接线在宿主（src/index.ts 维护标记，经 harness 的 packageDeps 下发）；
+ * 类型声明就地放在这里而不动 src/tools/types.ts，运行时形状与字段直接落在
+ * ToolPackageDeps 完全一致（宿主侧用条件展开传入，与既有可选回调同一套惯用法）。
+ */
+export type SelfMuteDeps = ToolPackageDeps & {
+  /** conversationId → 该会话（chatKey 级）最新一条消息是否鱼自己发的；缺省 = 否。 */
+  lastWasFishOf?: (conversationId: string) => boolean;
+};
+
+/**
+ * 末条自言禁言的机械校验（决策 24，T15）：群里最新一条消息是鱼自己发的（lastWasFish）时，
+ * ambient/injection 轮未声明 share 的出口一律 tool 错误拒绝——只允许素材分享（兑现承诺/
+ * 交付委托结果/分享外部素材）。answer 轮天然豁免（有人 @ 必有入站，标记已翻 false），
+ * trigger 拿不到时同样豁免；lastWasFishOf 未接线时缺省放行（宁松勿严）。
+ * 调用点必须在 chargeSayRound 之前：被拒的尝试不占开口额度；既有 @/quote/额度校验不受影响。
+ */
+export function assertShareAllowed(deps: SelfMuteDeps, api: SayApi, trigger: SayRound["trigger"], share: unknown): void {
+  const kind: RoundKind = trigger?.kind ?? "answer";
+  if (kind === "answer") return;
+  if (share === true) return;
+  if (deps.lastWasFishOf?.(String(api.conversationId)) !== true) return;
+  throw new Error(deps.prompts.messages["say_self_mute"] ?? "say_self_mute");
+}
+
+/**
  * 模型侧引用参数解析（决策 6，say_words/say_media/say_meme 共用；say_voice 不走这里）：
  * - quoteMsgId（接受 [m:123] 或裸数字，机械剥掉包装）属本轮 quoteIds 窗口 → 有效：返回该 id
  *   并等效 quote=true（防 emit 层四条件静默丢弃）；

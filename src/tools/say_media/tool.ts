@@ -12,6 +12,7 @@ import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import {
   assertMentions,
+  assertShareAllowed,
   chargeSayRound,
   enqueueOutbound,
   inMemeInbox,
@@ -28,6 +29,8 @@ interface SayMediaArgs {
   quoteMsgId?: string;
   /** 旧参数：schema 不再暴露；模型仍输出 quote:true 时按「引用本轮锚点」容忍，不报错。 */
   quote?: boolean;
+  /** 素材分享声明（决策 24）：ambient/injection 轮末条自言时必须为 true 才放行。 */
+  share?: boolean;
   mentions?: string[];
 }
 
@@ -44,6 +47,10 @@ export function createSayMediaTool(manifest: ToolManifest, deps: ToolPackageDeps
     parameters: manifestParameters<SayMediaArgs>(manifest),
     execute: async (args, api, context) => {
       const { round, trigger } = await resolveSayContext(api, deps, context);
+
+      // 末条自言禁言（决策 24）：群里最后一条是自己发的时，ambient/injection 轮只放行带
+      // share 的素材分享；必须在开口计数前（被拒不占额度），answer 轮天然豁免
+      assertShareAllowed(deps, api, trigger, args.share);
 
       const media = args.media;
       // 本地待收目录（meme-inbox/）不是出口的图源：它里面的图必须先 look + meme_add 进库，

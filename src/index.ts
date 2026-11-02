@@ -340,6 +340,13 @@ function lastArrivalSeq(messages: readonly { arrivalSeq?: number }[]): number | 
 function quoteIdsOf(messages: readonly { messageId?: number | string }[]): Set<string> {
   return new Set(messages.flatMap((m) => (m.messageId !== undefined ? [String(m.messageId)] : [])));
 }
+
+// ── 末条自言标记（决策 24，T15）─────────────────────────────
+// chatKey → 群里最新一条消息是否鱼自己发的。内存态：emit 实际发送成功置 true，
+// 任一入站消息置 false，重启归 false（宁松勿严）。ambient/injection 环境轮的出口校验
+// 经 lastWasFishOf 读它；answer 轮豁免（有人 @ 必有入站，标记已翻 false）。
+const lastWasFish = new Set<string>();
+
 const lastMention = new Map<string, boolean>();
 // 本轮触发是否是回复某条消息：是则鱼的回应强制引用（回复链可读性）
 const lastReply = new Map<string, boolean>(); // 最近一次触发是否@了鱼：被@必回引用，让群里看得出鱼在回谁
@@ -497,6 +504,12 @@ const fish = await openFish({
     }
     return allowed ? "allow" : "not_privileged";
   },
+  // 末条自言标记（决策 24）的读取口：say_* 的 ambient/injection 轮据它判定「群里最新一条
+  // 是不是鱼自己发的」，是则只放行带 share 的素材分享。标记由 emit/入站两处维护（见上）。
+  lastWasFishOf: (conversationId) => {
+    const chatKey = chatKeyFor(conversationId);
+    return chatKey !== undefined && lastWasFish.has(chatKey);
+  },
   groupMembersOf: async (conversationId) => {
     const chatKey = chatKeyFor(conversationId);
     if (!chatKey || !chatKey.startsWith("qq:group:")) return [];
@@ -575,6 +588,10 @@ const fish = await openFish({
     // harness 把 outbox 放回 queued 也重试不出来（幂等表先把它拦了）。
     // 紧接着发送就记，不等下面的日志：日志写失败不能让 drain 重发一遍（宁可少一条日志，不要重复发言）。
     markSent(payload.key);
+
+    // 末条自言标记（决策 24）：这条消息实际发送成功，群里最新一条就是鱼自己说的了。
+    // 幂等重放的早退路径到不了这里（重放没真发，不该覆盖入站刚清掉的标记）。
+    lastWasFish.add(chatKey);
 
     for (const text of payload.items) {
       chatlog.append({ at: payload.at, chat: chatKey, from: "fish", text, kind: "out" });
@@ -2039,6 +2056,10 @@ const debouncer = createDebouncer({
 onebot.onMessage((raw) => {
   void (async () => {
     const msg = raw;
+    // 末条自言标记（决策 24）：任一入站消息都清掉本群的标记——有人说了话，
+    // 群里最新一条就不再是鱼自己发的了。置顶在处理链最前，后续本条触发的
+    // 机械回执 / drain 发送若真发出去，emit 会重新置回 true。
+    lastWasFish.delete(msg.chatKey);
     // 记忆 entry 的原始文本：必须在卡片渲染（就地改写 msg.text）与 bypass 剥离之前取，
     // 只去掉 [卡片#N] 占位与 bypass 指令，不携带任何宿主渲染文案
     rawMemoryText.set(msg, memoryTextOf(msg.text));
