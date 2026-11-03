@@ -27,6 +27,7 @@ media_magic: 文件头不是图片，拒绝发送
 voice_with_media: 语音不能和图片、表情包一起发，选一个
 quote_msg_invalid: quoteMsgId 对不上这一轮里的任何消息（要用 [m:…] 里的数字），这次没发出去，也不占这轮开口额度
 say_silent: 这一轮是收图用的，不用说话
+say_worker_round: 这一轮是逛 B 站收弹药的工时轮，不是聊天——说话出口全部关着，把挑中的视频用 ammo_submit 入库就行
 say_self_mute: 群里最后一条消息是你自己发的：现在只能做素材分享（兑现你答应过的事、交付别人委托的结果、分享外部素材），继续闲聊先停一停；真有要分享的就重新调用并在参数里带上 share: true，等别人开了新话头就恢复正常
 busy_reply: 缸里正在归档记忆，稍等一下再叫我
 
@@ -47,6 +48,11 @@ forward_recent_prefix: 以下是这个群刚才那条没展开的合集内容：
 forward_collapsed: [转发合集（内容略）]
 gif_ingest_header: 群里刚聊的是这 {{count}} 条（只是背景）：
 gif_ingest_task: 上面这段对话里，{{who}} 发了一张动图：{{ref}}。你这一轮只判断一件事——它值不值得进你的表情包库。值得就调 meme_add（caption 写它在聊天里是什么意思，tags 写你以后会用来找它的词）；不值得就什么都不做、别说话。
+
+# worker 逛轮（外部信息源计划 Task E4，src/index.ts 的 scheduler 四时点起）：宿主定时把鱼
+# 派去 B 站刷一轮的触发语。{{minutes}}=硬截止分钟数、{{max}}=本轮入库上限、{{topics}}=topic
+# 枚举（与 ammo_submit 的 Schema 一致）；这一轮 say_* 机械拒绝，产出只有 ammo_submit 入库。
+worker_browse_task: 到点了，去 B 站刷一轮：接下来 {{minutes}} 分钟内用 bili_hot / bili_video 挑最多 {{max}} 条你觉得有意思的视频（偏好这些口味：{{topics}}），每条用 ammo_submit 入库（summary 用你自己的话写为什么值得分享，topic 按枚举选）。挑不满也没关系，宁缺毋滥；这一轮不许说话，逛完就收工。
 
 # 语音触发提示与工具超时（host 侧注入，不属于任何单个工具）
 voice_hint: （这一条必须用语音回：用 say_voice 发，别用文字。这是规则，不是建议）

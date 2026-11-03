@@ -35,6 +35,13 @@ const ctx = BACKGROUND_CONTEXT;
  */
 export const MEMORY_ENGAGE_KIND = "fish.engage_tick";
 
+/**
+ * worker 轮（弹药逛轮，外部计划 Task E4）的 entry kind：触发语是宿主任务文案，不是群友
+ * 原话——不写 fish.inbound、不进摘要与记忆抽取，但计入换页阈值（entries 与 chars：
+ * worker 会话也要能被顶到换页，否则上下文无限涨），原文行进换页尾巴（同 engage_tick 口径）。
+ */
+export const MEMORY_WORKER_KIND = "fish.worker_round";
+
 /** 记忆抽取阶段的失败标记：onError 据此区分换页失败与抽取失败，只携带安全的错误摘要。 */
 export class MemoryExtractError extends Error {
   constructor(cause: unknown) {
@@ -646,6 +653,8 @@ function entryTimestamp(entry: { kind: string; model?: unknown; data?: unknown }
  * shard 轮）计入换页阈值（entries 与 chars：tailLines 字符数也算，终审 #2），不进摘要输入
  * （决策 4：背景板不进摘要），但
  * 原文行进换页尾巴（T12 裁定：背景板也是模型见过的内容，tailLines）；
+ * fish.worker_round（worker 会话的逛轮触发语，E4）同 engage_tick 口径：计数入阈值、
+ * 行进尾巴、不进摘要输入；
  * fish.eval（主人评价事件，T6）是书记性 entry（无 model 字段、不占模型上下文），
  * 既不计数也不进 handoff（决策 11b：排除摘要，只进抽取白名单）。
  * stopReason:error 的空 assistant entry（生产观察：失败轮会留一条 content 空的错误
@@ -667,8 +676,8 @@ async function renderCountedEntries(conversation: Conversation): Promise<Counted
             : undefined;
         const lines = text ? [`群友: ${text}`] : [];
         counted.push({ lines, chars: lines.join("\n").length, at: entryTimestamp(entry), ...(speaker ? { speaker } : {}) });
-      } else if (entry.kind === MEMORY_ENGAGE_KIND) {
-        // engage_tick：计入阈值（entries 与 chars），不进摘要输入；原文行只进换页尾巴（tailLines），
+      } else if (entry.kind === MEMORY_ENGAGE_KIND || entry.kind === MEMORY_WORKER_KIND) {
+        // engage_tick / worker_round：计入阈值（entries 与 chars），不进摘要输入；原文行只进换页尾巴（tailLines），
         // 时间戳保留给时间头
         const text = entryText(entry.model);
         counted.push({

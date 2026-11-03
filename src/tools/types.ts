@@ -17,11 +17,13 @@ export const ENUM_FROM_KEY = "x-yugang-enum-from";
 export type EnumFromContextKey = "memeTags";
 
 /**
- * 轮类型（搭话 next，决策 7）：answer = 既有必答 / 私聊 / legacy 轮（语义不变）；
- * ambient = open 窗的 shard 轮（free_pass 消息每 10 秒一拍合并提交，非必答）；
- * injection = 开窗瞬间的积压注入轮（背景板语义）。legacy 轮全部 answer。
+ * 轮类型（搭话 next，决策 7 + 外部计划 E4）：answer = 既有必答 / 私聊 / legacy 轮
+ * （语义不变）；ambient = open 窗的 shard 轮（free_pass 消息每拍合并提交，非必答）；
+ * injection = 开窗瞬间的积压注入轮（背景板语义）；worker = 后台作业轮（弹药逛轮，
+ * 独立 worker 会话，say_* 机械拒绝，模型只经 ammo_submit 提交结构化候选）。
+ * legacy 轮全部 answer。
  */
-export type RoundKind = "ambient" | "injection" | "answer";
+export type RoundKind = "ambient" | "injection" | "answer" | "worker";
 
 /**
  * triggerOf 的值：本轮触发消息 + 轮类型 + quoteMsgId 窗口。
@@ -36,6 +38,12 @@ export interface RoundTrigger {
   kind?: RoundKind;
   /** 本轮注入窗口的消息 id 集合（[m:…] 锚点里的数字）；T4 消费。 */
   quoteIds?: ReadonlySet<string>;
+  /**
+   * worker 轮（弹药逛轮，外部计划 E4）的作业上下文：runKey = 作业幂等键（date + slot，
+   * jobKeyOf），maxPicks = 本轮入库上限（ammo.maxPicksPerRun，作业起时定格），
+   * ttlHours = 弹药存活时长（ammo.ttlHours）。ammo_submit 只在携带它的轮里可用。
+   */
+  workerRun?: { runKey: string; maxPicks: number; ttlHours: number };
 }
 
 /** loadToolManifests 的动态上下文；词表为空时对应属性退化为普通字符串（与现行为一致）。 */

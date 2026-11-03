@@ -64,7 +64,7 @@ export interface SayRound {
 
 /**
  * 解析本轮出口上下文：snapshot 取轮标识 → onSayCall 回调（成败都算一次开口）→
- * 静默轮（自动收表情包）拒绝 → triggerOf 取触发消息。
+ * 静默轮（自动收表情包）拒绝 → triggerOf 取触发消息 → worker 轮拒绝（逛轮禁言）。
  */
 export async function resolveSayContext(api: SayApi, deps: ToolPackageDeps, context: unknown): Promise<SayRound> {
   // 静默轮（自动收表情包）只允许调工具，不许冒话
@@ -79,6 +79,11 @@ export async function resolveSayContext(api: SayApi, deps: ToolPackageDeps, cont
     throw new Error(deps.prompts.messages["say_silent"] ?? "say_silent");
   }
   const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
+  // worker 轮（弹药逛轮，外部计划 E4）：后台作业不是聊天，say_* 一律机械拒绝——
+  // 模型只能用 ammo_submit 提交结构化候选，出口零开放（复用收图轮同款的轮闸思路）
+  if (trigger?.kind === "worker") {
+    throw new Error(deps.prompts.messages["say_worker_round"] ?? "say_worker_round");
+  }
   return { round, trigger };
 }
 

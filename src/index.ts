@@ -31,7 +31,7 @@ import {
   type RecentChatMessage,
 } from "./qq/debounce.ts";
 import { replaceWatched, type WatchedMap } from "./qq/watch-state.ts";
-import { MEMORY_ENGAGE_KIND, profileAmmoOf, type CompactResult } from "./compact.ts";
+import { MEMORY_ENGAGE_KIND, MEMORY_WORKER_KIND, profileAmmoOf, type CompactResult } from "./compact.ts";
 import type { RoundKind, RoundTrigger } from "./tools/types.ts";
 import { setLookDisabled } from "./tools/look/tool.ts";
 import { clearMemeImportRound } from "./tools/meme_import/shared.ts";
@@ -52,18 +52,16 @@ import { memoryKeyOf, privateMemoryKeyOf, pushScope, shiftScope } from "./memory
 import { OutboundEntry, type OutboundPayload } from "./tools/say-shared.ts";
 import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
-// —— 外部信息源基础设施挂载点（docs/plans/2026-11-02-external-ammo.md Task E1）——
-// 只立槽位不接业务：scheduler 实例化与 onJob 接线在 E4（逛轮编排）落位，E7（新闻播报）复用
-// 同一调度器（slots 追加 10:30）。接线形态：
-//   externalScheduler = createScheduler({
-//     slots: () => fishConfig().config.ammo?.slots ?? [...], onJob,
-//     now: () => new Date(), ...nodeTimers, jobTimeoutMs,
-//     jobs: jobsHandleOf(fish.harness),
-//   }).start();
-// 退出钩子（文件尾 SIGTERM）里 .stop()。频控客户端与筛选配置见 src/external/bili-client.ts，
-// 不可信文本清洗见 src/external/sanitize.ts。
-import type { Scheduler } from "./external/scheduler.ts";
-let externalScheduler: Scheduler | undefined; // E4 赋值并 .start()；未接线前保持 undefined
+// —— 外部信息源基础设施（docs/plans/2026-11-02-external-ammo.md Task E1/E4）——
+// scheduler 四时点（fish.config 的 ammo.slots，热读）起 worker 逛轮：独立后台会话
+//（WORKER_CHAT_KEY，默认人格、人格中立 doc），say_* 机械拒绝，产出只有 ammo_submit 入库；
+// 错过时点 ≤2h 补跑一次（幂等 date+slot，fish.external_jobs）；硬截止在 runBrowseJob 里
+// 取消在途 submission，scheduler 的 jobTimeout 再兜一层。E7（新闻播报）复用同一调度器
+//（slots 追加 10:30）。频控客户端与筛选配置见 src/external/bili-client.ts，
+// 不可信文本清洗见 src/external/sanitize.ts，弹药库读写见 src/external/ammo-store.ts。
+import { createScheduler, jobKeyOf, jobsHandleOf, nodeTimers, type Scheduler } from "./external/scheduler.ts";
+import { AMMO_TOPICS } from "./external/ammo-store.ts";
+let externalScheduler: Scheduler | undefined; // 下方实例化并 .start()；SIGTERM 时 .stop()
 
 // 每条入站消息的原始文本（卡片渲染 / bypass 剥离之前取）：记忆 entry 只存群友原话，
 // 不把 card_bilibili / ctx_header 等宿主文案写进 fish.inbound。WeakMap 键是消息对象，
@@ -1990,6 +1988,108 @@ const engageNext = createEngageNext({
   onError: (error) => console.error("[鱼缸] 搭话开窗回调失败", error instanceof Error ? error.message : error),
 });
 
+// ── worker 逛轮（外部计划 Task E4）：scheduler 四时点起独立后台会话刷 B 站 ──────────
+
+/** worker 会话的 chatKey：不是 QQ 会话，不进 gate / 群白名单 / 记忆映射；独立 conversation + 独立 cwd。 */
+const WORKER_CHAT_KEY = "worker:bili";
+
+/** 逛轮在途标记：scheduler 的 watchdog 已收束但上一轮还在收尾时，新作业直接跳过（宁少勿答）。 */
+let browseInFlight = false;
+
+/**
+ * 一次逛轮作业（scheduler 的 onJob）：
+ *   1. 独立 worker 会话（fish.group(WORKER_CHAT_KEY)，默认人格、人格中立）直接 conv.submit
+ *      （GIF 收图轮同款先例）：触发语 = messages 的 worker_browse_task（时点参数现算），
+ *      entry kind = fish.worker_round（不进摘要/记忆抽取，但计入换页阈值）；
+ *   2. triggerOf 钉上 kind=worker + workerRun（runKey/maxPicks/ttlHours，作业起时定格）——
+ *      say_* 据此机械拒绝，ammo_submit 据此放行；
+ *   3. 硬截止：browseMinutes 到点 submission.abort() 取消在途轮（已入库保留，未提交候选丢弃），
+ *      抛错让 scheduler 落 failed；scheduler 自己的 watchdog（jobTimeout）是最后兑底；
+ *   4. 收尾：用量记账（与 submitRound 同口径）+ 换页检查（阈值满足时机械降级换页）。
+ * 作业键 runKey = date + slot（jobKeyOf），幂等与单轮入库上限都认它。
+ */
+async function runBrowseJob(slot: string, date: string): Promise<void> {
+  if (browseInFlight) {
+    console.log(`[鱼缸] 逛轮跳过 ${date} ${slot}：上一轮未完`);
+    return;
+  }
+  browseInFlight = true;
+  try {
+    const ammo = fishConfig().config.ammo;
+    const runKey = jobKeyOf(date, slot);
+    const conv = await fish.group(WORKER_CHAT_KEY);
+    const content = renderTemplate(fish.prompts.messages["worker_browse_task"] ?? "", {
+      minutes: String(ammo.browseMinutes),
+      max: String(ammo.maxPicksPerRun),
+      topics: AMMO_TOPICS.join("、"),
+    });
+    const submission = await conv.submit({ type: "input", content, entry: { kind: MEMORY_WORKER_KIND } }, ctx);
+    const roundId = String(submission.id);
+    triggerOf.set(roundId, {
+      mentionsBot: false,
+      kind: "worker",
+      workerRun: { runKey, maxPicks: ammo.maxPicksPerRun, ttlHours: ammo.ttlHours },
+    });
+    const timeoutMs = Math.max(60_000, ammo.browseMinutes * 60_000);
+    let watchdog: NodeJS.Timeout | undefined;
+    try {
+      console.log(`[鱼缸] 逛轮开始 ${runKey}`);
+      const outcome = await Promise.race([
+        submission.wait(ctx).then((settled) => ({ kind: "settled" as const, status: settled.status })),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          watchdog = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+          watchdog.unref?.();
+        }),
+      ]);
+      if (outcome.kind === "timeout") {
+        // 硬截止收束：取消在途轮。Submission.abort 只能撤回未入册的排队输入（已放置的返回
+        // already_placed 不停轮），真正收束在途作业用 Conversation.abort——标记并唤醒全部活任务、
+        // 等会话闲置后返回，未提交候选自然丢弃（已入库保留）；随后换页检查也安全。取消不了只记日志不重试
+        await conv.abort(ctx);
+        console.log(`[鱼缸] 逛轮硬截止 ${runKey}（已收束）`);
+        throw new Error("worker_browse_timeout");
+      }
+      if (outcome.status !== "done") {
+        console.log(`[鱼缸] 逛轮结束 ${runKey} ${outcome.status}`);
+      } else {
+        console.log(`[鱼缸] 逛轮完成 ${runKey}`);
+      }
+    } finally {
+      if (watchdog !== undefined) clearTimeout(watchdog);
+      triggerOf.delete(roundId);
+      // 用量记账（与 submitRound 同口径）+ 换页检查；worker 会话没有记忆映射，压缩只做换页
+      try {
+        const spent = await fish.harness.snapshot(UsageDoc, conv.id, ctx);
+        const delta = usage.append(WORKER_CHAT_KEY, sumUsage(spent), Date.now(), String(conv.id));
+        if (delta) console.log(`[鱼缸] ${WORKER_CHAT_KEY} +${delta.total} tokens / ${delta.cost}`);
+      } catch (error) {
+        console.error("[鱼缸] 逛轮用量记账失败", error instanceof Error ? error.message : error);
+      }
+      try {
+        const compacted = await compactWithGuard(conv, false, WORKER_CHAT_KEY);
+        if (compacted.compacted) console.log(`[鱼缸] ${WORKER_CHAT_KEY} 换页 ${compacted.entries}条/${compacted.chars}字`);
+      } catch (error) {
+        console.error("[鱼缸] 逛轮换页失败", error instanceof Error ? error.message : error);
+      }
+    }
+  } finally {
+    browseInFlight = false;
+  }
+}
+
+// 四时点（缺省 09:00/12:00/18:00/24:00，ammo.slots 热读）触发逛轮；错过 ≤2h 补跑一次
+//（幂等 date+slot，fish.external_jobs）；硬截止双层：runBrowseJob 内的 abort + scheduler watchdog
+externalScheduler = createScheduler({
+  slots: () => fishConfig().config.ammo.slots,
+  onJob: (slot, date) => runBrowseJob(slot, date),
+  now: () => new Date(),
+  ...nodeTimers,
+  jobTimeoutMs: () => Math.max(60_000, fishConfig().config.ammo.browseMinutes * 60_000),
+  jobs: jobsHandleOf(fish.harness),
+  log: (message) => console.log(`[鱼缸] ${message}`),
+});
+externalScheduler.start();
+
 const gate = createGate({
   master: config.master,
   groups: config.groups,
@@ -2318,6 +2418,7 @@ process.on("SIGTERM", () => {
   closing = true;
   console.log("[鱼缸] SIGTERM，冲刷后退出");
   engageNext.stop(); // 先停开窗循环：退出后不再触发相位迁移回调
+  externalScheduler?.stop(); // 停作业调度：不再触发新逛轮，在途轮由各自的 watchdog 收束
   void (async () => {
     try { const n = await fish.drain(); if (n > 0) console.log(`[鱼缸] 退出前补发 ${n} 条`); } catch { /* 尽力而为 */ }
     onebot.close(); // 先冲刷再断 WS：让协议端立即感知重连，不等它自己的超时
