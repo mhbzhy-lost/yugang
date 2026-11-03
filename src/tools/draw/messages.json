@@ -1,0 +1,13 @@
+{
+  "draw_prompt": "画面描述得有内容，1000 字以内",
+  "draw_used": "这轮画过了，先把画发出去",
+  "draw_failed": "画图没成功（本地和备用通道都没出图）",
+  "draw_done": "gen/{{file}} — 画好了，用 say_media 发出去",
+  "draw_off": "本地画图没配置地址，用不了",
+  "draw_ref_outside": "只能改这一轮群里的图（inbound/…）或你自己画过的图（gen/…）：{{ref}}",
+  "draw_ref_missing": "找不到这张图：{{ref}}",
+  "draw_ref_type": "这张不是能重画的图片格式：{{ref}}",
+  "draw_ref_big": "这张图太大，改不动：{{ref}}",
+  "draw_ref_broken": "这张图读不出来（格式坏了或者转换失败）：{{ref}}",
+  "draw_strength": "重画幅度只能在 0.1 到 0.9 之间"
+}

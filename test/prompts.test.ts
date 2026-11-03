@@ -191,57 +191,80 @@ test("messages.md 里没有死文案，tools/ 里没有死文件", async () => {
   }
 });
 
-/** 最小合法 TOOL.md 头（frontmatter + 空 schema 块），供第三块解析测试拼装。 */
-function toolHead(name: string): string {
-  return `---\nname: ${name}\ndescription: 摘要\n---\n---tool-schema\n{"parameters":{"type":"object","properties":{}}}\n---end-tool-schema\n`;
+/** 最小合法工具包三件套（frontmatter + 空 schema + 指南），供解析测试拼装。 */
+function toolSource(name: string, messages: string | null = null, guide = "使用指南正文"): {
+  source: { md: string; schema: string; messages: string | null };
+  mdPath: string;
+  schemaPath: string;
+  messagesPath: string;
+} {
+  return {
+    source: {
+      md: `---\nname: ${name}\ndescription: 摘要\n---\n\n${guide}`,
+      schema: `{"parameters":{"type":"object","properties":{}}}`,
+      messages,
+    },
+    mdPath: `${name}/TOOL.md`,
+    schemaPath: `${name}/schema.json`,
+    messagesPath: `${name}/messages.json`,
+  };
 }
 
-test("TOOL.md 第三块：tool-messages 逐行解析，块可选", () => {
-  // 有块：文案逐行进 manifest.messages，指南不含块内容
-  const withBlock = parseToolManifest(
-    toolHead("demo") + "\n---tool-messages\ndemo_key: 一句文案，含 {{var}}\nanother: 另一句\n---end-tool-messages\n\n使用指南正文",
-    "demo/TOOL.md",
-  );
-  assert.equal(withBlock.messages["demo_key"], "一句文案，含 {{var}}");
-  assert.equal(withBlock.messages["another"], "另一句");
-  assert.equal(withBlock.guide, "使用指南正文");
-  assert.deepEqual(withBlock.description, "摘要");
+function parseSource(files: ReturnType<typeof toolSource>) {
+  return parseToolManifest(files.source, files.mdPath, files.schemaPath, files.messagesPath);
+}
 
-  // 无块：messages 为空表，指南紧跟 schema 块
-  const withoutBlock = parseToolManifest(toolHead("demo") + "\n使用指南正文", "demo/TOOL.md");
-  assert.deepEqual(withoutBlock.messages, {});
-  assert.equal(withoutBlock.guide, "使用指南正文");
+test("messages.json 解析：文件可选，文案逐 key 进 manifest.messages", () => {
+  // 有文件：文案逐 key 进 manifest.messages，指南不含结构块内容
+  const withFile = parseSource({
+    source: {
+      md: "---\nname: demo\ndescription: 摘要\n---\n\n使用指南正文",
+      schema: `{"parameters":{"type":"object","properties":{}}}`,
+      messages: `{"demo_key":"一句文案，含 {{var}}","another":"另一句"}`,
+    },
+    mdPath: "demo/TOOL.md",
+    schemaPath: "demo/schema.json",
+    messagesPath: "demo/messages.json",
+  });
+  assert.equal(withFile.messages["demo_key"], "一句文案，含 {{var}}");
+  assert.equal(withFile.messages["another"], "另一句");
+  assert.equal(withFile.guide, "使用指南正文");
+  assert.deepEqual(withFile.description, "摘要");
+
+  // 无文件：messages 为空表
+  const withoutFile = parseSource(toolSource("demo"));
+  assert.deepEqual(withoutFile.messages, {});
+  assert.equal(withoutFile.guide, "使用指南正文");
 });
 
-test("TOOL.md 第三块：缺围栏对、非法 key 名、空块、块内重复 key 都直接报错", () => {
-  // 缺 ---end-tool-messages
+test("messages.json：非法 key 名、空文案、空对象、TOOL.md 里的旧块围栏都直接报错", () => {
+  // 非法 key 名（大写/数字开头）
   assert.throws(
-    () => parseToolManifest(toolHead("demo") + "\n---tool-messages\ndemo_key: 一句文案\n\n使用指南", "demo/TOOL.md"),
-    /---end-tool-messages 未闭合/,
-  );
-  // 非法 key 名（大写/连字符/数字开头）
-  assert.throws(
-    () => parseToolManifest(toolHead("demo") + "\n---tool-messages\nBad-Key: 一句文案\n---end-tool-messages\n\n使用指南", "demo/TOOL.md"),
-    /tool-messages 行必须是/,
+    () => parseSource({ source: { md: toolSource("demo").source.md, schema: toolSource("demo").source.schema, messages: `{"Bad-Key":"一句"}` }, mdPath: "demo/TOOL.md", schemaPath: "demo/schema.json", messagesPath: "demo/messages.json" }),
+    /tool-messages key 名非法/,
   );
   assert.throws(
-    () => parseToolManifest(toolHead("demo") + "\n---tool-messages\n9key: 一句文案\n---end-tool-messages\n\n使用指南", "demo/TOOL.md"),
-    /tool-messages 行必须是/,
+    () => parseSource({ source: { md: toolSource("demo").source.md, schema: toolSource("demo").source.schema, messages: `{"9key":"一句"}` }, mdPath: "demo/TOOL.md", schemaPath: "demo/schema.json", messagesPath: "demo/messages.json" }),
+    /tool-messages key 名非法/,
   );
-  // 空块（围栏成对但内部没有合法行）
+  // 空文案
   assert.throws(
-    () => parseToolManifest(toolHead("demo") + "\n---tool-messages\n---end-tool-messages\n\n使用指南", "demo/TOOL.md"),
+    () => parseSource({ source: { md: toolSource("demo").source.md, schema: toolSource("demo").source.schema, messages: `{"demo_key":""}` }, mdPath: "demo/TOOL.md", schemaPath: "demo/schema.json", messagesPath: "demo/messages.json" }),
+    /tool-messages 文案必须是非空字符串/,
+  );
+  // 空对象（至少要有一条）
+  assert.throws(
+    () => parseSource({ source: { md: toolSource("demo").source.md, schema: toolSource("demo").source.schema, messages: `{}` }, mdPath: "demo/TOOL.md", schemaPath: "demo/schema.json", messagesPath: "demo/messages.json" }),
     /至少要有一条文案/,
   );
-  // 块内重复 key
+  // TOOL.md 正文里又出现旧块围栏：报错，不猜哪个算数
   assert.throws(
-    () => parseToolManifest(toolHead("demo") + "\n---tool-messages\ndemo_key: 一句\ndemo_key: 又一句\n---end-tool-messages\n\n使用指南", "demo/TOOL.md"),
-    /重复的 tool-messages key/,
-  );
-  // 指南里又出现一份围栏：报错，不猜哪个算数
-  assert.throws(
-    () => parseToolManifest(toolHead("demo") + "\n---tool-messages\ndemo_key: 一句\n---end-tool-messages\n\n使用指南\n---tool-messages\n", "demo/TOOL.md"),
+    () => parseSource(toolSource("demo", null, "使用指南\n---tool-messages\n")),
     /多余的 tool-messages 块围栏/,
+  );
+  assert.throws(
+    () => parseSource(toolSource("demo", null, "使用指南\n---tool-schema\n")),
+    /多余的 schema 块围栏/,
   );
 });
 
@@ -250,8 +273,12 @@ test("工具文案合并：key 撞车（工具↔工具、工具↔中心）直�
   const tmpRoot = mkdtempSync(join(tmpdir(), "yg-tools-"));
   mkdirSync(join(tmpRoot, "alpha"), { recursive: true });
   mkdirSync(join(tmpRoot, "beta"), { recursive: true });
-  writeFileSync(join(tmpRoot, "alpha", "TOOL.md"), toolHead("alpha") + "\n---tool-messages\ndup_key: 甲的文案\n---end-tool-messages\n\n指南A");
-  writeFileSync(join(tmpRoot, "beta", "TOOL.md"), toolHead("beta") + "\n---tool-messages\ndup_key: 乙的文案\n---end-tool-messages\n\n指南B");
+  writeFileSync(join(tmpRoot, "alpha", "TOOL.md"), "---\nname: alpha\ndescription: 摘要\n---\n\n指南A");
+  writeFileSync(join(tmpRoot, "alpha", "schema.json"), `{"parameters":{"type":"object","properties":{}}}`);
+  writeFileSync(join(tmpRoot, "alpha", "messages.json"), `{"dup_key":"甲的文案"}`);
+  writeFileSync(join(tmpRoot, "beta", "TOOL.md"), "---\nname: beta\ndescription: 摘要\n---\n\n指南B");
+  writeFileSync(join(tmpRoot, "beta", "schema.json"), `{"parameters":{"type":"object","properties":{}}}`);
+  writeFileSync(join(tmpRoot, "beta", "messages.json"), `{"dup_key":"乙的文案"}`);
   const manifests = loadToolManifests(tmpRoot, { memeTags: [] });
   assert.throws(() => mergeToolMessages(manifests, {}), /dup_key.*alpha.*beta/);
 
@@ -265,7 +292,9 @@ test("工具文案合并：key 撞车（工具↔工具、工具↔中心）直�
   // 不撞车时合并进同一个 map（合并视图语义）
   const okRoot = mkdtempSync(join(tmpdir(), "yg-tools-"));
   mkdirSync(join(okRoot, "alpha"), { recursive: true });
-  writeFileSync(join(okRoot, "alpha", "TOOL.md"), toolHead("alpha") + "\n---tool-messages\nalpha_key: 甲的文案\n---end-tool-messages\n\n指南A");
+  writeFileSync(join(okRoot, "alpha", "TOOL.md"), "---\nname: alpha\ndescription: 摘要\n---\n\n指南A");
+  writeFileSync(join(okRoot, "alpha", "schema.json"), `{"parameters":{"type":"object","properties":{}}}`);
+  writeFileSync(join(okRoot, "alpha", "messages.json"), `{"alpha_key":"甲的文案"}`);
   const target: Record<string, string> = { center_key: "中心文案" };
   mergeToolMessages(loadToolManifests(okRoot, { memeTags: [] }), target);
   assert.deepEqual(target, { center_key: "中心文案", alpha_key: "甲的文案" });

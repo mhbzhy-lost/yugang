@@ -1,0 +1,41 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "source": {
+        "type": "string",
+        "enum": [
+          "popular",
+          "rank"
+        ],
+        "description": "popular=综合热门（全站滚动更新）；rank=分区排行榜（配合 rid 选分区）"
+      },
+      "rid": {
+        "type": "number",
+        "enum": [
+          0,
+          1,
+          4,
+          36,
+          188,
+          160,
+          181,
+          3,
+          5,
+          23
+        ],
+        "description": "排行榜分区号：0 全站、1 动画、4 游戏、36 知识、188 科技、160 生活、181 影视、3 音乐、5 娱乐、23 电影；缺省 0 全站"
+      },
+      "limit": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 20,
+        "description": "要几条候选（1-20），缺省 10"
+      }
+    },
+    "required": [
+      "source"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -1,18 +1,18 @@
 /**
- * TOOL.md 严格解析器。
+ * 工具包严格解析器。
  *
- * 固定格式（解析器不接受近似写法）：
- *   ---\nname: <snake_case>\ndescription: <摘要>\n---        ← frontmatter，只认 name/description
- *   ---tool-schema\n{ ...严格 JSON... }\n---end-tool-schema   ← parameters 是唯一顶层键
- *   ---tool-messages\nkey: 文案\n---end-tool-messages  ← 可选第三块：工具专属回执文案
- *   <非空正文>                                                ← 使用指南，注册时拼进 description
+ * 固定格式（解析器不接受近似写法）：一个工具包 = src/tools/<name>/ 下的四个文件
+ *   TOOL.md      ← frontmatter（只认 name/description）+ 非空使用指南正文（注册时拼进 description）
+ *   schema.json  ← 严格 JSON（注释、尾逗号、重复 key 都拒）：parameters 是唯一顶层键
+ *   messages.json← 可选：工具专属回执文案，严格 JSON 对象（key → 文案，可含 {{var}}）
+ *   tool.ts      ← 实现（loader 校验存在，不在这里解析）
  *
- * 第三块逐行 `key: 文案`（与 prompt/messages.md 同格式，可含 {{var}}），块可选；
- * 有则围栏必须成对、内部至少一行合法 key，key 名只认 ^[a-z][a-z0-9_]*$，块内不许重复。
- * 跨文件归属去重（工具 ↔ 工具、工具 ↔ 中心文件）不在这里做，由 loader 的合并步骤报错。
+ * messages.json 的 key 名只认 ^[a-z][a-z0-9_]*$、不许重复、至少一条；跨文件归属去重
+ * （工具 ↔ 工具、工具 ↔ 中心文件）不在这里做，由 loader 的合并步骤报错。
  *
- * 校验全部在解析期机械判定：未知/重复 frontmatter 字段、空字段、非法 JSON（注释、尾逗号、
- * 重复 key）、缺 parameters、保留的 x-yugang-* 扩展、远程 $ref、空指南一律报错。
+ * 校验全部在解析期机械判定：未知/重复 frontmatter 字段、空字段、非法 JSON、缺
+ * parameters、保留的 x-yugang-* 扩展、远程 $ref、空指南一律报错；TOOL.md 正文里
+ * 不允许再出现旧的块围栏（---tool-schema 等，结构块已拆到同目录 JSON，出现即报错）。
  * 唯一受控的动态扩展是 x-yugang-enum-from: "memeTags"：解析期只验合同，loadToolManifests
  * 按调用方传入的词表替换成 enum，除此之外没有任何运行时改写模型所见 Schema 的通道。
  */
@@ -54,13 +54,29 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** 一份工具包的三个源文件（拆分后的固定三件套；messages 可选）。 */
+export interface ToolManifestSource {
+  /** TOOL.md 全文：frontmatter + 使用指南。 */
+  readonly md: string;
+  /** schema.json 全文：严格 JSON，顶层只有 parameters。 */
+  readonly schema: string;
+  /** messages.json 全文；无该文件时为 null。 */
+  readonly messages: string | null;
+}
+
 /**
- * 解析一份 TOOL.md 文本。动态词表扩展（x-yugang-enum-from）在这里只做合同校验，
+ * 解析一份工具包。动态词表扩展（x-yugang-enum-from）在这里只做合同校验，
  * 真正替换成 enum 由 loadToolManifests 按调用方传入的 context 完成。
+ * 诊断路径：TOOL.md 问题报 mdPath，schema/messages 问题报各自文件路径。
  */
-export function parseToolManifest(text: string, path: string): ToolManifest {
-  const lines = text.split(/\r?\n/);
-  if (lines[0]?.trim() !== "---") fail(path, 1, "缺少 frontmatter");
+export function parseToolManifest(
+  source: ToolManifestSource,
+  mdPath: string,
+  schemaPath: string,
+  messagesPath: string,
+): ToolManifest {
+  const lines = source.md.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") fail(mdPath, 1, "缺少 frontmatter");
 
   let close = -1;
   for (let i = 1; i < lines.length; i++) {
@@ -69,94 +85,69 @@ export function parseToolManifest(text: string, path: string): ToolManifest {
       break;
     }
   }
-  if (close === -1) fail(path, undefined, "frontmatter 未闭合");
+  if (close === -1) fail(mdPath, undefined, "frontmatter 未闭合");
 
   const fields = new Map<string, { value: string; line: number }>();
   for (let i = 1; i < close; i++) {
     const line = lines[i];
     if (line.trim() === "") continue;
     const match = /^([A-Za-z][A-Za-z0-9_-]*):(.*)$/.exec(line);
-    if (!match) fail(path, i + 1, "frontmatter 行不是 key: value");
+    if (!match) fail(mdPath, i + 1, "frontmatter 行不是 key: value");
     const key = match[1];
     const value = match[2].trim();
-    if (fields.has(key)) fail(path, i + 1, `重复的 frontmatter 字段：${key}`);
-    if (key !== "name" && key !== "description") fail(path, i + 1, `未知的 frontmatter 字段：${key}`);
-    if (value === "") fail(path, i + 1, `frontmatter 字段为空：${key}`);
+    if (fields.has(key)) fail(mdPath, i + 1, `重复的 frontmatter 字段：${key}`);
+    if (key !== "name" && key !== "description") fail(mdPath, i + 1, `未知的 frontmatter 字段：${key}`);
+    if (value === "") fail(mdPath, i + 1, `frontmatter 字段为空：${key}`);
     const first = value.charCodeAt(0);
-    if (first === DQ || first === SQ) fail(path, i + 1, "frontmatter 值不要加引号");
+    if (first === DQ || first === SQ) fail(mdPath, i + 1, "frontmatter 值不要加引号");
     fields.set(key, { value, line: i + 1 });
   }
-  if (!fields.has("name")) fail(path, undefined, "frontmatter 缺少 name");
-  if (!fields.has("description")) fail(path, undefined, "frontmatter 缺少 description");
+  if (!fields.has("name")) fail(mdPath, undefined, "frontmatter 缺少 name");
+  if (!fields.has("description")) fail(mdPath, undefined, "frontmatter 缺少 description");
 
   const nameField = fields.get("name")!;
-  if (nameField.value.length > MAX_NAME_LENGTH) fail(path, nameField.line, "工具名过长");
-  if (!TOOL_NAME_PATTERN.test(nameField.value)) fail(path, nameField.line, "工具名必须是 snake_case");
+  if (nameField.value.length > MAX_NAME_LENGTH) fail(mdPath, nameField.line, "工具名过长");
+  if (!TOOL_NAME_PATTERN.test(nameField.value)) fail(mdPath, nameField.line, "工具名必须是 snake_case");
 
-  let i = close + 1;
-  while (i < lines.length && lines[i].trim() === "") i++;
-  if (i >= lines.length) fail(path, undefined, "缺少 ---tool-schema 块");
-  if (lines[i].trim() !== "---tool-schema") fail(path, i + 1, "frontmatter 后必须是 ---tool-schema");
+  // schema.json：严格 JSON；顶层只有 parameters
+  const schema = parseStrictJson(source.schema, schemaPath, 1);
+  const parameters = validateSchema(schema, schemaPath, 1);
 
-  let end = -1;
-  for (let j = i + 1; j < lines.length; j++) {
-    if (lines[j].trim() === "---end-tool-schema") {
-      end = j;
-      break;
-    }
-  }
-  if (end === -1) fail(path, undefined, "---end-tool-schema 未闭合");
-
-  const schema = parseStrictJson(lines.slice(i + 1, end).join("\n"), path, i + 2);
-  const parameters = validateSchema(schema, path, i + 2);
-
-  // 第三块（可选）：---tool-messages / ---end-tool-messages 之间是工具专属回执文案。
-  // 紧跟 schema 块之后（中间只允许空行）；格式与 prompt/messages.md 完全一致。
-  let cursor = end + 1;
-  while (cursor < lines.length && lines[cursor].trim() === "") cursor++;
+  // messages.json（可选文件）：严格 JSON 对象，key 名同中心文件规则，至少一条
   let messages: Record<string, string> = {};
-  let messagesEnd = -1;
-  if (lines[cursor]?.trim() === "---tool-messages") {
-    for (let j = cursor + 1; j < lines.length; j++) {
-      if (lines[j].trim() === "---end-tool-messages") {
-        messagesEnd = j;
-        break;
-      }
-    }
-    if (messagesEnd === -1) fail(path, cursor + 1, "---end-tool-messages 未闭合");
-    messages = parseToolMessageLines(lines.slice(cursor + 1, messagesEnd), path, cursor + 2);
-    cursor = messagesEnd + 1;
-    while (cursor < lines.length && lines[cursor].trim() === "") cursor++;
+  if (source.messages !== null) {
+    messages = parseToolMessages(source.messages, messagesPath);
   }
 
-  // 指南区里不允许再出现任何块围栏（第二份 schema / tool-messages 块一律报错，不猜哪个算数）
-  for (let j = cursor; j < lines.length; j++) {
+  // 正文里不允许再出现任何旧块围栏（结构块已拆到同目录 JSON，出现即报错，不猜哪个算数）
+  for (let j = close + 1; j < lines.length; j++) {
     const trimmed = lines[j].trim();
-    if (trimmed === "---tool-schema" || trimmed === "---end-tool-schema") fail(path, j + 1, "多余的 schema 块围栏");
-    if (trimmed === "---tool-messages" || trimmed === "---end-tool-messages") fail(path, j + 1, "多余的 tool-messages 块围栏");
+    if (trimmed === "---tool-schema" || trimmed === "---end-tool-schema") fail(mdPath, j + 1, "多余的 schema 块围栏（结构块在 schema.json）");
+    if (trimmed === "---tool-messages" || trimmed === "---end-tool-messages") fail(mdPath, j + 1, "多余的 tool-messages 块围栏（结构块在 messages.json）");
   }
-  const guide = lines.slice(cursor).join("\n").trim();
-  if (guide === "") fail(path, undefined, "正文指南为空");
+  const guide = lines.slice(close + 1).join("\n").trim();
+  if (guide === "") fail(mdPath, undefined, "正文指南为空");
 
-  return { name: nameField.value, description: fields.get("description")!.value, guide, parameters, messages, path };
+  return { name: nameField.value, description: fields.get("description")!.value, guide, parameters, messages, path: mdPath };
 }
 
-/** 第三块的逐行解析：`key: 文案`，key 名同中心文件规则，块内不许重复、不许空块。 */
-function parseToolMessageLines(lines: string[], path: string, baseLine: number): Record<string, string> {
+/** messages.json 的解析：严格 JSON 对象，key → 非空文案字符串，key 名同中心文件规则。 */
+function parseToolMessages(text: string, path: string): Record<string, string> {
+  const value = parseStrictJson(text, path, 1);
+  if (!isPlainObject(value)) fail(path, 1, "messages.json 顶层必须是 JSON 对象");
   const table: Record<string, string> = {};
-  for (const [index, raw] of lines.entries()) {
-    const match = /^([a-z][a-z0-9_]*): (.+)$/.exec(raw);
-    if (!match) fail(path, baseLine + index, `tool-messages 行必须是 "key: 文案"：${raw.trim()}`);
-    if (match[1] in table) fail(path, baseLine + index, `重复的 tool-messages key：${match[1]}`);
-    table[match[1]] = match[2];
+  for (const [key, entry] of Object.entries(value)) {
+    if (!/^[a-z][a-z0-9_]*$/.test(key)) fail(path, 1, `tool-messages key 名非法：${key}`);
+    if (typeof entry !== "string" || entry.length === 0) fail(path, 1, `tool-messages 文案必须是非空字符串：${key}`);
+    table[key] = entry;
   }
-  if (Object.keys(table).length === 0) fail(path, baseLine, "tool-messages 块内至少要有一条文案");
+  if (Object.keys(table).length === 0) fail(path, 1, "tool-messages 至少要有一条文案");
   return table;
 }
 
 /**
- * 扫描 root 下的 <name>/TOOL.md：目录缺 manifest、manifest name 与目录名不一致、
- * 重复 manifest name 一律失败。返回以工具名为键的 manifest 表。
+ * 扫描 root 下的 <name>/ 三件套：目录缺 TOOL.md / schema.json、manifest name 与目录名
+ * 不一致、重复 manifest name 一律失败。返回以工具名为键的 manifest 表。
  */
 export function loadToolManifests(root: string, context: ManifestLoadContext): Map<string, ToolManifest> {
   if (!existsSync(root)) fail(root, undefined, "工具目录不存在");
@@ -167,8 +158,16 @@ export function loadToolManifests(root: string, context: ManifestLoadContext): M
     if (!entry.isDirectory()) continue;
     sawPackage = true;
     const file = join(root, entry.name, "TOOL.md");
+    const schemaFile = join(root, entry.name, "schema.json");
+    const messagesFile = join(root, entry.name, "messages.json");
     if (!existsSync(file)) fail(file, undefined, "目录缺少 TOOL.md");
-    const manifest = parseToolManifest(readFileSync(file, "utf8"), file);
+    if (!existsSync(schemaFile)) fail(schemaFile, undefined, "目录缺少 schema.json");
+    const manifest = parseToolManifest(
+      { md: readFileSync(file, "utf8"), schema: readFileSync(schemaFile, "utf8"), messages: existsSync(messagesFile) ? readFileSync(messagesFile, "utf8") : null },
+      file,
+      schemaFile,
+      messagesFile,
+    );
     if (manifest.name !== entry.name) {
       fail(file, undefined, `manifest name 与目录名不一致：${manifest.name} != ${entry.name}`);
     }

@@ -2,46 +2,6 @@
 name: meme_add
 description: 把一张图收进表情包库并打标；只有主人能让图入库。
 ---
----tool-schema
-{
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "ref": {
-        "type": "string",
-        "description": "要收进库的图片引用，比如 inbound/1793xxx.jpg（本轮消息里出现的图），或导入轮回执给的 meme-inbox/xxx.png"
-      },
-      "caption": {
-        "type": "string",
-        "description": "一句话说清这张图想表达什么（不是画面描述，是它的梗/用途）"
-      },
-      "tags": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "description": "标签：至少包含一个一级情绪词（词表以系统提示里的表情包词表为准），后面可以再跟 1-3 个自由词"
-      }
-    },
-    "required": ["ref", "caption", "tags"]
-  }
-}
----end-tool-schema
-
----tool-messages
-meme_add_master: 只有主人能让图长期留在库里，这张不收
-meme_add_missing: 找不到这张图：{{ref}}
-meme_add_type: 这不是能收的图片类型：{{ref}}
-meme_add_caption: 得写一句这张图什么意思，再给几个标签
-meme_add_mood: 标签里至少有一个得是一级情绪词（{{moods}}），从里面挑一个最贴的
-meme_add_dup: 库里已经有这张了（{{file}}），不用重复收
-meme_add_done: 收好了：memes/{{file}}，库里现在 {{count}} 张
-meme_add_import_outside: 这张不在本轮导入清单里：{{ref}}。先调 meme_import 登记，或者那是上一轮的图（清单已经作废）
-meme_add_not_looked: 这张还没看过就先别收，先 look 看一眼再 meme_add：{{ref}}
-meme_add_link: 这是个符号链接，不收（把文件本身放进目录）：{{ref}}
-meme_add_big: 这张太大，收不进库：{{ref}}
-meme_add_magic: 文件头不是图片（改了扩展名也没用），不收：{{ref}}
----end-tool-messages
 
 把一张图收进你的表情包库。只有主人让你收的时候才做，群友随口发的图一律不收。
 

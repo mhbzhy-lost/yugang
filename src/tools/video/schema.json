@@ -1,0 +1,14 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "B 站链接：视频链接 / BV 号 / b23.tv 短链 / 图文动态（/opus/...）都行"
+      }
+    },
+    "required": [
+      "url"
+    ]
+  }
+}

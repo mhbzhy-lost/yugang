@@ -2,44 +2,6 @@
 name: ammo_submit
 description: 收弹药入库（后台逛轮或主人私聊手动逛轮）：核验 BV、补全卡片、判重后写进弹药库，等开窗分享。
 ---
----tool-schema
-{
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "bvid": {
-        "type": "string",
-        "pattern": "^BV[0-9A-Za-z]{10}$",
-        "description": "候选视频的 BV 号（bili_hot 行尾那格 / bili_video 卡片里的那个）"
-      },
-      "summary": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 60,
-        "description": "一两句中文小结：这条讲什么、为什么值得分享（≤60 字，会被机械清洗）"
-      },
-      "topic": {
-        "type": "string",
-        "enum": ["二次元", "游戏", "军事", "数码"],
-        "description": "内容归类，四选一"
-      }
-    },
-    "required": ["bvid", "summary", "topic"],
-    "additionalProperties": false
-  }
-}
----end-tool-schema
-
----tool-messages
-ammo_submit_not_worker: 现在不是能收弹药的轮：弹药只在后台逛 B 站的工时轮，或主人私聊里的手动逛轮里收，这两种轮之外一律不收
-ammo_submit_bad_bvid: 这不是合法的 BV 号（BV + 10 位字母数字）
-ammo_submit_bad_summary: summary 不能是空的
-ammo_submit_bad_topic: topic 只能是这几个之一：{{topics}}
-ammo_submit_view_failed: 这条视频核实不过：{{reason}}
-ammo_submit_dup: 这条 BV 已经在弹药库里了（{{bvid}}），换一条
-ammo_submit_full: 这一轮的弹药已经收满 {{max}} 条了，到此为止
-ammo_submit_ok: 已入库（{{bvid}} {{title}}），到点分享
----end-tool-messages
 
 收弹药入库专用：后台定时起的逛 B 站工时轮（worker 轮），或主人私聊里的手动逛轮——
 先 bili_hot / bili_video 把候选看完，再把挑中的正式收进弹药库。只有这两种轮里可用：

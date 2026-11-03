@@ -1,0 +1,8 @@
+{
+  "meme_empty": "表情包库是空的，先用文字回",
+  "meme_no_mood": "「{{mood}}」这一档还没有图。现有：{{inventory}}",
+  "meme_no_tag": "「{{tags}}」在全库里没搜到图。现有：{{inventory}}",
+  "meme_tag_required": "mood 填「按标签」时 tags 得至少给一个自由词（具体事物、角色、场景都行），空手搜不了",
+  "meme_pick": "{{list}}",
+  "meme_used": "这一轮挑过了，先用挑到的"
+}

@@ -2,33 +2,6 @@
 name: bili_video
 description: 终选核实一条 B 站视频：完整数据卡片 + UP 评级软筛信号，可选热评与高能弹幕；入库前最后核对用。
 ---
----tool-schema
-{
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "bvid": {
-        "type": "string",
-        "description": "BV 号：BV 开头 + 10 个字母数字（即 ^BV[0-9A-Za-z]{10}$），从 bili_hot 结果或视频链接里取"
-      },
-      "withComments": {
-        "type": "boolean",
-        "description": "true 时附热评前 5（每条 ≤50 字）；缺省不取"
-      },
-      "withDanmaku": {
-        "type": "boolean",
-        "description": "true 时附高能弹幕前 10（密度/复读优先；多 P 视频只取第一段）；缺省不取"
-      }
-    },
-    "required": ["bvid"]
-  }
-}
----end-tool-schema
-
----tool-messages
-bili_video_invalid: 这不是合法的 BV 号（BV + 10 位字母数字）
-bili_video_failed: 视频卡片没取到（{{bvid}}）：{{detail}}
----end-tool-messages
 
 终选核实用：bili_hot 漏斗筛出候选后、提交入库前，用这条把候选的最后疑点核掉——
 完整卡片看成色，口碑信号看真假热度，UP 评级看号本身的底子。

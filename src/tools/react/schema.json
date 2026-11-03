@@ -1,0 +1,14 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "emoji": {
+        "type": "string",
+        "description": "一个表情，比如 124（赞）、178（笑哭）、182（比心）"
+      }
+    },
+    "required": [
+      "emoji"
+    ]
+  }
+}

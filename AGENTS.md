@@ -34,26 +34,27 @@
 - `src/` 里不允许出现大段 prompt 字面量。`npm test` 会扫描（阈值：单条字面量 ≥ 12 个汉字）；
   `TOOL.md` 是唯一例外——它本来就是模型侧文字，只是随工具包放在 `src/tools/<name>/` 里
 - 模板用 `{{name}}` 严格替换，缺变量直接抛错
-- 想加宿主/共享层文案，加进 `prompt/messages.md`；想加某个工具的专属回执，加进它 `TOOL.md` 的
-  `---tool-messages` 块（key 不许与中心文件或其它工具重复，loader 合并时撞车直接启动失败）；
+- 想加宿主/共享层文案，加进 `prompt/messages.md`；想加某个工具的专属回执，加进它目录下的
+  `messages.json`（key 不许与中心文件或其它工具重复，loader 合并时撞车直接启动失败）；
   想加新 prompt，加新文件并接到 `src/prompts.ts`
 
 ### 2. 工具 = `src/tools/<name>/TOOL.md + tool.ts` 工具包
 
 **这是本仓库最容易违反的规则：模型能看到的工具说明只来自 TOOL.md，代码里不写第二份。**
 
-- 一个工具包 = `src/tools/<name>/` 下的 `TOOL.md` + `tool.ts`，目录名 = manifest `name` = 注册名。
-  缺块、重复名、目录对不上时 `openFish()` 直接抛错起不来；`src/tools/loader.ts` 启动时做
+- 一个工具包 = `src/tools/<name>/` 下的四件套：`TOOL.md`（frontmatter 摘要 + 使用指南）、
+  `schema.json`（严格 JSON 参数 Schema）、`messages.json`（可选，工具专属回执文案）、
+  `tool.ts`（实现）；目录名 = manifest `name` = 注册名。缺文件、重复名、目录对不上时
+  `openFish()` 直接抛错起不来；`src/tools/loader.ts` 启动时做
   manifest ↔ factory 的双向一一对应校验，孤儿文档和没文档的实现都算错
-- `TOOL.md` 是**三元数据块**格式：顶部 frontmatter 只认 `name` + `description`（一句摘要）；
-  第二块 `---tool-schema` / `---end-tool-schema` 必须是**严格 JSON**（不许注释、尾逗号、远程 `$ref`），
-  里面的 `parameters` 是唯一参数 Schema；第三块 `---tool-messages` / `---end-tool-messages`（可选）
-  是本工具专属的回执文案，逐行 `key: 文案`（格式同 `prompt/messages.md`，可含 `{{var}}`），
-  围栏必须成对、内部至少一行合法 key，key 名只认 `[a-z][a-z0-9_]*` 且块内不重复；
-  块之后的正文是非空使用指南，注册时与摘要拼成完整 description
-- 解析与动态词表在 `src/tools/manifest.ts`：frontmatter / tool-schema / tool-messages 三块都在这里严格解析；
-  唯一受控扩展是 `meme.mood` 的
-  `x-yugang-enum-from: "memeTags"`（启动时按 `prompt/meme-tags.md` 机械换成 enum），
+- `TOOL.md` 只认 `name` + `description`（一句摘要）；`schema.json` 必须是**严格 JSON**
+  （不许注释、尾逗号、远程 `$ref`），里面的 `parameters` 是唯一参数 Schema；
+  `messages.json` 是严格 JSON 对象（`key: 文案`，key 名只认 `[a-z][a-z0-9_]*` 且不重复、
+  文案非空，可含 `{{var}}`；文件可选）
+- 解析与动态词表在 `src/tools/manifest.ts`：TOOL.md frontmatter / schema.json / messages.json
+  都在这里严格解析（TOOL.md 正文里出现旧块围栏直接报错）；
+  唯一受控扩展是 meme `schema.json` 里的
+  `"x-yugang-enum-from": "memeTags"`（启动时按 `prompt/meme-tags.md` 机械换成 enum），
   其它运行时改写模型所见 Schema 的通道一律拒绝
 - 工具面分两层：四个 `say_*` / `react` / `tool_search` 初始可见（eager），其余已启用工具统一 `deferred: true`；
   模型先用中文/英文检索 `tool_search`，命中后从下一次模型请求起才能调用。`runtime` section
@@ -61,16 +62,18 @@
 - 加一个工具 = 三处改动，缺一不可：
 
 ```
-1. src/tools/<name>/TOOL.md     摘要 + 严格 JSON Schema + 使用指南
-2. src/tools/<name>/tool.ts     defineTool，窄接口，Schema 只消费 manifest
-3. src/tools/loader.ts          FACTORIES 名单里加一行
+1. src/tools/<name>/TOOL.md     摘要 + 使用指南
+2. src/tools/<name>/schema.json 严格 JSON 参数 Schema
+3. src/tools/<name>/messages.json 工具专属回执文案（可选）
+4. src/tools/<name>/tool.ts     defineTool，窄接口，Schema 只消费 manifest
+5. src/tools/loader.ts          FACTORIES 名单里加一行
 ```
 
 - 主人专属工具（`read`/`grep`/`write`/`tree`/`config`/`restart`/`watch`/`meme_add`/`meme_import`）
   没配 `MASTER_QQ` 时 factory 返回 `undefined`，不进 `agent.tools` / `agent.deferred` / `tool_catalog`；
   `TOOL.md` 仍随包存在，注册与否由 loader 按依赖现判，执行内核里的二次身份校验不变
-- 旧 `prompt/tools/*.md` 平铺文档已删除，不要再建；工具专属回执/拒绝文案走各自 `TOOL.md` 的
-  `---tool-messages` 块，宿主/共享层文案（出口策略码、fs 共用拒绝、`working_*`、`ctx_*`、`/` 指令回执等）
+- 旧 `prompt/tools/*.md` 平铺文档已删除，不要再建；工具专属回执/拒绝文案走各自 `messages.json`，
+  宿主/共享层文案（出口策略码、fs 共用拒绝、`working_*`、`ctx_*`、`/` 指令回执等）
   继续走 `prompt/messages.md`。loader 启动时把两边合并成全局 messages 视图，消费侧统一
   `deps.prompts.messages["key"]`，任何 key 撞车（工具↔工具、工具↔中心）直接启动失败
 - 审查入口：`npm run prompts` 列出 prompt 文件、全部工具包（路径/sha256/摘要/Schema 属性/文案 key/eager/deferred）、

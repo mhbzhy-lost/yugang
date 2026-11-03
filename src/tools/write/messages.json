@@ -1,0 +1,3 @@
+{
+  "fs_write_outside": "write 只能写 /tmp/yugang 里的文件"
+}

@@ -1,0 +1,19 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "/tmp/yugang 下的路径；相对路径按 /tmp/yugang 解析"
+      },
+      "content": {
+        "type": "string",
+        "description": "完整的文件内容"
+      }
+    },
+    "required": [
+      "path",
+      "content"
+    ]
+  }
+}

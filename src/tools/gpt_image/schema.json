@@ -1,0 +1,35 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "画面描述。写清主体、构图、风格；唯一必填项。想要竖版/横版就把构图写进去"
+      },
+      "model": {
+        "type": "string",
+        "description": "模型 id，不填就用 config/models.json 的 models.image；一般不用填"
+      },
+      "background": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "transparent",
+          "opaque"
+        ],
+        "description": "auto / transparent / opaque；不填就是 auto。要透明底就传 transparent"
+      },
+      "images": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 5,
+        "description": "参考图列表，写媒体目录下的路径（如 inbound/xxx.jpg、gen/xxx.png），最多 5 张；传了就是改图，不传是纯文生图"
+      }
+    },
+    "required": [
+      "prompt"
+    ]
+  }
+}

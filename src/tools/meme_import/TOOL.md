@@ -2,30 +2,6 @@
 name: meme_import
 description: 主人本地批量导入表情包的登记入口：只扫固定 meme-inbox 目录，登记本轮可看的清单。
 ---
----tool-schema
-{
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "cursor": {
-        "type": "string",
-        "description": "继续游标：上一批最后一张的文件名。第一次不用填"
-      }
-    }
-  }
-}
----end-tool-schema
-
----tool-messages
-meme_import_master: 本地表情导入只有主人能开，这一轮不算
-meme_import_empty: 待导入目录里没有能收的图片了（只认 jpg/jpeg/png/gif/webp 的直接子文件）
-meme_import_nodir: 还没有 meme-inbox 这个待导入目录，先把图放进 <MEDIA_ROOT>/meme-inbox/
-meme_import_denied: meme-inbox 打不开（权限不对或者不是目录），先检查一下再导入
-meme_import_linkdir: meme-inbox 本身是个符号链接，那就不算固定目录了，先改成真目录
-meme_import_list: 这一批登记了 {{count}} 张，只能逐张 look、逐张用 meme_add 收，别靠文件名猜内容：
-meme_import_more: 目录里还有 {{rest}} 张，这一批处理完再调一次 meme_import，cursor 填 {{cursor}}
-meme_import_skipped: 跳过了 {{count}} 个不能收的：{{items}}
----end-tool-messages
 
 把本地待收目录里的一批图登记进本轮导入清单。只有主人让你导表情包时才用，
 目录是固定的 meme-inbox（不接受任何路径参数，也没有别的读文件手段）。

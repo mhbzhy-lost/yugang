@@ -1,0 +1,10 @@
+{
+  "say_mention_all": "不能@全体成员，只能@具体的人",
+  "say_mention_bad": "主动@只能填纯数字 QQ 号（从上下文里的「昵称(QQ号)」抄），不能填昵称或 all",
+  "say_mention_too_many": "一次最多@3个人，先挑最该应声的",
+  "say_mention_no_trigger": "这一轮不知道是谁在跟你说话，@不了人，先说话",
+  "say_mention_private": "私聊里没有@这回事，直接说话就行",
+  "say_mention_not_privileged": "主动@只在主人或你特别关注的人叫你点名时才行，这条别@",
+  "say_mention_members_missing": "拿不到这个群的成员名单，没法核实要@谁，这条别@",
+  "say_mention_not_member": "{{userIds}} 不在这个群里，号可能抄错了，先核准再@"
+}

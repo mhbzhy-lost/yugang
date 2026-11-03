@@ -1,0 +1,22 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "仓库内的相对路径（如 prompt/persona.md），或 /tmp/yugang 下的绝对路径"
+      },
+      "startLine": {
+        "type": "number",
+        "description": "可选：从第几行开始读（1 起）"
+      },
+      "endLine": {
+        "type": "number",
+        "description": "可选：读到第几行（含）"
+      }
+    },
+    "required": [
+      "path"
+    ]
+  }
+}

@@ -2,45 +2,6 @@
 name: gpt_image
 description: GPT Image 在线生图/改图；只有用户点名要用 GPT/在线/云端时才用。
 ---
----tool-schema
-{
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "prompt": {
-        "type": "string",
-        "description": "画面描述。写清主体、构图、风格；唯一必填项。想要竖版/横版就把构图写进去"
-      },
-      "model": {
-        "type": "string",
-        "description": "模型 id，不填就用 config/models.json 的 models.image；一般不用填"
-      },
-      "background": {
-        "type": "string",
-        "enum": ["auto", "transparent", "opaque"],
-        "description": "auto / transparent / opaque；不填就是 auto。要透明底就传 transparent"
-      },
-      "images": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "maxItems": 5,
-        "description": "参考图列表，写媒体目录下的路径（如 inbound/xxx.jpg、gen/xxx.png），最多 5 张；传了就是改图，不传是纯文生图"
-      }
-    },
-    "required": ["prompt"]
-  }
-}
----end-tool-schema
-
----tool-messages
-gpt_image_prompt: 给我一句画面描述再画
-gpt_image_off: 在线生图没登录，先用 npm run login 登录
-gpt_image_unconfigured: 没配图片模型，去 config/models.json 的 models.image 里加一条
-gpt_image_bad_ref: 参考图 {{ref}} 用不了（要媒体目录里的图片）
-gpt_image_done: 画好了：{{files}} —— 用 say_media 发出去
----end-tool-messages
 
 用 GPT Image 画图或改图。**只有用户明确要求用 GPT / 在线 / 云端生图时才用这个工具**；
 用户没点名云端画图就别走这条通道，别自己替用户换。

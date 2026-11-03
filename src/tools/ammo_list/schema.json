@@ -1,0 +1,18 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "topic": {
+        "type": "string",
+        "enum": [
+          "二次元",
+          "游戏",
+          "军事",
+          "数码"
+        ],
+        "description": "只看这个分类；缺省看全部"
+      }
+    },
+    "additionalProperties": false
+  }
+}

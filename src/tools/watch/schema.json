@@ -1,0 +1,31 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "add",
+          "remove",
+          "list"
+        ],
+        "description": "add=记一个人；remove=不再关注；list=看看现在都记着谁"
+      },
+      "userId": {
+        "type": "string",
+        "description": "被关注者的 QQ 号（纯数字）。主人给你了就用那个号，别自己猜"
+      },
+      "name": {
+        "type": "string",
+        "description": "主人怎么称呼他，可留空"
+      },
+      "note": {
+        "type": "string",
+        "description": "自由备注：他是谁、该怎么称呼他、见到他该做什么，主人怎么说就怎么记"
+      }
+    },
+    "required": [
+      "action"
+    ]
+  }
+}

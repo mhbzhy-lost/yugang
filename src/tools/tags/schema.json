@@ -1,0 +1,14 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "keyword": {
+        "type": "string",
+        "description": "英文关键词或猜的 tag，会自动转下划线匹配"
+      }
+    },
+    "required": [
+      "keyword"
+    ]
+  }
+}

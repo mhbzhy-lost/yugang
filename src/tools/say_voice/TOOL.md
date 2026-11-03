@@ -2,30 +2,6 @@
 name: say_voice
 description: 往当前会话发一条语音：把 text 合成成你的声音说出去，不带文字气泡。
 ---
----tool-schema
-{
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "text": {
-        "type": "string",
-        "description": "要说的话，会被合成成语音发出去（不会再有文字气泡），200 字以内，只适合短句"
-      },
-      "quote": {
-        "type": "boolean",
-        "description": "可选：引用你正在回的那条消息。回应某人具体发言时建议传 true（对方能看出你在回谁）；泛泛插话才省略"
-      }
-    },
-    "required": ["text"]
-  }
-}
----end-tool-schema
-
----tool-messages
-voice_off: 现在还没有语音能力
-voice_too_long: 这句话太长了（{{length}} 字），语音只适合短句，长的用文字说
-voice_failed: 语音没合成出来，改用文字说吧
----end-tool-messages
 
 用你自己的声音说一句话：text 会合成成语音消息发出去，不会再有文字气泡。
 语音里带不了 @，也没有 mentions 参数。

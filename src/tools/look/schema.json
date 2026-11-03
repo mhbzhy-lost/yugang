@@ -1,0 +1,14 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "string",
+        "description": "图片引用，就是群里那条消息里中括号写的东西，比如 inbound/ab12.png；导入轮的待收图是 meme-inbox/xxx.png（登记回执会给引用）"
+      }
+    },
+    "required": [
+      "ref"
+    ]
+  }
+}

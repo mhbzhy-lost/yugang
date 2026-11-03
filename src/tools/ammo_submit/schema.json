@@ -1,0 +1,34 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "bvid": {
+        "type": "string",
+        "pattern": "^BV[0-9A-Za-z]{10}$",
+        "description": "候选视频的 BV 号（bili_hot 行尾那格 / bili_video 卡片里的那个）"
+      },
+      "summary": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 60,
+        "description": "一两句中文小结：这条讲什么、为什么值得分享（≤60 字，会被机械清洗）"
+      },
+      "topic": {
+        "type": "string",
+        "enum": [
+          "二次元",
+          "游戏",
+          "军事",
+          "数码"
+        ],
+        "description": "内容归类，四选一"
+      }
+    },
+    "required": [
+      "bvid",
+      "summary",
+      "topic"
+    ],
+    "additionalProperties": false
+  }
+}

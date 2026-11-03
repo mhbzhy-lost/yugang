@@ -2,32 +2,6 @@
 name: tool_search
 description: 搜索当前还没加载的工具；命中后从下一次模型请求起才能调用。
 ---
----tool-schema
-{
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "query": {
-        "type": "string",
-        "description": "搜索词：中文场景词（如「看图」「搜资料」「画图」「收表情包」）或英文工具名（如 look、search）都行"
-      },
-      "limit": {
-        "type": "number",
-        "description": "可选：最多返回几个工具；不填有默认上限"
-      }
-    },
-    "required": ["query"]
-  }
-}
----end-tool-schema
-
----tool-messages
-tool_search_ok: 搜到 {{count}} 个，从下一次模型请求起就能调用：
-tool_search_line: - {{name}}：{{summary}}
-tool_search_none: 没搜到这样的工具，换个说法再试；反复没有就直说做不到，别猜参数。
-tool_search_empty: 搜索词不能是空的，写个中文场景词或英文工具名
-tool_search_bad_limit: limit 得是不小于 1 的整数
----end-tool-messages
 
 按需查找还没提供给你的工具。
 

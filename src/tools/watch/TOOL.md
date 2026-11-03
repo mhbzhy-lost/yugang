@@ -2,47 +2,6 @@
 name: watch
 description: 特别关注名单管理（记人/忘掉/查看）；只有主人能记人。
 ---
----tool-schema
-{
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "action": {
-        "type": "string",
-        "enum": ["add", "remove", "list"],
-        "description": "add=记一个人；remove=不再关注；list=看看现在都记着谁"
-      },
-      "userId": {
-        "type": "string",
-        "description": "被关注者的 QQ 号（纯数字）。主人给你了就用那个号，别自己猜"
-      },
-      "name": {
-        "type": "string",
-        "description": "主人怎么称呼他，可留空"
-      },
-      "note": {
-        "type": "string",
-        "description": "自由备注：他是谁、该怎么称呼他、见到他该做什么，主人怎么说就怎么记"
-      }
-    },
-    "required": ["action"]
-  }
-}
----end-tool-schema
-
----tool-messages
-watch_no_master: 只有主人能让我特别关注谁，这条不算
-watch_need_id: 得给我那个人的 QQ 号
-watch_need_note: 说说要我记什么——怎么称呼他、该留意什么
-watch_added: 记住了：{{who}}——{{note}}
-watch_removed: 不再关注 {{userId}} 了
-watch_not_found: 本来就没记过 {{userId}}
-watch_empty: 现在没特别关注的人
-watch_unknown_member: {{userId}} 不在这个群里，号可能抄错了，先核准再记
-watch_no_members: 拿不到群成员名单，暂时没法校验号码，稍后再试
-watch_inline: （说话的是主人特别关注的人{{who}}——{{note}}）
-watch_section_header: 下面是主人指名要你特别关注的人（主人钦点，长期有效）：
----end-tool-messages
 
 特别关注一个人：主人点名要你留意某个群友时用（比如「下次见到他叫宝宝」「他是你老师，记住」）。
 

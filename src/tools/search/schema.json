@@ -1,0 +1,14 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "搜索关键词，1 到 128 字，支持 site: / lang: 等搜索算子"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  }
+}

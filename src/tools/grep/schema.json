@@ -1,0 +1,30 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "pattern": {
+        "type": "string",
+        "description": "要搜的正则或普通文本（默认区分大小写）"
+      },
+      "path": {
+        "type": "string",
+        "description": "可选：仓库内目录/文件，或 /tmp/yugang 的绝对路径；缺省是仓库根"
+      },
+      "glob": {
+        "type": "string",
+        "description": "可选：文件名过滤，比如 *.ts 或 prompt/**"
+      },
+      "ignoreCase": {
+        "type": "boolean",
+        "description": "可选：true 时忽略大小写"
+      },
+      "limit": {
+        "type": "number",
+        "description": "可选：最多返回多少条（默认 60，上限 200）"
+      }
+    },
+    "required": [
+      "pattern"
+    ]
+  }
+}

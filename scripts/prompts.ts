@@ -4,9 +4,9 @@
  *   npm run prompts
  *
  * 说明文字分两处：prompt/ 下的 system/persona/message 文件，以及每个工具包的
- * src/tools/<name>/TOOL.md（摘要 + Schema + 工具专属文案 + 使用指南，唯一模型侧来源）。
- * 本脚本两处都列，并按 loader 的真实注册结果标出 eager/deferred；工具文案按归属分别
- * 列出（中心 prompt/messages.md 与各工具的 ---tool-messages 块，后者已由 loader 合并
+ * src/tools/<name>/（TOOL.md 摘要与使用指南 + schema.json + messages.json 工具专属文案，
+ * 唯一模型侧来源）。本脚本两处都列，并按 loader 的真实注册结果标出 eager/deferred；工具文案
+ * 按归属分别列出（中心 prompt/messages.md 与各工具的 messages.json，后者已由 loader 合并
  * 进全局 messages 视图），最后照常扫描 src/ 的内嵌 prompt。
  * 只读仓库文件，不读 .env、不读凭据。
  */
@@ -44,7 +44,7 @@ const surface = await loadToolSurface({
   master: "0",
 });
 
-console.log(`\n== 工具包 ${surface.manifests.length} 个（src/tools/<name>/TOOL.md + tool.ts，loader 实际注册结果）\n`);
+console.log(`\n== 工具包 ${surface.manifests.length} 个（src/tools/<name>/ 的 TOOL.md + schema.json + messages.json + tool.ts，loader 实际注册结果）\n`);
 for (const manifest of surface.manifests) {
   const registration = surface.tools.find((tool) => tool.name === manifest.name);
   const status = registration?.deferred === true ? "deferred" : "eager";
@@ -62,8 +62,8 @@ for (const manifest of surface.manifests) {
   console.log(`    参数：${params}`);
   console.log(
     messageKeys.length === 0
-      ? "    文案：（无 ---tool-messages 块，文案走中心 prompt/messages.md）"
-      : `    文案（tool-messages 块）：${messageKeys.join(", ")}`,
+      ? "    文案：（无 messages.json，文案走中心 prompt/messages.md）"
+      : `    文案（messages.json）：${messageKeys.join(", ")}`,
   );
 }
 const deferredNames = surface.tools.filter((t) => t.deferred === true).map((t) => t.name);
@@ -86,7 +86,7 @@ for (const [code, text] of Object.entries(prompts.messages).slice(0, 6)) {
   console.log(`    ${code.padEnd(16)} ${text}`);
 }
 console.log("  …（其余见 prompt/messages.md）");
-console.log("  工具专属（各自 TOOL.md 的 ---tool-messages 块，loader 合并时撞车会报错）：");
+console.log("  工具专属（各自 messages.json，loader 合并时撞车会报错）：");
 for (const manifest of surface.manifests) {
   const keys = Object.keys(manifest.messages);
   if (keys.length === 0) continue;

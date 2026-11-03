@@ -1,0 +1,22 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "bvid": {
+        "type": "string",
+        "description": "BV 号：BV 开头 + 10 个字母数字（即 ^BV[0-9A-Za-z]{10}$），从 bili_hot 结果或视频链接里取"
+      },
+      "withComments": {
+        "type": "boolean",
+        "description": "true 时附热评前 5（每条 ≤50 字）；缺省不取"
+      },
+      "withDanmaku": {
+        "type": "boolean",
+        "description": "true 时附高能弹幕前 10（密度/复读优先；多 P 视频只取第一段）；缺省不取"
+      }
+    },
+    "required": [
+      "bvid"
+    ]
+  }
+}

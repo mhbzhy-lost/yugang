@@ -1,0 +1,10 @@
+{
+  "ammo_submit_not_worker": "现在不是能收弹药的轮：弹药只在后台逛 B 站的工时轮，或主人私聊里的手动逛轮里收，这两种轮之外一律不收",
+  "ammo_submit_bad_bvid": "这不是合法的 BV 号（BV + 10 位字母数字）",
+  "ammo_submit_bad_summary": "summary 不能是空的",
+  "ammo_submit_bad_topic": "topic 只能是这几个之一：{{topics}}",
+  "ammo_submit_view_failed": "这条视频核实不过：{{reason}}",
+  "ammo_submit_dup": "这条 BV 已经在弹药库里了（{{bvid}}），换一条",
+  "ammo_submit_full": "这一轮的弹药已经收满 {{max}} 条了，到此为止",
+  "ammo_submit_ok": "已入库（{{bvid}} {{title}}），到点分享"
+}

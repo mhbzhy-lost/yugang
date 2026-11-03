@@ -2,45 +2,6 @@
 name: meme
 description: 从表情包库按一级情绪词挑候选图，返回引用和描述。
 ---
----tool-schema
-{
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "mood": {
-        "anyOf": [
-          {
-            "x-yugang-enum-from": "memeTags",
-            "description": "一级情绪词：先想这句话想传递什么情绪，从受控词表里挑一个最贴近的（词表以系统提示里的表情包词表为准）"
-          },
-          {
-            "enum": ["按标签"],
-            "description": "特殊分支：想找的不是情绪，而是具体事物、角色或场景，且确认词表里没有贴切的情绪词时才用；填了它就必须在 tags 里至少给一个自由词"
-          }
-        ],
-        "description": "一级情绪词，或特殊分支「按标签」"
-      },
-      "tags": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "description": "自由词。mood 是一级情绪词时可选，做二次筛选（比如具体人名、梗、主体），命中越多排越前；mood 是「按标签」时必填至少一个，直接按这些词在全库的标签和描述里搜"
-      }
-    },
-    "required": ["mood"]
-  }
-}
----end-tool-schema
-
----tool-messages
-meme_empty: 表情包库是空的，先用文字回
-meme_no_mood: 「{{mood}}」这一档还没有图。现有：{{inventory}}
-meme_no_tag: 「{{tags}}」在全库里没搜到图。现有：{{inventory}}
-meme_tag_required: mood 填「按标签」时 tags 得至少给一个自由词（具体事物、角色、场景都行），空手搜不了
-meme_pick: {{list}}
-meme_used: 这一轮挑过了，先用挑到的
----end-tool-messages
 
 从表情包库里挑一张贴题的图。返回几张候选的引用和描述。
 

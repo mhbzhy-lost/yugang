@@ -2,18 +2,6 @@
 name: restart
 description: 重启自己让代码、配置、人格书的改动生效；重启完成后宿主会向本会话发一条固定确认。只有主人能让重启。
 ---
----tool-schema
-{
-  "parameters": {
-    "type": "object",
-    "properties": {}
-  }
-}
----end-tool-schema
-
----tool-messages
-restart_done: 重启完成，配置已生效。
----end-tool-messages
 
 重启你自己：让代码、配置、人格书的改动生效。
 

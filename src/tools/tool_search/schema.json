@@ -1,0 +1,18 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "搜索词：中文场景词（如「看图」「搜资料」「画图」「收表情包」）或英文工具名（如 look、search）都行"
+      },
+      "limit": {
+        "type": "number",
+        "description": "可选：最多返回几个工具；不填有默认上限"
+      }
+    },
+    "required": [
+      "query"
+    ]
+  }
+}

@@ -2,50 +2,6 @@
 name: say_words
 description: 往当前会话说一句话：文字出口，一次一条消息。
 ---
----tool-schema
-{
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "text": {
-        "type": "string",
-        "description": "要说的话，一条消息，群里说出口的样子：短、口语、最多两行、不带 markdown"
-      },
-      "quoteMsgId": {
-        "type": "string",
-        "description": "可选：要引用哪条消息，填那行消息开头 [m:…] 里的数字（填裸数字或整个 [m:123] 都行）；只能填本轮上下文里出现过的消息，填了别的会被拒且不占这轮开口额度；不传就不引用"
-      },
-      "share": {
-        "type": "boolean",
-        "description": "可选：声明这条发言是素材分享（兑现承诺/交付委托结果）。群里最后一条消息是你自己发的时，只有带 share: true 或 ammoId 的发言会被放行"
-      },
-      "ammoId": {
-        "type": "string",
-        "description": "可选：要分享的外部视频编号（开窗弹药栏里给你的 ammoId，原样填）。分享门开着的窗口才能分享成功，一窗最多一条；填了就代表这条是外部素材分享（深夜时段一律不发）；链接由系统自动附在消息开头，text 只写推荐语、不要自己写链接"
-      },
-      "mentions": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "description": "可选：要主动@的群友 QQ 号，去重后最多 3 个（如 [\"1234567\"]），只能填当前群成员的号，不能填 all"
-      }
-    },
-    "required": ["text"]
-  }
-}
----end-tool-schema
-
----tool-messages
-say_mention_all: 不能@全体成员，只能@具体的人
-say_mention_bad: 主动@只能填纯数字 QQ 号（从上下文里的「昵称(QQ号)」抄），不能填昵称或 all
-say_mention_too_many: 一次最多@3个人，先挑最该应声的
-say_mention_no_trigger: 这一轮不知道是谁在跟你说话，@不了人，先说话
-say_mention_private: 私聊里没有@这回事，直接说话就行
-say_mention_not_privileged: 主动@只在主人或你特别关注的人叫你点名时才行，这条别@
-say_mention_members_missing: 拿不到这个群的成员名单，没法核实要@谁，这条别@
-say_mention_not_member: {{userIds}} 不在这个群里，号可能抄错了，先核准再@
----end-tool-messages
 
 用文字说一句话。你产生的任何文字都不会发出去，只有出口工具能把话送出去。
 

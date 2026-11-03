@@ -2,40 +2,6 @@
 name: say_meme
 description: 往当前会话发一张表情包：按关键词从库里挑贴题的图，不带文字。
 ---
----tool-schema
-{
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "meme": {
-        "type": "string",
-        "description": "表情包关键词，空格分隔多个词（如「无语 敷衍」），自动挑一张贴题的当图发"
-      },
-      "quoteMsgId": {
-        "type": "string",
-        "description": "可选：要引用哪条消息，填那行消息开头 [m:…] 里的数字（填裸数字或整个 [m:123] 都行）；只能填本轮上下文里出现过的消息，填了别的会被拒且不占这轮开口额度；不传就不引用"
-      },
-      "share": {
-        "type": "boolean",
-        "description": "可选：声明这张表情是素材分享（兑现承诺/交付委托结果/分享外部素材）。群里最后一条消息是你自己发的时，只有带 share: true 的发言会被放行"
-      },
-      "mentions": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "description": "可选：要主动@的群友 QQ 号，去重后最多 3 个（如 [\"1234567\"]），只能填当前群成员的号，不能填 all"
-      }
-    },
-    "required": ["meme"]
-  }
-}
----end-tool-schema
-
----tool-messages
-say_meme_cooldown: 表情包刚用过，隔一会儿再翻柜子，这句先用文字说
-say_meme_nomatch: 库里没有贴这个关键词的，换个词或者直接用文字
----end-tool-messages
 
 按关键词从表情包库里挑一张贴题的当图发，不带文字。
 直接写关键词就行；并列贴题的图随机挑，不会每次同一张。

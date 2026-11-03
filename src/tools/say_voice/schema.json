@@ -1,0 +1,18 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "要说的话，会被合成成语音发出去（不会再有文字气泡），200 字以内，只适合短句"
+      },
+      "quote": {
+        "type": "boolean",
+        "description": "可选：引用你正在回的那条消息。回应某人具体发言时建议传 true（对方能看出你在回谁）；泛泛插话才省略"
+      }
+    },
+    "required": [
+      "text"
+    ]
+  }
+}

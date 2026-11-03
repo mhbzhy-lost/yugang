@@ -1,0 +1,11 @@
+{
+  "video_invalid": "那不是 B 站视频链接",
+  "video_used": "本轮已经看过一个视频了，直接说，别重复看",
+  "video_failed": "视频没打开：{{url}}",
+  "card_bilibili": "[B站视频卡片] {{desc}} {{url}}",
+  "card_link": "[卡片] {{title}} {{desc}} {{url}}",
+  "video_truncated": "（视频超过 {{minutes}} 分钟，只看了前 {{minutes}} 分钟）",
+  "video_danmaku_header": "弹幕摘录：",
+  "video_frames_header": "画面（按时间点）：",
+  "video_comments_header": "热评："
+}

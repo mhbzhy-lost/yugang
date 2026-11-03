@@ -1,0 +1,11 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "cursor": {
+        "type": "string",
+        "description": "继续游标：上一批最后一张的文件名。第一次不用填"
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "要说的话，一条消息，群里说出口的样子：短、口语、最多两行、不带 markdown"
+      },
+      "quoteMsgId": {
+        "type": "string",
+        "description": "可选：要引用哪条消息，填那行消息开头 [m:…] 里的数字（填裸数字或整个 [m:123] 都行）；只能填本轮上下文里出现过的消息，填了别的会被拒且不占这轮开口额度；不传就不引用"
+      },
+      "share": {
+        "type": "boolean",
+        "description": "可选：声明这条发言是素材分享（兑现承诺/交付委托结果）。群里最后一条消息是你自己发的时，只有带 share: true 或 ammoId 的发言会被放行"
+      },
+      "ammoId": {
+        "type": "string",
+        "description": "可选：要分享的外部视频编号（开窗弹药栏里给你的 ammoId，原样填）。分享门开着的窗口才能分享成功，一窗最多一条；填了就代表这条是外部素材分享（深夜时段一律不发）；链接由系统自动附在消息开头，text 只写推荐语、不要自己写链接"
+      },
+      "mentions": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "可选：要主动@的群友 QQ 号，去重后最多 3 个（如 [\"1234567\"]），只能填当前群成员的号，不能填 all"
+      }
+    },
+    "required": [
+      "text"
+    ]
+  }
+}

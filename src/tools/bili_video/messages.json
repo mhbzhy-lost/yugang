@@ -1,0 +1,4 @@
+{
+  "bili_video_invalid": "这不是合法的 BV 号（BV + 10 位字母数字）",
+  "bili_video_failed": "视频卡片没取到（{{bvid}}）：{{detail}}"
+}

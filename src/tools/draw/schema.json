@@ -1,0 +1,39 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "画面描述。danbooru tag 为主（先查词表拿准词），可混自然语言，逗号分隔"
+      },
+      "negative": {
+        "type": "string",
+        "description": "不要出现的东西，tag 写法，可留空"
+      },
+      "preset": {
+        "type": "string",
+        "enum": [
+          "default",
+          "hsr",
+          "secret"
+        ],
+        "description": "画风预设：default=通用动漫（默认）；hsr=崩坏星穹铁道画风"
+      },
+      "highres": {
+        "type": "boolean",
+        "description": "要高分辨率/大图/超分时传 true；默认 false 出普通图，true 更大也更慢。只对从零画生效，带 ref 时忽略"
+      },
+      "ref": {
+        "type": "string",
+        "description": "要重画的初图：只能填这一轮消息里出现过的 inbound/…，或自己之前画出来的 gen/…；不填就是从零画"
+      },
+      "strength": {
+        "type": "number",
+        "description": "重画幅度 0.1–0.9，默认 0.45，只对改图生效"
+      }
+    },
+    "required": [
+      "prompt"
+    ]
+  }
+}
