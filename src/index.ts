@@ -1299,13 +1299,14 @@ function engageNudgeLevel(chatKey: string): 0 | 1 | 2 {
 
 // ── 开窗弹药栏（T13，决策 21）与宵禁二态 footer ─────────────────────────────
 
-/** 宵禁（本地 hour<9，与 footer 夜间态同阈）：外部库存行不注入、出口 claim 拒绝。 */
+/** 宵禁（本地 02:00–09:00，与 footer 夜间态同阈）：外部库存行不注入、出口 claim 拒绝。 */
 function engageFooterOfNight(): boolean {
-  return new Date().getHours() < 9;
+  const hour = new Date().getHours();
+  return hour >= 2 && hour < 9;
 }
 
 /**
- * 注入 footer 的宵禁二态（纯文案层切换，@ 白名单等硬机制不动）：本地 00:00–09:00
+ * 注入 footer 的宵禁二态（纯文案层切换，@ 白名单等硬机制不动）：本地 02:00–09:00
  * 用夜间版（纯搭话模式：不鼓励主动开腔），其余时间用白天版（自由发挥）。每小时
  * 天然分档，不引入配置项；模板 key 用直接下标取（test/prompts.test.ts 逐字扫 src）。
  */

@@ -280,9 +280,10 @@ export function ammoShareGateOf(chatKey: string): AmmoShareGate | undefined {
   return ammoShareHost?.gateOf(chatKey);
 }
 
-/** claim 时刻的宵禁（与 engage footer 二态同阈）：本地 hour<9 门恒关，同窗白天门开着也不发。 */
+/** claim 时刻的宵禁（与 engage footer 二态同阈）：本地 02:00–09:00 门恒关，同窗白天门开着也不发。 */
 export function ammoCurfewAt(nowMs: number): boolean {
-  return new Date(nowMs).getHours() < 9;
+  const hour = new Date(nowMs).getHours();
+  return hour >= 2 && hour < 9;
 }
 
 /**
