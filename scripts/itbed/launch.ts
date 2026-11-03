@@ -36,7 +36,8 @@
  *   默认无参冒烟行为保持不变。
  *
  * 已知边界（不改 src 的前提下）：
- *   - bili-client 的 API_ROOT 钉死 https://api.bilibili.com，BILI_BASE_URL 注入后待 src 接线；
+ *   - bili-client 已支持 BILI_BASE_URL 覆盖（未设置默认 https://api.bilibili.com），launch 注入
+ *     后 IT bed 会真正指向 faux B 站；
  *   - fish.config 的 voices/memeCooldown/ammo/news 只认文件，sandbox 生效面以环境变量可表达
  *     的字段为限（parity .env 值已覆盖其中行为参数）；
  *   - 少量工具（draw/look/restart/config）读写 cwd=仓库根 的 var/ 路径，sandbox 隔离以

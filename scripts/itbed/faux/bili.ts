@@ -25,8 +25,8 @@
  * 用法：
  *   node scripts/itbed/faux/bili.ts [--port 4430]
  *   环境变量 FAUX_BILI_PORT 同样生效，CLI 优先。
- *   注意：src 侧 bili-client 的 API_ROOT 目前钉死 https://api.bilibili.com，尚无地址覆盖项
- *   （BILI_BASE_URL 已由 launch 注入，待 src 接线后即生效）；本替身当前由 launch 自测与场景驱动器消费。
+ *   注意：src 侧 bili-client 已支持 BILI_BASE_URL 覆盖（未设置默认 https://api.bilibili.com），
+ *   launch 注入后即指向本替身；本替身当前由 launch 自测与场景驱动器消费。
  *
  * fixture 替换（POST /refresh，JSON，按键部分替换，内存态不落盘）：
  *   {"popular": [卡片…], "ranking": [卡片…],          ← 整列表替换（须非空、每张有非空 bvid）
