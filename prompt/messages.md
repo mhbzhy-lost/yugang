@@ -54,6 +54,19 @@ gif_ingest_task: 上面这段对话里，{{who}} 发了一张动图：{{ref}}。
 # 枚举（与 ammo_submit 的 Schema 一致）；这一轮 say_* 机械拒绝，产出只有 ammo_submit 入库。
 worker_browse_task: 到点了，去 B 站刷一轮：接下来 {{minutes}} 分钟内用 bili_hot / bili_video 挑最多 {{max}} 条你觉得有意思的视频（偏好这些口味：{{topics}}），每条用 ammo_submit 入库（summary 用你自己的话写为什么值得分享，topic 按枚举选）。挑不满也没关系，宁缺毋滥；这一轮不许说话，逛完就收工。
 
+# 新闻播报（外部信息源计划 Task E7，src/index.ts 10:30 job）：scheduled answer 轮的触发语与成品
+# 播报模板。news_broadcast_task 是触发语（下面紧接着宿主渲染好的整份播报文本，模型用 say_words
+# 单条发出）；渲染模板逐行拼装：news_header（{{date}}=localDay）→ 每 topic 一段（news_topic 分节
+# + news_item 逐条；{{source}}=来源署名、{{url}}=宿主按 sourceRef 索引拼的原文 canonical 链接，
+# 模型输出里没有也不许有 URL）→ news_closing（{{closing}}=归纳模型给出的人格化收尾，宿主原样用）。
+# 整份 ≤500 字，超限按 topic 顺序裁剪；行首统一用「·」等符号，不许出现「数字.」「-」等 markdown
+# 列表标记（出口策略的列表规则会整条拒绝多行播报）。
+news_broadcast_task: 到点了，把下面这份今日新闻速递播报到群里：用 say_words 发一条消息完成播报（只发这一条，别拆成多条），条目、链接与来源署名必须一字不改地保留，语气和开头可以是你自己的。
+news_header: 「{{date}} 新闻速递」
+news_topic: ▸ {{topic}}
+news_item: · {{summary}}（{{source}}）{{url}}
+news_closing: ——{{closing}}
+
 # 语音触发提示与工具超时（host 侧注入，不属于任何单个工具）
 voice_hint: （这一条必须用语音回：用 say_voice 发，别用文字。这是规则，不是建议）
 tool_timeout: 这个工具卡住超过半分钟了，先别重试，换个办法或者说句话
