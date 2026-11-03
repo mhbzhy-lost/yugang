@@ -131,8 +131,9 @@ ctx_engage_ammo_header: 顺手翻了下旧账，这几件还挂着没下文（�
 ctx_engage_ammo_line: - {{days}}{{who}}提过的「{{what}}」还没下文
 # 外部库存行（外部信息源计划 Task E5/T13 合并口径）：独立模板，最多 1 条且只占剩余预算；
 # {{title}} 是入库时宿主清洗过的标题（不可信文本）、{{topic}} 是入库 topic、{{id}} 是
-# 分享时要原样传给出口工具的 ammoId；链接不进注入，分享时由宿主从 doc 渲染 canonical URL
-ctx_engage_ammo_external: 库存里还有你之前捡到的视频：「{{title}}」（{{topic}}），想分享就在出口调用带上 ammoId {{id}}，链接系统会自动附上，你只写推荐语
+# 分享时要原样传给出口工具的 ammoId；链接不进注入，分享时由宿主从 doc 渲染 canonical URL。
+# 措辞刻嘉不说「库存」：弹药库是宿主侧的缓冲机制，对外呈现就是她自己想分享
+ctx_engage_ammo_external: 你之前看到觉得值得分享的视频：「{{title}}」（{{topic}}），想发就在出口调用带上 ammoId {{id}}，链接系统会自动附上，你只写推荐语；对群里就是你自己想分享，别提库存、弹药、编号、分享门这些幕后机制
 
 # 主人 / 指令的闸前机械回执（不进模型）
 bypass_placeholder: （一条画图指令：图片的细节发送者已单独指定，直接用 draw 画一张就好）
