@@ -915,7 +915,14 @@ async function submitRound(input: {
   conv: Conversation;
   content: string;
   /** 本轮触发消息：引用目标与主动 @ 的身份闸都只认它；kind = 轮类型（缺省 answer） */
-  trigger: { messageId?: number | string; mentionsBot: boolean; userId?: number; kind?: RoundKind };
+  trigger: {
+    messageId?: number | string;
+    mentionsBot: boolean;
+    userId?: number;
+    kind?: RoundKind;
+    /** 主人私聊手动逛轮窄口（manualAmmoRunOf 的产物）；仅普通 answer 轮携带，随 triggerOf 钉上 */
+    manualAmmoRun?: { runKey: string; maxPicks: number; ttlHours: number };
+  };
   /** 本轮是不是在回复别人（回复链要引用） */
   reply: boolean;
   /** 本轮是否必答（闸放行原因 ∈ private/mentioned/replied_forward）：正文兜底只补必答轮 */
@@ -998,6 +1005,8 @@ async function submitRound(input: {
         userId: trigger.userId,
         kind: roundKind,
         ...(input.quoteIds !== undefined && input.quoteIds.size > 0 ? { quoteIds: input.quoteIds } : {}),
+        // 主人私聊手动逛轮窄口：随轮绑定（ammo_submit 放行前还会二次机械核对身份）
+        ...(trigger.manualAmmoRun !== undefined ? { manualAmmoRun: trigger.manualAmmoRun } : {}),
       });
       // 重耗时工具的机械提示要落回本轮会话：登记轮的会话，settle 的 finally 里删
       roundConv.set(String(submission.id), conv);
@@ -2069,6 +2078,27 @@ function syncBiliBudget(): void {
   getBiliClient().setDailyBudget(fishConfig().config.ammo.dailyBudget);
 }
 
+/**
+ * 主人私聊手动逛轮的窄口上下文（主人私聊专用，不是群内能力）：仅普通 answer 轮由宿主
+ * 调用，身份与 chatKey 双重机械核对（发送者 = config.master 且会话 = qq:private:<master>），
+ * 两者任一不满足、或未配主人时返回 undefined（群聊/陌生私聊/机械命令轮都不创建——
+ * 机械命令在 handleCommand 就拦截，根本不经 submitRound）。runKey 用该条私聊 messageId
+ * 稳定派生（缺失时宿主时间戳），同一条消息的轮内重试共用一键 → 每轮上限按消息计；
+ * maxPicks/ttlHours 每轮从 ammo 配置现读（config 工具热改下一轮即生效）。工具侧放行前
+ * 还会二次机械核对（ammo_submit 的 deps.master + chatKeyOf 闸），这里只是入口的钉上下文。
+ */
+function manualAmmoRunOf(
+  chatKey: string,
+  messageId: number | string | undefined,
+  userId: number | undefined,
+): { runKey: string; maxPicks: number; ttlHours: number } | undefined {
+  if (!config.master) return undefined;
+  if (String(userId) !== config.master) return undefined;
+  if (chatKey !== `qq:private:${config.master}`) return undefined;
+  const ammo = fishConfig().config.ammo;
+  return { runKey: `manual:${messageId ?? Date.now()}`, maxPicks: ammo.maxPicksPerRun, ttlHours: ammo.ttlHours };
+}
+
 /** 逛轮在途标记：scheduler 的 watchdog 已收束但上一轮还在收尾时，新作业直接跳过（宁少勿答）。 */
 let browseInFlight = false;
 
@@ -2808,11 +2838,20 @@ onebot.onMessage((raw) => {
       if (qq && !speakers.some((s) => s.subject === `qq:${qq}`)) speakers.push({ subject: `qq:${qq}`, name });
     }
 
+    // 主人私聊手动逛轮窄口：仅普通 answer 轮、发送者与会话双重机械核对主人才创建
+    //（群聊/陌生私聊/机械命令轮都是 undefined，ammo_submit 在这些轮照旧拒绝）
+    const manualAmmo = manualAmmoRunOf(msg.chatKey, msg.messageId, msg.userId);
     await submitRound({
       chatKey: msg.chatKey,
       conv,
       content: withContext(msg, bucket, [], { master: config.master, messages: fish.prompts.messages }).content,
-      trigger: { messageId: msg.messageId, mentionsBot: msg.mentionsBot, userId: msg.userId, kind: "answer" },
+      trigger: {
+        messageId: msg.messageId,
+        mentionsBot: msg.mentionsBot,
+        userId: msg.userId,
+        kind: "answer",
+        ...(manualAmmo !== undefined ? { manualAmmoRun: manualAmmo } : {}),
+      },
       // 回复链：本轮触发本身是在回复某条消息，鱼的回应应引用触发那条
       reply: (msg.replyIds?.length ?? 0) > 0,
       mustAnswer: MUST_ANSWER_REASONS.has(decision.reason),

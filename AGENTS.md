@@ -19,7 +19,7 @@
 文字/图片/表情包/语音各一个，可引用，除语音外可点名 @ 群友）、`react`（只贴表情）、
 `look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`meme_import`（主人本地批量导入的登记入口）、
 `draw`（本地 SD 生图）、`gpt_image`（GPT Image 2 透传）、`search`/`video`（联网查）、
-`bili_hot`/`bili_video`/`ammo_submit`（B 站逛轮三件套，`ammo_submit` 仅 worker 轮可用）、`tags`（danbooru 词表）；
+`bili_hot`/`bili_video`/`ammo_submit`（B 站逛轮三件套，`ammo_submit` 仅 worker 逛轮或主人私聊手动逛轮可用）、`tags`（danbooru 词表）；
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
 
@@ -403,6 +403,12 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
   （已入库剔除 → 硬筛一票否决 → 软筛评分排序，多抓 4 倍防筛空；规则命中逐条落审计日志，仅元数据）
   → `bili_video` 终选核实（完整卡片 + UP 评级 + 可选热评/高能弹幕）→ `ammo_submit` 入库
   （BV 正则校验、summary≤60 字、topic 四枚举、BV 判重、每轮上限 `ammo.maxPicksPerRun` 缺省 3）。
+  入库入口除 worker 逛轮外另有一个**主人私聊窄口**（不是群内能力）：主人在 `qq:private:<master>`
+  发的普通 answer 轮由宿主钉上 `manualAmmoRun`（runKey 按该条私聊 messageId 稳定派生、
+  缺失时宿主时间戳，上限/TTL 每轮现读 `ammo` 配置），`ammo_submit` 放行前还会二次机械
+  核对 `master` + `chatKeyOf` 确为主人私聊且轮类型 answer——群聊、陌生私聊、无上下文的轮
+  一律 fail closed。手动逛轮是普通聊天轮，`say_*` 规则不变；工具结果也不直接出 QQ，
+  照旧等开窗分享。
   弹药库 `fish.external_ammo`（全局抓取池、人格中立；TTL `ammo.ttlHours` 缺省 48h，惰性过期）。
   分享：open 窗随机门（`ammo.shareChance` 缺省 0.2）**每窗最多 1 条外部**，`share` 的 `ammoId`
   （字段名全文档统一，旧名 externalAmmoId 弃用）机械校验「本窗门已开 ∧ item available ∧ 本窗未消费外部」后原子 claim，b23/BV canonical 链接由宿主

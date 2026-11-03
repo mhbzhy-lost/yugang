@@ -1,9 +1,15 @@
 /**
  * ammo_submit —— 逛轮弹药入库（外部计划 Task E4）。
  *
- * 仅 worker 轮可用：轮上下文（LiveDoc 的 run.inputs[0] → triggerOf）带 kind="worker"
- * 且携带 workerRun（runKey/maxPicks/ttlHours，宿主起作业轮时定格）才放行；其余轮一律
- * tool 错误。宿主核验链：BV 形（isValidBvid）→ summary 清洗（sanitizeExternalText ≤60）
+ * 两种允许入口，其余一律 tool 错误（fail closed）：
+ *   1. worker 轮：轮上下文（LiveDoc 的 run.inputs[0] → triggerOf）带 kind="worker" 且携带
+ *      workerRun（runKey/maxPicks/ttlHours，宿主起作业轮时定格）；
+ *   2. 主人私聊手动逛轮：主人私聊的普通 answer 轮携带 manualAmmoRun（同形，每轮现读配置），
+ *      放行前二次机械核对 deps.master + deps.chatKeyOf(api.conversationId) 确为
+ *      qq:private:<master> 且轮类型 answer——仅凭 trigger 里的字段不够，当前会话本身
+ *      必须就是主人私聊；无法判定（deps 缺失）同样拒绝。
+ * 群聊、陌生私聊、无上下文的轮一律拒绝。
+ * 宿主核验链：BV 形（isValidBvid）→ summary 清洗（sanitizeExternalText ≤60）
  * → topic 枚举（AMMO_TOPICS，与 TOOL.md 的 Schema 一一对应）→ bili-client view 端点
  * 补全卡片（标题清洗后入库，URL/时长/播放等只在补全校验里用）→ applyAmmoSubmit 原子
  * 入库（判重 + 单轮上限在同一事务读改）。写入 fish.external_ammo（session doc，人格
@@ -47,14 +53,27 @@ export function createAmmoSubmitTool(
     callers: ["model"],
     parameters: manifestParameters<AmmoSubmitArgs>(manifest),
     execute: async (args, api, context) => {
-      // 1) 轮类型闸：只有 worker 轮（逛轮）携带 workerRun，其余一律拒绝（fail closed）
+      // 1) 轮类型闸：worker 轮（逛轮）携带 workerRun；主人私聊手动逛轮携带 manualAmmoRun；
+      //    其余一律拒绝（fail closed）。手动入口还要过第二道机械身份闸（下方）。
       const live = (await api.snapshot(LiveDoc, api.conversationId, context)) as
         | { run?: { inputs?: unknown[] } }
         | undefined;
       const round = live?.run?.inputs?.[0];
       const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
       const workerRun = trigger?.kind === "worker" ? trigger.workerRun : undefined;
-      if (workerRun === undefined) {
+      const manualRun = trigger?.kind === "answer" ? trigger.manualAmmoRun : undefined;
+      let run: { runKey: string; maxPicks: number; ttlHours: number } | undefined = workerRun;
+      if (run === undefined && manualRun !== undefined) {
+        // 2) 手动入口的二次机械身份闸：当前会话本身必须就是主人私聊（chatKeyOf 与 deps.master
+        //    同源核对）。仅凭 trigger 携带的字段不够——群聊/陌生私聊轮即使被异常钉上
+        //    manualAmmoRun 也在这里拦死；deps.master / chatKeyOf 缺失时无法机械判定，同样拒绝。
+        const chatKey = deps.chatKeyOf?.(String(api.conversationId));
+        if (!deps.master || chatKey !== `qq:private:${deps.master}`) {
+          throw new Error(messages["ammo_submit_not_worker"] ?? "ammo_submit_not_worker");
+        }
+        run = manualRun;
+      }
+      if (run === undefined) {
         throw new Error(messages["ammo_submit_not_worker"] ?? "ammo_submit_not_worker");
       }
 
@@ -91,7 +110,7 @@ export function createAmmoSubmitTool(
         const doc = await tx.doc(ExternalAmmoDoc);
         return applyAmmoSubmit(
           doc,
-          { bvid, title, summary, topic, run: workerRun.runKey, maxPicks: workerRun.maxPicks, ttlHours: workerRun.ttlHours },
+          { bvid, title, summary, topic, run: run.runKey, maxPicks: run.maxPicks, ttlHours: run.ttlHours },
           nowMs,
         );
       }, context);

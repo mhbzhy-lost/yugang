@@ -41,7 +41,7 @@
 | FE1 | scheduler 按配置时点触发 job（四时点+10:30），错过补跑 ≤2h 幂等，硬截止收束；job 状态落 `fish.external_jobs` | 单测式内联验证（可注入时钟） | 时点/补跑/截止/幂等全路径正确 | E1 |
 | FE2 | bili-client：白名单端点、串行+端点间隔、每日预算持久、熔断、buvid3 复用；video 工具改走同一客户端不回归 | 内联验证 + npm test 既有 video 回归 | 频控各路径正确；video 行为不变 | E1、E3 |
 | FE3 | bili_hot/bili_video/ammo_submit 三工具包规范落地（deferred）；硬筛+软筛评分在工具层模型之前执行，命中落审计 | npm run prompts + 内联验证 | 候选经三层漏斗；筛选可核对 | E2 |
-| FE4 | worker 轮（kind=worker）：say_* 机械拒绝；模型经 ammo_submit 提交候选（BV 校验、summary≤60、topic 枚举），宿主补全 URL/时间/TTL 入库；重启/重复触发不重复入库（BV 判重） | 内联验证 | 逛轮产物结构化落库、幂等 | E4 |
+| FE4 | worker 轮（kind=worker）：say_* 机械拒绝；模型经 ammo_submit 提交候选（BV 校验、summary≤60、topic 枚举），宿主补全 URL/时间/TTL 入库；重启/重复触发不重复入库（BV 判重）；主人私聊手动逛轮窄口（manualAmmoRun，二次机械身份闸）同规入库，群/陌生私聊/无上下文拒绝 | 内联验证 | 逛轮产物结构化落库、幂等 | E4 |
 | FE5 | 弹药库状态机（available→claimed→shared / expired TTL）；open 窗 windowId+随机门一次落库；share.ammoId 机械绑定（门未开/已分享/非 available 一律拒）；T13 合并 kind 分离与 nudge 口径 | 内联验证 | 每窗≤1 条、claim 原子、URL 宿主渲染 | E5 |
 | FE6 | 新闻客户端：60s/RSS/知乎日报取数、源探活冗余（单源失败降内容不阻断）、topic 两层映射、exclude 黑名单、响应限制 | 内联验证（60s 不可达时用 fixture） | 五 topic 供料正确、娱乐圈过滤生效 | E6 |
 | FE7 | 新闻编排：10:30 job → NewsDigest schema 总结 → scheduled answer 轮 say_words 发 targetGroup（∈GROUPS 校验）；幂等 news_runs；三类失败兜底；末条自言推迟≤30min | 内联验证 | 播报单条出口、幂等、兜底全路径 | E7 |
@@ -114,7 +114,11 @@ E8 (配置 schema) 无依赖可并行；E9 依赖 E2/E6 的工具面成型
 
 **接口契约：**
 - Produces：轮类型 `worker`（RoundKind 扩展；say_* 在 worker 轮一律 tool 错误——复用 silentOf 同款机制）；scheduler 四时点（缺省 09:00/12:00/18:00/24:00 可配）起 worker 会话轮：触发语（messages.md key，语义「到点了，去 B 站刷一轮，10 分钟内用 bili_hot/bili_video 挑 1-3 条有意思的，用 ammo_submit 入库」）；worker 会话=独立 conversation（人格中立 doc）
-- Produces：工具 `ammo_submit`（仅 worker 轮可用）：参数 {bvid, summary≤60, topic 枚举（二次元/游戏/军事/数码）}；宿主核验 BV 合法、经 bili-client 补全卡片字段、判重（BV 已在库拒绝）、写入 `fish.external_ammo`（ttlAt=pickedAt+48h 缺省可配）
+- Produces：工具 `ammo_submit`（worker 逛轮可用；2026-11-03 追加主人私聊手动逛轮窄口：
+  `manualAmmoRun` 同形上下文仅在主人私聊（`qq:private:<master>`）的普通 answer 轮由宿主钉上
+  （身份与 chatKey 双重机械核对，runKey 按该条私聊 messageId 稳定派生、上限/TTL 每轮现读
+  `ammo` 配置），工具放行前二次机械核对 master 私聊身份——群聊、陌生私聊、无上下文的轮
+  一律 fail closed；手动轮是普通聊天轮，`say_*` 规则不变）：参数 {bvid, summary≤60, topic 枚举（二次元/游戏/军事/数码）}；宿主核验 BV 合法、经 bili-client 补全卡片字段、判重（BV 已在库拒绝）、写入 `fish.external_ammo`（ttlAt=pickedAt+48h 缺省可配）
 - 硬截止：10 分钟 watchdog 收束（取消 submission，已入库保留）；错过补跑
 
 **验收：** 内联验证全链（触发→工具→入库→判重→截止）；npm test 绿。
@@ -192,7 +196,7 @@ npm test / npm run prompts / npm run memory 全绿；FE1-FE10 逐项核对并记
 | FE1 | 满足 | scheduler 时点/补跑/幂等/watchdog 全路径；新闻作业另有硬截止抢跑闸：比 watchdog 早 60s 置 timedOut 并 `Conversation.abort`（等 idle），各阶段见超时即弃 |
 | FE2 | 满足 | bili-client 白名单端点/串行/预算/熔断/buvid 复用，`video` 共用；`ammo.dailyBudget` 热生效（启动、scheduler tick、作业开工、config set 四点灌入共享客户端）；video/opus 标题、简介、UP 名、弹幕、热评、图文正文全部先过 `sanitizeExternalText` |
 | FE3 | 满足 | 三工具包、工具层三层漏斗、审计日志；`bili_hot` 对库内全部状态（available/claimed/shared/expired）剔重 |
-| FE4 | 满足（有残余） | `worker:bili` 不登记 memory key（harness），memory section 无 key 不注入、compactor 无 key 跳过抽取（双重 fail-closed）；`say_*` 机械拒绝、BV 判重、上限、TTL、宿主补全。残余：逛轮内部 watchdog 与 scheduler watchdog 同刻竞态，只影响落账文案时序、不影响出口收束（abort 即刻标记并等 idle） |
+| FE4 | 满足（有残余） | `worker:bili` 不登记 memory key（harness），memory section 无 key 不注入、compactor 无 key 跳过抽取（双重 fail-closed）；`say_*` 机械拒绝、BV 判重、上限、TTL、宿主补全。2026-11-03 追加主人私聊手动窄口（`manualAmmoRun` + 放行前二次身份闸，worker 允许/主人私聊 manual 允许/群拒绝/陌生私聊拒绝四路径内联验证）。残余：逛轮内部 watchdog 与 scheduler watchdog 同刻竞态，只影响落账文案时序、不影响出口收束（abort 即刻标记并等 idle） |
 | FE5 | 满足 | claim 原子、windowId、T13 合并、宿主 canonical 渲染；随机门严格 `<`（shareChance=0 永不开门，1 全开） |
 | FE6 | 满足（有残余） | 60s/RSS/知乎日报取数、健康降级、两层映射、exclude、响应/实体限制。残余：`publishedAt` 未机械过滤到当日 |
 | FE7 | 满足 | news_runs 幂等、三类失败兑底、T15 推迟、GROUPS 域校验；scheduled 轮闸机械收束出口：单次 say_words、宿主重建 payload（模型文本剥 URL，canonical 链接只按 sourceRef 索引拼）、closing 剥 URL、媒体/语音出口拒绝、零出口不记 done |
