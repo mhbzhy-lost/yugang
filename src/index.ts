@@ -1402,6 +1402,7 @@ async function externalAmmoOf(chatKey: string): Promise<AmmoCandidate[]> {
     return [];
   }
   const gate = engageNext.shareGateOf(chatKey);
+  console.log(`[鱼缸] 弹药外部行诊断 chat=${chatKey} gate=${gate?.open ?? "none"} win=${gate?.windowId ?? "-"} picked=${picked?.id ?? "none"}/${picked?.state ?? "-"} night=${engageFooterOfNight()}`);
   if (!gate?.open || engageFooterOfNight() || picked === undefined) return [];
   return [{ what: picked.title, who: "", kind: "external", ammoId: picked.id, topic: picked.topic }];
 }
