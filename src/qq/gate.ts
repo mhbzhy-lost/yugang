@@ -1,34 +1,15 @@
 /**
- * 门外的闸：决定这条消息要不要进 agent loop。
+ * 门外的闸：决定这条消息要不要进 agent loop（next-only，2026-11 起 legacy 判定已下线）。
  *
- * 当前策略（2026-10 二次改版）——@ 必答 + 限流：
- *   私聊只认主人；群里任何人 @ → 必答；回复合集 → 必答；
- *   特别关注者 → 先过限流门：安静够久就直接进；没到间隔才掷随机（watchAmbientChance）。
- *   其余消息（含主人的非 @）→ 同一群两条被处理消息之间至少隔 ambientMinIntervalSeconds。
- *
- * 为什么从随机门换成限流：随机门对「沉寂很久突然有人说话」这种场景不友好——
- * 明明半天没人吱声，鱼也可能因为没抽中而一声不吭。限流模式下安静久了的第一条必定进，
- * 之后的才按时间拦，行为更像「有人在听，只是不插话」。
- *
- * 曾经有第二道「便宜模型打分」闸，2026-10 被主人砍掉：它用的是主模型，
- * 主模型一挂，主动接话就整晚全灭（gate_failed 静默丢弃），而且完全不可复盘。
- * 现在只留随机，是否开口的最终决定权交回门内的鱼自己（它也可以不调出口工具）。
- *
- * 搭话总开关 engagement（2026-11，fish.config.json 热生效）：
- *   legacy（缺省）= 上面整套判定照旧；
- *   next = 定时开窗两态（节拍由 src/engage-next.ts 状态机驱动，本闸只认它给的 isOpen）：
- *     closed 态——@ 必答不变，replied_forward / watched / watched_rate_pass / rate_pass
- *       四条通路全部不判，非 @ 群消息统一 skip:next_pending（不进模型）；
- *     open 态——非 @ 群消息 enter:free_pass（非必答：不 markHandled、不刷限流冷却、
- *       不触发正文兜底），照常走既有 10 秒合并管线（ambient 轮语义，零出口合法）。
- *   isOpen 由宿主注入（src/index.ts 接状态机相位）；缺省 = closed——没接状态机时 next
- *   恒为 skip:next_pending。私聊、`/` 指令、GIF 收图轮在闸前各有自己的通道不受影响；
- *   recent 流水、chatlog、合集 id 缓存等旁路记账也都在闸外照常。
- *
- * 旧的作息/配额/冷却/抽样不再参与判定，字段仅兼容保留。
+ * 判定：私聊只认主人；群白名单（GROUPS）对谁都生效；任何人 @（含裸 @）必答，零模型
+ * 调用；其余非 @ 群消息统一交给开窗状态机（src/engage-next.ts）——open 窗
+ * enter:free_pass（非必答：不触发正文兜底，零出口合法），closed / 未跟踪
+ * skip:next_pending 不进模型。回复合集不再参与判定：回复鱼的内容只是引用动作，
+ * 决定回复的是 @；合集的展开与 id 缓存在 onebot 解析层（闸前），不受本闸影响。
+ * 私聊、`/` 指令、GIF 收图轮在闸前各有自己的通道不受影响；recent 流水、chatlog、
+ * 昵称映射、`#recentForward` 合集 id 缓存等旁路记账也都在闸外照常。
  */
 import type { IncomingMention, IncomingMessage } from "./onebot.ts";
-import type { EngagementMode } from "../fish-config.ts";
 import { renderTemplate } from "../prompts.ts";
 
 /** renderForModel 的文案表 = PromptSet.messages；模型可见的字全部从这里来。 */
@@ -39,59 +20,28 @@ export interface GateOptions {
   master: string;
   /** 只在白名单群里说话；空数组 = 所有群。 */
   groups: readonly string[];
-  /** 【仅兼容保留，当前策略下无效】旧安静时段。 */
-  quietHours?: readonly [number, number];
-  /** 【仅兼容保留，当前策略下无效】旧每日主动配额。 */
-  dailyQuota: number;
-  /** 【仅兼容保留，当前策略下无效】旧开口冷却。 */
-  cooldownMs: number;
-  /** 非 @、非特别关注：同一群两条被处理消息之间的最短间隔（毫秒）。 */
-  ambientMinIntervalMs?: number;
-  /** 主人特别关注的人发言时的概率（比普通闲聊高得多，但不等于必答）。 */
-  watchedChance?: number;
-  /** 搭话总开关：legacy = 全部现行判定；next = 定时开窗两态（closed skip / open free_pass）。 */
-  engagement?: EngagementMode;
-  /** next 态该群是否处于 open 窗（src/engage-next.ts 状态机的相位）；缺省 = closed。 */
+  /** 该群是否处于 open 窗（src/engage-next.ts 状态机的相位）；缺省 / 未跟踪 = closed。 */
   isOpen?: (chatKey: string) => boolean;
-  /** 每轮现取（热更新用）；给了就盖过上面的静态值。 */
-  chances?: (chatKey: string) => { minIntervalMs: number; watched: number; engagement: EngagementMode };
-  now?: () => number;
-  random?: () => number;
 }
 
 export interface GateInput {
   msg: IncomingMessage;
-  /** 这条消息的发送者是否在主人给的特别关注名单里。 */
-  watched?: boolean;
-  /** 【仅兼容保留】最近的群聊流水。 */
-  recent?: readonly { nickname: string; text: string }[];
-  lastSpokeAt?: number;
-  spokenToday?: number;
 }
 
 export type GateDecision =
-  | { enter: true; reason: "private" | "mentioned" | "replied_forward" | "free_pass" | "watched_rate_pass" | "watched" | "rate_pass" }
-  | { enter: false; reason: "stranger_private" | "group_not_allowed" | "next_pending" | "forward_ignored" | "watched_sampled_out" | "rate_limited" };
+  | { enter: true; reason: "private" | "mentioned" | "free_pass" }
+  | { enter: false; reason: "stranger_private" | "group_not_allowed" | "next_pending" };
 
 export interface Gate {
   decide(input: GateInput): Promise<GateDecision>;
 }
 
 export function createGate(options: GateOptions): Gate {
-  const random = options.random ?? Math.random;
-  const now = options.now ?? Date.now;
-  // 每个群最后一次「被处理」的时刻：入闸的 @ / 回复 / 限流放行都会刷新它
-  const lastHandled = new Map<string, number>();
-  const markHandled = (chatKey: string, at: number) => lastHandled.set(chatKey, at);
   return {
-    async decide({ msg, watched }) {
-      const at = now();
+    async decide({ msg }) {
       // 私聊：只认主人
       if (msg.chatKey.startsWith("qq:private:")) {
-        if (String(msg.userId) === options.master) {
-          markHandled(msg.chatKey, at);
-          return { enter: true, reason: "private" };
-        }
+        if (String(msg.userId) === options.master) return { enter: true, reason: "private" };
         return { enter: false, reason: "stranger_private" };
       }
 
@@ -101,59 +51,15 @@ export function createGate(options: GateOptions): Gate {
       }
 
       // 任何人 @（含裸 @）必答，零模型调用
-      if (msg.mentionsBot) {
-        markHandled(msg.chatKey, at);
-        return { enter: true, reason: "mentioned" };
-      }
+      if (msg.mentionsBot) return { enter: true, reason: "mentioned" };
 
-      // 每轮现取（热更新用）：搭话开关也走这条通道，改 fish.config.json 下一轮生效
-      const live = options.chances?.(msg.chatKey);
-
-      // next 模式：定时开窗两态。closed——@ 必答外一切搭话判定失效，非 @ 统一
-      // skip:next_pending 不进模型；open——状态机开着窗，非 @ 也放行 free_pass
-      // （非必答：不 markHandled、不刷限流冷却，flushBurst 走 ambient 轮语义，零出口合法）。
-      // isOpen 缺省 = closed：没接状态机时 next 恒为 skip。私聊 / `/` 指令 / GIF 收图轮走
-      // 闸前自己的通道；recent 流水与合集 id 缓存（onebot 解析层，闸前照记）等旁路记账
-      // 不受开关影响。
-      if ((live?.engagement ?? options.engagement ?? "legacy") === "next") {
-        if (options.isOpen?.(msg.chatKey) === true) {
-          return { enter: true, reason: "free_pass" };
-        }
-        return { enter: false, reason: "next_pending" };
-      }
-
-      // 回复某条合并转发 = 明确指令（回复本身就是指向），不需要 @
-      if (msg.repliedForward) {
-        markHandled(msg.chatKey, at);
-        return { enter: true, reason: "replied_forward" };
-      }
-
-      // 无 @ 的合并转发合集：零成本丢弃（展开也不发生）。
-      // 要让鱼看合集：回复合集并 @，或发合集时直接 @。
-      if ((msg.forwardIds?.length ?? 0) > 0) return { enter: false, reason: "forward_ignored" };
-
-      const minInterval = live?.minIntervalMs ?? options.ambientMinIntervalMs ?? 30_000;
-      const last = lastHandled.get(msg.chatKey) ?? 0;
-      const cooledDown = at - last >= minInterval;
-
-      // 特别关注：先掷随机门，中了立刻回（不排队等冷却）；
-      // 没中再看 60s 门——安静够久也回。两条命中任一即放行，
-      // 尽量别出现「关注的人说话没反应，随后别人说话却回了」。
-      if (watched === true) {
-        const chance = live?.watched ?? options.watchedChance ?? 0.5;
-        if (random() <= chance) {
-          markHandled(msg.chatKey, at);
-          return { enter: true, reason: "watched" };
-        }
-        if (!cooledDown) return { enter: false, reason: "watched_sampled_out" };
-        markHandled(msg.chatKey, at);
-        return { enter: true, reason: "watched_rate_pass" };
-      }
-
-      // 其余消息：纯限流。安静越久越容易进，刚处理过就闭嘴。
-      if (!cooledDown) return { enter: false, reason: "rate_limited" };
-      markHandled(msg.chatKey, at);
-      return { enter: true, reason: "rate_pass" };
+      // 开窗两态（src/engage-next.ts 状态机的相位）：open——非 @ 也放行 free_pass
+      // （非必答：不触发正文兜底，open 态走 ambient 轮语义，零出口合法）；
+      // closed / 未跟踪——非 @ 统一 skip:next_pending 不进模型。`/` 指令与 GIF 收图轮
+      // 走闸前自己的通道；recent 流水与合集 id 缓存（onebot 解析层，闸前照记）等旁路
+      // 记账不受影响。回复合集不再必答：回复鱼的内容只是引用动作，决定回复的是 @。
+      if (options.isOpen?.(msg.chatKey) === true) return { enter: true, reason: "free_pass" };
+      return { enter: false, reason: "next_pending" };
     },
   };
 }

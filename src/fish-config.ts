@@ -16,12 +16,12 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 
 const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-/** 搭话总开关：legacy = 现行全部搭话判定；next = 按群定时开窗——closed 态非 @ 群消息统一 skip:next_pending，open 态 free_pass 走合并管线。 */
+/** 搭话模式标记（兼容 harness 的 runtime 裁剪）：next = 开窗两态；非群会话（私聊 / worker）
+ *  标 legacy 以裁掉 runtime 的窗口协议小节（行为与历史一致），不再有开关语义。 */
 export type EngagementMode = "legacy" | "next";
 
-const ENGAGEMENT_MODES: readonly EngagementMode[] = ["legacy", "next"];
-
-/** next 搭话（engagement=next）的开窗参数；逐字段校验，非法告警保留缺省，热生效。 */
+/** next 搭话（开窗两态）的开窗参数；逐字段校验，非法告警保留缺省，热生效。
+ *  群表白名单不在这里：开窗群表 = .env GROUPS（安全域即行为域，2026-11 起）。 */
 export interface EngageConfig {
   /** closed 相位时长（分钟）：非 @ 群消息 skip:next_pending，@ 恒必答。 */
   closedMinutes: number;
@@ -37,8 +37,6 @@ export interface EngageConfig {
   windowRelaxCap: number;
   /** open 态分片节拍（秒）：每拍把窗内全部发送者的新消息合成一轮 ambient 提交（T14 消费）。 */
   shardSeconds: number;
-  /** 群白名单（群号字符串）：engagement=next 仅对这些群生效；空 = 任何群都不进 next（fail-safe）。 */
-  groups: string[];
 }
 
 export const ENGAGE_DEFAULTS: EngageConfig = {
@@ -48,7 +46,6 @@ export const ENGAGE_DEFAULTS: EngageConfig = {
   mentionContextSize: 5,
   silenceThreshold: 3,
   windowRelaxCap: 30,
-  groups: [],
   shardSeconds: 20,
 };
 
@@ -143,13 +140,7 @@ export const NEWS_DEFAULTS: NewsConfig = {
 };
 
 export interface FishConfig {
-  /** 非 @、非特别关注的消息：同一群两条被处理消息之间的最短间隔（秒）。 */
-  ambientMinIntervalSeconds: number;
-  /** 特别关注者发言的概率（0–1）。 */
-  watchAmbientChance: number;
-  /** 搭话总开关：legacy（缺省）= 现行判定照旧；next = 定时开窗两态（节拍与上限见 engage）。 */
-  engagement: EngagementMode;
-  /** next 搭话开窗参数：closed/open 节拍、积压与背景上限、nudge 阈值（仅 next 消费）。 */
+  /** next 搭话开窗参数：closed/open 节拍、积压与背景上限、nudge 阈值。 */
   engage: EngageConfig;
   /** B 站弹药管线参数：逛轮时点、硬截止、随机门、TTL、每日预算、单轮入库上限与空库补货目标。 */
   ammo: AmmoConfig;
@@ -293,7 +284,6 @@ function checkEngageBlock(raw: unknown): FieldCheck {
     ["mentionContextSize", "engage.mentionContextSize 必须在 1–30"],
     ["silenceThreshold", "engage.silenceThreshold 必须在 1–50"],
     ["windowRelaxCap", "engage.windowRelaxCap 必须在 10–100"],
-    ["groups", "engage.groups 必须是群号字符串数组"],
     ["shardSeconds", "engage.shardSeconds 必须在 5–120"],
   ];
   const ranges: Record<string, [number, number]> = {
@@ -309,17 +299,8 @@ function checkEngageBlock(raw: unknown): FieldCheck {
   const problems: string[] = [];
   let any = false;
   const known = new Set<string>(specs.map(([key]) => key));
-  if (e["groups"] !== undefined) {
-    const g = e["groups"];
-    if (Array.isArray(g) && g.every((x) => typeof x === "string" && /^\d+$/.test(x))) {
-      parsed.groups = [...new Set(g)];
-      any = true;
-    } else {
-      problems.push("engage.groups 必须是群号数组，已回默认");
-    }
-  }
   for (const [key, reason] of specs) {
-    if (key === "groups" || e[key] === undefined) continue;
+    if (e[key] === undefined) continue;
     const [lo, hi] = ranges[key];
     const r = numberIn(reason, lo, hi, true)(e[key]);
     if (r.ok) {
@@ -531,9 +512,6 @@ function checkNewsBlock(raw: unknown): FieldCheck {
 }
 
 export const FISH_CONFIG_FIELDS: readonly FishConfigFieldSpec[] = [
-  { name: "ambientMinIntervalSeconds", effect: "hot", check: numberIn("ambientMinIntervalSeconds 必须在 5–3600", 5, 3600) },
-  { name: "watchAmbientChance", effect: "hot", check: numberIn("watchAmbientChance 必须是 0–1", 0, 1) },
-  { name: "engagement", effect: "hot", check: oneOf("engagement 只认 legacy/next", ENGAGEMENT_MODES as readonly string[]) },
   { name: "engage", effect: "hot", check: checkEngageBlock },
   { name: "ammo", effect: "hot", check: checkAmmoBlock },
   { name: "news", effect: "hot", check: checkNewsBlock },
@@ -558,6 +536,10 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
   if (src["ambientChance"] !== undefined || src["ambientChanceByGroup"] !== undefined) {
     problems.push("ambientChance[/ByGroup] 已废弃: 限流模式, 可删除");
   }
+  // legacy 搭话判定下线（2026-11）：旧配置里的四个字段不再受控，提醒清理而非静默忽略
+  for (const gone of ["engagement", "ambientMinIntervalSeconds", "watchAmbientChance"]) {
+    if (src[gone] !== undefined) problems.push(`${gone} 已随 legacy 搭话判定下线，可删除`);
+  }
 
   // 白名单循环：不在 FISH_CONFIG_FIELDS 里的顶层键一律不认；字段校验与告警文案只有这一份
   for (const spec of FISH_CONFIG_FIELDS) {
@@ -575,11 +557,6 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
 
 function parseEnv(env: NodeJS.ProcessEnv, problems: string[]): Partial<FishConfig> {
   const out: Partial<FishConfig> = {};
-  const interval = num(env["AMBIENT_MIN_INTERVAL_SECONDS"]);
-  if (interval !== undefined && interval >= 5) out.ambientMinIntervalSeconds = interval;
-
-  const watched = chance(env["WATCH_AMBIENT_CHANCE"]);
-  if (watched !== undefined) out.watchAmbientChance = watched;
 
   const toolTimeout = num(env["TOOL_TIMEOUT_SECONDS"]);
   if (toolTimeout !== undefined && toolTimeout >= 5) out.toolTimeoutSeconds = toolTimeout;
@@ -603,9 +580,6 @@ function parseEnv(env: NodeJS.ProcessEnv, problems: string[]): Partial<FishConfi
 }
 
 const DEFAULTS: FishConfig = {
-  ambientMinIntervalSeconds: 60,
-  watchAmbientChance: 0.5,
-  engagement: "legacy",
   engage: ENGAGE_DEFAULTS,
   ammo: AMMO_DEFAULTS,
   news: NEWS_DEFAULTS,

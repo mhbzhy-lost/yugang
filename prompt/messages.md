@@ -104,8 +104,8 @@ ctx_target: 要你回应的是最后这一条：
 ctx_image_attached: 本条消息末尾直接附了 {{count}} 张图（你能看到原图），需要的话直接看它们，不必调 look
 ctx_images_more: 这组话里另有 {{count}} 张图没有附上（动图或超出限额），想看用 look
 
-# 搭话模式（engagement=next）的窗口注入文案：开窗积压背景板、沉默提醒与已读引导。
-# 仅 next 态消费（src/index.ts / engage-next），legacy 不引用。ctx_engage_line 带 [m:id] 消息锚点，
+# 搭话（开窗）的窗口注入文案：开窗积压背景板、沉默提醒与已读引导。
+# 由 src/index.ts / engage-next 消费。ctx_engage_line 带 [m:id] 消息锚点，
 # {{name}} 由装配方并入「[主人]」/「[特别关注]」标记（master 优先互斥，两者都不加就是普通群友）；
 # 注入行按最新到最早排列；ctx_engage_header 用于开窗首轮（injection / nudge-only），
 # ctx_engage_shard_header 用于窗内后续 shard 拍，两者都引导先读最新一条、向上回溯上文；

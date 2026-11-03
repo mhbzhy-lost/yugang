@@ -28,7 +28,7 @@ export interface RecentChatMessage {
   nickname: string;
   text: string;
   at: number;
-  /** 纯媒体消息形态（onebot 解析层透传，仅 next 的积压/shard 过滤消费；legacy 不看）：
+  /** 纯媒体消息形态（onebot 解析层透传，开窗积压/shard 过滤消费）：
  *  gif = 纯 GIF 消息，image = 纯图片无文字。undefined = 普通消息。 */
   mediaOnly?: "gif" | "image";
 }
@@ -294,17 +294,15 @@ export interface ContextOptions {
   master: string;
   /** prompt/messages.md 的文案表：所有可见文案从这里来。 */
   messages: MessageTable;
-  /** 特别关注标注（宿主按当前 watchedByChat 现算），只挂在这一轮要说的人前面。 */
-  watchedNote?: string;
   /** inline 附图标注（宿主按图选取结果现算）：attach=已附张数，more=未附张数。缺省不标注。 */
   images?: { attach: number; more: number };
-  /** 背景板条数上限（T5）：缺省 10 = legacy 零变化；next 的 @（answer）轮传 engage.mentionContextSize。 */
+  /** 背景板条数上限（T5）：@（answer）轮传 engage.mentionContextSize，缺省 10。 */
   backgroundLimit?: number;
-  /** 已读标记（决策 20）：背景板先取上限再剔除 arrivalSeq ≤ 它的行（已进过模型的不重复注入）；缺省不去重（legacy 零变化）。 */
+  /** 已读标记（决策 20）：背景板先取上限再剔除 arrivalSeq ≤ 它的行（已进过模型的不重复注入）；缺省不去重。 */
   seenSeq?: number;
-  /** 背景板注入时紧跟其后的引导行文案（ctx_seen_note，next 每次都带——不限于背景板非空或发生截减时）；缺省不带。 */
+  /** 背景板注入时紧跟其后的引导行文案（ctx_seen_note，每次都带——不限于背景板非空或发生截减时）；缺省不带。 */
   seenNote?: string;
-  /** 锚点行打标（next：[主人]/[特别关注]，master 优先互斥；「你主人」标注在行内保留）；缺省不打（legacy 零变化）。 */
+  /** 锚点行打标（[主人]/[特别关注]，master 优先互斥；「你主人」标注在行内保留）；缺省不打。 */
   anchorMark?: string;
 }
 
@@ -359,8 +357,8 @@ export function withContext(
 ): RoundContext {
   const messages = options.messages;
   const renderedAnchor = withAnchor(anchor, renderForModel(anchor, options.master, messages));
-  // 锚点行打标（next）：[主人]/[特别关注]（master 优先互斥），放行首（[m:id] 之前）；
-  // 行内的「你主人」标注照旧保留。legacy 不传 anchorMark = 行零变化。
+  // 锚点行打标：[主人]/[特别关注]（master 优先互斥），放行首（[m:id] 之前）；
+  // 行内的「你主人」标注照旧保留。
   const anchorLine = options.anchorMark ? `${options.anchorMark} ${renderedAnchor}` : renderedAnchor;
   if (!anchor.chatKey.startsWith("qq:group:")) {
     return { content: anchorLine, seen: [seenOf(anchor)] };
@@ -369,7 +367,7 @@ export function withContext(
   const parts: string[] = [];
   const seen: SeenMessage[] = [];
   // 背景板（决策 20）：先按上限取最近 N 条，再剔除已进过模型的部分（arrivalSeq ≤ seenSeq；
-  // 旧流水没有序号的没法判已读，保守保留）。legacy 不传 seenSeq = 整段不去重、恒 10 条。
+  // 旧流水没有序号的没法判已读，保守保留）。不传 seenSeq = 整段不去重。
   let background = backgroundFor(anchor, bucket, burst, options.backgroundLimit ?? 10);
   if (options.seenSeq !== undefined) {
     const seenSeq = options.seenSeq;
@@ -383,8 +381,8 @@ export function withContext(
       seen.push(seenOf(line));
     }
   }
-  // next 模式每次携带（终审 #4：不限于背景板非空——重启后首条 / 背景全已读时同样带，
-  // 引导模型把新消息接进历史而不是当孤立新话题）：legacy 不传 seenNote，行为零变化
+  // 每次携带（终审 #4：不限于背景板非空——重启后首条 / 背景全已读时同样带，
+  // 引导模型把新消息接进历史而不是当孤立新话题）：不传 seenNote 就不带
   if (options.seenNote) parts.push(options.seenNote);
 
   // 多才叫「连续发言」：一条就还是原来的「要你回应的就是这一条」
@@ -398,12 +396,12 @@ export function withContext(
       parts.push(`${marker} ${withAnchor(line, rendered)}`.trim());
       seen.push(seenOf(line));
     }
-    parts.push(messages["ctx_anchor_note"] ?? "", options.watchedNote ?? "");
+    parts.push(messages["ctx_anchor_note"] ?? "");
     // 锚点这一行走带结构化标注的那份（群号 / 昵称(QQ) / 回复 id / @ 目标），仍打同组标记
     parts.push(`${marker} ${anchorLine}`.trim());
     seen.push(seenOf(anchor));
   } else {
-    parts.push(messages["ctx_target"] ?? "", options.watchedNote ?? "", anchorLine);
+    parts.push(messages["ctx_target"] ?? "", anchorLine);
     seen.push(seenOf(anchor));
   }
 

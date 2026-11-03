@@ -213,22 +213,11 @@ const visionFallbackModel = modelSelection.visionFallback
   ? { provider: modelSelection.visionFallback.providerId, modelId: modelSelection.visionFallback.modelId }
   : undefined;
 
-/** 搭话开关的唯一判定函数（开关 & 群白名单 ∩ GROUPS 安全域）：engagement=next 且该群在交集内
- * 才算 next；其余一律 legacy。gate / 状态机 / runtime 裁剪 / in-flight 登记全部走这里，不许各自判断。 */
+/** 搭话判定的唯一入口（next-only，2026-11 起）：该会话是否为 GROUPS 白名单群。
+ *  gate / 状态机 / runtime 裁剪 / in-flight 登记全部走这里，不许各自判断；
+ *  私聊与 worker 会话恒 false（不登记在途，runtime 的窗口协议小节照旧裁掉）。 */
 function engageNextOf(chatKey: string): boolean {
-  const c = fishConfig().config;
-  return c.engagement === "next" && engageGroupsIncludes(engageGroupsSafe(), chatKey);
-}
-
-/**
- * engage.groups ∩ .env GROUPS（P0 修复）：安全发送域（GROUPS）是硬边界，engage.groups 只是
- * 行为白名单——可写配置不许把开窗/发信面扩到安全域外。状态机群表、gate 判定等一切消费点
- * 只认这份交集；config 工具对域外群号整次拒绝（src/tools/config/tool.ts），这里机械兜底
- * parseFile 直改文件的路径。
- */
-function engageGroupsSafe(): string[] {
-  const c = fishConfig().config;
-  return c.engage.groups.filter((g) => config.groups.includes(g));
+  return engageGroupsIncludes(config.groups, chatKey);
 }
 
 // inline 直读开关（docs/plans/2026-11-01-inline-vision.md）：主/视觉同模型且通道在白名单。
@@ -271,18 +260,17 @@ const compacting = new Set<string>();
 // 静默收图轮在跑的会话：同一会话不许并发提交 / 不许换页（两条路径共用 conversationBusy）
 const ingestRounds = new Set<string>();
 // 会话忙（换页 / 静默收图轮 / next 在途轮）的判定：起新提交与起换页前都要先看它。
-// next 的在途轮登记见 nextInFlight（shard 到期与开窗注入据此退避，同一会话绝不并发提交）；
-// legacy 不登记，行为零变化。
+// 在途轮登记见 nextInFlight（shard 到期与开窗注入据此退避，同一会话绝不并发提交）。
 function conversationBusy(id: string | number): boolean {
   const key = String(id);
   return compacting.has(key) || ingestRounds.has(key) || nextInFlight.has(key);
 }
 
-// ── 携话 next（engagement=next）的轮级互斥（决策 8 + shard 修订）─────────────────
+// ── 携话 next（开窗两态）的轮级互斥（决策 8 + shard 修订）─────────────────
 // 在途轮登记：conversationId → 在途轮的 kind 集合。submit 前登记、settle 的 finally 释放；
-// 仅 engagement=next 时登记（legacy 零变化）。@ 轮（answer）也登记——shard 到期与开窗
-// 注入据此退避，不与必答轮并发；但 @ 轮自己的等待队列只等 ambient/injection 清零
-// （两个必答轮并发提交是既有行为，不引入排队）。
+// 仅 GROUPS 群聊登记（私聊 / worker 会话不登记，行为与历史一致）。@ 轮（answer）也登记——
+// shard 到期与开窗注入据此退避，不与必答轮并发；但 @ 轮自己的等待队列只等 ambient/injection
+// 清零（两个必答轮并发提交是既有行为，不引入排队）。
 const nextInFlight = new Map<string, Set<RoundKind>>();
 // 等待在途 ambient/injection 轮清零的 @ 轮唤醒器：清零（或超时）时逐个唤醒
 const ambientWaiters = new Map<string, Set<(ok: boolean) => void>>();
@@ -350,7 +338,7 @@ async function waitAmbientClear(id: string | number, timeoutMs: number): Promise
 // conversationId → 最后一条进入模型输入的消息 arrivalSeq。内存态（重启即无＝什么都
 // 没看过，不会把没看过的当已读）；所有把群消息注入模型输入的路径统一维护：
 // injection backlog / shard 轮注入后推进、@ 轮整组（burst 本体）照常注入并推进；
-// 背景板去重（先取 N 再剔已读）由 T5 接入（withContext 的 seenSeq，flushBurst 按 engagement 传值）。
+// 背景板去重（先取 N 再剔已读）由 T5 接入（withContext 的 seenSeq，flushBurst 对群轮恒传）。
 // @ 轮整组不属背景板，不受标记影响。
 const lastSeenByModel = new Map<string, number>();
 
@@ -389,7 +377,7 @@ const lastMention = new Map<string, boolean>();
 const lastReply = new Map<string, boolean>(); // 最近一次触发是否@了鱼：被@必回引用，让群里看得出鱼在回谁
 // submissionId → 本轮触发消息（含轮类型 kind 与 quoteIds 窗口）：把引用目标绑在轮上，
 // 不被后续消息顶掉；userId 是主动 @ 身份闸的唯一依据（不靠模型文本推断关系）。
-// kind：answer = 既有必答 / 私聊 / legacy 轮；ambient = open 窗 shard 轮；injection = 开窗
+// kind：answer = 必答 / 私聊轮；ambient = open 窗 shard 轮；injection = 开窗
 // 积压注入轮（后两者无锚点消息）。quoteIds = 本轮注入窗口的消息 id（T4 quoteMsgId 消费），
 // settle 的 finally 里随轮清除。
 const triggerOf = new Map<string, RoundTrigger>();
@@ -406,9 +394,9 @@ const roundConv = new Map<string, Conversation>();
 // 轮内去重：roundId → 本轮已发过提示的工具集合，「同轮同工具只发一次」在这里保证；
 // 与 roundConv 同生命周期，settle 的 finally 里整份删。
 const workingSent = new Map<string, Set<string>>();
-// 窗口键（chatKey\0发送者）→ 本组是否有「必答」放行（private/mentioned/replied_forward）。
-// gate 逐条放行时累积，flushBurst 整组消费并清掉：正文兜底只补必答轮——环境轮（rate_pass /
-// watched 等）零 say_* 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
+// 窗口键（chatKey\0发送者）→ 本组是否有「必答」放行（private/mentioned）。
+// gate 逐条放行时累积，flushBurst 整组消费并清掉：正文兜底只补必答轮——环境轮（free_pass）
+// 零 say_* 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
 const burstMustAnswer = new Map<string, boolean>();
 
 /** 与 debouncer 一致的窗口键：群 + 发送者唯一确定一个待定组。 */
@@ -419,7 +407,7 @@ function windowKey(chatKey: string, userId: number): string {
 }
 
 /** 必答放行原因：只有以这些原因进闸的轮才允许正文兜底补发。 */
-const MUST_ANSWER_REASONS: ReadonlySet<string> = new Set(["private", "mentioned", "replied_forward"]);
+const MUST_ANSWER_REASONS: ReadonlySet<string> = new Set(["private", "mentioned"]);
 const conversations = new Map<string, Conversation>();
 
 const fish = await openFish({
@@ -472,7 +460,7 @@ const fish = await openFish({
   master: config.master,
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
   silentOf: (roundId) => silentRounds.has(String(roundId)),
-  // runtime 的「自由交流窗口」小节只在 engagement=next 时注入（热读取，决策 18）
+  // runtime 的「自由交流窗口」小节只对 GROUPS 群会话注入（决策 18；私聊/worker 恒裁掉）
   engagementOf: (chatKey: string) => (engageNextOf(chatKey) ? "next" : "legacy"),
   // 出口计数：say_* 的 execute 进入即回调；未登记的轮（收图轮）直接忽略，不留孤儿计数
   onSayCall: (roundId) => {
@@ -519,11 +507,11 @@ const fish = await openFish({
   onWatchChanged: (conversationId, people) => {
     const chatKey = chatKeyFor(conversationId);
     if (!chatKey) return;
-    // 整份替换：删掉的人（含已退群、watch remove 掉的）立刻失去主动 @ 权限与随机门加权
+    // 整份替换：删掉的人（含已退群、watch remove 掉的）立刻失去主动 @ 权限与打标
     applyWatched(chatKey, people);
   },
-  // 主动 @ 的身份闸（机械判定，按轮类型，决策 7）：私聊没有 @ 这回事。answer/legacy 轮
-  // userId 是本轮触发者——只有主人或本群特别关注者「被点名」时可 @（语义零变化）；next 的
+  // 主动 @ 的身份闸（机械判定，按轮类型，决策 7）：私聊没有 @ 这回事。answer 轮
+  // userId 是本轮触发者——只有主人或本群特别关注者「被点名」时可 @（语义零变化）；
   // ambient/injection 环境轮没有锚点身份，出口层对每个 @ 目标各调一次、userId 携带的是
   // 目标 QQ，白名单同为 {主人} ∪ 本群 watched——这是接受的放宽面（open 窗内普通群友可诱导
   // 鱼 @ 主人/watched），放行与越界拒绝都记审计日志。成员名单校验在出口层照旧。
@@ -928,7 +916,7 @@ async function submitRound(input: {
   };
   /** 本轮是不是在回复别人（回复链要引用） */
   reply: boolean;
-  /** 本轮是否必答（闸放行原因 ∈ private/mentioned/replied_forward）：正文兜底只补必答轮 */
+  /** 本轮是否必答（闸放行原因 ∈ private/mentioned）：正文兜底只补必答轮 */
   mustAnswer?: boolean;
   /** bypass 段（画图指令）；只在这一轮可见，轮 settle 即删 */
   bypass?: string;
@@ -1128,8 +1116,8 @@ const ANSWER_WAIT_MS = 60_000;
  *
  * 锚点 = 这一组按收到顺序最后一条（A-B-A 里 B 只出现在背景，不可能顶掉 A）；整组里任意一条 @鱼
  * 就整组必答；引用只看锚点。会话忙分两级：换页 / 收图轮沿用既有语义（丢组 + 被@回忙碌语）；
- * 在途 ambient/injection 轮（仅 next 登记）则分级——@ 轮（必答）排队等待 ≤60s（超时转忙碌语，
- * 消息不丢），非必答组静默丢弃（沿用环境轮遇忙即弃）。legacy 不登记在途，零变化。
+ * 在途 ambient/injection 轮则分级——@ 轮（必答）排队等待 ≤60s（超时转忙碌语，
+ * 消息不丢），非必答组静默丢弃（沿用环境轮遇忙即弃）。私聊不经这里，无在途登记。
  */
 async function flushBurst(burst: PendingBurst): Promise<void> {
   const anchor = burst.anchor;
@@ -1161,28 +1149,18 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     }
   }
 
-  // 命中特别关注：legacy 在要回的那行前面给 watch_inline 备注行（零变化）；next 改锚点行
-  // 打标（[主人]/[特别关注]，master 优先互斥，沿用 T1 文案；行内「你主人」标注保留）
-  const nextMode = engageNextOf(anchor.chatKey);
-  const watched = watchedByChat.get(anchor.chatKey)?.get(String(anchor.userId));
-  const watchedNote = !nextMode && watched
-    ? renderTemplate(fish.prompts.messages["watch_inline"] ?? "", { who: anchor.nickname, note: watched.note })
-    : "";
   // inline 附图选取：锚点图优先、burst 内按序补足，普通轮 ≤2 张；GIF 与缺失文件不附（也不占额度）
   const inlinePick = inlineVisionOn() ? pickInlineImages(anchor, burst.messages, config.mediaRoot) : { attach: [], more: 0 };
   const roundContext = withContext(anchor, recent.get(anchor.chatKey) ?? [], burst.messages, {
     master: config.master,
     messages: fish.prompts.messages,
-    ...(watchedNote ? { watchedNote } : {}),
-    // next @（answer）轮背景（T5/决策 20）：上限缩为 engage.mentionContextSize（热加载）、
+    // @（answer）轮背景（T5/决策 20）：上限缩为 engage.mentionContextSize（热加载）、
     // 先取 N 再剔除已进过模型的（lastSeenByModel），每次携带 ctx_seen_note，注入后随
-    // 整组推进标记（下方 advanceSeenSeq）；legacy 不传这组选项 = 恒 10 条、不去重（零变化）
-    ...(nextMode ? {
-      backgroundLimit: fishConfig().config.engage.mentionContextSize,
-      seenSeq: seenSeqOf(conv.id),
-      seenNote: fish.prompts.messages["ctx_seen_note"] ?? "",
-      anchorMark: engageMarkOf(anchor.chatKey, anchor.userId),
-    } : {}),
+    // 整组推进标记（下方 advanceSeenSeq）；锚点行打 [主人]/[特别关注] 标（master 优先互斥）
+    backgroundLimit: fishConfig().config.engage.mentionContextSize,
+    seenSeq: seenSeqOf(conv.id),
+    seenNote: fish.prompts.messages["ctx_seen_note"] ?? "",
+    anchorMark: engageMarkOf(anchor.chatKey, anchor.userId),
     ...(inlinePick.attach.length > 0 ? { images: { attach: inlinePick.attach.length, more: inlinePick.more } } : {}),
   });
   let content = roundContext.content;
@@ -1222,7 +1200,7 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     conv,
     content,
     // 引用锚点与主动 @ 的身份闸都只认锚点；但整组里任意一条 @鱼，整组都必答。
-    // burst 轮（@ / legacy）一律 answer；open 态的非 @ 消息走 shard（ambient），不经这里
+    // burst 轮（@）一律 answer；open 态的非 @ 消息走 shard（ambient），不经这里
     trigger: { messageId: anchor.messageId, mentionsBot: burst.mustAnswer, userId: anchor.userId, kind: "answer" },
     reply: burst.quoteFromReply,
     mustAnswer,
@@ -2027,17 +2005,14 @@ async function drainLoop(): Promise<void> {
   }
 }
 
-// next 搭话开窗状态机：每 tick 现读 fishConfig()（engagement 热切换含无消息期都在 tick 里消化，
-// 切回 legacy 自动清相位停窗，重新进 next 从 closed 零计时）；gate 的 isOpen 接它的相位，
-// 未跟踪/legacy/白名单外恒 closed。open 进入经 onPhase 提交 injection 轮（背景板）；
-// open 态的 free_pass 消息由 onMessage 路由进它的 shard 收集器，每 engage.shardSeconds
-// （缺省 20 秒）一拍经 onShard 合并提交（ambient）；closed 进入只留相位日志。
+// next 搭话开窗状态机：每 tick 现读 fishConfig()（窗口时长热改含无消息期都在 tick 里消化）；
+// gate 的 isOpen 接它的相位，未跟踪/白名单外恒 closed。open 进入经 onPhase 提交 injection 轮
+// （背景板）；open 态的 free_pass 消息由 onMessage 路由进它的 shard 收集器，每
+// engage.shardSeconds（缺省 20 秒）一拍经 onShard 合并提交（ambient）；closed 进入只留相位日志。
 const engageNext = createEngageNext({
-  // 状态机群表 = engage.groups ∩ .env GROUPS（终验 #1/P0 修复）：之前直接枚举 engage.groups，
-  // config 写入域外群号就会向安全域外开窗。交集保证「不在 GROUPS 的群永不维护相位、
-  // 永不开窗」；白名单群本身应在 GROUPS 里，不在也无妨——没有消息就不会有相位消费。
-  // 群号去重与格式校验在 checkEngageBlock，安全域交集在这里机械兜底。
-  groups: () => engageGroupsSafe().map((g) => "qq:group:" + g),
+  // 状态机群表 = .env GROUPS 全量（2026-11 起 legacy 下线，安全域即行为域）：
+  // 不在 GROUPS 的群永不维护相位、永不开窗；gate 也只放行 GROUPS 群，两处同源。
+  groups: () => config.groups.map((g) => "qq:group:" + g),
   recentOf: (chatKey) => recent.get(chatKey) ?? [],
   backlogOf: (chatKey, afterSeq) => engageBacklogOf(chatKey, afterSeq),
   busy: (chatKey) => {
@@ -2057,7 +2032,6 @@ const engageNext = createEngageNext({
   config: () => {
     const c = fishConfig().config;
     return {
-      engagement: c.engagement,
       closedMinutes: c.engage.closedMinutes,
       openMinutes: c.engage.openMinutes,
       // shard 节拍（T14）：engage.shardSeconds，缺省 20 秒，每拍现读热生效
@@ -2649,24 +2623,11 @@ newsScheduler.start();
 const gate = createGate({
   master: config.master,
   groups: config.groups,
-  dailyQuota: 0,
-  cooldownMs: 0,
-  // 非 @、非特别关注：同一群两条被处理消息的最短间隔（限流）
-  ambientMinIntervalMs: fishConfig().config.ambientMinIntervalSeconds * 1000,
-  // 特别关注者发言时的放行概率（走随机门，照顾到但不是必答）
-  watchedChance: fishConfig().config.watchAmbientChance,
-  // 搭话总开关（缺省值；实际判定走 chances 每轮现取的「开关 & 群白名单」）
-  engagement: "legacy",
-  // next 的 open 窗判定：接状态机相位；缺省 = closed（没接状态机时 next 恒 skip）
+  // 开窗两态判定：接状态机相位；未跟踪 = closed（非 @ 恒 skip:next_pending）
   isOpen: (chatKey) => engageNext.isOpen(chatKey),
-  // 每轮现取：改 fish.config.json 下一轮就生效，不用重启（engagement 同样热切换）
-  chances: (chatKey: string) => {
-    const c = fishConfig().config;
-    return { minIntervalMs: c.ambientMinIntervalSeconds * 1000, watched: c.watchAmbientChance, engagement: engageNextOf(chatKey) ? "next" : "legacy" };
-  },
 });
 
-// 启动装载特别关注名单：随机门与命中注入都要用，重启后立刻生效
+// 启动装载特别关注名单：锚点行打标与主动 @ 白名单都要用，重启后立刻生效
 {
   const chats = await fish.harness.snapshot(ChatsDoc, ctx);
   for (const [chatKey, conversationId] of Object.entries(chats?.chats ?? {})) {
@@ -2711,7 +2672,7 @@ function startWeekly(): void {
 }
 startWeekly();
 
-// 开窗循环开始跳：engagement=legacy（缺省）时 tick 空转，改 fish.config.json 切 next 即生效
+// 开窗循环开始跳：每个 GROUPS 群从 closed 零计时起相位
 engageNext.start();
 
 // 每个群的最近流水：背景栏与连续发言都从这里取。
@@ -2721,12 +2682,9 @@ engageNext.start();
 // userId 是背景行里「昵称(QQ号)」的来源，模型主动 @ 只从可信上下文抄号码。
 const recent = new Map<string, RecentChatMessage[]>();
 
-// 流水上限：缺省 30 不变；next 的积压放宽（engage.windowRelaxCap）需要流水兜底，
-// 上限提升为 max(30, windowRelaxCap)。legacy 的背景截断（背景最多 10 条）不受影响。
+// 流水上限：缺省 30 不变；开窗积压的放宽（engage.windowRelaxCap）需要流水兜底，
+// 上限提升为 max(30, windowRelaxCap)。
 const recentCap = () => Math.max(30, fishConfig().config.engage.windowRelaxCap);
-const lastSpoke = new Map<string, number>();
-const spokenToday = new Map<string, { day: string; count: number }>();
-const today = () => new Date().toISOString().slice(0, 10);
 
 // 群消息按「群 + 发送者」攒 10 秒：同一个人还在打字就一直往后延，静默满 10 秒才整组提交。
 // 窗口固定 10000ms，不设环境变量也不设最长等待；重启时没 flush 的窗口直接丢弃。
@@ -2800,17 +2758,7 @@ onebot.onMessage((raw) => {
     // 主人 / 指令：bypass 剥离后、闸前拦截——机械秒回，不进 gate、不进 conversation
     if ((await handleCommand(msg)) !== null) return;
 
-    const stat = spokenToday.get(msg.chatKey);
-    const count = stat && stat.day === today() ? stat.count : 0;
-
-    const watched = watchedByChat.get(msg.chatKey)?.get(String(msg.userId));
-    const decision = await gate.decide({
-      msg,
-      ...(watched ? { watched: true } : {}),
-      recent: bucket.slice(0, -1),
-      lastSpokeAt: lastSpoke.get(msg.chatKey) ?? 0,
-      spokenToday: count,
-    });
+    const decision = await gate.decide({ msg });
     // gate 判决留痕（不记正文）
     const verdict = (decision.enter ? "enter:" : "skip:") + decision.reason;
     console.log("[fish] gate " + msg.chatKey + " " + msg.nickname.slice(0, 12) + " -> " + verdict);

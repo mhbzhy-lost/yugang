@@ -1,13 +1,13 @@
 /**
- * engage-next 状态机：engagement=next 时按群循环「closed → open → closed」的开窗节拍
- * （默认 closed 10 分钟 → open 3 分钟，fish.config.json 的 engage 块可调）。
+ * engage-next 状态机：按群循环「closed → open → closed」的开窗节拍
+ * （默认 closed 10 分钟 → open 3 分钟，fish.config.json 的 engage 块可调；2026-11 起
+ * 这是唯一的搭话行为，legacy 判定已下线，闸只认这里的相位）。
  *
  * 为什么不是消息驱动：closed 期间非 @ 消息根本不进模型，如果只在消息到来时推进状态，
- * 无消息的群永远停在 closed，engagement 热切换（改 fish.config.json）也就无从生效。
- * 所以状态机自带 tick 定时器（时钟注入参照 debounce 的先例），每 tick 现读 fishConfig()：
- *   - legacy：清掉全部群相位（热切换 stop），tick 空转；
- *   - next：为白名单群维护相位——closed 满 closedMinutes 开窗，open 满 openMinutes 关窗。
- * 热切换重新进入 next 时相位从零建：closed 从零计时，lastCloseSeq 懒定 recent 末条
+ * 无消息的群永远停在 closed。所以状态机自带 tick 定时器（时钟注入参照 debounce 的先例），
+ * 每 tick 现读 fishConfig()，为白名单群维护相位——closed 满 closedMinutes 开窗，
+ * open 满 openMinutes 关窗；时长热改下一拍生效。群表直取 .env GROUPS（安全域即行为域）。
+ * stop 后重新 start 相位从零建：closed 从零计时，lastCloseSeq 懒定 recent 末条
  * arrivalSeq（宁少勿答：宁可少注入一条积压，不把已进过模型的消息再注入一遍）。
  *
  * open 进入瞬间回调 onPhase(chatKey, "open", backlog)：积压 = (lastCloseSeq, now] 排除
@@ -22,7 +22,7 @@
  * ambient/injection 轮、换页、收图）就不提交，消息累积并入下一拍——绝不丢、绝不
  * 并发提交、绝不向 pi 的 steering 队列塞多条；提交失败（onShard 抛错 / Promise reject）
  * 同样把整拍原子回收进收集器并入下一拍。关窗时收集器里还有整拍消息就补交一拍
- * （忙则丢弃并留日志，宁少勿答）；热切换离开 next / stop 同样清掉。@ 消息不走 shard，
+ * （忙则丢弃并留日志，宁少勿答）；stop 同样清掉。@ 消息不走 shard，
  * 仍由 debounce 的 burst 即时路径提交（answer 轮）。
  *
  * 沉默递进（T8）：宿主在 ambient/injection 轮 settle 时发现出口数 >0 就调 noteExit，
@@ -38,10 +38,9 @@
  * 门只定「本窗能不能分享」，每窗一条与 available 校验在 claim 事务里机械保证。
  * 相位、lastCloseSeq 与 shard 收集器都只活在内存里：重启回到 closed 从零计时，与
  * debounce 的 pending 同一个取舍——宁可少说一句，不补陈年旧话。沉默计数同生命周期，
- * 热切换离开 next / stop 清相位时一并归零。
+ * stop 清相位时一并归零。
  */
 import { createHash } from "node:crypto";
-import type { EngagementMode } from "./fish-config.ts";
 
 /** 群白名单判定：chatKey 形如 qq:group:NNN（含人格后缀也认前缀），群号在名单内才算命中。 */
 export function engageGroupsIncludes(groups: readonly string[], chatKey: string): boolean {
@@ -70,7 +69,6 @@ export interface EngageShardItem extends EngageBacklogItem {
 
 /** 每 tick 现读的窗口参数（宿主从 fishConfig().config 现取）。 */
 export interface EngageTickConfig {
-  engagement: EngagementMode;
   closedMinutes: number;
   openMinutes: number;
   /** open 态分片节拍（秒，engage.shardSeconds）：每拍排程时现读，热加载下一拍生效。 */
@@ -95,7 +93,7 @@ export interface EngageNextDeps {
   /** shard 到期回调：把这拍收集的全部 free_pass 消息合成一轮 ambient 提交（宿主实现）。
  *  提供了 shard 机制才生效；不提供时 collectShard 恒 false（宿主丢弃并留日志）。 */
   onShard?(chatKey: string, messages: readonly EngageShardItem[]): void | Promise<void>;
-  /** 每 tick 现读：engagement 热切换与窗口时长都从这里来（无消息也生效）。 */
+  /** 每 tick 现读：窗口时长都从这里来（无消息也生效）。 */
   config(): EngageTickConfig;
   now?: () => number;
   setTimer?: (flush: () => void, ms: number) => EngageTimer;
@@ -113,11 +111,11 @@ export interface EngageNextDeps {
 }
 
 export interface EngageNext {
-  /** 开始 tick 循环（幂等）；engagement=legacy 时 tick 空转，热切换由 tick 自行消化。 */
+  /** 开始 tick 循环（幂等）；tick 自行消化窗口时长热改。 */
   start(): void;
   /** 停止 tick 并清掉全部群相位与 shard 收集器：下次 start 从 closed 零计时重来。 */
   stop(): void;
-  /** 该群是否处于 open 窗；未跟踪（未 start / legacy / 白名单外）= closed。 */
+  /** 该群是否处于 open 窗；未跟踪（未 start / 白名单外）= closed。 */
   isOpen(chatKey: string): boolean;
   /** 该群当前相位；未跟踪返回 undefined（观测用）。 */
   phaseOf(chatKey: string): EngagePhase | undefined;
@@ -146,7 +144,7 @@ interface GroupPhase {
   phaseSince: number;
   /** 上次关窗时 recent 末条 arrivalSeq：open 进入据此取积压。 */
   lastCloseSeq?: number;
-  /** open 态的 shard 收集器：待提交消息 + 自续定时器；关窗 / 热切换时清掉。 */
+  /** open 态的 shard 收集器：待提交消息 + 自续定时器；关窗 / stop 时清掉。 */
   shard?: { messages: EngageShardItem[]; timer?: EngageTimer };
   /** 连续全程零出口的 open 窗数（T8）：窗内有 ambient/injection 轮开口即清零。 */
   silentWindows: number;
@@ -191,7 +189,7 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     state.shard = undefined;
   };
 
-  /** 丢弃收集器里未提交的消息（关窗时忙 / 热切换 / stop）：宁少勿答，但必须留痕。 */
+  /** 丢弃收集器里未提交的消息（关窗时忙 / stop）：宁少勿答，但必须留痕。 */
   const dropShard = (state: GroupPhase, chatKey: string, why: string): void => {
     if (state.shard && state.shard.messages.length > 0) {
       deps.log?.(`搭话 shard 丢弃 ${chatKey} ${state.shard.messages.length} 条（${why}）`);
@@ -201,8 +199,8 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
 
   /** shard 到期：会话忙就不提交（消息累积并入下一拍，背压）；final 只在关窗收尾时为 true。
    *  提交成功才算数：onShard 同步抛错或 Promise reject（onError 路径）时，整拍消息原子放回
-   *  收集器队首（保持到达序）并入下一拍，绝不丢；收集器已被关窗/热切换清掉就重建承接
-   *  （下次开窗的 scheduleShard 会复用并补交；engagement 切离后的整份清除仍按既有语义丢弃）。 */
+   *  收集器队首（保持到达序）并入下一拍，绝不丢；收集器已被关窗清掉就重建承接
+   *  （下次开窗的 scheduleShard 会复用并补交；stop 后的整份清除仍按既有语义丢弃）。 */
   const flushShard = (chatKey: string, state: GroupPhase, final: boolean): void => {
     const shard = state.shard;
     if (!shard || shard.messages.length === 0) return;
@@ -294,21 +292,12 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
   };
 
   const tick = (): void => {
-    const { engagement, closedMinutes, openMinutes } = deps.config();
-    if (engagement !== "next") {
-      // 热切换 stop：清掉全部相位与 shard 收集器，下次进 next 从 closed 零计时重来
-      if (phases.size > 0) {
-        for (const [chatKey, state] of phases) dropShard(state, chatKey, "engagement 已切离 next");
-        phases.clear();
-        deps.log?.("搭话开窗 next 停止（engagement 已切离 next）");
-      }
-      return;
-    }
+    const { closedMinutes, openMinutes } = deps.config();
     const at = now();
     for (const chatKey of deps.groups()) {
       let state = phases.get(chatKey);
       if (!state) {
-        // 初次进入（start / 热切换回 next）：closed 从零计时，基线懒定 recent 末条
+        // 初次进入（start / stop 后重来）：closed 从零计时，基线懒定 recent 末条
         state = { phase: "closed", phaseSince: at, lastCloseSeq: lastSeqOf(deps.recentOf(chatKey)), silentWindows: 0, spokeInWindow: false };
         phases.set(chatKey, state);
         deps.log?.(`搭话开窗 next 启动 ${chatKey}：closed 从零计时`);

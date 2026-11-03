@@ -8,6 +8,5 @@
   "watch_empty": "现在没特别关注的人",
   "watch_unknown_member": "{{userId}} 不在这个群里，号可能抄错了，先核准再记",
   "watch_no_members": "拿不到群成员名单，暂时没法校验号码，稍后再试",
-  "watch_inline": "（说话的是主人特别关注的人{{who}}——{{note}}）",
   "watch_section_header": "下面是主人指名要你特别关注的人（主人钦点，长期有效）："
 }

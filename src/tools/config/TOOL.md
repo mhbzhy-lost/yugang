@@ -19,12 +19,9 @@ fish.config.json 受控字段白名单（生效时机逐字段标注）：
 
 | 字段 | 类型 | 生效时机 | 说明与取值 |
 | --- | --- | --- | --- |
-| engagement | 字符串 | 热加载 | 搭话总开关，只认 legacy / next；next 的生效范围还叠加 engage.groups 白名单（开关 & 白名单双闸） |
-| engage | 对象 | 热加载 | 自由交流窗口参数，只认八个键：closedMinutes 1–240（closed 分钟）、openMinutes 1–120（open 分钟）、windowSize 1–100（开窗积压注入上限）、mentionContextSize 1–30（@ 轮背景条数）、silenceThreshold 1–50（连续零出口 nudge 阈值）、windowRelaxCap 10–100（零出口超阈值后的积压放宽上限）、shardSeconds 5–120（open 态分片节拍，秒）、groups（群号字符串数组，白名单语义：engagement=next 只对这些群生效，空数组 = 任何群都不进 next，fail-safe）；未知键告警并忽略，全部非法才整块拒绝 |
-| ammo | 对象 | 热加载 | B 站弹药管线参数，只认六个键：slots（HH:MM 时点字符串数组，去重保序，缺省 ["09:00","12:00","18:00","24:00"]，24:00 = 当天末尾）、browseMinutes 1–60（单次逛轮硬截止，分钟）、shareChance 0–1（open 窗分享外部弹药的随机门概率，每窗最多 1 条）、ttlHours 1–168（弹药入库后存活时长，小时）、dailyBudget 10–500（B 站每日请求总预算，次）、maxPicksPerRun 1–10（单次逛轮最多入库条数）；未知键告警并忽略，全部非法才整块拒绝 |
+| engage | 对象 | 热加载 | 自由交流窗口参数，只认七个键：closedMinutes 1–240（closed 分钟）、openMinutes 1–120（open 分钟）、windowSize 1–100（开窗积压注入上限）、mentionContextSize 1–30（@ 轮背景条数）、silenceThreshold 1–50（连续零出口 nudge 阈值）、windowRelaxCap 10–100（零出口超阈值后的积压放宽上限）、shardSeconds 5–120（open 态分片节拍，秒）；未知键告警并忽略，全部非法才整块拒绝。开窗群表不在配置里：直接取 .env GROUPS |
+| ammo | 对象 | 热加载 | B 站弹药管线参数，只认七个键：slots（HH:MM 时点字符串数组，去重保序，可空 = 缺省不定时，逛轮由空库补货触发，24:00 = 当天末尾）、browseMinutes 1–60（单次逛轮硬截止，分钟）、shareChance 0–1（open 窗分享外部弹药的随机门概率，每窗最多 1 条）、ttlHours 1–168（弹药入库后存活时长，小时）、dailyBudget 10–500（B 站每日请求总预算，次）、maxPicksPerRun 1–10（单次逛轮最多入库条数）、refillTarget 0–20（空库自动补货目标条数，0 = 关闭，缺省 5）；未知键告警并忽略，全部非法才整块拒绝 |
 | news | 对象 | 热加载 | 新闻播报参数，只认五个键：at（HH:MM 播报时点，缺省 10:30）、targetGroup（纯数字群号，空串 = 不启用；必须是 GROUPS 白名单内的群号，域校验在运行时）、topics（topic 数组，每条只认 name / sources / keywords / exclude 四键，sources 枚举 60s/jiemian/huxiu/ithome/people/zhihu_daily/weibo_hot/baidu_hot，坏 topic 整条剔除并告警，显式给 topics 就整体覆盖缺省五 topic：AI/时政/军事/科技数码/趣闻二次元）、perTopicInput 1–20（每 topic 送模型输入上限，条）、perTopicOutput 1–5（每 topic 输出上限，条）；未知键告警并忽略，全部非法才整块拒绝 |
-| ambientMinIntervalSeconds | 数值 | 热加载 | 5–3600，非 @ 消息的最短处理间隔（秒） |
-| watchAmbientChance | 数值 | 热加载 | 0–1，特别关注者被搭话的概率 |
 | sendPacingSeconds | 数值 | 热加载 | 0–60，出站配速：同会话相邻两条物理消息实际发送的最小间隔（秒），每条消息发送前生效，0 = 关闭 |
 | compact | 对象 | 热加载 | 换页阈值：maxEntries 1–5000、maxChars 1000–200000 |
 | memeCooldownMinutes | 数值 | 热加载 | 0–240，表情包跨轮冷却（分钟） |
