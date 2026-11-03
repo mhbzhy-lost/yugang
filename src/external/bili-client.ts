@@ -21,7 +21,14 @@ import { localDay } from "../usage.ts";
 
 export type BiliEndpoint = "popular" | "ranking" | "view" | "dm" | "reply" | "card" | "spi";
 
-const API_ROOT = "https://api.bilibili.com";
+/** 生产 B 站 API 根地址；无覆盖时 endpointUrl 全部端点都从这里拼出，行为不变。 */
+const DEFAULT_BILI_API_ROOT = "https://api.bilibili.com";
+/**
+ * API 根地址：仅用于本地 IT bed/faux 覆盖（scripts/itbed/launch.ts 会注入 BILI_BASE_URL
+ * 指向本地 faux B 站），生产无需设置。未设置或为空字符串时严格取生产默认值；覆盖值显式
+ * 去除末尾斜杠，endpointUrl 拼出的路径与查询参数形状保持不变。
+ */
+const API_ROOT = (process.env.BILI_BASE_URL || DEFAULT_BILI_API_ROOT).replace(/\/+$/, "");
 
 /** 钉死的浏览器 UA 与 Referer：B 站游客接口对裸 UA 风控极重，不许调用方改。 */
 const PINNED_UA =
