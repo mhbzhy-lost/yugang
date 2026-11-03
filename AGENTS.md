@@ -417,6 +417,10 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
   （字段名全文档统一，旧名 externalAmmoId 弃用）机械校验「本窗门已开 ∧ item available ∧ 本窗未消费外部」后原子 claim，b23/BV canonical 链接由宿主
   拼进 payload；分享全时尊重宵禁二态（夜间窗口纯搭话、不分享素材）与末条自言禁言。T13 合并条目
   `kind: debt|external`——旧账优先、外部最多 1 条只占剩余预算、nudge 的 {{n}} 只数 debt。
+  空窗也开口（2026-11-03）：开窗无积压且 nudge 未到档时，外部弹药在场（门开且非宵禁）
+  同样提交无行注入轮（空窗弹药轮）——分享是鱼自己想开口的事，不被「没新消息」压着；
+  debt 旧账单独不触发空窗轮。另补了只读查库工具 `ammo_list`（available 先入先出 + 门/宵禁状态），
+  模型不必再从弹药栏缺位反推库存空。
   频控内核 `src/external/bili-client.ts`：白名单端点（7 个，URL 只从 switch 拼）、全局串行锁、
   同端点 ≥2s、每日预算（`ammo.dailyBudget` 缺省 60，持久 `var/bili-budget.json`）、-412/-352 当日熔断、
   buvid3 长期复用（`var/bili-state.json`）；**`video` 工具共用该客户端**，新增 B 站端点必须先进白名单。

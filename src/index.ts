@@ -1474,18 +1474,23 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
     ? fish.prompts.messages["ctx_engage_nudge_2"]
     : fish.prompts.messages["ctx_engage_nudge_1"];
   if (backlog.length === 0) {
-    // 无积压不注入；但沉默递进到位时改提 nudge-only 轮（header+footer+nudge，无行）：
+    // 无积压不注入；但两种情况例外，改提无行注入轮（header+footer+弹药段，无行）：
+    // ①沉默递进到位时的 nudge（T8）；②外部弹药在场（门开且非宵禁，2026-11-03 新增）——
+    // 分享是鱼自己想开口的事，不该被「没新消息」压着：门开着就该给她看到库存与编号。
     // 同走 injection 管线（fish.engage_tick、非必答、无 salvage、无 quoteIds）；
-    // 遇忙放弃（宁少勿答，nudge 不重试不补发，下窗档位还在自然重试）
-    if (nudge === 0) return;
-    const conv = await conversationFor(chatKey);
-    if (conversationBusy(conv.id)) {
-      console.log(`[鱼缸] ${chatKey} nudge 注入放弃：忙（宁少勿答）`);
+    // 遇忙放弃（宁少勿答，不重试不补发，下窗自然重试）
+    const conv0 = await conversationFor(chatKey);
+    if (conversationBusy(conv0.id)) {
+      console.log(`[鱼缸] ${chatKey} 空窗注入放弃（忙）`);
       return;
     }
-    // nudge-only 轮同样携带弹药段（T13）：未兑现数 {{n}} 就是这批弹药条数
-    const ammo = renderAmmoSection(await ammoOf(chatKey, conv));
-    const nudgeText = renderTemplate(nudgeTemplate ?? "", { n: String(ammo.count) });
+    // 弹药段先拼（T13）：未兑现数 {{n}} 喂 nudge_2；外部在场与否由此判定（debt 旧账
+    // 不单独触发空窗轮——只有 nudge 或外部弹药才是开口理由，防止旧账把空窗变成常态轮）
+    const candidates = await ammoOf(chatKey, conv0);
+    const hasExternal = candidates.some((item) => item.kind === "external");
+    if (nudge === 0 && !hasExternal) return;
+    const ammo = renderAmmoSection(candidates);
+    const nudgeText = nudge > 0 ? renderTemplate(nudgeTemplate ?? "", { n: String(ammo.count) }) : "";
     const content = [
       renderTemplate(fish.prompts.messages["ctx_engage_header"] ?? "", { count: "0" }),
       engageFooterOf(),
@@ -1494,10 +1499,10 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
       ...ammo.lines,
       nudgeText,
     ].filter((line) => line.length > 0).join("\n");
-    console.log(`[鱼缸] ${chatKey} nudge-only 轮提交（沉默递进档位 ${nudge}）`);
+    console.log(`[鱼缸] ${chatKey} ${nudge > 0 ? `nudge-only 轮提交（沉默递进档位 ${nudge}）` : "空窗弹药轮提交"}`);
     await submitRound({
       chatKey,
-      conv,
+      conv: conv0,
       content,
       trigger: { mentionsBot: false, kind: "injection" },
       reply: false,
