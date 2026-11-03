@@ -1390,6 +1390,7 @@ async function memoryDelegationsOf(chatKey: string): Promise<AmmoCandidate[]> {
  * 注入：模型只拿标题/topic/ammoId，canonical URL 由宿主在出口渲染（P0-5）。
  */
 async function externalAmmoOf(chatKey: string): Promise<AmmoCandidate[]> {
+  console.log(`[鱼缸] 弹药外部行开始 chat=${chatKey}`);
   let picked: ExternalAmmoItem | undefined;
   try {
     picked = await fish.harness.commit(async (tx) => {
@@ -1479,7 +1480,9 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
     // 分享是鱼自己想开口的事，不该被「没新消息」压着：门开着就该给她看到库存与编号。
     // 同走 injection 管线（fish.engage_tick、非必答、无 salvage、无 quoteIds）；
     // 遇忙放弃（宁少勿答，不重试不补发，下窗自然重试）
+    console.log(`[鱼缸] ${chatKey} 空窗分支进入（nudge=${nudge}）`);
     const conv0 = await conversationFor(chatKey);
+    console.log(`[鱼缸] ${chatKey} 空窗conv就绪`);
     if (conversationBusy(conv0.id)) {
       console.log(`[鱼缸] ${chatKey} 空窗注入放弃（忙）`);
       return;
@@ -1487,6 +1490,7 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
     // 弹药段先拼（T13）：未兑现数 {{n}} 喂 nudge_2；外部在场与否由此判定（debt 旧账
     // 不单独触发空窗轮——只有 nudge 或外部弹药才是开口理由，防止旧账把空窗变成常态轮）
     const candidates = await ammoOf(chatKey, conv0);
+    console.log(`[鱼缸] ${chatKey} 空窗ammoOf返回 ${candidates.length} 条`);
     const hasExternal = candidates.some((item) => item.kind === "external");
     if (nudge === 0 && !hasExternal) return;
     const ammo = renderAmmoSection(candidates);
