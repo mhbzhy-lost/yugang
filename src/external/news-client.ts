@@ -22,7 +22,7 @@
 import { XMLParser } from "fast-xml-parser";
 import { sanitizeExternalText, sanitizeUrl } from "./sanitize.ts";
 
-/** 60s 服务根地址（自建 Docker，缺省 loopback 4399；测试注入 fixture 用）。 */
+/** 60s 服务根地址（自建 Docker，缺省 loopback 4399；环境变量 SIXTY_BASE_URL 可覆盖缺省，测试注入 fixture 仍最高）。 */
 export const DEFAULT_60S_API_ROOT = "http://127.0.0.1:4399";
 
 /** 知乎日报官方 API（最新一期 stories）。 */
@@ -139,7 +139,7 @@ const nodeTimers: NewsTimers = {
 };
 
 export interface NewsClientOptions {
-  /** 60s 服务根地址；缺省 loopback 4399。 */
+  /** 60s 服务根地址；缺省环境变量 SIXTY_BASE_URL，未设置/空值回退 loopback 4399。 */
   api60sRoot?: string;
   /** RSS 端点覆盖（按源）。 */
   feeds?: Partial<Record<RssSourceId, string>>;
@@ -265,7 +265,7 @@ function parseRssRawItems(text: string): RawRecord[] {
 }
 
 export function createNewsClient(options: NewsClientOptions = {}): NewsClient {
-  const api60sRoot = (options.api60sRoot ?? DEFAULT_60S_API_ROOT).replace(/\/+$/, "");
+  const api60sRoot = (options.api60sRoot ?? (process.env.SIXTY_BASE_URL || DEFAULT_60S_API_ROOT)).replace(/\/+$/, "");
   const feeds: Readonly<Record<RssSourceId, string>> = { ...DEFAULT_NEWS_FEEDS, ...options.feeds };
   const zhihuDailyApi = options.zhihuDailyApi ?? DEFAULT_ZHIHU_DAILY_API;
   const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? NEWS_FETCH_TIMEOUT_MS));
