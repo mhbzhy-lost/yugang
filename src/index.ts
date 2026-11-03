@@ -49,7 +49,7 @@ import { ChatsDoc, MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc, WatchDoc } fro
 import { renderTemplate } from "./prompts.ts";
 import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, mergeMemoryStates, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "./memory.ts";
 import { memoryKeyOf, privateMemoryKeyOf, pushScope, shiftScope } from "./memory-scope.ts";
-import { OutboundEntry, takeAmmoShare, wireAmmoShareHost, type OutboundPayload } from "./tools/say-shared.ts";
+import { beginNewsBroadcastRound, endNewsBroadcastRound, newsBroadcastDelivered, OutboundEntry, stripOutboundLinks, takeAmmoShare, wireAmmoShareHost, type OutboundPayload } from "./tools/say-shared.ts";
 import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc, defineDoc } from "@earendil-works/pi-durable";
 // —— 外部信息源基础设施（docs/plans/2026-11-02-external-ammo.md Task E1/E4）——
@@ -73,6 +73,7 @@ import {
 } from "./external/ammo-store.ts";
 import { createNewsClient, type NewsItem, type NewsTopicFeed } from "./external/news-client.ts";
 import { sanitizeExternalText } from "./external/sanitize.ts";
+import { getBiliClient } from "./external/bili-client.ts";
 let externalScheduler: Scheduler | undefined; // 下方实例化并 .start()；SIGTERM 时 .stop()
 
 // 每条入站消息的原始文本（卡片渲染 / bypass 剥离之前取）：记忆 entry 只存群友原话，
@@ -211,11 +212,22 @@ const visionFallbackModel = modelSelection.visionFallback
   ? { provider: modelSelection.visionFallback.providerId, modelId: modelSelection.visionFallback.modelId }
   : undefined;
 
-/** 搭话开关的唯一判定函数（开关 & 群白名单）：engagement=next 且该群在 engage.groups 白名单内
+/** 搭话开关的唯一判定函数（开关 & 群白名单 ∩ GROUPS 安全域）：engagement=next 且该群在交集内
  * 才算 next；其余一律 legacy。gate / 状态机 / runtime 裁剪 / in-flight 登记全部走这里，不许各自判断。 */
 function engageNextOf(chatKey: string): boolean {
   const c = fishConfig().config;
-  return c.engagement === "next" && engageGroupsIncludes(c.engage.groups, chatKey);
+  return c.engagement === "next" && engageGroupsIncludes(engageGroupsSafe(), chatKey);
+}
+
+/**
+ * engage.groups ∩ .env GROUPS（P0 修复）：安全发送域（GROUPS）是硬边界，engage.groups 只是
+ * 行为白名单——可写配置不许把开窗/发信面扩到安全域外。状态机群表、gate 判定等一切消费点
+ * 只认这份交集；config 工具对域外群号整次拒绝（src/tools/config/tool.ts），这里机械兜底
+ * parseFile 直改文件的路径。
+ */
+function engageGroupsSafe(): string[] {
+  const c = fishConfig().config;
+  return c.engage.groups.filter((g) => config.groups.includes(g));
 }
 
 // inline 直读开关（docs/plans/2026-11-01-inline-vision.md）：主/视觉同模型且通道在白名单。
@@ -2002,10 +2014,11 @@ async function drainLoop(): Promise<void> {
 // open 态的 free_pass 消息由 onMessage 路由进它的 shard 收集器，每 engage.shardSeconds
 // （缺省 20 秒）一拍经 onShard 合并提交（ambient）；closed 进入只留相位日志。
 const engageNext = createEngageNext({
-  // 直接枚举 engage.groups（终验 #1）：状态机只为白名单群维护相位；之前从 GROUPS 过滤，
-  // GROUPS 环境变量为空时这里永远是空集，状态机永不维护任何群。白名单群本身应在
-  // GROUPS 里，不在也无妨——没有消息就不会有相位消费。群号在 checkEngageBlock 已去重。
-  groups: () => fishConfig().config.engage.groups.map((g) => "qq:group:" + g),
+  // 状态机群表 = engage.groups ∩ .env GROUPS（终验 #1/P0 修复）：之前直接枚举 engage.groups，
+  // config 写入域外群号就会向安全域外开窗。交集保证「不在 GROUPS 的群永不维护相位、
+  // 永不开窗」；白名单群本身应在 GROUPS 里，不在也无妨——没有消息就不会有相位消费。
+  // 群号去重与格式校验在 checkEngageBlock，安全域交集在这里机械兜底。
+  groups: () => engageGroupsSafe().map((g) => "qq:group:" + g),
   recentOf: (chatKey) => recent.get(chatKey) ?? [],
   backlogOf: (chatKey, afterSeq) => engageBacklogOf(chatKey, afterSeq),
   busy: (chatKey) => {
@@ -2047,6 +2060,15 @@ wireAmmoShareHost({ gateOf: (chatKey) => engageNext.shareGateOf(chatKey) });
 /** worker 会话的 chatKey：不是 QQ 会话，不进 gate / 群白名单 / 记忆映射；独立 conversation + 独立 cwd。 */
 const WORKER_CHAT_KEY = "worker:bili";
 
+/**
+ * ammo.dailyBudget 热生效（终验 #8 修复）：共享 bili 客户端长驻进程，配置读取/变更都把
+ * 当前值灌进去——启动一次、scheduler 每 tick 的 slots 热读点一次、每次逛轮作业开工一次，
+ * config 工具 set ammo 时也同步灌入。未配置时保留客户端内建缺省 60。
+ */
+function syncBiliBudget(): void {
+  getBiliClient().setDailyBudget(fishConfig().config.ammo.dailyBudget);
+}
+
 /** 逛轮在途标记：scheduler 的 watchdog 已收束但上一轮还在收尾时，新作业直接跳过（宁少勿答）。 */
 let browseInFlight = false;
 
@@ -2070,6 +2092,7 @@ async function runBrowseJob(slot: string, date: string): Promise<void> {
   browseInFlight = true;
   try {
     const ammo = fishConfig().config.ammo;
+    syncBiliBudget(); // 作业开工即灌一次当前预算上限（热配置生效点之一）
     const runKey = jobKeyOf(date, slot);
     const conv = await fish.group(WORKER_CHAT_KEY);
     const content = renderTemplate(fish.prompts.messages["worker_browse_task"] ?? "", {
@@ -2134,7 +2157,12 @@ async function runBrowseJob(slot: string, date: string): Promise<void> {
 // 四时点（缺省 09:00/12:00/18:00/24:00，ammo.slots 热读）触发逛轮；错过 ≤2h 补跑一次
 //（幂等 date+slot，fish.external_jobs）；硬截止双层：runBrowseJob 内的 abort + scheduler watchdog
 externalScheduler = createScheduler({
-  slots: () => fishConfig().config.ammo.slots,
+  // slots 是 scheduler 每 tick 的热读点：顺带把 ammo.dailyBudget 灌进共享客户端
+  //（终验 #8：配置读取即生效；变更路径在 config 工具 set ammo）
+  slots: () => {
+    syncBiliBudget();
+    return fishConfig().config.ammo.slots;
+  },
   onJob: (slot, date) => runBrowseJob(slot, date),
   now: () => new Date(),
   ...nodeTimers,
@@ -2142,11 +2170,13 @@ externalScheduler = createScheduler({
   jobs: jobsHandleOf(fish.harness),
   log: (message) => console.log(`[鱼缸] ${message}`),
 });
+syncBiliBudget(); // 启动即灌一次：共享客户端在首次请求前就持有当前预算上限（缺省 60）
 externalScheduler.start();
 
 // ── 新闻播报 job（外部计划 Task E7，决策 10–12）：scheduler 第二实例 news.at 起播 ──────
 
 const NEWS_JOB_TIMEOUT_MS = 45 * 60_000; // 硬截止：30 分钟推迟窗口 + 取料/归纳/播报余量
+const NEWS_ABORT_MARGIN_MS = 60_000; // 抢跑余量：比 scheduler watchdog 早 60s abort 在途会话，保证 failed_timeout 落账前已收束
 const NEWS_DEFER_MAX_MS = 30 * 60_000; // T15：末条自言最多推迟 30 分钟（决策 10，宁少勿扰）
 const NEWS_DEFER_STEP_MS = 5 * 60_000; // 推迟重查步长（每 5 分钟重查）
 const NEWS_BROADCAST_MAX_CHARS = 500; // 成品播报预算（超限按 topic 顺序裁剪）
@@ -2242,15 +2272,32 @@ async function completeNewsDigest(prompt: string): Promise<string> {
     .join("\n");
 }
 
-function newsRecOf(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
 function newsStrOf(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-/** 严格解析 NewsDigest：形状不对/没有可归一化内容返回 undefined（调用方重试一次后放弃）。 */
+/** 严格对象判定：非 null 非数组的 object 才算，否则 undefined（严格 schema 的形状闸）。 */
+function newsObjOf(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+/** 键集合完全一致才算过：NewsDigest 严格 schema 的「不增」检查（未知字段拒绝）。 */
+function newsKeysMatch(obj: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(obj).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, i) => key === expected[i]);
+}
+
+/**
+ * 严格解析 NewsDigest（终验 #10 修复）：
+ *   - 未知字段拒绝：根对象只认 sections+closing，section 只认 topic+items，item 只认
+ *     summary+sourceRef，键集合多一个、少一个都整体作废（调用方重试一次后放弃当日）；
+ *   - sections 按输入 feed 顺序重建：模型乱序输出由宿主纠序，输入里的 topic 缺席、
+ *     未知/重复 topic、未知/重复 sourceRef 一律整体作废（不增不减）；
+ *   - 空 section 策略（与 prompt/news-digest.md 一致）：模型可以对没有可播条目的 topic
+ *     给空 items——宿主丢弃空 section 并记一行日志（「无可播条目，已省略」，不算违约），
+ *     全部 topic 都空才返回 undefined。
+ */
 function parseNewsDigest(
   raw: string,
   feeds: readonly NewsTopicFeed[],
@@ -2267,32 +2314,46 @@ function parseNewsDigest(
   } catch {
     return undefined;
   }
-  const root = newsRecOf(parsed);
+  const root = newsObjOf(parsed);
+  if (root === undefined || !newsKeysMatch(root, ["sections", "closing"]) || !Array.isArray(root["sections"])) return undefined;
   const topicNames = new Set(feeds.map((feed) => feed.topic));
-  const sections: NewsDigestSection[] = [];
-  const seenTopics = new Set<string>();
-  for (const rawSection of Array.isArray(root["sections"]) ? root["sections"] : []) {
-    const section = newsRecOf(rawSection);
-    const topic = sanitizeExternalText(newsStrOf(section["topic"]), { maxLen: 30 });
-    if (topic.length === 0 || !topicNames.has(topic) || seenTopics.has(topic)) continue;
+  const byTopic = new Map<string, NewsDigestSection>();
+  for (const rawSection of root["sections"]) {
+    const section = newsObjOf(rawSection);
+    if (section === undefined || !newsKeysMatch(section, ["topic", "items"]) || !Array.isArray(section["items"])) return undefined;
+    const topic = newsStrOf(section["topic"]);
+    // topic 必须逐字命中输入（不增不减）：未知或重复 topic 都是 schema 违约，整体作废
+    if (!topicNames.has(topic) || byTopic.has(topic)) return undefined;
     const seenRefs = new Set<string>();
     const items: NewsDigestItem[] = [];
-    for (const rawItem of Array.isArray(section["items"]) ? section["items"] : []) {
-      if (items.length >= perTopicOutput) break; // perTopicOutput 截断
-      const entry = newsRecOf(rawItem);
+    for (const rawItem of section["items"]) {
+      if (items.length >= perTopicOutput) break; // 超上限的部分不采信（截断语义不变）
+      const entry = newsObjOf(rawItem);
+      if (entry === undefined || !newsKeysMatch(entry, ["summary", "sourceRef"])) return undefined;
       const ref = newsStrOf(entry["sourceRef"]).trim();
-      if (!index.has(ref) || seenRefs.has(ref)) continue; // 未知/重复索引丢弃
+      if (!index.has(ref) || seenRefs.has(ref)) return undefined; // 未知/重复索引：违约
       const summary = sanitizeExternalText(newsStrOf(entry["summary"]), { maxLen: 60 });
-      if (summary.length === 0 || /https?:\/\//i.test(summary)) continue; // URL 不进模型输出
+      if (summary.length === 0 || /https?:\/\//i.test(summary)) return undefined; // URL 不进模型输出
       seenRefs.add(ref);
       items.push({ summary, sourceRef: ref });
     }
-    if (items.length === 0) continue;
-    seenTopics.add(topic);
-    sections.push({ topic, items });
+    byTopic.set(topic, { topic, items });
+  }
+  // 按输入 feed 顺序重建；输入里的 topic 少一个 section 都算「减」，整体作废
+  const sections: NewsDigestSection[] = [];
+  for (const feed of feeds) {
+    const section = byTopic.get(feed.topic);
+    if (section === undefined) return undefined;
+    if (section.items.length === 0) {
+      console.log(`[鱼缸] 新闻 ${feed.topic} 空条目，省略`);
+      continue;
+    }
+    sections.push(section);
   }
   if (sections.length === 0) return undefined;
-  return { sections, closing: sanitizeExternalText(newsStrOf(root["closing"]), { maxLen: 60 }) };
+  // closing 同样剥 URL（终验 #7）：宿主渲染时链接只从 sourceRef 索引拼接，收尾句不许带链接
+  const closing = stripOutboundLinks(sanitizeExternalText(newsStrOf(root["closing"]), { maxLen: 60 }));
+  return { sections, closing };
 }
 
 /** 归纳（决策 12）：模型/解析失败重试 1 次，两次都失败抛错——调用方放弃当日。 */
@@ -2322,20 +2383,23 @@ async function digestNewsWithRetry(
  * 宿主渲染成品播报：模板 key（news_header/news_topic/news_item/news_closing）逐行拼装，
  * canonical 链接由 sourceRef 索引现查（模型输出里没有 URL）；≤budget（缺省 500）字，
  * 超限按 topic 顺序裁剪；收尾句预算预留，只要头行之后放得下就保证在场。
+ * 返回值附 links：实际进了播报的条目的 canonical URL（按 sourceRef 索引现查，顺序同播报），
+ * 宿主登记进新闻轮闸，出口重建 payload 时只认这份列表——模型文本里的 URL 一律剥掉。
  */
 function renderNewsBroadcast(
   day: string,
   digest: NewsDigest,
   index: ReadonlyMap<string, NewsItem>,
   budgetChars = NEWS_BROADCAST_MAX_CHARS,
-): string {
+): { text: string; links: string[] } {
   const headerTpl = fish.prompts.messages["news_header"] ?? "";
   const topicTpl = fish.prompts.messages["news_topic"] ?? "";
   const itemTpl = fish.prompts.messages["news_item"] ?? "";
   const closingTpl = fish.prompts.messages["news_closing"] ?? "";
-  if (headerTpl.length === 0 || topicTpl.length === 0 || itemTpl.length === 0) return "";
+  if (headerTpl.length === 0 || topicTpl.length === 0 || itemTpl.length === 0) return { text: "", links: [] };
   const closingLine = digest.closing.length > 0 && closingTpl.length > 0 ? renderTemplate(closingTpl, { closing: digest.closing }) : "";
   const lines: string[] = [];
+  const links: string[] = [];
   let used = 0;
   const add = (line: string, limit: number): boolean => {
     if (line.length === 0) return false;
@@ -2345,18 +2409,16 @@ function renderNewsBroadcast(
     used += sep + line.length;
     return true;
   };
-  if (!add(renderTemplate(headerTpl, { date: day }), budgetChars)) return "";
+  if (!add(renderTemplate(headerTpl, { date: day }), budgetChars)) return { text: "", links: [] };
   // 收尾预留：头行之后放得下收尾就把它的长度从条目预算里扣掉，保证整份播报带收尾
   const reserved = closingLine.length > 0 && used + 1 + closingLine.length <= budgetChars ? closingLine.length + 1 : 0;
   const itemBudget = budgetChars - reserved;
   for (const section of digest.sections) {
-    const block = [
-      renderTemplate(topicTpl, { topic: section.topic }),
-      ...section.items.flatMap((item) => {
-        const news = index.get(item.sourceRef);
-        return news ? [renderTemplate(itemTpl, { summary: item.summary, source: news.source, url: news.url })] : [];
-      }),
-    ];
+    const entries = section.items.flatMap((item) => {
+      const news = index.get(item.sourceRef);
+      return news ? [{ line: renderTemplate(itemTpl, { summary: item.summary, source: news.source, url: news.url }), url: news.url }] : [];
+    });
+    const block = [renderTemplate(topicTpl, { topic: section.topic }), ...entries.map((entry) => entry.line)];
     // 整段能进多少行先探后放：只放得下分节头就整段放弃（不留空节）
     let fits = 0;
     let size = used;
@@ -2368,10 +2430,12 @@ function renderNewsBroadcast(
     }
     if (fits <= 1) break;
     for (let i = 0; i < fits; i++) add(block[i]!, itemBudget);
+    // 实际进播报的条目（block[0] 是分节头，条目数 = fits - 1）链接按宿主索引收集
+    for (const entry of entries.slice(0, fits - 1)) links.push(entry.url);
     if (fits < block.length) break; // 有条目被裁：后面的 topic 不再尝试（按 topic 顺序裁剪）
   }
   add(closingLine, budgetChars);
-  return lines.join("\n");
+  return { text: lines.join("\n"), links };
 }
 
 const sleepUnref = (ms: number): Promise<void> => new Promise((resolve) => {
@@ -2382,10 +2446,12 @@ const sleepUnref = (ms: number): Promise<void> => new Promise((resolve) => {
 /**
  * T15 推迟（决策 10）：发送前查末条自言（lastWasFish），为 true 则每 5 分钟重查，
  * ≤30 分钟；会话忙（换页/收图/在途轮）一并等。窗口内仍不行返回 false——放弃当日，宁少勿扰。
+ * cancelled 回调（新闻硬截止抢跑闸）返回 true 时立即放失败，不再等槽位。
  */
-async function awaitNewsSlot(conv: Conversation, chatKey: string): Promise<boolean> {
+async function awaitNewsSlot(conv: Conversation, chatKey: string, cancelled?: () => boolean): Promise<boolean> {
   const startedAt = Date.now();
   for (;;) {
+    if (cancelled?.() === true) return false;
     if (!lastWasFish.has(chatKey) && !conversationBusy(conv.id)) return true;
     if (Date.now() - startedAt >= NEWS_DEFER_MAX_MS) return false;
     console.log(`[鱼缸] 新闻推迟 ${chatKey}（自言或忙）`);
@@ -2398,10 +2464,16 @@ async function awaitNewsSlot(conv: Conversation, chatKey: string): Promise<boole
  *   ① targetGroup ∈ GROUPS 硬校验（不过则跳过并告警，不记 run）；
  *   ② 幂等：fish.news_runs（localDay+targetGroup）已有任意状态记录就不再触发；
  *   ③ 取料（全源失败抛错→当日不发）→ main 模型按 NewsDigest 严格 schema 归纳
- *     （失败重试 1 次后放弃当日）→ 宿主渲染 ≤500 字（超限按 topic 顺序裁剪）；
+ *     （失败重试 1 次后放弃当日）→ 宿主渲染 ≤500 字（超限按 topic 顺序裁剪，
+ *     links = 实际进播报条目的 canonical 链接表）；
  *   ④ T15 末条自言推迟 ≤30 分钟，仍自言放弃当日；
- *   ⑤ scheduled answer 轮（目标群当前人格的 conversation，mustAnswer：零出口时正文
- *     兜底兜一把），say_words 单条出口；轮没答上来记 failed——发送失败不重发，当日不再触发。
+ *   ⑤ scheduled answer 轮（目标群当前人格的 conversation）——出口被新闻轮闸机械收束
+ *     （say-shared 登记）：只许一次 say_words，payload 由宿主重建（模型文本剥 URL，
+ *     canonical 链接只按 sourceRef 索引拼接）；mustAnswer 关闭（裸文本兜底不发——
+ *     播报必须带宿主链接，无出口记 failed，当日不再触发），零出口/发送失败不重发。
+ *   ⑥ 硬截止抢跑闸：比 scheduler watchdog 早 NEWS_ABORT_MARGIN_MS 把对应 Conversation
+ *     abort（abort 自带等待 idle），scheduler 落 failed_timeout 前在途轮已收束，
+ *     不存在「已判失败还在发」的窗口。
  */
 async function runNewsJob(slot: string, date: string): Promise<void> {
   const news = fishConfig().config.news;
@@ -2424,33 +2496,62 @@ async function runNewsJob(slot: string, date: string): Promise<void> {
     await writeNewsRun({ localDay: date, targetGroup: group, state: "failed", startedAt, finishedAt: Date.now(), error: clipped });
     console.log(`[鱼缸] 新闻失败 ${key} ${clipped}`);
   };
+  // 硬截止抢跑闸：到点先置 timedOut 并 abort 对应会话（在途轮收束、排队输入撤回），
+  // 后续各阶段见到 timedOut 都直接放弃；conv 在 conversationFor 之后才存在，之前的阶段
+  // 没有可发的出口，置位即可。scheduler 自己的 watchdog 晚 NEWS_ABORT_MARGIN_MS 才落账。
+  let conv: Conversation | undefined;
+  let timedOut = false;
+  const guard = setTimeout(() => {
+    timedOut = true;
+    if (conv === undefined) return;
+    console.log(`[鱼缸] 新闻硬截止 ${key}：abort 在途会话`);
+    void conv.abort(ctx).catch((error: unknown) =>
+      console.error("[鱼缸] 新闻 abort 失败", error instanceof Error ? error.message : error),
+    );
+  }, Math.max(1_000, NEWS_JOB_TIMEOUT_MS - NEWS_ABORT_MARGIN_MS));
+  guard.unref?.();
   try {
     const feeds = await newsClient.collectForTopics(news.topics, { perTopicInput: news.perTopicInput });
+    if (timedOut) throw new Error("news_timeout");
     const { prompt, index } = buildNewsDigestInput(feeds);
     if (index.size === 0) throw new Error("no_items");
     // 归纳提示词（prompt/news-digest.md）：指令 + {{topics}} 标题块 + {{max}} 每 topic 上限
     const digestPrompt = renderTemplate(fish.prompts.newsDigest, { topics: prompt, max: String(news.perTopicOutput) });
     const digest = await digestNewsWithRetry(digestPrompt, feeds, index, news.perTopicOutput);
+    if (timedOut) throw new Error("news_timeout");
     const broadcast = renderNewsBroadcast(date, digest, index);
-    if (broadcast.length === 0) throw new Error("render_empty");
+    if (broadcast.text.length === 0) throw new Error("render_empty");
     const chatKey = `qq:group:${group}`;
-    const conv = await conversationFor(chatKey);
-    if (!(await awaitNewsSlot(conv, chatKey))) throw new Error("defer_giveup");
+    conv = await conversationFor(chatKey);
+    if (!(await awaitNewsSlot(conv, chatKey, () => timedOut))) throw new Error(timedOut ? "news_timeout" : "defer_giveup");
+    if (timedOut) throw new Error("news_timeout");
     const task = fish.prompts.messages["news_broadcast_task"] ?? "";
-    const outcome = await submitRound({
-      chatKey,
-      conv,
-      content: task.length > 0 ? task + "\n" + broadcast : broadcast,
-      trigger: { mentionsBot: false, kind: "answer" },
-      reply: false,
-      mustAnswer: true,
-      entryKind: MEMORY_ENGAGE_KIND,
-    });
-    if (outcome !== "done") throw new Error(`round_${outcome}`);
-    await writeNewsRun({ localDay: date, targetGroup: group, state: "done", startedAt, finishedAt: Date.now(), digest: broadcast });
+    // 新闻轮闸：登记本轮 + canonical 链接表，say_words 出口由宿主重建 payload、单次封顶
+    beginNewsBroadcastRound(String(conv.id), broadcast.links);
+    try {
+      const outcome = await submitRound({
+        chatKey,
+        conv,
+        content: task.length > 0 ? task + "\n" + broadcast.text : broadcast.text,
+        trigger: { mentionsBot: false, kind: "answer" },
+        reply: false,
+        mustAnswer: false,
+        entryKind: MEMORY_ENGAGE_KIND,
+      });
+      if (timedOut) throw new Error("news_timeout");
+      if (outcome !== "done") throw new Error(`round_${outcome}`);
+      // 单出口闸核对：模型一次 say_words 都没调（零出口）不算播完——裸文本兜底已关，
+      // 没有宿主重建的 canonical 链接就不该有「done」的播报账
+      if (!newsBroadcastDelivered(String(conv.id))) throw new Error("news_no_exit");
+    } finally {
+      endNewsBroadcastRound(String(conv.id));
+    }
+    await writeNewsRun({ localDay: date, targetGroup: group, state: "done", startedAt, finishedAt: Date.now(), digest: broadcast.text });
     console.log(`[鱼缸] 新闻播完 ${key}`);
   } catch (error) {
     await fail(error instanceof Error ? error.message : String(error));
+  } finally {
+    clearTimeout(guard);
   }
 }
 

@@ -32,7 +32,7 @@
  * 追加 nudge 文案，2×阈值另放宽积压窗口），状态机本身不读阈值配置。
  *
  * 分享门（外部计划 E5，决策 9）：open 进入瞬间生成稳定 windowId（chatKey+开窗时刻
- * sha256 派生，同窗恒定、跨窗不撞）并**一次挷随机门**（random() <= ammo.shareChance，
+ * sha256 派生，同窗恒定、跨窗不撞）并**一次挷随机门**（严格 random() < ammo.shareChance，shareChance=0 永不开放，
  * 每 tick 现读热生效）落相位内存——窗内不变，关窗作废。出口层（say_words 的 ammoId
  * 链）经 shareGateOf(chatKey) 查询：closed/未跟踪 = undefined（门没开，claim 一律拒）。
  * 门只定「本窗能不能分享」，每窗一条与 available 校验在 claim 事务里机械保证。
@@ -281,7 +281,9 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     // 分享门（E5）：稳定 windowId（chatKey+开窗时刻 sha256 派生，同窗恒定跨窗不撞）+
     // 随机门一次挷落相位——窗内不变，出口层 claim 时只认这份结果，不重挷
     state.windowId = "win-" + createHash("sha256").update(chatKey + "@" + String(at)).digest("hex").slice(0, 16);
-    state.shareOpen = random() <= (deps.config().ammoShareChance ?? 0);
+    // 严格小于（终验 #5 修复）：random() 会精确返回 0，<= 会让 shareChance=0 在 RNG=0 时
+    // 错误开门；< 之后 0 永不开放、1 全开放（random() ∈ [0,1) 恒 < 1）。
+    state.shareOpen = random() < (deps.config().ammoShareChance ?? 0);
     // 新窗从零观测开口（上一窗已在关窗时结算）；沉默计数跨窗保留，开口才清零
     state.spokeInWindow = false;
     // 忙（在途轮 / 换页 / 收图）时放弃注入（宁少勿答）；backlogOf 由宿主提供

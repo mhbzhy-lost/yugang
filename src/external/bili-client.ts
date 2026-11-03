@@ -169,6 +169,8 @@ export interface BiliClient {
   hotReplies(oid: string | number, type?: number): Promise<BiliReply[]>;
   /** UP 主卡片（粉丝/等级/认证，软筛评级用）。 */
   upCard(mid: string | number): Promise<BiliUpCard>;
+  /** 热更新每日预算（ammo.dailyBudget 配置读取/变更时由宿主灌入）；缺省 60。 */
+  setDailyBudget(n: number): void;
   /** 观测口：预算/熔断/buvid 现状（审计与验证用）。 */
   snapshot(): BiliClientSnapshot;
 }
@@ -277,7 +279,9 @@ export function createBiliClient(options: BiliClientOptions = {}): BiliClient {
   const varDir = options.varDir ?? defaultVarDir();
   const budgetPath = join(varDir, "bili-budget.json");
   const statePath = join(varDir, "bili-state.json");
-  const budgetCap = Math.max(0, Math.floor(options.dailyBudget ?? 60));
+  // 预算上限可热更（setDailyBudget）：共享单例在进程内长驻，配置读取/变更由宿主灌入，
+  // 已花的当日计数（budget.count）不动，只改上限。
+  let budgetCap = Math.max(0, Math.floor(options.dailyBudget ?? 60));
   const intervalMs = Math.max(0, Math.floor(options.sameEndpointIntervalMs ?? 2000));
   const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? 20_000));
   const now = options.now ?? (() => new Date());
@@ -492,6 +496,12 @@ export function createBiliClient(options: BiliClientOptions = {}): BiliClient {
     },
     async upCard(mid: string | number): Promise<BiliUpCard> {
       return mapUpCard(await send("card", { mid }));
+    },
+    setDailyBudget(n: number): void {
+      const next = Math.max(0, Math.floor(Number.isFinite(n) ? n : 60));
+      if (next === budgetCap) return;
+      budgetCap = next;
+      log(`每日预算热更 -> ${budgetCap}`);
     },
     snapshot(): BiliClientSnapshot {
       const bucket = currentBudget();

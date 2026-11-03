@@ -15,7 +15,11 @@
 规则：
 
 - sections 只收输入里出现过的 topic，topic 名必须与输入逐字一致，按输入顺序输出，不增不减；
-- 每个 topic 最多 {{max}} 条 items，宁缺毋滥；没有值得播报的 topic 就给空 items 数组；
+- 每个 topic 最多 {{max}} 条 items，宁缺毋滥；没有值得播报的 topic 就给空 items 数组——
+  宿主会把空 section 丢弃并记一行日志（不算违约），但 topic 本身必须保留，一个都不能少；
+- 除 JSON 本身外不写任何多余字段：顶层只有 sections 和 closing，每个 section 只有 topic
+  和 items，每个 item 只有 summary 和 sourceRef；多出的未知字段、未知 topic、重复的 topic
+  或 sourceRef 都会导致整份输出被拒绝（重试一次后当日放弃），宁缺勿滥；
 - summary 用你自己的话概括这一条（60 字以内），不照抄标题原文，不写链接，不写来源名；
 - sourceRef 只能填该条输入方括号里的索引数字；除它之外，任何 URL、链接、编号都不许出现在输出里；
 - closing 是整份播报的收尾一句（30 字以内），口语、像群友顺口一句的自然收束，不要「播报完毕」「以上是新闻」之类的套话。

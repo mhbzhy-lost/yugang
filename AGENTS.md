@@ -404,8 +404,8 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
   → `bili_video` 终选核实（完整卡片 + UP 评级 + 可选热评/高能弹幕）→ `ammo_submit` 入库
   （BV 正则校验、summary≤60 字、topic 四枚举、BV 判重、每轮上限 `ammo.maxPicksPerRun` 缺省 3）。
   弹药库 `fish.external_ammo`（全局抓取池、人格中立；TTL `ammo.ttlHours` 缺省 48h，惰性过期）。
-  分享：open 窗随机门（`ammo.shareChance` 缺省 0.2）**每窗最多 1 条外部**，`share` 的 `externalAmmoId`
-  机械校验「本窗门已开 ∧ item available ∧ 本窗未消费外部」后原子 claim，b23/BV canonical 链接由宿主
+  分享：open 窗随机门（`ammo.shareChance` 缺省 0.2）**每窗最多 1 条外部**，`share` 的 `ammoId`
+  （字段名全文档统一，旧名 externalAmmoId 弃用）机械校验「本窗门已开 ∧ item available ∧ 本窗未消费外部」后原子 claim，b23/BV canonical 链接由宿主
   拼进 payload；分享全时尊重宵禁二态（夜间窗口纯搭话、不分享素材）与末条自言禁言。T13 合并条目
   `kind: debt|external`——旧账优先、外部最多 1 条只占剩余预算、nudge 的 {{n}} 只数 debt。
   频控内核 `src/external/bili-client.ts`：白名单端点（7 个，URL 只从 switch 拼）、全局串行锁、

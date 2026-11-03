@@ -137,7 +137,12 @@ export function createCompactor(options: CompactorOptions): Compactor {
         // 宁可没记上，不能不换页。解析失败（parse_failed）不计零提取、不推进 lastExtractAt，
         // 单独走 MemoryExtractError 上报；零提取（empty）按人格累计，达阈值用宽松复查提示词
         // 重跑本页一次（只一次不循环；复查失败不清计数、不阻塞换页）。
+        // 无 memory key（worker 会话隔离，harness 不登记）双重 fail-closed：不注入、不抽取，
+        // 只做换页；留一行日志让隔离可核对。
         const memoryKey = options.memoryKeyOf?.(conversation.id);
+        if (!memoryKey && options.extract !== undefined) {
+          console.log("[鱼缸] 无记忆 key，跳过记忆抽取");
+        }
         if (memoryKey && options.extract && options.savePendingMemories) {
           try {
             const known = options.knownMemory

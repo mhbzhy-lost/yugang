@@ -15,6 +15,8 @@
  * 请求层：view / 弹幕 / 热评三类 B 站请求统一走 bili-client 共享单例
  * （频控/预算/熔断与 bili_hot、bili_video 共用一份，Task E3）；短链展开与图文
  * 动态（opus）端点不在白名单内，仍用直接 fetch。对外行为与返回格式零变化。
+ * 外部不可信文本边界（终验 #9 修复）：标题/简介/UP 名/弹幕/热评/opus 作者与正文
+ * 一律先过 sanitizeExternalText 才返回给模型，与 bili_hot 同一清洗边界。
  *
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest（factory 只消费它，不再有第二份运行时定义）。
  */
@@ -24,6 +26,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { getBiliClient, type BiliClient } from "../../external/bili-client.ts";
+import { sanitizeExternalText } from "../../external/sanitize.ts";
 import { renderTemplate } from "../../prompts.ts";
 import { describeImage } from "../../media/describe.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
@@ -212,8 +215,8 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
             const item = opus?.data?.item;
             if (opus?.code !== 0 || !item) throw new Error("opus failed");
             const modules = (item.modules ?? []) as any[];
-            const author = modules.find((m) => m?.module_type === "MODULE_TYPE_AUTHOR")?.module_author?.name ?? "?";
-            const published = modules.find((m) => m?.module_type === "MODULE_TYPE_AUTHOR")?.module_author?.pub_time ?? "";
+            const author = sanitizeExternalText(modules.find((m) => m?.module_type === "MODULE_TYPE_AUTHOR")?.module_author?.name ?? "?", { maxLen: 60 }) || "?";
+            const published = sanitizeExternalText(modules.find((m) => m?.module_type === "MODULE_TYPE_AUTHOR")?.module_author?.pub_time ?? "", { maxLen: 30 });
             const paragraphs = modules.find((m) => m?.module_type === "MODULE_TYPE_CONTENT")?.module_content?.paragraphs ?? [];
             let body = "";
             const pics: string[] = [];
@@ -227,7 +230,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
             }
             const head = [
               `${author}${published ? ` · ${published}` : ""} 的图文动态`,
-              body.replace(/\s+/g, " ").slice(0, 600),
+              sanitizeExternalText(body, { maxLen: 600 }),
             ].filter((s) => s.length > 0);
 
             let picText = "";
@@ -266,15 +269,15 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         const truncated = duration > capSeconds + 5;
 
         const head = [
-          `《${d.title.slice(0, 60)}》`,
-          `UP主 ${d.owner.name || "?"} · ${Math.round(duration / 60)} 分钟 · 播放 ${d.stat.view.toLocaleString()}`,
+          `《${sanitizeExternalText(d.title, { maxLen: 60 })}》`,
+          `UP主 ${sanitizeExternalText(d.owner.name, { maxLen: 60 }) || "?"} · ${Math.round(duration / 60)} 分钟 · 播放 ${d.stat.view.toLocaleString()}`,
         ];
         if (truncated) {
           head.push(
             renderTemplate(deps.prompts.messages["video_truncated"] ?? "", { minutes: String(maxMinutes) }),
           );
         }
-        const desc = d.desc.replace(/\s+/g, " ").slice(0, 200);
+        const desc = sanitizeExternalText(d.desc, { maxLen: 200 });
         if (desc) head.push(desc);
 
         // 弹幕
@@ -288,7 +291,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
             "\n" +
             (deps.prompts.messages["video_danmaku_header"] ?? "") +
             "\n" +
-            picked.map((t) => `· ${t.replace(/\s+/g, " ").slice(0, 40)}`).join("\n");
+            picked.map((t) => `· ${sanitizeExternalText(t, { maxLen: 40 })}`).join("\n");
         }
 
         // 关键帧 → 文字描述
@@ -342,7 +345,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
               "\n" +
               (deps.prompts.messages["video_comments_header"] ?? "") +
               "\n" +
-              replies.map((c, i) => `${i + 1}. ${c.message.replace(/\s+/g, " ").slice(0, 100)}`).join("\n");
+              replies.map((c, i) => `${i + 1}. ${sanitizeExternalText(c.message, { maxLen: 100 })}`).join("\n");
           }
         } catch {
           // 评论区拿不到不影响

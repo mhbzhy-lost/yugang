@@ -369,11 +369,12 @@ export function createBiliHotTool(manifest: ToolManifest, deps: ToolPackageDeps,
         throw new Error(messages["bili_hot_bad_rid"] ?? "分区号不认识");
       }
 
-      // 已入库 BV（available/shared）：弹药库是会话级 doc，库里没有就读到 undefined，等价空库
+      // 已入库 BV（全部库内状态，终验 #3 修复）：available/claimed/shared/expired 都算已入库——
+      // applyAmmoSubmit 对任意状态的同 BV 都判重，榜单候选不该再浪费请求与轮次去撞库内条目
       const ammo = await api.snapshot(ExternalAmmoReadDoc, context);
       const inLibrary = new Map<string, string>();
       for (const item of ammo?.items ?? []) {
-        if (item.state === "available" || item.state === "shared") inLibrary.set(item.bvid, item.state);
+        inLibrary.set(item.bvid, item.state);
       }
 
       let cards: BiliVideoCard[];

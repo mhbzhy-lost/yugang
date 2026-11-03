@@ -22,6 +22,7 @@ import { join, resolve } from "node:path";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { renderTemplate } from "../../prompts.ts";
 import { loadFishConfig, FISH_CONFIG_FIELDS, type FieldCheck, type FishConfigFieldSpec } from "../../fish-config.ts";
+import { getBiliClient } from "../../external/bili-client.ts";
 import type { ModelsFile, ModelRole } from "../../model-config.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
@@ -114,10 +115,21 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
     return lines.join("\n");
   }
 
-  /** set：白名单校验（返回 FieldCheck）→ 整文件读改 → 原子写盘；读写失败直接抛回执文案。不存在的文件按空对象起底。 */
+  /** set：白名单校验（返回 FieldCheck）→ 安全域硬闸 → 整文件读改 → 原子写盘；读写失败直接抛回执文案。不存在的文件按空对象起底。 */
   function writeFishConfigField(spec: FishConfigFieldSpec, raw: unknown): FieldCheck {
     const result = spec.check(raw);
     if (!result.ok) return result;
+    // 安全域硬闸（终验 #1/P0 修复）：engage.groups 只能与 .env GROUPS 的交集生效。
+    // 含域外群号的整次设置直接以 tool error 拒绝（不部分写入）——先扩 GROUPS 再设置；
+    // 状态机与 gate 侧另有交集机械兑底（src/index.ts 的 engageGroupsSafe）。
+    if (spec.name === "engage") {
+      const groups = (result.value as { groups?: unknown }).groups;
+      const allowed = new Set((process.env.GROUPS ?? "").split(",").map((s) => s.trim()).filter(Boolean));
+      const outside = (Array.isArray(groups) ? groups : []).map(String).filter((g) => !allowed.has(g));
+      if (outside.length > 0) {
+        throw new Error(`engage.groups 含 GROUPS 域外群号（${outside.join("、")}），先扩 GROUPS 再设置`);
+      }
+    }
     let current: Record<string, unknown>;
     try {
       current = JSON.parse(readFileSync(fishConfigPath, "utf8")) as Record<string, unknown>;
@@ -141,6 +153,12 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
       }));
     }
     console.log(`[鱼缸] config set fish.config.json ${spec.name}=${show(result.value)} (${spec.effect})`);
+    // ammo.dailyBudget 配置变更即灌入共享 bili 客户端（终验 #8）：热配置真正生效，
+    // 不等下一次 scheduler tick；宿主侧启动/读路径的灌入在 src/index.ts（syncBiliBudget）
+    if (spec.name === "ammo" && result.ok) {
+      const budget = (result.value as { dailyBudget?: unknown }).dailyBudget;
+      if (typeof budget === "number") getBiliClient().setDailyBudget(budget);
+    }
     // 部分字段非法已回默认的（engage 块逐字段校验）：告警进审计日志与 set 回执（终审 #5/#7）
     for (const problem of result.problems ?? []) console.warn(`[鱼缸] 配置 ${problem}`);
     return result;

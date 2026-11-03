@@ -1028,8 +1028,14 @@ export async function openFish(options: FishOptions): Promise<Fish> {
           // 创建与复用两条路径都在这里登记：key 是映射键（chatKey 或 chatKey#人格），
           // memoryKeyOf 提取人格名（无后缀 = 默认）——同一个人格的所有会话
           // （各群、私聊）都指向同一个公共 family member；原始 chatKey 另存一份，
-          // 待审条目的来源会话与私有层 doc key（人格名@chatKey）都由它现算
-          memoryKeyByConversation.set(String(conversation.id), memoryKeyOf(key));
+          // 待审条目的来源会话与私有层 doc key（人格名@chatKey）都由它现算。
+          // worker 会话（worker:*，如 index.ts 的 WORKER_CHAT_KEY）不登记 memory key：
+          // 后台作业不是聊天，memory section 与 compactor 抽取都靠「无 key 双重 fail-closed」
+          // 隔离——不注入共享记忆、不做抽取（compact.ts 无 key 分支）。chatKey 照常登记，
+          // 用量记账与换页检查不受影响。
+          if (!key.startsWith("worker:")) {
+            memoryKeyByConversation.set(String(conversation.id), memoryKeyOf(key));
+          }
           chatKeyByConversation.set(String(conversation.id), groupKey);
           return conversation;
         });

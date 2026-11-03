@@ -4,7 +4,7 @@
 
 **目标：** ① 鱼每天四时点自己逛 B 站（游客 API + 营销号三层筛选），把有意思的视频做成小总结存进弹药库，open 窗经随机门每窗最多分享 1 条（b23 链接，URL 由宿主渲染）；② 每天 10:30 取当日新闻（自建 60s + RSS）按主人 topic 归纳，经 say_words 定时播报到指定群。两管线全时尊重宵禁与末条自言禁言。
 
-**架构：** 统一 `src/external/` 模块（scheduler/job runner、bili-client 频控内核、RSS/60s 新闻客户端、不可信数据清洗）；独立后台 worker 会话（新轮类型 `worker`：say_* 机械禁用，模型只提交结构化 AmmoDraft）；弹药库/作业/播报全部 durable doc + 幂等键；分享经 `share.externalAmmoId` 机械绑定 canonical 记录。
+**架构：** 统一 `src/external/` 模块（scheduler/job runner、bili-client 频控内核、RSS/60s 新闻客户端、不可信数据清洗）；独立后台 worker 会话（新轮类型 `worker`：say_* 机械禁用，模型只提交结构化 AmmoDraft）；弹药库/作业/播报全部 durable doc + 幂等键；分享经 `share.ammoId` 机械绑定 canonical 记录。
 
 **技术栈：** TypeScript / pi-durable docs / OneBot 既有出口 / fast-xml-parser（RSS，受限解析）/ Docker（macmini 上的 60s 服务，部署属运维、不在本计划代码内）。
 
@@ -15,7 +15,7 @@
 - 工具包契约：一目录一工具——`src/tools/bili_hot/`、`src/tools/bili_video/`、`src/tools/ammo_submit/` 分开建包，共享核心在 `src/external/bili-client.ts`（P1-1）
 - 安全域：`news.targetGroup` 必须 ∈ `.env GROUPS`，config 工具只能改行为字段不能扩安全域（P1-7）
 - 模型可见文案唯一源 prompt/；src/ 无大段字面量
-- 不部署、不 commit（各任务产出由主会话统一 commit）
+- 不部署；各任务产出由该任务完成验证后**分任务各自 commit**（主会话不再统一 commit，只做终态核对与附录记录，不 push）
 
 ## 已裁定决策（对应审阅的 14 项必须决策）
 
@@ -27,7 +27,7 @@
 6. **频控内核**：`bili-client` 串行锁 + 同端点 ≥2s 间隔 + 每日总预算计数（持久 `var/bili-budget.json`，缺省 60/天）+ -412/-352 当日熔断该端点；与现有 `video` 工具共用该客户端（P1-3/P2-1）
 7. **筛选配置**：`var/bili-filters.json`（硬筛阈值/黑名单正则/软筛权重，mtime 热更新）；规则命中逐条落审计日志（仅元数据）
 8. **T13 合并**：ammo 条目 `kind: debt|external`——旧账优先、外部最多 1 条且只占剩余预算；nudge 的 {{n}} 只统计 debt（P1-4）
-9. **分享协议**：open 窗生成稳定 windowId，随机门结果窗进入时一次落库；`share` 参数扩展 `externalAmmoId`——校验「本窗门已开 ∧ 该 item available ∧ 本窗未分享过外部」后 claim，URL/b23 由宿主从 doc 渲染进 payload 前缀（P0-2）；v1 仅 `say_words` 一条（文字+canonical 链接），封面后置
+9. **分享协议**：open 窗生成稳定 windowId，随机门结果窗进入时一次落库；`share` 参数扩展 `ammoId`（工具字段名以 say_words TOOL.md 为准，全文档统一）——校验「本窗门已开 ∧ 该 item available ∧ 本窗未分享过外部」后 claim，URL/b23 由宿主从 doc 渲染进 payload 前缀（P0-2）；v1 仅 `say_words` 一条（文字+canonical 链接），封面后置
 10. **新闻发送语义**：scheduled answer 轮（人格=目标群当前人格；额度=该轮 3 次；T15 检查保留：末条自言则推迟，最多 30 分钟，仍自言则放弃当日并记日志——宁少勿扰）
 11. **新闻配置**：`news` 块 { at:"10:30", targetGroup, topics:[{name, sources[], keywords[], exclude[]}], perTopicInput≤20, perTopicOutput≤5 }；sources 枚举：60s/jiemian/huxiu/ithome/people/zhihu_daily/weibo_hot/baidu_hot
 12. **新闻模型与兜底**：总结用 main（不新增角色）；输出 NewsDigest 严格 JSON schema；全源失败→当日不发+日志；模型失败→重试 1 次后放弃当日；幂等 localDay+group，重复触发不重发
@@ -42,7 +42,7 @@
 | FE2 | bili-client：白名单端点、串行+端点间隔、每日预算持久、熔断、buvid3 复用；video 工具改走同一客户端不回归 | 内联验证 + npm test 既有 video 回归 | 频控各路径正确；video 行为不变 | E1、E3 |
 | FE3 | bili_hot/bili_video/ammo_submit 三工具包规范落地（deferred）；硬筛+软筛评分在工具层模型之前执行，命中落审计 | npm run prompts + 内联验证 | 候选经三层漏斗；筛选可核对 | E2 |
 | FE4 | worker 轮（kind=worker）：say_* 机械拒绝；模型经 ammo_submit 提交候选（BV 校验、summary≤60、topic 枚举），宿主补全 URL/时间/TTL 入库；重启/重复触发不重复入库（BV 判重） | 内联验证 | 逛轮产物结构化落库、幂等 | E4 |
-| FE5 | 弹药库状态机（available→claimed→shared / expired TTL）；open 窗 windowId+随机门一次落库；share.externalAmmoId 机械绑定（门未开/已分享/非 available 一律拒）；T13 合并 kind 分离与 nudge 口径 | 内联验证 | 每窗≤1 条、claim 原子、URL 宿主渲染 | E5 |
+| FE5 | 弹药库状态机（available→claimed→shared / expired TTL）；open 窗 windowId+随机门一次落库；share.ammoId 机械绑定（门未开/已分享/非 available 一律拒）；T13 合并 kind 分离与 nudge 口径 | 内联验证 | 每窗≤1 条、claim 原子、URL 宿主渲染 | E5 |
 | FE6 | 新闻客户端：60s/RSS/知乎日报取数、源探活冗余（单源失败降内容不阻断）、topic 两层映射、exclude 黑名单、响应限制 | 内联验证（60s 不可达时用 fixture） | 五 topic 供料正确、娱乐圈过滤生效 | E6 |
 | FE7 | 新闻编排：10:30 job → NewsDigest schema 总结 → scheduled answer 轮 say_words 发 targetGroup（∈GROUPS 校验）；幂等 news_runs；三类失败兜底；末条自言推迟≤30min | 内联验证 | 播报单条出口、幂等、兜底全路径 | E7 |
 | FE8 | 配置 schema：ammo 块（四时点/随机门/TTL/预算）+ news 块进 fish-config 与 config 工具白名单（热加载类）；example/TOOL.md 同步含漏列字段 | npm run prompts + config 工具字段表核对 | 全字段可配置且生效语义标注 | E8 |
@@ -127,7 +127,7 @@ E8 (配置 schema) 无依赖可并行；E9 依赖 E2/E6 的工具面成型
 
 **接口契约：**
 - Produces：open 窗 windowId（稳定派生）+ 随机门结果窗进入时落库（`ammoShareChance` 缺省 0.2）；弹药 TTL 过期清理（惰性）
-- Produces：`share` 参数扩展对象形态 `{ ammoId }`（或并列 `externalAmmoId`）：校验「门已开 ∧ item available ∧ 本窗未消费外部 ∧ 时段非宵禁」→ 原子 claim → payload 文本由宿主前缀 canonical `https://b23.tv/…`/BV 链接（模型文本只作推荐语，链接不许模型写）→ 发送成功置 shared
+- Produces：`share` 参数扩展对象形态 `{ ammoId }`（工具字段名统一 ammoId，不再用 externalAmmoId）：校验「门已开 ∧ item available ∧ 本窗未消费外部 ∧ 时段非宵禁」→ 原子 claim → payload 文本由宿主前缀 canonical `https://b23.tv/…`/BV 链接（模型文本只作推荐语，链接不许模型写）→ 发送成功置 shared
 - Produces：T13 合并：`renderAmmoSection` 条目 kind=debt|external，debt 优先、external ≤1 条占剩余预算、nudge {{n}} 只数 debt；external 行独立模板（messages.md key）
 
 **验收：** 内联验证（门/claim/互斥/TTL/合并口径）；npm test 绿。
@@ -180,7 +180,25 @@ E8 (配置 schema) 无依赖可并行；E9 依赖 E2/E6 的工具面成型
 
 ### Task E10：收口（主会话执行）
 
-npm test / npm run prompts / npm run memory 全绿；FE1-FE10 逐项核对并记附录；统一 commit；**不部署**。
+npm test / npm run prompts / npm run memory 全绿；FE1-FE10 逐项核对并记附录（各任务已分任务 commit，收口只核对、不统一 commit）；**不部署**。
+
+---
+
+**终态核对附录（FE1–FE10，2026-11-02 验收修复批后）：** 验证命令 `timeout 180 npm test` 102/102、
+`timeout 60 npm run prompts` 干净、`npm run memory` 正常；逐项状态与依据如下。
+
+| FE | 终态 | 依据（以当前工作树为准） |
+|---|---|---|
+| FE1 | 满足 | scheduler 时点/补跑/幂等/watchdog 全路径；新闻作业另有硬截止抢跑闸：比 watchdog 早 60s 置 timedOut 并 `Conversation.abort`（等 idle），各阶段见超时即弃 |
+| FE2 | 满足 | bili-client 白名单端点/串行/预算/熔断/buvid 复用，`video` 共用；`ammo.dailyBudget` 热生效（启动、scheduler tick、作业开工、config set 四点灌入共享客户端）；video/opus 标题、简介、UP 名、弹幕、热评、图文正文全部先过 `sanitizeExternalText` |
+| FE3 | 满足 | 三工具包、工具层三层漏斗、审计日志；`bili_hot` 对库内全部状态（available/claimed/shared/expired）剔重 |
+| FE4 | 满足（有残余） | `worker:bili` 不登记 memory key（harness），memory section 无 key 不注入、compactor 无 key 跳过抽取（双重 fail-closed）；`say_*` 机械拒绝、BV 判重、上限、TTL、宿主补全。残余：逛轮内部 watchdog 与 scheduler watchdog 同刻竞态，只影响落账文案时序、不影响出口收束（abort 即刻标记并等 idle） |
+| FE5 | 满足 | claim 原子、windowId、T13 合并、宿主 canonical 渲染；随机门严格 `<`（shareChance=0 永不开门，1 全开） |
+| FE6 | 满足（有残余） | 60s/RSS/知乎日报取数、健康降级、两层映射、exclude、响应/实体限制。残余：`publishedAt` 未机械过滤到当日 |
+| FE7 | 满足 | news_runs 幂等、三类失败兑底、T15 推迟、GROUPS 域校验；scheduled 轮闸机械收束出口：单次 say_words、宿主重建 payload（模型文本剥 URL，canonical 链接只按 sourceRef 索引拼）、closing 剥 URL、媒体/语音出口拒绝、零出口不记 done |
+| FE8 | 满足 | ammo/news schema 白名单与 TOOL.md 同步；config 工具对 GROUPS 域外 engage.groups 整次拒绝，状态机只认交集（`engageGroupsSafe`）；`dailyBudget` 实际生效 |
+| FE9 | 满足 | runtime 注入免疫文案与文档齐备；AGENTS 第 17 节与实际语义一致（worker 记忆隔离、video 清洗边界、字段名统一 `ammoId`） |
+| FE10 | 满足 | npm test 102/102、npm run prompts 干净、npm run memory 正常；本附录即终态核对记录 |
 
 ---
 
