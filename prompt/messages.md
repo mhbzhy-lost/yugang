@@ -28,8 +28,17 @@ voice_with_media: 语音不能和图片、表情包一起发，选一个
 quote_msg_invalid: quoteMsgId 对不上这一轮里的任何消息（要用 [m:…] 里的数字），这次没发出去，也不占这轮开口额度
 say_silent: 这一轮是收图用的，不用说话
 say_worker_round: 这一轮是逛 B 站收弹药的工时轮，不是聊天——说话出口全部关着，把挑中的视频用 ammo_submit 入库就行
-say_self_mute: 群里最后一条消息是你自己发的：现在只能做素材分享（兑现你答应过的事、交付别人委托的结果、分享外部素材），继续闲聊先停一停；真有要分享的就重新调用并在参数里带上 share: true，等别人开了新话头就恢复正常
+say_self_mute: 群里最后一条消息是你自己发的：现在只能做素材分享（兑现你答应过的事、交付别人委托的结果、分享外部素材），继续闲聊先停一停；真有要分享的就重新调用并在参数里带上 share: true（外部素材则带 ammoId），等别人开了新话头就恢复正常
 busy_reply: 缸里正在归档记忆，稍等一下再叫我
+
+# 外部弹药分享（外部信息源计划 Task E5，决策 9；say_words 的 ammoId 参数）：随机门 open 窗
+# 一次落库，claim 机械校验链的拒绝文案（全部在开口计数前抛，不占额度）； ammo_missing 的
+# {{id}} 是模型传来的编号。URL 由宿主从 doc 渲染，模型文本只作推荐语。
+ammo_gate_closed: 这个窗口的分享门没开，外部素材这次发不了（不占这轮开口额度）
+ammo_curfew: 现在是深夜时段，外部素材分享关着，白天再分享
+ammo_missing: 弹药库里查不到这个编号（{{id}}），可能已经过期清掉了
+ammo_not_available: 这条素材现在不能分享：已经分享过或已过期
+ammo_window_used: 这个窗口已经分享过一条外部素材了，一窗最多一条
 
 # fs 工具共用（read / grep / tree / write）的拒绝文案
 fs_locked: 这些工具只在主人让你动手改自己时可用
@@ -117,6 +126,10 @@ ctx_seen_note: 上面只列了你还没看过的最新几条；更早的对话�
 # {{what}} 是逐字原文（禁转述）；段落预算由装配方机械裁决，超限丢条目。
 ctx_engage_ammo_header: 顺手翻了下旧账，这几件还挂着没下文（只是提醒，不是任务，怎么处理你定）：
 ctx_engage_ammo_line: - {{days}}{{who}}提过的「{{what}}」还没下文
+# 外部库存行（外部信息源计划 Task E5/T13 合并口径）：独立模板，最多 1 条且只占剩余预算；
+# {{title}} 是入库时宿主清洗过的标题（不可信文本）、{{topic}} 是入库 topic、{{id}} 是
+# 分享时要原样传给出口工具的 ammoId；链接不进注入，分享时由宿主从 doc 渲染 canonical URL
+ctx_engage_ammo_external: 库存里还有你之前捡到的视频：「{{title}}」（{{topic}}），想分享就在出口调用带上 ammoId {{id}}，链接系统会自动附上，你只写推荐语
 
 # 主人 / 指令的闸前机械回执（不进模型）
 bypass_placeholder: （一条画图指令：图片的细节发送者已单独指定，直接用 draw 画一张就好）

@@ -31,10 +31,16 @@
  * 也找不到 open 窗，一律不计不清。计数供宿主定 nudge 档位（达 silenceThreshold 尾部
  * 追加 nudge 文案，2×阈值另放宽积压窗口），状态机本身不读阈值配置。
  *
+ * 分享门（外部计划 E5，决策 9）：open 进入瞬间生成稳定 windowId（chatKey+开窗时刻
+ * sha256 派生，同窗恒定、跨窗不撞）并**一次挷随机门**（random() <= ammo.shareChance，
+ * 每 tick 现读热生效）落相位内存——窗内不变，关窗作废。出口层（say_words 的 ammoId
+ * 链）经 shareGateOf(chatKey) 查询：closed/未跟踪 = undefined（门没开，claim 一律拒）。
+ * 门只定「本窗能不能分享」，每窗一条与 available 校验在 claim 事务里机械保证。
  * 相位、lastCloseSeq 与 shard 收集器都只活在内存里：重启回到 closed 从零计时，与
  * debounce 的 pending 同一个取舍——宁可少说一句，不补陈年旧话。沉默计数同生命周期，
  * 热切换离开 next / stop 清相位时一并归零。
  */
+import { createHash } from "node:crypto";
 import type { EngagementMode } from "./fish-config.ts";
 
 /** 群白名单判定：chatKey 形如 qq:group:NNN（含人格后缀也认前缀），群号在名单内才算命中。 */
@@ -69,6 +75,8 @@ export interface EngageTickConfig {
   openMinutes: number;
   /** open 态分片节拍（秒，engage.shardSeconds）：每拍排程时现读，热加载下一拍生效。 */
   shardSeconds: number;
+  /** open 窗随机门概率（ammo.shareChance）：开窗挷一次，窗内不变；缺省 0 = 门恒关（fail closed）。 */
+  ammoShareChance?: number;
 }
 
 export type EngageTimer = ReturnType<typeof setTimeout>;
@@ -96,6 +104,8 @@ export interface EngageNextDeps {
   tickMs?: number;
   /** shard 时长覆盖（毫秒）；缺省每拍现读 config().shardSeconds（缺省 20 秒）。留参数只为验证时注入。 */
   shardMs?: number;
+  /** 随机门 RNG 注入（内联验证用）；缺省 Math.random。 */
+  random?: () => number;
   /** 启动/停止等状态机自身事件的日志出口；缺省静默。 */
   log?: (message: string) => void;
   /** onPhase / onShard 回调与 tick 的异常出口；缺省静默（状态机自身永不抛错中断循环）。 */
@@ -124,6 +134,11 @@ export interface EngageNext {
   noteExit(chatKey: string): void;
   /** 该群当前连续全程零出口的 open 窗数（T8 沉默计数，宿主据此定 nudge 档位）；未跟踪 = 0。 */
   silenceOf(chatKey: string): number;
+  /**
+   * 当前 open 窗的分享门（E5）：windowId + 开窗时一次挷出的门结果；closed / 未跟踪 /
+   * 白名单外 = undefined（出口层的 ammoId 链据此拒绝且不占额度）。
+   */
+  shareGateOf(chatKey: string): { windowId: string; open: boolean } | undefined;
 }
 
 interface GroupPhase {
@@ -137,6 +152,10 @@ interface GroupPhase {
   silentWindows: number;
   /** 本 open 窗内是否已有 ambient/injection 轮开口（settle 观测，关窗时结算归位）。 */
   spokeInWindow: boolean;
+  /** 本窗稳定 windowId（E5，chatKey+开窗时刻派生）：窗内恒定，关窗作废。 */
+  windowId?: string;
+  /** 本窗随机门结果（E5）：开窗进入时一次落定，窗内不变。 */
+  shareOpen?: boolean;
 }
 
 export function createEngageNext(deps: EngageNextDeps): EngageNext {
@@ -145,6 +164,7 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
   const clearTimer = deps.clearTimer ?? ((timer) => clearTimeout(timer));
   const tickMs = deps.tickMs ?? 1_000;
   const shardEnabled = deps.onShard !== undefined;
+  const random = deps.random ?? Math.random;
 
   /** shard 一拍的时长（毫秒）：验证注入优先；否则现读配置（engage.shardSeconds，缺省 20，热加载每拍现读）。 */
   const shardMsOf = (): number => deps.shardMs ?? deps.config().shardSeconds * 1000;
@@ -224,6 +244,9 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
   const enterClosed = (chatKey: string, state: GroupPhase, at: number): void => {
     state.phase = "closed";
     state.phaseSince = at;
+    // 分享门随窗作废（E5）：closed 后 shareGateOf 必须 undefined，出口层拒无可拒
+    state.windowId = undefined;
+    state.shareOpen = undefined;
     // 关窗即懒定基线：open 期的消息已进过模型（injection / shard），不再算积压
     state.lastCloseSeq = lastSeqOf(deps.recentOf(chatKey));
     // 收集器里还有整拍消息就补交一拍；忙则丢弃留日志（宁少勿答）。
@@ -255,6 +278,10 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
   const enterOpen = (chatKey: string, state: GroupPhase, at: number): void => {
     state.phase = "open";
     state.phaseSince = at;
+    // 分享门（E5）：稳定 windowId（chatKey+开窗时刻 sha256 派生，同窗恒定跨窗不撞）+
+    // 随机门一次挷落相位——窗内不变，出口层 claim 时只认这份结果，不重挷
+    state.windowId = "win-" + createHash("sha256").update(chatKey + "@" + String(at)).digest("hex").slice(0, 16);
+    state.shareOpen = random() <= (deps.config().ammoShareChance ?? 0);
     // 新窗从零观测开口（上一窗已在关窗时结算）；沉默计数跨窗保留，开口才清零
     state.spokeInWindow = false;
     // 忙（在途轮 / 换页 / 收图）时放弃注入（宁少勿答）；backlogOf 由宿主提供
@@ -343,6 +370,11 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     },
     silenceOf(chatKey) {
       return phases.get(chatKey)?.silentWindows ?? 0;
+    },
+    shareGateOf(chatKey) {
+      const state = phases.get(chatKey);
+      if (!state || state.phase !== "open" || state.windowId === undefined) return undefined;
+      return { windowId: state.windowId, open: state.shareOpen === true };
     },
   };
 }

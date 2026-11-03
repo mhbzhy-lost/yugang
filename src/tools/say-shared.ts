@@ -146,15 +146,17 @@ export type SelfMuteDeps = ToolPackageDeps & {
 
 /**
  * 末条自言禁言的机械校验（决策 24，T15）：群里最新一条消息是鱼自己发的（lastWasFish）时，
- * ambient/injection 轮未声明 share 的出口一律 tool 错误拒绝——只允许素材分享（兑现承诺/
- * 交付委托结果/分享外部素材）。answer 轮天然豁免（有人 @ 必有入站，标记已翻 false），
- * trigger 拿不到时同样豁免；lastWasFishOf 未接线时缺省放行（宁松勿严）。
- * 调用点必须在 chargeSayRound 之前：被拒的尝试不占开口额度；既有 @/quote/额度校验不受影响。
+ * ambient/injection 轮未声明分享的出口一律 tool 错误拒绝——分享意图认两个参数：
+ * share: true（兑现承诺/交付委托结果）与 ammoId（外部素材，外部计划 E5），两类都是
+ * 「素材分享」。answer 轮天然豁免（有人 @ 必有入站，标记已翻 false），trigger 拿不到时
+ * 同样豁免；lastWasFishOf 未接线时缺省放行（宁松勿严）。调用点必须在 chargeSayRound
+ * 之前：被拒的尝试不占开口额度；既有 @/quote/额度校验不受影响。
  */
-export function assertShareAllowed(deps: SelfMuteDeps, api: SayApi, trigger: SayRound["trigger"], share: unknown): void {
+export function assertShareAllowed(deps: SelfMuteDeps, api: SayApi, trigger: SayRound["trigger"], share: unknown, ammoId?: unknown): void {
   const kind: RoundKind = trigger?.kind ?? "answer";
   if (kind === "answer") return;
   if (share === true) return;
+  if (typeof ammoId === "string" && ammoId.trim().length > 0) return;
   if (deps.lastWasFishOf?.(String(api.conversationId)) !== true) return;
   throw new Error(deps.prompts.messages["say_self_mute"] ?? "say_self_mute");
 }
@@ -235,6 +237,94 @@ export function chargeSayRound(conversationId: string, round: unknown, onceMessa
   const said = saidIn.get(conversationId);
   if (said?.round === round && said.count >= max) throw new Error(onceMessage);
   saidIn.set(conversationId, { round, count: said?.round === round ? said.count + 1 : 1 });
+}
+
+/**
+ * 额度 peek（E5 外部弹药链路专用）：判定口径与 chargeSayRound 完全一致但**不记账**——
+ * claim 前先问「这次开口会不会超」，超额先拒，避免 claim 成功后 chargeSayRound 再抛
+ * say_once 把条目卡在 claimed（只能等 TTL）。单轮内工具调用顺序执行，peek 过了 charge
+ * 就不会再抛；未登记的轮（round undefined）与 charge 同口径直接放行。
+ */
+export function peekSayRound(conversationId: string, round: unknown, onceMessage: string, max = 3): void {
+  if (round === undefined) return;
+  const said = saidIn.get(conversationId);
+  if (said?.round === round && said.count >= max) throw new Error(onceMessage);
+}
+
+// ── 外部弹药分享（外部计划 E5，决策 9）：门适配 / 宵禁 / URL 宿主渲染 ──────────
+
+/**
+ * 宿主门适配器：engage-next 的开窗相位（windowId + 随机门）与出口层在这里接线。
+ * 宿主（src/index.ts）起好状态机后调 wireAmmoShareHost 注册；出口层经 ammoShareGateOf
+ * 读取（bili-client 单例同款先例）。未注册 = 门恒关（fail closed，claim 一律拒）。
+ */
+export interface AmmoShareGate {
+  windowId: string;
+  open: boolean;
+}
+
+export interface AmmoShareHost {
+  /** chatKey → 当前 open 窗的分享门；closed / 未跟踪 = undefined。 */
+  gateOf: (chatKey: string) => AmmoShareGate | undefined;
+}
+
+let ammoShareHost: AmmoShareHost | undefined;
+
+/** 宿主启动时注册门适配器（可替换：内联验证 / 热切换）。 */
+export function wireAmmoShareHost(host: AmmoShareHost): void {
+  ammoShareHost = host;
+}
+
+/** 出口层读宿主门：未注册 / 非开窗 = undefined（门没开）。 */
+export function ammoShareGateOf(chatKey: string): AmmoShareGate | undefined {
+  return ammoShareHost?.gateOf(chatKey);
+}
+
+/** claim 时刻的宵禁（与 engage footer 二态同阈）：本地 hour<9 门恒关，同窗白天门开着也不发。 */
+export function ammoCurfewAt(nowMs: number): boolean {
+  return new Date(nowMs).getHours() < 9;
+}
+
+/**
+ * 模型文本链接剥离：canonical 链接一律由宿主从 doc 渲染（P0-5），模型文本只作推荐语——
+ * 模型自己写的 http(s) 链接全部剥掉（防与宿主前缀重复、防绕过渲染源）。剥完连续空白
+ * 折成一个空格再收边。
+ */
+export function stripOutboundLinks(text: string): string {
+  return text.replace(/https?:\/\/\S+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** 宿主前缀 canonical 链接：链接 + 一个空格 + 推荐语（推荐语剥空 = 只发链接）。 */
+export function prefixAmmoLink(url: string, text: string): string {
+  return text.length > 0 ? url + " " + text : url;
+}
+
+/**
+ * 待发弹药记账（外部计划 E5，决策 9）：claim 成功后按 payload key 登记在内存，宿主
+ * emit 实发成功后 takeAmmoShare 取走并 markShared（applyAmmoShared）。
+ * 不走 payload 字段：harness.drain 逐字段重建 payload，未声明字段会被丢弃；key 是
+ * 必透传字段，用它当登记键语义等价且不动 harness。
+ * 崩溃窗口：登记丢失 → 条目滞留 claimed，TTL 惰性清理兜底（与 claim 后进程死的
+ * 取舍一致，宁少分享不重发）。
+ */
+const pendingAmmoShares = new Map<string, { id: string; windowId: string }>();
+
+/** claim 成功、入队前登记（key 重复覆盖，emit 重放不会重复消费）。 */
+export function registerAmmoShare(key: string, ammo: { id: string; windowId: string }): void {
+  // 防泄漏：未发送场景（过期丢弃）的残留登记超过 100 条时丢最老的（实际在途远小于此）
+  while (pendingAmmoShares.size >= 100) {
+    const oldest = pendingAmmoShares.keys().next().value;
+    if (oldest === undefined) break;
+    pendingAmmoShares.delete(oldest);
+  }
+  pendingAmmoShares.set(key, ammo);
+}
+
+/** 宿主 emit 实发成功后取走记账（取走即删：幂等重放不重复置位）；无登记返回 undefined。 */
+export function takeAmmoShare(key: string): { id: string; windowId: string } | undefined {
+  const ammo = pendingAmmoShares.get(key);
+  pendingAmmoShares.delete(key);
+  return ammo;
 }
 
 /** 把 payload 落进 outbox（和 transcript entry 同一次提交）：宿主崩了也不会丢，重启后接着发。 */

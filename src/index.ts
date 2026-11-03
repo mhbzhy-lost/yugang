@@ -49,7 +49,7 @@ import { ChatsDoc, MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc, WatchDoc } fro
 import { renderTemplate } from "./prompts.ts";
 import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, mergeMemoryStates, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "./memory.ts";
 import { memoryKeyOf, privateMemoryKeyOf, pushScope, shiftScope } from "./memory-scope.ts";
-import { OutboundEntry, type OutboundPayload } from "./tools/say-shared.ts";
+import { OutboundEntry, takeAmmoShare, wireAmmoShareHost, type OutboundPayload } from "./tools/say-shared.ts";
 import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc, defineDoc } from "@earendil-works/pi-durable";
 // —— 外部信息源基础设施（docs/plans/2026-11-02-external-ammo.md Task E1/E4）——
@@ -62,7 +62,15 @@ import { UsageDoc, defineDoc } from "@earendil-works/pi-durable";
 // 不可信文本清洗见 src/external/sanitize.ts，弹药库读写见 src/external/ammo-store.ts，
 // 新闻取料客户端见 src/external/news-client.ts。
 import { createScheduler, jobKeyOf, jobsHandleOf, nodeTimers, type Scheduler } from "./external/scheduler.ts";
-import { AMMO_TOPICS } from "./external/ammo-store.ts";
+import {
+  AMMO_TOPICS,
+  ExternalAmmoDoc,
+  applyAmmoShared,
+  applyAmmoSweep,
+  renderAmmoSectionOf,
+  shareableAmmoOf,
+  type ExternalAmmoItem,
+} from "./external/ammo-store.ts";
 import { createNewsClient, type NewsItem, type NewsTopicFeed } from "./external/news-client.ts";
 import { sanitizeExternalText } from "./external/sanitize.ts";
 let externalScheduler: Scheduler | undefined; // 下方实例化并 .start()；SIGTERM 时 .stop()
@@ -601,6 +609,19 @@ const fish = await openFish({
     // 记账必须在真的发完之后：先记账后发，发送抛错时这一条就被当成已发，
     // harness 把 outbox 放回 queued 也重试不出来（幂等表先把它拦了）。
     // 紧接着发送就记，不等下面的日志：日志写失败不能让 drain 重发一遍（宁可少一条日志，不要重复发言）。
+    // 外部弹药（E5）先于幂等表置 shared：实发已成功，按登记（payload key）取走记账关账；
+    // 置位失败只打日志不抛——消息已出去不能为它重发，条目最多滞留 claimed 等 TTL 收走
+    const ammoBook = takeAmmoShare(payload.key);
+    if (ammoBook) {
+      try {
+        await fish.harness.commit(async (tx) => {
+          const doc = await tx.doc(ExternalAmmoDoc);
+          applyAmmoShared(doc, ammoBook.id, ammoBook.windowId);
+        }, ctx);
+      } catch (error) {
+        console.error("[鱼缸] 弹药 markShared 失败", error instanceof Error ? error.message : error);
+      }
+    }
     markSent(payload.key);
 
     // 末条自言标记（决策 24）已下沉到 onebot 层逐条置位（构造参数 onSent）：置位错点
@@ -1256,14 +1277,18 @@ function engageNudgeLevel(chatKey: string): 0 | 1 | 2 {
 
 // ── 开窗弹药栏（T13，决策 21）与宵禁二态 footer ─────────────────────────────
 
+/** 宵禁（本地 hour<9，与 footer 夜间态同阈）：外部库存行不注入、出口 claim 拒绝。 */
+function engageFooterOfNight(): boolean {
+  return new Date().getHours() < 9;
+}
+
 /**
  * 注入 footer 的宵禁二态（纯文案层切换，@ 白名单等硬机制不动）：本地 00:00–09:00
  * 用夜间版（纯搭话模式：不鼓励主动开腔），其余时间用白天版（自由发挥）。每小时
  * 天然分档，不引入配置项；模板 key 用直接下标取（test/prompts.test.ts 逐字扫 src）。
  */
 function engageFooterOf(): string {
-  const night = new Date().getHours() < 9;
-  return (night ? fish.prompts.messages["ctx_engage_footer_night"] : fish.prompts.messages["ctx_engage_footer"]) ?? "";
+  return (engageFooterOfNight() ? fish.prompts.messages["ctx_engage_footer_night"] : fish.prompts.messages["ctx_engage_footer"]) ?? "";
 }
 
 /**
@@ -1274,11 +1299,17 @@ function engageFooterOf(): string {
  */
 const AMMO_DELEGATION_RE = /托你查|托我查|帮我查|帮忙查|让你查|帮我问问|等我问问/;
 
-/** 弹药条目：一段原文（逐字，不生成）+ 谁（可空）+ 时间锚（可空），渲染成一行。 */
+/** 弹药条目：一段原文（逐字，不生成）+ 谁（可空）+ 时间锚（可空）；kind 区分旧账与外部库存（T13）。 */
 interface AmmoCandidate {
   what: string;
   who: string;
   at?: number;
+  /** 缺省 = debt（旧账）；external = 弹药库捡的视频（最多 1 条，只占剩余预算）。 */
+  kind?: "debt" | "external";
+  /** external 专用：分享要带的编号（开窗弹药栏给模型，出口调用原样传回）。 */
+  ammoId?: string;
+  /** external 专用：topic（独立行模板展示用）。 */
+  topic?: string;
 }
 
 /** 弹药段预算（字符，头+行合计）：机械裁决，超限丢条目而不是放宽。 */
@@ -1287,14 +1318,6 @@ const AMMO_SECTION_CHARS = 300;
 const AMMO_ITEM_CAP = 5;
 /** 单条弹药原文截断：一行能放下的短语级文本，不是整段搬运。 */
 const AMMO_TEXT_CHARS = 60;
-
-/** 「N 天前」机械锚点：有时间戳按天差计算，拿不到退化为「之前」（不伪造时间）。 */
-function ammoDaysAgo(at: number | undefined): string {
-  if (at === undefined) return "之前";
-  const days = Math.floor((Date.now() - at) / 86_400_000);
-  // 字符串拼接而非模板字面量：新增栅栏号会移动 prompt-lint 的配对链（文件里已有反斜杠模板）
-  return days >= 1 ? days + " 天前" : "之前";
-}
 
 /** 锚点消息 → 发送者昵称（「名字」）：只认 recent 流水里还在的那条，查不到留空。 */
 function nicknameOfMessage(chatKey: string, messageId: string | number | undefined): string {
@@ -1339,20 +1362,48 @@ async function memoryDelegationsOf(chatKey: string): Promise<AmmoCandidate[]> {
 }
 
 /**
- * 开窗弹药（T13）：机械拼装两路来源——①上一页剖面还开着的未兑现承诺/话头
- * （T12 字段，profileAmmoOf 从 pi.reset head 提取）；②记忆里命中委托标记的文本。
- * 只拼装不生成：文本逐字取自剖面/记忆，who 与天数由锚点/时间戳机械推导，拿不到
- * 就留空退化。两路按 what 去重（同一句话可能两边各收一次）；都空 = 空弹药，
+ * 弹药来源③（外部库存，外部计划 E5/T13）：门开且非宵禁才出——门没开/深夜注入了
+ * 也发不出去（claim 拒绝），宁少勿扰。读库顺手做 TTL 惰性清理（读时过期置 expired，
+ * 与挑选同一次提交）；FIFO 取最旧 available（先到先分享，压 TTL 浪费）。链接不进
+ * 注入：模型只拿标题/topic/ammoId，canonical URL 由宿主在出口渲染（P0-5）。
+ */
+async function externalAmmoOf(chatKey: string): Promise<AmmoCandidate[]> {
+  let picked: ExternalAmmoItem | undefined;
+  try {
+    picked = await fish.harness.commit(async (tx) => {
+      const doc = await tx.doc(ExternalAmmoDoc);
+      applyAmmoSweep(doc, Date.now());
+      return shareableAmmoOf(doc, Date.now());
+    }, ctx);
+  } catch (error) {
+    console.error("[鱼缸] 弹药库读取失败", error instanceof Error ? error.message : error);
+    return [];
+  }
+  const gate = engageNext.shareGateOf(chatKey);
+  if (!gate?.open || engageFooterOfNight() || picked === undefined) return [];
+  return [{ what: picked.title, who: "", kind: "external", ammoId: picked.id, topic: picked.topic }];
+}
+
+/**
+ * 开窗弹药（T13）：机械拼装三路来源——①上一页剖面还开着的未兑现承诺/话头
+ * （T12 字段，profileAmmoOf 从 pi.reset head 提取）；②记忆里命中委托标记的文本；
+ * ③外部库存（E5：随机门开且非宵禁时至多 1 条）。合并口径（决策 8/P1-4）：debt
+ * （①②）优先，external 最多 1 条且只占剩余预算（排在最后，条数 cap 自然截断）；
+ * 只拼装不生成：文本逐字取自剖面/记忆/弹药库 doc，who 与天数由锚点/时间戳机械推导，
+ * 拿不到就留空退化。①②按 what 去重（同一句话可能两边各收一次）；全空 = 空弹药，
  * 整段不注入（零占位，F16）。任何一路失败都只少一路，不阻塞开窗。
  */
 async function ammoOf(chatKey: string, conv: Conversation): Promise<AmmoCandidate[]> {
-  const [profile, delegations] = await Promise.all([
+  const [profile, delegations, external] = await Promise.all([
     profileAmmoOf(conv).catch(() => ({ items: [] })),
     memoryDelegationsOf(chatKey).catch(() => [] as AmmoCandidate[]),
+    externalAmmoOf(chatKey).catch(() => [] as AmmoCandidate[]),
   ]);
   const candidates: AmmoCandidate[] = [
     ...profile.items.map((item) => ({ what: item.quote, who: nicknameOfMessage(chatKey, item.anchor), ...(profile.at !== undefined ? { at: profile.at } : {}) })),
     ...delegations,
+    // external 排最后：debt 优先，剩余预算（条数 cap 与字符预算）才有它的份（决策 8）
+    ...external,
   ];
   const seen = new Set<string>();
   const out: AmmoCandidate[] = [];
@@ -1366,23 +1417,15 @@ async function ammoOf(chatKey: string, conv: Conversation): Promise<AmmoCandidat
 }
 
 /**
- * 弹药段渲染：头 + 逐条一行；条数先截（AMMO_ITEM_CAP）、预算再裁（超限丢条目）。
- * 弹药为空或模板缺失时 lines 为空数组——整段不注入、不占位（空则退化，F16）；
- * count 是实际渲染的弹药条数，喂给 nudge_2 的 {{n}}（未兑现数联动）。
+ * 弹药段渲染：合并口径的唯一实现在 ammo-store.renderAmmoSectionOf（可内联验证的纯函数），
+ * 这里只负责从 prompt/messages.md 直取模板与预算（直接下标取，test/prompts.test.ts 逐字扫 src）。
  */
 function renderAmmoSection(items: readonly AmmoCandidate[]): { lines: string[]; count: number } {
-  const header = fish.prompts.messages["ctx_engage_ammo_header"] ?? "";
-  const template = fish.prompts.messages["ctx_engage_ammo_line"] ?? "";
-  if (!header || !template || items.length === 0) return { lines: [], count: 0 };
-  const lines: string[] = [];
-  let total = header.length;
-  for (const item of items) {
-    const line = renderTemplate(template, { days: ammoDaysAgo(item.at), who: item.who, what: item.what });
-    if (total + line.length > AMMO_SECTION_CHARS) break;
-    lines.push(line);
-    total += line.length;
-  }
-  return lines.length > 0 ? { lines: [header, ...lines], count: lines.length } : { lines: [], count: 0 };
+  return renderAmmoSectionOf(items, {
+    header: fish.prompts.messages["ctx_engage_ammo_header"] ?? "",
+    debtLine: fish.prompts.messages["ctx_engage_ammo_line"] ?? "",
+    externalLine: fish.prompts.messages["ctx_engage_ammo_external"] ?? "",
+  }, { chars: AMMO_SECTION_CHARS, cap: AMMO_ITEM_CAP }, Date.now());
 }
 
 /**
@@ -1425,7 +1468,7 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
       engageFooterOf(),
       // 该轮也是注入轮（终验 #5）：已读引导照常携带，与常规 injection 轮同位序
       fish.prompts.messages["ctx_seen_note"] ?? "",
-      ...ammo,
+      ...ammo.lines,
       nudgeText,
     ].filter((line) => line.length > 0).join("\n");
     console.log(`[鱼缸] ${chatKey} nudge-only 轮提交（沉默递进档位 ${nudge}）`);
@@ -1459,7 +1502,7 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
     // 每次注入都携带（决策 20，不限于发生截减时）：引导结合历史理解这批背景
     fish.prompts.messages["ctx_seen_note"] ?? "",
     // 弹药段（T13）：空则退化，整段不占位
-    ...ammo,
+    ...ammo.lines,
     // 沉默递进（T8）：连续零出口达阈值，尾部追加 nudge（2×阈值换更重的 nudge_2）
     nudge > 0 ? nudgeText : "",
   ].filter((line) => line.length > 0).join("\n");
@@ -1987,11 +2030,17 @@ const engageNext = createEngageNext({
       openMinutes: c.engage.openMinutes,
       // shard 节拍（T14）：engage.shardSeconds，缺省 20 秒，每拍现读热生效
       shardSeconds: c.engage.shardSeconds,
+      // 随机门（E5）：ammo.shareChance，开窗进入时一次挷落相位（热读：下一窗生效）
+      ammoShareChance: c.ammo.shareChance,
     };
   },
   log: (message) => console.log(`[鱼缸] ${message}`),
   onError: (error) => console.error("[鱼缸] 搭话开窗回调失败", error instanceof Error ? error.message : error),
 });
+
+// 分享门接线（E5）：出口层（say_words 的 ammoId 链）经这个单例读当前 open 窗的
+// windowId 与门结果；未开窗/closed 的 chatKey 拿到 undefined，claim 一律拒（fail closed）
+wireAmmoShareHost({ gateOf: (chatKey) => engageNext.shareGateOf(chatKey) });
 
 // ── worker 逛轮（外部计划 Task E4）：scheduler 四时点起独立后台会话刷 B 站 ──────────
 
