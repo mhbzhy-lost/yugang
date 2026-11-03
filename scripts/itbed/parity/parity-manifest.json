@@ -1,0 +1,112 @@
+{
+  "manifestVersion": 1,
+  "generatedAt": "2026-11-03T03:47:48.275Z",
+  "source": {
+    "host": "home-mac（zhanghaiyang-nas.local，经 home-mac-connect 中继）",
+    "fishConfigPath": "/Users/zhanghaiyang/yugang/fish.config.json",
+    "envPath": "/Users/zhanghaiyang/yugang/.env",
+    "transport": "connect.sh -- （ssh/scp 只读：echo $HOME / git rev-parse HEAD / cat ×2）",
+    "pullMode": "live",
+    "note": "macmini 不可达时的人工兜底：本地副本手工构造，pullMode 标 manual-fallback 并注明来源待补"
+  },
+  "gitHead": "cbf5c41d2f3811d67950f3cda0fd7b0293b0179b",
+  "fishConfig": {
+    "watchAmbientChance": 0.25,
+    "thinkingLevel": "off",
+    "compact": {
+      "maxEntries": 200,
+      "maxChars": 50000
+    },
+    "weeklyGroupId": "",
+    "memeCooldownMinutes": 8,
+    "voices": {
+      "爱莉希雅": {
+        "url": "http://127.0.0.1:9884",
+        "referWav": "/Users/zhanghaiyang/tts/GPT-SoVITS/reference/感动-欸嘿，大家笑一笑，好吗？.wav",
+        "referText": "欸嘿，大家笑一笑，好吗？",
+        "referLanguage": "zh"
+      },
+      "长征机": {
+        "url": "http://127.0.0.1:9888",
+        "referWav": "/Users/zhanghaiyang/tts/GPT-SoVITS/reference/sandrone/闲聊-茶会.wav",
+        "referText": "差不多该约一次茶会了吧？也不知道其他人有没有空。",
+        "referLanguage": "zh",
+        "speed": 0.9
+      },
+      "凯尔希": {
+        "url": "http://127.0.0.1:9887",
+        "referWav": "/Users/zhanghaiyang/tts/GPT-SoVITS/reference/kaltsit_cold/CN_031.wav",
+        "referText": "评估一下逃亡人员的危险系数，以及敌军再突袭的可能性。",
+        "referLanguage": "zh",
+        "speed": 0.9
+      }
+    },
+    "toolTimeoutSeconds": 30,
+    "ambientMinIntervalSeconds": 120
+  },
+  "env": {
+    "keyCount": 23,
+    "keys": [
+      "ONEBOT_WS_URL",
+      "ONEBOT_TOKEN",
+      "MASTER_QQ",
+      "GROUPS",
+      "AMBIENT_CHANCE",
+      "COOLDOWN_MS",
+      "DAILY_QUOTA",
+      "QUIET_HOURS",
+      "COMPACT_MAX_ENTRIES",
+      "COMPACT_MAX_CHARS",
+      "PROTOCOL_QQ",
+      "MODELSCOPE_KEY",
+      "WEEKLY_GROUP_ID",
+      "SD_WEBUI_URL",
+      "BYPASS_GROUPS",
+      "AMBIENT_CHANCE_BY_GROUP",
+      "THINKING_LEVEL",
+      "TTS_URL",
+      "TTS_REF_WAV",
+      "TTS_REF_TEXT",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "NO_PROXY"
+    ],
+    "values": {
+      "ONEBOT_WS_URL": "ws://127.0.0.1:3001",
+      "ONEBOT_TOKEN": "<redacted:len=43>",
+      "MASTER_QQ": "2928390812",
+      "GROUPS": "659976571,184875934,174408629",
+      "AMBIENT_CHANCE": "0.1",
+      "COOLDOWN_MS": "120000",
+      "DAILY_QUOTA": "40",
+      "QUIET_HOURS": "1-8",
+      "COMPACT_MAX_ENTRIES": "200",
+      "COMPACT_MAX_CHARS": "50000",
+      "PROTOCOL_QQ": "3768557204",
+      "MODELSCOPE_KEY": "<redacted:len=39>",
+      "WEEKLY_GROUP_ID": "659976571",
+      "SD_WEBUI_URL": "http://192.168.31.25:7860",
+      "BYPASS_GROUPS": "659976571",
+      "AMBIENT_CHANCE_BY_GROUP": "174408629:0.05",
+      "THINKING_LEVEL": "off",
+      "TTS_URL": "http://127.0.0.1:9880",
+      "TTS_REF_WAV": "/Users/zhanghaiyang/tts/GPT-SoVITS/reference/感动-欸嘿，大家笑一笑，好吗？.wav",
+      "TTS_REF_TEXT": "欸嘿，大家笑一笑，好吗？",
+      "HTTPS_PROXY": "http://127.0.0.1:7897",
+      "HTTP_PROXY": "http://127.0.0.1:7897",
+      "NO_PROXY": "localhost,127.0.0.1,::1,.bilibili.com,.hdslb.com,.bilivideo.com,.bilivideo.cn,.bilivideo.net,.b23.tv"
+    }
+  },
+  "redactions": [
+    {
+      "where": "env.ONEBOT_TOKEN",
+      "kind": "token",
+      "note": "长度占位（原值 43 字符）"
+    },
+    {
+      "where": "env.MODELSCOPE_KEY",
+      "kind": "token",
+      "note": "长度占位（原值 39 字符）"
+    }
+  ]
+}
