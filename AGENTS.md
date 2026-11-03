@@ -399,10 +399,16 @@ watchdog 硬截止强制收束。共同铁律：**外部文本（标题/简介/�
 canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的模型侧文案唯一源是 `prompt/runtime.md`；
 新闻归纳提示词唯一源是 `prompt/news-digest.md`。
 
-- **B 站弹药管线**：`ammo.slots`（缺省 09:00/12:00/18:00/24:00）起 worker 逛轮——独立后台会话
+- **B 站弹药管线**：worker 逛轮——独立后台会话
   （`worker:bili`，默认人格、人格中立 doc，不进群白名单/记忆映射），`say_*` 机械拒绝
   （`say_worker_round`），产出只有 `ammo_submit` 入库；硬截止 `ammo.browseMinutes`（缺省 10 分钟，
-  watchdog 到点收束、未提交候选丢弃）。候选走 B 站游客 API，营销号三层筛选：`bili_hot` 取榜单
+  watchdog 到点收束、未提交候选丢弃）——触发源有两个：`ammo.slots` 时刻表（缺省空表 = 不按时刻起轮，
+  仍可显式配置）与**空库事件驱动补货**（2026-11-04 T1，缺省唯一触发源）：`ammo.refillTarget`
+  （0–20，缺省 5）——库内 available（未过期）数为 0 时自动起一轮 refill 逛轮（maxPicks 定格为
+  refillTarget，作业键 `refill-<HHmm>`）；挂点两个：外部分享落账后 fire-and-forget + 每 5 分钟
+  巡检定时器；30 分钟冷却（起轮即置 `lastRefillAttempt`）防抖——补货轮失败或空手而归时不追查，
+  等冷却过后自然重试（巡检每 5 分钟醒一次，实际重试节奏最多每 30 分钟一次）；`refillTarget: 0`
+  关闭自动补货。候选走 B 站游客 API，营销号三层筛选：`bili_hot` 取榜单
   （已入库剔除 → 硬筛一票否决 → 软筛评分排序，多抓 4 倍防筛空；规则命中逐条落审计日志，仅元数据）
   → `bili_video` 终选核实（完整卡片 + UP 评级 + 可选热评/高能弹幕）→ `ammo_submit` 入库
   （BV 正则校验、summary≤60 字、topic 四枚举、BV 判重、每轮上限 `ammo.maxPicksPerRun` 缺省 3）。
@@ -416,7 +422,8 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
   分享：open 窗随机门（`ammo.shareChance` 缺省 0.2）**每窗最多 1 条外部**，`share` 的 `ammoId`
   （字段名全文档统一，旧名 externalAmmoId 弃用）机械校验「本窗门已开 ∧ item available ∧ 本窗未消费外部」后原子 claim，b23/BV canonical 链接由宿主
   拼进 payload；分享全时尊重宵禁二态（夜间窗口纯搭话、不分享素材）与末条自言禁言。T13 合并条目
-  `kind: debt|external`——旧账优先、外部最多 1 条只占剩余预算、nudge 的 {{n}} 只数 debt。
+  `kind: debt|external`——旧账优先（段预算 `{debtChars, debtCap}` 只管 debt，超限丢条目截断不变）、
+  外部行独立渲染（在场必注，不受 debt 预算/cap 约束，2026-11-04 T1 预算分家）、nudge 的 {{n}} 只数 debt。
   空窗也开口（2026-11-03）：开窗无积压且 nudge 未到档时，外部弹药在场（门开且非宵禁）
   同样提交无行注入轮（空窗弹药轮）——分享是鱼自己想开口的事，不被「没新消息」压着；
   debt 旧账单独不触发空窗轮。另补了只读查库工具 `ammo_list`（available 先入先出 + 门/宵禁状态），

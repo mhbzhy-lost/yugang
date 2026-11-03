@@ -53,10 +53,12 @@ import { beginNewsBroadcastRound, endNewsBroadcastRound, newsBroadcastDelivered,
 import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc, defineDoc } from "@earendil-works/pi-durable";
 // —— 外部信息源基础设施（docs/plans/2026-11-02-external-ammo.md Task E1/E4）——
-// scheduler 四时点（fish.config 的 ammo.slots，热读）起 worker 逛轮：独立后台会话
+// scheduler 四时点（fish.config 的 ammo.slots，热读，缺省空表 = 不按时刻起轮）起 worker 逛轮：独立后台会话
 //（WORKER_CHAT_KEY，默认人格、人格中立 doc），say_* 机械拒绝，产出只有 ammo_submit 入库；
 // 错过时点 ≤2h 补跑一次（幂等 date+slot，fish.external_jobs）；硬截止在 runBrowseJob 里
-// 取消在途 submission，scheduler 的 jobTimeout 再兜一层。E7（新闻播报）走第二个调度器实例
+// 取消在途 submission，scheduler 的 jobTimeout 再兜一层。空库补货（2026-11-04 计划 T1）：
+// ammo.refillTarget>0 且库内 available=0 时由 maybeRefillAmmo 起 refill 逛轮（挂点：外部分享
+// 落账后 + 每 5 分钟巡检，30 分钟冷却），maxPicks 定格 refillTarget。E7（新闻播报）走第二个调度器实例
 //（news.at 时点，幂等账是 fish.news_runs，不写 external_jobs——date+slot 键与逛轮共用，
 // 同时点配置会互相覆盖）。频控客户端与筛选配置见 src/external/bili-client.ts，
 // 不可信文本清洗见 src/external/sanitize.ts，弹药库读写见 src/external/ammo-store.ts，
@@ -632,6 +634,8 @@ const fish = await openFish({
       } catch (error) {
         console.error("[鱼缸] 弹药 markShared 失败", error instanceof Error ? error.message : error);
       }
+      // 补货挂点 a（2026-11-04 计划 T1）：分享落账后查空库，fire-and-forget，不挡发送链收尾
+      void maybeRefillAmmo("分享后");
     }
     markSent(payload.key);
 
@@ -1334,9 +1338,9 @@ interface AmmoCandidate {
   topic?: string;
 }
 
-/** 弹药段预算（字符，头+行合计）：机械裁决，超限丢条目而不是放宽。 */
+/** 弹药段 debt 字符预算（头 + debt 行合计）：机械裁决，超限丢条目而不是放宽；external 行不受它约束。 */
 const AMMO_SECTION_CHARS = 300;
-/** 弹药条数上限：先截条数，预算再裁。 */
+/** debt 条数上限：先截条数，预算再裁；external 行独立渲染不受它约束（2026-11-04 T1 预算分家）。 */
 const AMMO_ITEM_CAP = 5;
 /** 单条弹药原文截断：一行能放下的短语级文本，不是整段搬运。 */
 const AMMO_TEXT_CHARS = 60;
@@ -1423,7 +1427,8 @@ async function ammoOf(chatKey: string, conv: Conversation): Promise<AmmoCandidat
   const candidates: AmmoCandidate[] = [
     ...profile.items.map((item) => ({ what: item.quote, who: nicknameOfMessage(chatKey, item.anchor), ...(profile.at !== undefined ? { at: profile.at } : {}) })),
     ...delegations,
-    // external 排最后：debt 优先，剩余预算（条数 cap 与字符预算）才有它的份（决策 8）
+    // external 排最后（决策 8）：debt 优先；总条数上限在这里机械截断，渲染层外部行独立、
+    // 不受 debt 预算约束（2026-11-04 T1 预算分家）
     ...external,
   ];
   const seen = new Set<string>();
@@ -1446,7 +1451,7 @@ function renderAmmoSection(items: readonly AmmoCandidate[]): { lines: string[]; 
     header: fish.prompts.messages["ctx_engage_ammo_header"] ?? "",
     debtLine: fish.prompts.messages["ctx_engage_ammo_line"] ?? "",
     externalLine: fish.prompts.messages["ctx_engage_ammo_external"] ?? "",
-  }, { chars: AMMO_SECTION_CHARS, cap: AMMO_ITEM_CAP }, Date.now());
+  }, { debtChars: AMMO_SECTION_CHARS, debtCap: AMMO_ITEM_CAP }, Date.now());
 }
 
 /**
@@ -2119,7 +2124,7 @@ let browseInFlight = false;
  *   4. 收尾：用量记账（与 submitRound 同口径）+ 换页检查（阈值满足时机械降级换页）。
  * 作业键 runKey = date + slot（jobKeyOf），幂等与单轮入库上限都认它。
  */
-async function runBrowseJob(slot: string, date: string): Promise<void> {
+async function runBrowseJob(slot: string, date: string, opts?: { maxPicks?: number }): Promise<void> {
   if (browseInFlight) {
     console.log(`[鱼缸] 逛轮跳过 ${date} ${slot}：上一轮未完`);
     return;
@@ -2132,7 +2137,7 @@ async function runBrowseJob(slot: string, date: string): Promise<void> {
     const conv = await fish.group(WORKER_CHAT_KEY);
     const content = renderTemplate(fish.prompts.messages["worker_browse_task"] ?? "", {
       minutes: String(ammo.browseMinutes),
-      max: String(ammo.maxPicksPerRun),
+      max: String(opts?.maxPicks ?? ammo.maxPicksPerRun),
       topics: AMMO_TOPICS.join("、"),
     });
     const submission = await conv.submit({ type: "input", content, entry: { kind: MEMORY_WORKER_KIND } }, ctx);
@@ -2140,7 +2145,7 @@ async function runBrowseJob(slot: string, date: string): Promise<void> {
     triggerOf.set(roundId, {
       mentionsBot: false,
       kind: "worker",
-      workerRun: { runKey, maxPicks: ammo.maxPicksPerRun, ttlHours: ammo.ttlHours },
+      workerRun: { runKey, maxPicks: opts?.maxPicks ?? ammo.maxPicksPerRun, ttlHours: ammo.ttlHours },
     });
     const timeoutMs = Math.max(60_000, ammo.browseMinutes * 60_000);
     let watchdog: NodeJS.Timeout | undefined;
@@ -2189,7 +2194,41 @@ async function runBrowseJob(slot: string, date: string): Promise<void> {
   }
 }
 
-// 四时点（缺省 09:00/12:00/18:00/24:00，ammo.slots 热读）触发逛轮；错过 ≤2h 补跑一次
+// ── 空库自动补货（2026-11-04 计划 T1）：库空即起 refill 逛轮，事件驱动缺省取代时刻表 ──
+
+/** 上次补货起轮时刻（含失败/空手而归）：30 分钟冷却的唯一判据；失败空转重试节奏靠它限速。 */
+let lastRefillAttempt = 0;
+/** 补货冷却：两次起轮的最小间隔——失败/空手时最多每 30 分钟重试一次。 */
+const REFILL_COOLDOWN_MS = 30 * 60_000;
+
+/**
+ * 空库自动补货触发器（fire-and-forget 友好）：refillTarget<=0、逛轮在途、30 分钟冷却
+ * 任一命中即静默返回；否则 snapshot 数 available（state==available 且 ttlAt>now），
+ * >0 库里有货直接返回，=0 置 lastRefillAttempt 后以 runKey refill-<HHmm> + 当天 localDay
+ * 起 runBrowseJob（maxPicks 定格为 ammo.refillTarget）。整体不抛错：两个挂点（emit 发送
+ * 链、5 分钟巡检定时器）都不许被它拖崩。
+ */
+async function maybeRefillAmmo(reason: string): Promise<void> {
+  try {
+    const ammo = fishConfig().config.ammo;
+    if (ammo.refillTarget <= 0) return;
+    if (browseInFlight) return;
+    const now = Date.now();
+    if (now - lastRefillAttempt < REFILL_COOLDOWN_MS) return;
+    const doc = await fish.harness.snapshot(ExternalAmmoDoc, ctx);
+    const available = (doc?.items ?? []).filter((item) => item.state === "available" && item.ttlAt > now).length;
+    if (available > 0) return;
+    lastRefillAttempt = now;
+    const at = new Date(now);
+    const hhmm = `${String(at.getHours()).padStart(2, "0")}${String(at.getMinutes()).padStart(2, "0")}`;
+    console.log(`[鱼缸] 弹药库空，补货起轮 ${reason} → ${ammo.refillTarget} 条`);
+    await runBrowseJob(`refill-${hhmm}`, localDay(now), { maxPicks: ammo.refillTarget });
+  } catch (error) {
+    console.error(`[鱼缸] 弹药补货失败（${reason}）`, error instanceof Error ? error.message : error);
+  }
+}
+
+// 四时点（ammo.slots 热读，缺省空表 = 不按时刻起轮，逛轮由空库补货触发）触发逛轮；错过 ≤2h 补跑一次
 //（幂等 date+slot，fish.external_jobs）；硬截止双层：runBrowseJob 内的 abort + scheduler watchdog
 externalScheduler = createScheduler({
   // slots 是 scheduler 每 tick 的热读点：顺带把 ammo.dailyBudget 灌进共享客户端
@@ -2207,6 +2246,10 @@ externalScheduler = createScheduler({
 });
 syncBiliBudget(); // 启动即灌一次：共享客户端在首次请求前就持有当前预算上限（缺省 60）
 externalScheduler.start();
+
+// 补货挂点 b（2026-11-04 计划 T1）：每 5 分钟巡检一次空库；unref 不挡进程退出，SIGTERM 时一并清掉
+const ammoRefillTimer = setInterval(() => void maybeRefillAmmo("定时巡检"), 5 * 60_000);
+ammoRefillTimer.unref?.();
 
 // ── 新闻播报 job（外部计划 Task E7，决策 10–12）：scheduler 第二实例 news.at 起播 ──────
 
@@ -2941,6 +2984,7 @@ process.on("SIGTERM", () => {
   console.log("[鱼缸] SIGTERM，冲刷后退出");
   engageNext.stop(); // 先停开窗循环：退出后不再触发相位迁移回调
   externalScheduler?.stop(); // 停作业调度：不再触发新逛轮，在途轮由各自的 watchdog 收束
+  clearInterval(ammoRefillTimer); // 停空库补货巡检：退出后不再起 refill 轮
   newsScheduler.stop(); // 停新闻调度：在途播报由 scheduler watchdog 收束，news_runs 幂等挡重启重发
   void (async () => {
     try { const n = await fish.drain(); if (n > 0) console.log(`[鱼缸] 退出前补发 ${n} 条`); } catch { /* 尽力而为 */ }

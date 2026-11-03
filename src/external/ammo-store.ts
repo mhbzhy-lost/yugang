@@ -200,10 +200,13 @@ export interface AmmoSectionTemplates {
   externalLine: string;
 }
 
-/** 弹药段预算：条数先截、字符预算再裁，超限丢条目不放宽（机械裁决）。 */
+/** 弹药段预算（只管 debt）：条数先截（debtCap）、字符预算再裁（debtChars），超限丢条目不放宽（机械裁决）。
+ *  external 行独立渲染，不受这两项约束（2026-11-04 计划 T1 预算分家）。 */
 export interface AmmoSectionBudget {
-  chars: number;
-  cap: number;
+  /** debt 行的字符预算（header + debt 行合计）。 */
+  debtChars: number;
+  /** debt 条数上限。 */
+  debtCap: number;
 }
 
 /** 「N 天前」机械锚点：不伪造时间，拿不到时间戳退化为「之前」。 */
@@ -215,10 +218,11 @@ function ammoDaysAgo(at: number | undefined, nowMs: number): string {
 
 /**
  * 弹药段渲染（纯函数，T13+E5 合并口径的唯一实现）：头 + debt 逐条一行（debtLine）+
- * external 至多一行（externalLine，独立模板）。条数先截（cap）、预算再裁；external
- * 最多 1 条且只占剩余预算（debt 满 cap 或字符预算装不下就整行不注）。返回的 count
- * 只数 debt——nudge_2 的 {{n}} 是「未兑现数」，外部库存不算欠账。空段返回空 lines
- * （整段不注入不占位）；debtLine 模板缺失时 debt 行退化不注（external 行不受牵连）。
+ * external 一行（externalLine，独立模板）。预算分家（2026-11-04 计划 T1）：debtCap 先截
+ * 条数、debtChars 再裁字符，超限丢条目不放宽（截断语义不变）；external 行独立渲染——
+ * 在场（模板与 ammoId 齐全）必注，不受 debt 条数/字符预算约束。返回的 count 只数
+ * debt——nudge_2 的 {{n}} 是「未兑现数」，外部库存不算欠账。空段返回空 lines（整段
+ * 不注入不占位）；debtLine 模板缺失时 debt 行退化不注（external 行不受牵连）。
  */
 export function renderAmmoSectionOf(
   items: readonly AmmoSectionItem[],
@@ -231,20 +235,20 @@ export function renderAmmoSectionOf(
   const external = items.find((item) => item.kind === "external");
   if (!header || (debt.length === 0 && external === undefined)) return { lines: [], count: 0 };
   const lines: string[] = [];
-  let total = header.length;
   let count = 0;
   if (debtLine) {
+    let total = header.length;
     for (const item of debt) {
+      if (count >= budget.debtCap) break;
       const line = renderTemplate(debtLine, { days: ammoDaysAgo(item.at, nowMs), who: item.who, what: item.what });
-      if (total + line.length > budget.chars) break;
+      if (total + line.length > budget.debtChars) break;
       lines.push(line);
       total += line.length;
       count += 1;
     }
   }
-  if (external !== undefined && externalLine && external.ammoId && count < budget.cap) {
-    const line = renderTemplate(externalLine, { title: external.what, topic: external.topic ?? "", id: external.ammoId });
-    if (total + line.length <= budget.chars) lines.push(line);
+  if (external !== undefined && externalLine && external.ammoId) {
+    lines.push(renderTemplate(externalLine, { title: external.what, topic: external.topic ?? "", id: external.ammoId }));
   }
   return lines.length > 0 ? { lines: [header, ...lines], count } : { lines: [], count: 0 };
 }

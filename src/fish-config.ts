@@ -53,7 +53,7 @@ export const ENGAGE_DEFAULTS: EngageConfig = {
 };
 
 /**
- * B 站弹药管线（外部计划 E1–E5）的行为参数：逛轮时点、硬截止、随机门、TTL 与预算。
+ * B 站弹药管线（外部计划 E1–E5）的行为参数：逛轮时点、硬截止、随机门、TTL、预算与空库补货目标。
  * 逐字段校验，非法告警保留缺省，热生效。
  */
 export interface AmmoConfig {
@@ -69,15 +69,19 @@ export interface AmmoConfig {
   dailyBudget: number;
   /** 单次逛轮最多入库的弹药条数。 */
   maxPicksPerRun: number;
+  /** 空库自动补货目标（0–20）：库内可分享条目为 0 时自动起一轮逛轮，maxPicks 定格为该值；0 = 关闭。 */
+  refillTarget: number;
 }
 
 export const AMMO_DEFAULTS: AmmoConfig = {
-  slots: ["09:00", "12:00", "18:00", "24:00"],
+  // 缺省空表（2026-11-04 计划 T1）：不按时刻起轮，逛轮由空库事件驱动补货（maybeRefillAmmo）触发
+  slots: [],
   browseMinutes: 10,
   shareChance: 0.2,
   ttlHours: 48,
   dailyBudget: 60,
   maxPicksPerRun: 3,
+  refillTarget: 5,
 };
 
 /** 新闻 topic 的来源枚举：与新闻客户端（外部计划 E6）的取数实现一一对应。 */
@@ -147,7 +151,7 @@ export interface FishConfig {
   engagement: EngagementMode;
   /** next 搭话开窗参数：closed/open 节拍、积压与背景上限、nudge 阈值（仅 next 消费）。 */
   engage: EngageConfig;
-  /** B 站弹药管线参数：逛轮时点、硬截止、随机门、TTL、每日预算与单轮入库上限。 */
+  /** B 站弹药管线参数：逛轮时点、硬截止、随机门、TTL、每日预算、单轮入库上限与空库补货目标。 */
   ammo: AmmoConfig;
   /** 新闻播报管线参数：播报时点、目标群、topic 供料与输入/输出上限。 */
   news: NewsConfig;
@@ -352,7 +356,8 @@ function checkTimeOfDay(label: string) {
 /**
  * ammo 块的校验（config 工具 set 与 parseFile 共用这一份，区间以此处为准）：
  * 逐字段校验，非法字段回默认并记入 problems（沿用 checkEngageBlock 的「非法回默认、
- * 合法照用」语义）；slots 里的坏时点剔除并告警；全部字段非法才整块拒绝。
+ * 合法照用」语义）；slots 空表合法（事件驱动补货的缺省形态）、坏时点剔除并告警；
+ * 全部字段非法才整块拒绝。
  */
 function checkAmmoBlock(raw: unknown): FieldCheck {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "ammo 必须是对象" };
@@ -363,7 +368,7 @@ function checkAmmoBlock(raw: unknown): FieldCheck {
 
   if (a["slots"] !== undefined) {
     const list = a["slots"];
-    if (Array.isArray(list) && list.length > 0) {
+    if (Array.isArray(list)) {
       const times: string[] = [];
       const check = checkTimeOfDay("ammo.slots");
       for (const item of list) {
@@ -371,11 +376,10 @@ function checkAmmoBlock(raw: unknown): FieldCheck {
         if (r.ok) times.push(r.value as string);
         else problems.push(`${r.reason}，该时点已忽略`);
       }
-      if (times.length > 0) {
-        parsed.slots = [...new Set(times)];
-        any = true;
-      } else problems.push("ammo.slots 没有合法时点，已回默认");
-    } else problems.push("ammo.slots 必须是非空 HH:MM 数组，已回默认");
+      // 空表合法（2026-11-04 计划 T1）：空表 = 纯事件驱动补货；坏时点剔除后合法时点照用
+      parsed.slots = [...new Set(times)];
+      any = true;
+    } else problems.push("ammo.slots 必须是 HH:MM 数组，已回默认");
   }
 
   const ranges: Array<[keyof AmmoConfig, number, number]> = [
@@ -383,6 +387,7 @@ function checkAmmoBlock(raw: unknown): FieldCheck {
     ["ttlHours", 1, 168],
     ["dailyBudget", 10, 500],
     ["maxPicksPerRun", 1, 10],
+    ["refillTarget", 0, 20],
   ];
   for (const [key, lo, hi] of ranges) {
     if (a[key] === undefined) continue;
