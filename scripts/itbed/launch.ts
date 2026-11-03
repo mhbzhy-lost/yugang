@@ -4,21 +4,26 @@
  * 结构（docs/plans/2026-11-03-itbed.md）：
  *   1. 独立 sandbox：缺省 <repo>/var/itbed/sandbox（--sandbox-dir 可换），每次启动整目录
  *      重建——fresh db/media/workspace，绝不触碰仓库 var/ 的真数据；
- *   2. fish.config 覆盖层：从 parity manifest 的 fishConfig 快照生成，--config-patch 叠加，
- *      写进 sandbox/fish.config.json（鱼读 cwd/fish.config.json；npm run 会把 cwd 切回仓库根，
- *      见下——所以覆盖层的值同时镜像进 fish-config 认识的环境变量，行为面真正生效）；
+ *   2. fish.config 覆盖层：从 parity manifest 的 fishConfig 快照生成，--config-patch 叠加。
+ *      鱼的 cwd 是 <sandbox>/runtime（见 4），覆盖层真身写 runtime/fish.config.json——鱼按
+ *      cwd 直接读它，engagement/engage/ammo/news 等只认文件的字段真正生效；sandbox 根另留
+ *      一份相同内容的审计副本 fish.config.json。env 镜像保留为同源双通道（行为面不变）；
  *   3. 环境注入（spawn env，优先级高于 npm start 的 --env-file 加载——Node 语义：已存在的
  *      环境变量胜出 env-file，2026-11-03 本机实测）：
  *        ONEBOT_WS_URL/ONEBOT_TOKEN → faux NapCat；GROUPS=424242、MASTER_QQ=1000002（faux 值）；
  *        PROTOCOL_QQ 沿用 parity 非凭据值并与 napcat --self 对齐；GROUPS/master 不用生产值；
  *        SIXTY_BASE_URL/BILI_BASE_URL → faux 60s / faux B 站；
  *        AMBIENT_CHANCE/COOLDOWN_MS/DAILY_QUOTA/QUIET_HOURS/THINKING_LEVEL 等沿用 parity 脱敏值；
- *        YUGANG_HOME/MEDIA_ROOT/WORKSPACE_ROOT → sandbox 内路径；
+ *        YUGANG_HOME/MEDIA_ROOT/WORKSPACE_ROOT → sandbox 内路径；PROMPT_ROOT → runtime/prompt；
  *        token 类（MODELSCOPE_KEY 等）parity 里是占位符，不注入、不落 sandbox——不把真实
  *        token 复制进 sandbox。
- *   4. 启动顺序：先三个 faux 服务（等 /health 全绿）再 spawn `npm start`；npm 显式
- *      cwd=仓库根——npm run 会向上找 package.json 并把 cwd 切回仓库根（2026-11-03 实测：
- *      从无 package.json 的目录起跑直接 ENOENT），不能依赖 spawn cwd，sandbox 靠 env 接线。
+ *   4. 启动顺序：先三个 faux 服务（等 /health 全绿，仍从仓库根起）再 spawn `npm start`。
+ *      鱼的 cwd 是 <sandbox>/runtime：里面只有符号链接（package.json/src/config/prompt/
+ *      node_modules → 仓库本体；var → sandbox/var）与生成的 fish.config.json，零复制——
+ *      凭据/模型配置只经 config/ 链接按需读取；不放 .env，--env-file-if-exists 直接跳过，
+ *      仓库真实 token 不进鱼进程。npm run 把脚本 cwd 固定在 package.json 所在目录且不
+ *      realpath（2026-11-03 实测 npm 11.17.0：符号链接目录下 script-cwd 停在 runtime），
+ *      所以鱼全程 cwd=runtime，热加载读的也是 runtime 覆盖层。
  *   5. 冒烟闭环（本脚本内置）：等鱼连上 faux NapCat（≤90s）→ POST /inject 注入一条 @鱼 →
  *      等 faux outbound.jsonl 出现记录（≤60s）→ SIGTERM 透传给鱼（进程组）→ 收掉全部
  *      faux → 打印 sandbox/outbound 路径与证据汇总。全程限时，无无限等待。
@@ -38,14 +43,18 @@
  * 已知边界（不改 src 的前提下）：
  *   - bili-client 已支持 BILI_BASE_URL 覆盖（未设置默认 https://api.bilibili.com），launch 注入
  *     后 IT bed 会真正指向 faux B 站；
- *   - fish.config 的 voices/memeCooldown/ammo/news 只认文件，sandbox 生效面以环境变量可表达
- *     的字段为限（parity .env 值已覆盖其中行为参数）；
- *   - 少量工具（draw/look/restart/config）读写 cwd=仓库根 的 var/ 路径，sandbox 隔离以
- *     YUGANG_HOME（db/media/workspace/chatlog/usage）为准。
+ *   - fish.config 的 voices/memeCooldown/ammo/news 只认文件——runtime 覆盖层已被鱼按 cwd
+ *     读取，「以环境变量可表达的字段为限」的旧边界解除；
+ *   - 工具相对 cwd 的 var/ 写入（draw/look/restart/config 等）经 runtime/var → sandbox/var
+ *     链接落 sandbox，不再碰仓库 var/；config/ 是符号链接，config 工具写 models.json 会
+ *     写穿仓库本体（IT bed 避开写模型配置的场景）；runtime 不链接 scripts/，video 工具按
+ *     cwd 找 scripts/video-frames.py 会落空（IT bed 已知降级面）；
+ *   - 仓库 .env 不再经 env-file 进入鱼进程（runtime 无 .env）：其中唯一的真实 token
+ *     MODELSCOPE_KEY 此前实际随 env-file 进入 IT bed 进程 env（src 未消费），现在彻底不进。
  */
 
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // ── 常量：faux 世界观（与 faux NapCat 的固定名单/测试群对齐；一律不用生产值）──
@@ -87,6 +96,7 @@ if (hasFlag("help")) {
       "                    [--config-patch '{\"compact\":{\"maxChars\":20000}}' | @file.json]\n" +
       "                    [--serve | --no-smoke] [--serve-max-ms 600000]\n" +
       "端口：napcat=base、60s=base+1、bili=base+2。\n" +
+      "鱼的 cwd=<sandbox>/runtime（仓库 package.json/src/config/prompt/node_modules 与 var 的符号链接 + 覆盖层，零复制）。\n" +
       "缺省：冒烟闭环（注入 @鱼 → 等出站 → 收摊退出）。\n" +
       "--serve/--no-smoke：等鱼连上后打印 [itbed-ready] {JSON} 行并写 <sandbox>/itbed-ready.json，\n" +
       "挂住等 SIGTERM/SIGINT（鱼退出/上限也触发）；结束按原有顺序收摊。供驱动器（driver.ts）使用。",
@@ -318,15 +328,30 @@ async function main(): Promise<number> {
   }
   const outboundPath = join(SANDBOX_DIR, "outbound.jsonl");
   const fishLogPath = join(SANDBOX_DIR, "logs", "fish.log");
+
+  // —— 0.5 runtime 隔离层：<sandbox>/runtime 作为鱼的 cwd，仓库本体全走符号链接（零复制）——
+  // 链接清单是闭合白名单：package.json/src/config/prompt/node_modules → 仓库本体、var → sandbox/var；
+  // 不放 .env（--env-file-if-exists 跳过，真实 token 不进鱼进程），凭据只经 config/ 链接按需读取。
+  const runtimeDir = join(SANDBOX_DIR, "runtime");
+  mkdirSync(runtimeDir, { recursive: true });
+  symlinkSync(join(REPO_ROOT, "package.json"), join(runtimeDir, "package.json"), "file");
+  for (const name of ["src", "config", "prompt", "node_modules"]) {
+    symlinkSync(join(REPO_ROOT, name), join(runtimeDir, name), "dir");
+  }
+  symlinkSync(join("..", "var"), join(runtimeDir, "var"), "dir"); // cwd 相对 var/ 写入（restart/draw/look 等）落 sandbox
+  console.log(`[itbed] runtime cwd：${runtimeDir}（仓库符号链接 + sandbox/var，零复制）`);
   console.log(`[itbed] sandbox：${SANDBOX_DIR}`);
   console.log(`[itbed] 出站记录：${outboundPath}（faux NapCat 落盘）`);
 
   // —— 1. fish.config 覆盖层：parity fishConfig < --config-patch，落盘 + 环境镜像 ——
   const configPatch = loadConfigPatch();
   const fishConfig = deepMerge(parity.fishConfig, configPatch);
-  const overlayPath = join(SANDBOX_DIR, "fish.config.json");
-  writeFileSync(overlayPath, `${JSON.stringify(fishConfig, null, 2)}\n`);
-  console.log(`[itbed] fish.config 覆盖层：${overlayPath}${Object.keys(configPatch).length > 0 ? "（含 --config-patch）" : ""}`);
+  const overlayText = `${JSON.stringify(fishConfig, null, 2)}\n`;
+  const runtimeOverlayPath = join(runtimeDir, "fish.config.json"); // 鱼真正读的（cwd/runtime）
+  const overlayPath = join(SANDBOX_DIR, "fish.config.json"); // sandbox 根的审计副本（launch 视角快照）
+  writeFileSync(runtimeOverlayPath, overlayText);
+  writeFileSync(overlayPath, overlayText);
+  console.log(`[itbed] fish.config 覆盖层：${runtimeOverlayPath}（鱼按 cwd 读取）${Object.keys(configPatch).length > 0 ? "（含 --config-patch）" : ""}；审计副本 ${overlayPath}`);
 
   // —— 2. 注入 env（spawn env 优先级高于 npm start 的 env-file；真实 token 一律不进 sandbox）——
   const compact = (fishConfig["compact"] ?? {}) as Record<string, unknown>;
@@ -347,14 +372,16 @@ async function main(): Promise<number> {
     YUGANG_HOME: sbVar,
     MEDIA_ROOT: join(sbVar, "media"),
     WORKSPACE_ROOT: join(sbVar, "workspace"),
+    // prompt 根显式指向 runtime 链接（鱼的 promptRoot 有 cwd 兜底，runtime/prompt 同值，显式更稳）
+    PROMPT_ROOT: join(runtimeDir, "prompt"),
     // parity 脱敏行为参数（沿用）
     ...(parity.envValues["AMBIENT_CHANCE"] !== undefined ? { AMBIENT_CHANCE: parity.envValues["AMBIENT_CHANCE"] } : {}),
     ...(parity.envValues["COOLDOWN_MS"] !== undefined ? { COOLDOWN_MS: parity.envValues["COOLDOWN_MS"] } : {}),
     ...(parity.envValues["DAILY_QUOTA"] !== undefined ? { DAILY_QUOTA: parity.envValues["DAILY_QUOTA"] } : {}),
     ...(parity.envValues["QUIET_HOURS"] !== undefined ? { QUIET_HOURS: parity.envValues["QUIET_HOURS"] } : {}),
     ...(parity.envValues["THINKING_LEVEL"] !== undefined ? { THINKING_LEVEL: parity.envValues["THINKING_LEVEL"] } : {}),
-    // fish.config 覆盖层 → 环境镜像（鱼读 cwd 的 fish.config.json，npm 把 cwd 切回仓库根，
-    // 覆盖层的值靠这组镜像真正生效；parity .env 值与快照一致，两路同源不冲突）
+    // fish.config 覆盖层 → 环境镜像（覆盖层本体在 runtime 已被鱼按 cwd 读取，engagement/
+    // engage/ammo/news 等文件字段直接生效；镜像保留为同源双通道，行为面与历史版本一致）
     ...(numOf(fishConfig["watchAmbientChance"]) !== undefined ? { WATCH_AMBIENT_CHANCE: String(numOf(fishConfig["watchAmbientChance"])) } : {}),
     ...(numOf(fishConfig["ambientMinIntervalSeconds"]) !== undefined ? { AMBIENT_MIN_INTERVAL_SECONDS: String(numOf(fishConfig["ambientMinIntervalSeconds"])) } : {}),
     ...(numOf(fishConfig["toolTimeoutSeconds"]) !== undefined ? { TOOL_TIMEOUT_SECONDS: String(numOf(fishConfig["toolTimeoutSeconds"])) } : {}),
@@ -404,10 +431,10 @@ async function main(): Promise<number> {
   await waitHealth("sixty", SIXTY_PORT);
   await waitHealth("bili", BILI_PORT);
 
-  // —— 4. spawn npm start（显式 cwd=仓库根：npm run 会向上找 package.json 并切回仓库根，
-  //       sandbox 全靠 env 接线；spawn env 胜出 env-file，实测语义）——
-  spawnManaged("fish", "npm", ["start"], REPO_ROOT, { ...process.env, ...fishEnv }, fishLogPath);
-  console.log(`  [itbed] npm start 已拉起（fish cwd=仓库根，pid=${managed.get("fish")?.proc.pid ?? "?"}）`);
+  // —— 4. spawn npm start（cwd=runtime：npm 11.17.0 实测不 realpath package root，脚本
+  //       cwd 停在符号链接目录，鱼按 cwd 读 runtime 覆盖层；spawn env 胜出 env-file）——
+  spawnManaged("fish", "npm", ["start"], runtimeDir, { ...process.env, ...fishEnv }, fishLogPath);
+  console.log(`  [itbed] npm start 已拉起（fish cwd=${runtimeDir}，pid=${managed.get("fish")?.proc.pid ?? "?"}）`);
 
   // fish 提前退场（起失败/端口占用等）→ 直接收摊报错
   const fishEntry = managed.get("fish");
@@ -446,6 +473,7 @@ async function main(): Promise<number> {
       readyAt: new Date().toISOString(),
       pid: process.pid,
       sandbox: SANDBOX_DIR,
+      runtime: runtimeDir,
       ports: { napcat: NAPCAT_PORT, sixty: SIXTY_PORT, bili: BILI_PORT },
       outbound: outboundPath,
       log: fishLogPath,
