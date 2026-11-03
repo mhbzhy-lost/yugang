@@ -26,6 +26,7 @@ import { join } from "node:path";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { loadToolManifests } from "./manifest.ts";
 import type { ToolPackageDeps, ToolPackageFactory, ToolManifest } from "./types.ts";
+import { createAmmoListTool } from "./ammo_list/tool.ts";
 import { createAmmoSubmitTool } from "./ammo_submit/tool.ts";
 import { createBiliHotTool } from "./bili_hot/tool.ts";
 import { createBiliVideoTool } from "./bili_video/tool.ts";
@@ -54,6 +55,7 @@ import { createWriteTool } from "./write/tool.ts";
 
 /** 25 个工具包的 Node factory；与 src/tools/<name>/TOOL.md 一一对应，两边都不允许孤儿。 */
 const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
+  ammo_list: createAmmoListTool,
   ammo_submit: createAmmoSubmitTool,
   bili_hot: createBiliHotTool,
   bili_video: createBiliVideoTool,
