@@ -26,7 +26,14 @@
  * 用法：
  *   node scripts/itbed/launch.ts [--sandbox-dir <dir>] [--port-base 4400]
  *                                [--config-patch '{"compact":{"maxChars":20000}}' | @file.json]
+ *                                [--serve | --no-smoke] [--serve-max-ms 600000]
  *   端口分配：napcat=base、60s=base+1、bili=base+2（缺省 4400/4401/4402）。
+ *   缺省（无 --serve）：冒烟闭环自动跑完并限时退出。
+ *   --serve/--no-smoke（Task I3，驱动器 driver.ts 消费）：等鱼连上 faux NapCat 后打印一行
+ *   `[itbed-ready] {JSON}`（含 sandbox、三 faux 端口、outbound/log 路径、注入 URL、测试群号），
+ *   并写 <sandbox>/itbed-ready.json；然后挂住等待——不注入冒烟消息、不自行退出；
+ *   SIGTERM/SIGINT（或鱼退出 / --serve-max-ms 上限）触发后按原有 teardown 顺序收摊。
+ *   默认无参冒烟行为保持不变。
  *
  * 已知边界（不改 src 的前提下）：
  *   - bili-client 的 API_ROOT 钉死 https://api.bilibili.com，BILI_BASE_URL 注入后待 src 接线；
@@ -52,7 +59,11 @@ const FAUX_MASTER_QQ = 1000002; // faux 名单里的「主人」（napcat ROSTER
 const FISH_CONNECT_TIMEOUT_MS = 90_000; // 合同上限：启动鱼最多 90 秒
 const OUTBOUND_TIMEOUT_MS = 60_000;
 const HEALTH_TIMEOUT_MS = 10_000;
-const WATCHDOG_MS = 180_000; // 总兜底：任何卡死路径最终都会走到这里
+const WATCHDOG_MS = 180_000; // 总兜底：任何卡死路径最终都会走到这里（serve 模式改用 SERVE_MAX_MS）
+
+// serve/no-smoke 模式（向后兼容分支：不影响默认冒烟路径）
+const SERVE = hasFlag("serve") || hasFlag("no-smoke");
+const SERVE_MAX_MS = num(argValue("serve-max-ms"), 600_000); // serve 生命周期上限（驱动器会传更紧的值）
 
 // ── CLI（CLI > 环境变量 > 缺省，同 faux 系风格）──────────────────────────────
 
@@ -73,7 +84,11 @@ if (hasFlag("help")) {
     "IT bed sandbox 启动器\n" +
       "用法：node scripts/itbed/launch.ts [--sandbox-dir <dir>] [--port-base 4400]\n" +
       "                    [--config-patch '{\"compact\":{\"maxChars\":20000}}' | @file.json]\n" +
-      "端口：napcat=base、60s=base+1、bili=base+2；冒烟闭环自动跑完并限时退出。",
+      "                    [--serve | --no-smoke] [--serve-max-ms 600000]\n" +
+      "端口：napcat=base、60s=base+1、bili=base+2。\n" +
+      "缺省：冒烟闭环（注入 @鱼 → 等出站 → 收摊退出）。\n" +
+      "--serve/--no-smoke：等鱼连上后打印 [itbed-ready] {JSON} 行并写 <sandbox>/itbed-ready.json，\n" +
+      "挂住等 SIGTERM/SIGINT（鱼退出/上限也触发）；结束按原有顺序收摊。供驱动器（driver.ts）使用。",
   );
   process.exit(0);
 }
@@ -250,6 +265,36 @@ async function teardown(reason: string): Promise<void> {
   }
 }
 
+/** 收摊后的退出态一行表（冒烟与 serve 共用）。 */
+function exitSummary(): string {
+  return ["fish", "napcat", "sixty", "bili"]
+    .map((name) => {
+      const record = exitRecords.get(name);
+      return `${name}: ${record !== undefined ? `code=${record.code}${record.signal !== null ? ` signal=${record.signal}` : ""}` : "仍在运行"}`;
+    })
+    .join("；");
+}
+
+// ── serve 模式停止闸门：信号/鱼退出/watchdog → main 内收摊后正常退出 ─────────
+
+let serveGateResolve: ((reason: string) => void) | null = null;
+let serveGateSettled = false;
+
+/** 打开停止闸门；返回的 Promise 在第一个停止请求到达时以原因结算。 */
+function openServeGate(): Promise<string> {
+  return new Promise<string>((resolveGate) => {
+    serveGateResolve = (reason) => {
+      if (serveGateSettled) return;
+      serveGateSettled = true;
+      resolveGate(reason);
+    };
+  });
+}
+
+function requestServeStop(reason: string): void {
+  serveGateResolve?.(reason);
+}
+
 async function main(): Promise<number> {
   const startedAt = Date.now();
   console.log(`[itbed] sandbox 启动器开跑：port-base=${PORT_BASE}（napcat=${NAPCAT_PORT} 60s=${SIXTY_PORT} bili=${BILI_PORT}）`);
@@ -392,6 +437,33 @@ async function main(): Promise<number> {
   ]);
   console.log(`  [itbed] 鱼已连上 faux NapCat（耗时 ${((Date.now() - startedAt) / 1000).toFixed(1)}s）`);
 
+  // —— 5.5 serve 模式：打印 ready → 挂住等停止信号（不注入、不自行退出）——
+  // 驱动器（driver.ts）读 [itbed-ready] 行或 itbed-ready.json 拿端口/路径；
+  // SIGTERM/SIGINT 由入口的 onStopSignal 转成闸门结算，鱼退出 / serve 上限同样触发。
+  if (SERVE) {
+    const ready = {
+      readyAt: new Date().toISOString(),
+      pid: process.pid,
+      sandbox: SANDBOX_DIR,
+      ports: { napcat: NAPCAT_PORT, sixty: SIXTY_PORT, bili: BILI_PORT },
+      outbound: outboundPath,
+      log: fishLogPath,
+      groupId: TEST_GROUP_ID,
+      injectUrl: `http://127.0.0.1:${NAPCAT_PORT}/inject`,
+    };
+    const readyPath = join(SANDBOX_DIR, "itbed-ready.json");
+    writeFileSync(readyPath, `${JSON.stringify(ready, null, 2)}\n`);
+    console.log(`[itbed-ready] ${JSON.stringify(ready)}`);
+    console.log(`[itbed] serve 模式：不注入冒烟消息；等 SIGTERM/SIGINT（上限 ${Math.round(SERVE_MAX_MS / 1000)}s）；ready 落盘 ${readyPath}`);
+    const gate = openServeGate(); // 先开闸门再挂鱼退出监听，避免极早退出丢信号
+    fishEntry?.proc.once("exit", () => requestServeStop("fish-exit"));
+    const stopReason = await gate;
+    const serveFailed = stopReason === "fish-exit" || stopReason === "serve-watchdog";
+    await teardown(`serve 结束（${stopReason}）`);
+    console.log(`\n[itbed] serve 结束（${stopReason}）\n  退出态：${exitSummary()}`);
+    return serveFailed ? 1 : 0;
+  }
+
   // —— 6. 注入一条 @鱼 ——
   const injectBody = JSON.stringify({ kind: "group", groupId: TEST_GROUP_ID, at: ["bot"], text: "鱼鱼在吗？IT bed 冒烟报到" });
   const injectRes = await fetch(`http://127.0.0.1:${NAPCAT_PORT}/inject`, { method: "POST", body: injectBody });
@@ -420,17 +492,11 @@ async function main(): Promise<number> {
   // —— 8. SIGTERM 收摊：鱼（进程组）→ faux 全家 ——
   await teardown("冒烟闭环完成");
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-  const exitTable = ["fish", "napcat", "sixty", "bili"]
-    .map((name) => {
-      const record = exitRecords.get(name);
-      return `${name}: ${record !== undefined ? `code=${record.code}${record.signal !== null ? ` signal=${record.signal}` : ""}` : "仍在运行"}`;
-    })
-    .join("；");
   console.log(
     `\n[itbed] 冒烟闭环通过 ✓\n` +
       `  总耗时 ${elapsed}s；sandbox=${SANDBOX_DIR}\n` +
       `  outbound=${outboundPath}（${outboundLines.length} 条）\n` +
-      `  退出态：${exitTable}`,
+      `  退出态：${exitSummary()}`,
   );
   return 0;
 }
@@ -439,18 +505,28 @@ async function main(): Promise<number> {
 
 let exitCode = 1;
 try {
+  const watchdogMs = SERVE ? SERVE_MAX_MS : WATCHDOG_MS;
   const watchdog = setTimeout(() => {
-    console.error(`\n[itbed] 看门狗触发（${WATCHDOG_MS / 1000}s 总上限），强制收摊`);
+    console.error(`\n[itbed] 看门狗触发（${watchdogMs / 1000}s 总上限），强制收摊`);
+    if (SERVE && serveGateResolve !== null && !serveGateSettled) {
+      requestServeStop("serve-watchdog"); // main 收摊后以非 0 退出
+      return;
+    }
     void teardown("watchdog").then(() => process.exit(1));
-  }, WATCHDOG_MS);
+  }, watchdogMs);
   watchdog.unref();
 
-  process.on("SIGINT", () => {
-    void teardown("SIGINT").then(() => process.exit(130));
-  });
-  process.on("SIGTERM", () => {
-    void teardown("SIGTERM").then(() => process.exit(143));
-  });
+  // serve 模式下首个 SIGTERM/SIGINT 只结算闸门（main 负责收摊并正常退出）；
+  // 非 serve 模式、或闸门已结算后的重复信号：立即收摊强退。
+  const onStopSignal = (signal: "SIGINT" | "SIGTERM"): void => {
+    if (SERVE && serveGateResolve !== null && !serveGateSettled) {
+      requestServeStop(signal);
+      return;
+    }
+    void teardown(signal).then(() => process.exit(signal === "SIGINT" ? 130 : 143));
+  };
+  process.on("SIGINT", () => onStopSignal("SIGINT"));
+  process.on("SIGTERM", () => onStopSignal("SIGTERM"));
 
   exitCode = await main();
 } catch (error) {
