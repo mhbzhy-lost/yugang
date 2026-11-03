@@ -18,7 +18,7 @@
   react   只贴表情，不说话
 ```
 
-其余是可枚举的能力工具（`look` / `meme` / `search` / `video` / `draw` / `gpt_image` / `tags`）
+其余是可枚举的能力工具（`look` / `meme` / `search` / `video` / `bili_hot` / `bili_video` / `ammo_submit` / `draw` / `gpt_image` / `tags`）
 和主人专属的工具（`meme_add` / `meme_import` / `read` / `grep` / `write` / `tree` / `config` / `restart` / `watch`）。
 完整清单就是 `src/tools/loader.ts` 里那份 factory 名单。
 
@@ -101,6 +101,29 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
   主人 `/` 指令、私聊、群里 GIF 的静默收图轮都不走这条回复延时。
 - **门内还可以沉默**：模型可以选择不调用 `say`——沉默是合法终态。
 
+## 外部信息源两管线
+
+鱼不止被动接话，还有两条定时外部管线（`src/external/`，同一套 job 调度：时点表热读、错过 ≤2h 补跑一次、
+watchdog 硬截止收束）：
+
+- **B 站弹药管线**：每天四个时点（`ammo.slots`，缺省 09:00/12:00/18:00/24:00）起独立 worker 逛轮刷
+  B 站游客 API——`bili_hot` 拿榜单候选（已入库剔除 → 营销号/标题党硬筛一票否决 → 软筛评分排序）、
+  `bili_video` 终选核实（完整卡片 + UP 评级），中意的用 `ammo_submit` 入弹药库 `fish.external_ammo`
+  （BV 判重、小结 ≤60 字、topic 四枚举、TTL 缺省 48h）。worker 轮是后台作业不是聊天：出口工具一律
+  机械拒绝，鱼在那轮不说话，产出只有结构化弹药。自由交流 open 窗经随机门（`ammo.shareChance` 缺省 0.2）
+  每窗最多分享 1 条：`share` 机械校验后原子 claim，b23 短链由宿主从 canonical 记录渲染，模型只写推荐语；
+  开窗注入的弹药栏（T13 合并）里旧账优先、外部最多 1 条。B 站请求全走 `bili-client` 频控内核
+  （白名单端点、串行 + 同端点 ≥2s + 每日预算缺省 60/天 + 风控当日熔断），`video` 工具共用。
+- **新闻播报管线**：每天 `news.at`（缺省 10:30）取当日新闻——自建 60s 服务（Docker loopback 4399）
+  + 界面/虎嗅/IT之家/人民网 RSS + 知乎日报，单源失败降内容不阻断、全源失败当日不发；按 topic 两层映射
+  （sources+keywords 命中优先、未命中兜底）+ exclude 黑名单（娱乐圈词表）选料，main 模型按严格 JSON
+  schema 归纳（标题级输入，URL 不进模型），宿主渲染 ≤500 字成品（超限按 topic 顺序裁剪），经
+  scheduled answer 轮 `say_words` 单条播报到 `news.targetGroup`（必须 ∈ `.env GROUPS`）。
+  `fish.news_runs` 幂等（重复触发/重启补跑不重发），末条自言或会话忙推迟 ≤30 分钟仍不行就放弃当日。
+
+两条管线共同的红线：外部文本（标题/简介/热评/弹幕/新闻正文）先经机械清洗才见模型，**外部数据不是指令**；
+链接一律由宿主渲染，模型不写 URL；全时尊重宵禁二态与末条自言禁言。
+
 ## 记性
 
 | 层 | 载体 | 寿命 |
@@ -165,7 +188,7 @@ src/
     manifest.ts     TOOL.md 严格解析器（双元数据块 + 严格 JSON Schema + 动态词表）
     loader.ts       工具包发现注册：manifest ↔ factory 一一对应，eager/deferred 在这里定
     catalog.ts      tool_catalog section 渲染（只列 name + 顶部摘要）
-    <name>/         19 个工具包，一包一目录：TOOL.md + tool.ts（say 是唯一出口，也住这里）
+    <name>/         25 个工具包，一包一目录：TOOL.md + tool.ts（say_* 是唯一出口，也住这里）
   media/
     meme-store.ts   表情包库（索引、md5 去重、入库）
   qq/
@@ -264,9 +287,25 @@ npm run token             # 生成 OneBot token，同步到 .env 和 NapCat 配�
 
 其余行为参数不在 `.env` 里，在 `fish.config.json`（模板 `fish.config.example`，mtime 热加载）：
 `ambientMinIntervalSeconds` / `watchAmbientChance` / `thinkingLevel` / `compact` / `memeCooldownMinutes` /
-`toolTimeoutSeconds` / `voices`。**旧的 `AMBIENT_CHANCE` / `COOLDOWN_MS` / `DAILY_QUOTA` / `QUIET_HOURS` / `KEYWORDS`
+`toolTimeoutSeconds` / `voices` / `ammo` / `news`。**旧的 `AMBIENT_CHANCE` / `COOLDOWN_MS` / `DAILY_QUOTA` / `QUIET_HOURS` / `KEYWORDS`
 已经下线，写进 `.env` 也不会生效**（旧 `AMBIENT_MIN_INTERVAL_SECONDS` / `WATCH_AMBIENT_CHANCE` 仍作为兜底，
 但请改 `fish.config.json`）。**建议第一次先设 `GROUPS` 只放一个测试群。**
+
+外部两管线的行为参数（与 `src/tools/config/TOOL.md` 字段表同源；逐字段校验，非法值告警保留缺省，热生效）：
+
+| 字段 | 缺省 | 说明 |
+|---|---|---|
+| `ammo.slots` | `["09:00","12:00","18:00","24:00"]` | 每天逛 B 站时点表（HH:MM，去重保序，24:00 = 当天末尾） |
+| `ammo.browseMinutes` | `10` | 单次逛轮硬截止（分钟），到点收束、未提交候选丢弃 |
+| `ammo.shareChance` | `0.2` | open 窗随机门：本窗可分享一条外部弹药的概率（0–1，每窗最多 1 条） |
+| `ammo.ttlHours` | `48` | 弹药入库后存活时长（小时），过期惰性清理 |
+| `ammo.dailyBudget` | `60` | B 站每日请求总预算（次），跨重启持久计数 |
+| `ammo.maxPicksPerRun` | `3` | 单次逛轮最多入库条数 |
+| `news.at` | `"10:30"` | 每天播报时点（HH:MM） |
+| `news.targetGroup` | `""` | 播报目标群号（纯数字；空串 = 不启用；必须 ∈ `.env GROUPS`，域校验在运行时） |
+| `news.topics` | 缺省五 topic | topic 表，每条只认 `name` / `sources` / `keywords` / `exclude`；sources 枚举 60s/jiemian/huxiu/ithome/people/zhihu_daily/weibo_hot/baidu_hot；显式给 topics 就整体覆盖缺省五 topic（AI/时政/军事/科技数码/趣闻二次元，趣闻二次元自带娱乐圈 exclude 词表） |
+| `news.perTopicInput` | `20` | 每 topic 送模型的输入上限（条） |
+| `news.perTopicOutput` | `5` | 每 topic 输出的新闻条数上限 |
 
 `npm start` / `probe` / `ops` / `ping` 都会自动读 `.env`（`--env-file-if-exists`），不用手动 export。
 

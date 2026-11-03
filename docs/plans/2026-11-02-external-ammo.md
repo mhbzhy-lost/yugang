@@ -184,6 +184,26 @@ npm test / npm run prompts / npm run memory 全绿；FE1-FE10 逐项核对并记
 
 ---
 
-**部署 runbook（主人阶段，不在执行范围）**：macmini Docker 起 60s（固定 digest、loopback、restart always）→ fish.config.json 配 ammo/news 块与 targetGroup → config 工具热调 → 观察 `fish.external_jobs`/`news_runs` 与审计日志。
+**部署 runbook 附录（主人阶段，不在执行范围）**
+
+外部依赖只有 60s 一项自建服务（macmini Docker）；界面/虎嗅/IT之家/人民网 RSS 与知乎日报走公网直连，无自建依赖。
+
+60s 服务（`vikiboss/60s`）：
+
+1. **镜像版本**：现状跑浮动 tag `vikiboss/60s:latest`（升级不可控）。升级锁定：`docker pull vikiboss/60s` 后用
+   `docker images --digests vikiboss/60s` 取 digest，改用 `vikiboss/60s@sha256:<digest>` 起容器；此后升级/回滚
+   都在 digest 粒度进行（digest 不可变，回滚 = 用旧 digest 重新 pull + run）。
+2. **起容器**：`docker run -d --name 60s --restart always -p 127.0.0.1:4399:4399 vikiboss/60s@sha256:<digest>`
+   ——loopback 绑定只对本机暴露，不经反代出公网。
+3. **健康检查**：探活端点是 `GET /health`（返回 `ok`；60s 源码 rootRouter 实际端点，**没有 `/healthz`**）：
+   `curl -fsS http://127.0.0.1:4399/health`；数据面抽查 `curl -fsS http://127.0.0.1:4399/v2/60s`（返回 code=200）。
+   用宿主侧探活脚本/cron 即可；容器镜像内未必带 curl，`--health-cmd` 写法以镜像实际内容为准，不确定就落在宿主侧。
+4. **升级**：`docker pull vikiboss/60s`（记新 digest）→ `docker rm -f 60s` → 用新 digest 重跑第 2 步 →
+   跑第 3 步探活 → 观察一次新闻作业取料日志。
+5. **回滚**：`docker rm -f 60s` → `docker pull vikiboss/60s@sha256:<旧digest>` → 用旧 digest 重跑第 2 步。
+   60s 不可达不是事故：news-client 单源降级，当日该源内容缺席、不阻断播报。
+
+fish 侧配置：`fish.config.json` 配 `ammo` 块与 `news` 块（`news.targetGroup` 必须 ∈ `.env GROUPS`）→
+`config` 工具可热调 → 观察 `fish.external_jobs` / `fish.news_runs` 与审计日志。
 
 **新增测试清单（待授权，暂同主线裁定不建）：** scheduler/bili-client 频控/筛选漏斗/ammo 状态机与 claim/news 幂等。

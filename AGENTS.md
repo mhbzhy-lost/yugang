@@ -18,7 +18,8 @@
 工具面：`say_words`/`say_media`/`say_meme`/`say_voice`（四个出口工具，共享每轮 3 次调用额度：
 文字/图片/表情包/语音各一个，可引用，除语音外可点名 @ 群友）、`react`（只贴表情）、
 `look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`meme_import`（主人本地批量导入的登记入口）、
-`draw`（本地 SD 生图）、`gpt_image`（GPT Image 2 透传）、`search`/`video`（联网查）、`tags`（danbooru 词表）；
+`draw`（本地 SD 生图）、`gpt_image`（GPT Image 2 透传）、`search`/`video`（联网查）、
+`bili_hot`/`bili_video`/`ammo_submit`（B 站逛轮三件套，`ammo_submit` 仅 worker 轮可用）、`tags`（danbooru 词表）；
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
 
@@ -386,11 +387,49 @@
   上写 doc，与线上进程同库时建议低峰执行（或直接私聊 `/记忆` 让线上进程自己写）；
   发现旧 chatKey 级 / 会话级 `fish.memory` 会明确报冲突，不静默择一
 
+### 17. 外部信息源两管线（2026-11，外部计划 E1–E9）
+
+B 站弹药管线（逛 B 站 → 弹药库 → 开窗分享）与新闻播报管线（10:30 取料 → 归纳 → 定时播报）都跑在
+`src/external/scheduler.ts` 的 job 模型上：时点表热读、错过 ≤2h 补跑一次（幂等 key = date + slot）、
+watchdog 硬截止强制收束。共同铁律：**外部文本（标题/简介/热评/弹幕/RSS 正文）一律先过
+`sanitizeExternalText`（长度/控制字符/bidi/URL scheme 白名单）才见模型**；**链接一律由宿主从
+canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的模型侧文案唯一源是 `prompt/runtime.md`；
+新闻归纳提示词唯一源是 `prompt/news-digest.md`。
+
+- **B 站弹药管线**：`ammo.slots`（缺省 09:00/12:00/18:00/24:00）起 worker 逛轮——独立后台会话
+  （`worker:bili`，默认人格、人格中立 doc，不进群白名单/记忆映射），`say_*` 机械拒绝
+  （`say_worker_round`），产出只有 `ammo_submit` 入库；硬截止 `ammo.browseMinutes`（缺省 10 分钟，
+  watchdog 到点收束、未提交候选丢弃）。候选走 B 站游客 API，营销号三层筛选：`bili_hot` 取榜单
+  （已入库剔除 → 硬筛一票否决 → 软筛评分排序，多抓 4 倍防筛空；规则命中逐条落审计日志，仅元数据）
+  → `bili_video` 终选核实（完整卡片 + UP 评级 + 可选热评/高能弹幕）→ `ammo_submit` 入库
+  （BV 正则校验、summary≤60 字、topic 四枚举、BV 判重、每轮上限 `ammo.maxPicksPerRun` 缺省 3）。
+  弹药库 `fish.external_ammo`（全局抓取池、人格中立；TTL `ammo.ttlHours` 缺省 48h，惰性过期）。
+  分享：open 窗随机门（`ammo.shareChance` 缺省 0.2）**每窗最多 1 条外部**，`share` 的 `externalAmmoId`
+  机械校验「本窗门已开 ∧ item available ∧ 本窗未消费外部」后原子 claim，b23/BV canonical 链接由宿主
+  拼进 payload；分享全时尊重宵禁二态（夜间窗口纯搭话、不分享素材）与末条自言禁言。T13 合并条目
+  `kind: debt|external`——旧账优先、外部最多 1 条只占剩余预算、nudge 的 {{n}} 只数 debt。
+  频控内核 `src/external/bili-client.ts`：白名单端点（7 个，URL 只从 switch 拼）、全局串行锁、
+  同端点 ≥2s、每日预算（`ammo.dailyBudget` 缺省 60，持久 `var/bili-budget.json`）、-412/-352 当日熔断、
+  buvid3 长期复用（`var/bili-state.json`）；**`video` 工具共用该客户端**，新增 B 站端点必须先进白名单。
+- **新闻播报管线**：`news.at`（缺省 10:30）触发第二 scheduler 实例（幂等账独立在 `fish.news_runs`，
+  不写 `fish.external_jobs`）。取料 `src/external/news-client.ts`：自建 60s 服务（loopback 4399 的
+  `/v2/60s`、`/v2/weibo`、`/v2/baidu/hot`）+ 界面/虎嗅/IT之家/人民网 RSS（fast-xml-parser 受限解析：
+  ≤2MB、10s 超时）+ 知乎日报；sources 枚举 60s/jiemian/huxiu/ithome/people/zhihu_daily/weibo_hot/
+  baidu_hot，单源失败降内容不阻断、全源失败当日不发；topic 两层映射（sources+keywords 命中优先、
+  未命中兜底）+ exclude 标题黑名单（娱乐圈词表可热改）。归纳用 main 模型按 `prompt/news-digest.md`
+  的严格 JSON schema（标题级输入带宿主索引，URL 不进模型；summary≤60 字；失败重试 1 次后放弃当日）；
+  宿主渲染 ≤500 字成品（超限按 topic 顺序裁剪，链接与来源署名宿主拼装），经 **scheduled answer 轮**
+  （目标群当前人格）的 `say_words` 单条出口到 `news.targetGroup`——必须 ∈ `.env GROUPS`（P1-7 安全域，
+  域外直接跳过）；幂等 `fish.news_runs`（localDay+targetGroup，重复触发/重启补跑不重发）；末条自言或
+  会话忙推迟 ≤30 分钟（5 分钟步长重查），仍不行放弃当日——宁少勿扰。
+- 部署依赖：60s 是 macmini 上的自建 Docker 服务（镜像固定、loopback、健康检查、升级回滚的 runbook
+  见 `docs/plans/2026-11-02-external-ammo.md` 附录）；RSS/知乎日报无自建依赖；60s 不可达只降级不阻断。
+
 ## 命令
 
 ```bash
 npm test           # 102 项，含上面每条约束的兜底
-npm run prompts    # 列出 prompt 文件 + sha256 + 22 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属 + 内嵌扫描结果
+npm run prompts    # 列出 prompt 文件 + sha256 + 25 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属 + 内嵌扫描结果
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
 npm run memory     # 长期记忆查看与审批（--persona / --chat / --json / --pending / --approve / --reject，见第 16 节）
@@ -417,6 +456,11 @@ node scripts/retag-memes.ts [--dry]     # 用 flash 给缺一级词的表情包�
 mini 上并没有 `home-mac-connect` 这个 skill（今天有子代理在 mini 上直接跑它，报「找不到 connect.sh」）。
 
 `scripts/deploy.ts` 用 `process.execPath` 拿全路径 node：非交互 shell（ssh/nohup）的 PATH 里没有 brew 的 node，直接 `spawn("node")` 会报 No such file or directory。pull 失败时不动线上；新鱼 8 秒内没打出「已连接」横幅则报错退出。
+
+新闻/B 站两管线依赖 macmini 上的自建 60s 服务（`vikiboss/60s` Docker，loopback 绑定 4399，`--restart always`）：
+镜像现状是浮动 tag `vikiboss/60s:latest`，升级/回滚应在 digest 粒度固定；健康检查端点是 `GET /health`
+（返回 `ok`，60s 源码实际端点，没有 `/healthz`）。完整 runbook（起容器命令、探活、升级与回滚步骤）
+在 `docs/plans/2026-11-02-external-ammo.md` 的部署 runbook 附录；RSS/知乎日报走公网直连，无自建依赖。
 
 ## 人格与指令
 
