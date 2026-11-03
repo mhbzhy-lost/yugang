@@ -1243,10 +1243,11 @@ function engageMarkOf(chatKey: string, userId: number): string {
   return watchedByChat.get(baseChatKey(chatKey))?.has(String(userId)) ? WATCHED_MARK : "";
 }
 
-/** 积压 / shard 行渲染：ctx_engage_line（[m:id] 锚点在模板里），{{name}} 并入打标。 */
+/** 积压 / shard 行渲染：ctx_engage_line（[m:id] 锚点在模板里），{{name}} 并入打标。
+ *  行序最新在前、最早在后（决策 2026-11-03）：模型从最新一条读起，按锚点向上回溯更早上下文。 */
 function renderEngageLines(chatKey: string, items: readonly EngageBacklogItem[]): string[] {
   const template = fish.prompts.messages["ctx_engage_line"] ?? "";
-  return items.map((item) => renderTemplate(template, {
+  return [...items].reverse().map((item) => renderTemplate(template, {
     id: item.messageId !== undefined ? String(item.messageId) : "",
     name: `${engageMarkOf(chatKey, item.userId)}${item.nickname}`,
     qq: String(item.userId),
@@ -1450,7 +1451,7 @@ function renderAmmoSection(items: readonly AmmoCandidate[]): { lines: string[]; 
 }
 
 /**
- * 开窗注入轮（injection，背景板语义）：open 进入瞬间把积压一轮注入。这些消息只是
+ * 开窗注入轮（injection，背景板语义）：open 进入瞬间把积压一轮注入（行序最新到最早）。这些消息只是
  * 背景板——无必答、无 salvage、模型不必逐条回应也不必补回复任何人；遇忙放弃
  * （宁少勿答，积压不重放）；注入后已读标记只推进到本轮实际注入集合（fresh）的
  * maxArrivalSeq——提交等待期间新到的未注入消息不算已读，仍归下一窗（决策 3：之后归 shard，
@@ -1543,7 +1544,7 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
 
 /**
  * open 窗 shard 轮（ambient）：每 10 秒一拍，把这一拍收集的全部发送者消息合成一轮
- * （多发送者逐行渲染，[m:id] 锚点照旧）。非必答：零出口合法、无 salvage、无强制
+ * （多发送者逐行渲染，最新在前，[m:id] 锚点照旧）；头部用 ctx_engage_shard_header。非必答：零出口合法、无 salvage、无强制
  * 引用；已读去重后注入、注入后推进标记；quoteIds = 本轮 shard 消息集；尾部 footer
  * 随宵禁二态（engageFooterOf，T13 追加，与 injection 轮同一套窗口收尾文案）。
  * 提交前会话又忙（状态机检查后的竞态）就放回收集器并入下一拍（绝不丢、绝不并发提交）。
@@ -1560,7 +1561,7 @@ async function submitShardRound(chatKey: string, items: readonly EngageShardItem
   const fresh = items.filter((m) => m.arrivalSeq === undefined || m.arrivalSeq > seenSeqOf(conv.id));
   if (fresh.length === 0) return;
   const content = [
-    renderTemplate(fish.prompts.messages["ctx_header"] ?? "", { count: String(fresh.length) }),
+    renderTemplate(fish.prompts.messages["ctx_engage_shard_header"] ?? "", { count: String(fresh.length) }),
     ...renderEngageLines(chatKey, fresh),
     fish.prompts.messages["ctx_seen_note"] ?? "",
     // 宵禁二态 footer（T13 追加）：与 injection 轮同一套窗口收尾，夜间纯搭话

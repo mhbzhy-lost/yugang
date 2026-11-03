@@ -105,15 +105,18 @@ ctx_image_attached: 本条消息末尾直接附了 {{count}} 张图（你能看�
 ctx_images_more: 这组话里另有 {{count}} 张图没有附上（动图或超出限额），想看用 look
 
 # 搭话模式（engagement=next）的窗口注入文案：开窗积压背景板、沉默提醒与已读引导。
-# 仅 next 态消费（src/engage-next.ts / debounce），legacy 不引用。ctx_engage_line 带 [m:id] 消息锚点，
+# 仅 next 态消费（src/index.ts / engage-next），legacy 不引用。ctx_engage_line 带 [m:id] 消息锚点，
 # {{name}} 由装配方并入「[主人]」/「[特别关注]」标记（master 优先互斥，两者都不加就是普通群友）；
+# 注入行按最新到最早排列；ctx_engage_header 用于开窗首轮（injection / nudge-only），
+# ctx_engage_shard_header 用于窗内后续 shard 拍，两者都引导先读最新一条、向上回溯上文；
 # ctx_seen_note 每次把群消息注入模型的轮次都携带（@ 轮背景、ambient 背景、injection backlog 通用，不限于发生截减时）；
 # ctx_engage_nudge_1/2 是连续沉默窗口下窗注入尾部的提醒，两句同义可任选；nudge_2 的 {{n}} 由装配方
 # 传当前拼出的弹药条数（未兑现数联动，T13）。
 # footer 分白天/夜间两态（T13，装配方按本地小时机械切换，仅文案层）：白天版鼓励自由发挥；
 # 夜间版（本地 00:00–09:00）纯搭话模式——不鼓励主动开腔，别起话题别 @ 人别分享素材。
-ctx_engage_header: 你刚打开群，这是你不在时新冒出来的 {{count}} 条——都只是背景板，看一遍就好，不构成需要你回应的任务，也不必补回复任何人
+ctx_engage_header: 开窗新增 {{count}} 条，最新在最上面——先从最新一条往上读，结合上文把前因补齐；不必逐条回应，有想接的可以接一句
 ctx_engage_line: [m:{{id}}] {{name}}({{qq}}): {{text}}
+ctx_engage_shard_header: 距你上次看过之后又新增 {{count}} 条，按最新到最早排列，结合上文看；不必逐条回应，想接就接一句
 ctx_engage_footer: 这个窗口随你自由发挥：想说就说，可以就背景里某条搭一句（quoteMsgId 填那行 [m:…] 里的数字，不填就不引用）、可以纯吐槽、可以 @ 你熟悉的人（只能 @ 主人和特别关注的人）、也可以什么都不说。语音不能 @ 也不能用 quoteMsgId，但可以照常引用正在回的那条。群里最后一条消息是你自己发的时候不能继续闲聊：只能做素材分享（兑现承诺、交付委托结果、分享外部素材），发言要带上出口工具的 share: true，有新消息进来后自动恢复；这个窗口里新进来的话你都会看到
 ctx_engage_footer_night: 现在是深夜时段，安静为主：有特别想接的话可以简短接一句，但别主动起话题、别 @ 人、也别分享素材，把话头留到白天。群里最后一条消息是你自己发的时候就别再接话了——深夜同样不发素材，安静待着就好；这个窗口里新进来的话你都会看到
 ctx_engage_nudge_1: （顺带一提：你已经好几个窗口没开口了。继续潜水没问题，但背景里要是有哪句让你想说，随时可以接）
