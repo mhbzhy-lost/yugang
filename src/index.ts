@@ -66,7 +66,6 @@ import {
   AMMO_TOPICS,
   ExternalAmmoDoc,
   applyAmmoShared,
-  applyAmmoSweep,
   renderAmmoSectionOf,
   shareableAmmoOf,
   type ExternalAmmoItem,
@@ -1386,25 +1385,22 @@ async function memoryDelegationsOf(chatKey: string): Promise<AmmoCandidate[]> {
 
 /**
  * 弹药来源③（外部库存，外部计划 E5/T13）：门开且非宵禁才出——门没开/深夜注入了
- * 也发不出去（claim 拒绝），宁少勿扰。读库顺手做 TTL 惰性清理（读时过期置 expired，
- * 与挑选同一次提交）；FIFO 取最旧 available（先到先分享，压 TTL 浪费）。链接不进
+ * 也发不出去（claim 拒绝），宁少勿扰。读库走 snapshot 只读路径（2026-11-04 根因修复：
+ * 唐住 commit 事务读会偶发 chord「Cannot use a settled overlay」TypeError，被 catch
+ * 吞掉后外部行永远注不进去；TTL 清扫不再在读侧做，claim 路径 applyAmmoClaim 自带
+ * sweep、shareableAmmoOf 本身也过滤过期）；FIFO 取最旧 available。链接不进
  * 注入：模型只拿标题/topic/ammoId，canonical URL 由宿主在出口渲染（P0-5）。
  */
 async function externalAmmoOf(chatKey: string): Promise<AmmoCandidate[]> {
-  console.log(`[鱼缸] 弹药外部行开始 chat=${chatKey}`);
   let picked: ExternalAmmoItem | undefined;
   try {
-    picked = await fish.harness.commit(async (tx) => {
-      const doc = await tx.doc(ExternalAmmoDoc);
-      applyAmmoSweep(doc, Date.now());
-      return shareableAmmoOf(doc, Date.now());
-    }, ctx);
+    const doc = await fish.harness.snapshot(ExternalAmmoDoc, ctx);
+    picked = shareableAmmoOf({ items: doc?.items ?? [] }, Date.now());
   } catch (error) {
-    console.error("[鱼缸] 弹药库读取失败", error instanceof Error ? error.message : error);
+    console.log("[鱼缸] 弹药库读取失败", error instanceof Error ? error.message : error);
     return [];
   }
   const gate = engageNext.shareGateOf(chatKey);
-  console.log(`[鱼缸] 弹药外部行诊断 chat=${chatKey} gate=${gate?.open ?? "none"} win=${gate?.windowId ?? "-"} picked=${picked?.id ?? "none"}/${picked?.state ?? "-"} night=${engageFooterOfNight()}`);
   if (!gate?.open || engageFooterOfNight() || picked === undefined) return [];
   return [{ what: picked.title, who: "", kind: "external", ammoId: picked.id, topic: picked.topic }];
 }
@@ -1481,9 +1477,7 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
     // 分享是鱼自己想开口的事，不该被「没新消息」压着：门开着就该给她看到库存与编号。
     // 同走 injection 管线（fish.engage_tick、非必答、无 salvage、无 quoteIds）；
     // 遇忙放弃（宁少勿答，不重试不补发，下窗自然重试）
-    console.log(`[鱼缸] ${chatKey} 空窗分支进入（nudge=${nudge}）`);
     const conv0 = await conversationFor(chatKey);
-    console.log(`[鱼缸] ${chatKey} 空窗conv就绪`);
     if (conversationBusy(conv0.id)) {
       console.log(`[鱼缸] ${chatKey} 空窗注入放弃（忙）`);
       return;
@@ -1491,7 +1485,6 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
     // 弹药段先拼（T13）：未兑现数 {{n}} 喂 nudge_2；外部在场与否由此判定（debt 旧账
     // 不单独触发空窗轮——只有 nudge 或外部弹药才是开口理由，防止旧账把空窗变成常态轮）
     const candidates = await ammoOf(chatKey, conv0);
-    console.log(`[鱼缸] ${chatKey} 空窗ammoOf返回 ${candidates.length} 条`);
     const hasExternal = candidates.some((item) => item.kind === "external");
     if (nudge === 0 && !hasExternal) return;
     const ammo = renderAmmoSection(candidates);
