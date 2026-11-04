@@ -38,7 +38,7 @@
 | F5 | 新闻和 GIF 使用独立任务模板且新闻调度独立存活 | `npm run prompts`、`npm test`、源码核对 | 新闻为 `[新闻播报]`；GIF 为 `[GIF 收图任务]` 且只看压缩图；新闻 scheduler 不受 ammo 停用影响 | 命令输出与 diff | T5 |
 | F6 | 换页前部剖面不变，尾部统一为真实顺序标准消息列表，无旧窗口说明/旧账/工具过程 | 本地核对 `compact.ts`、`prompt/handoff.md` diff、`npm test` | `handoff.md` 零改动；尾部为 `[历史消息]` + 边界 + 消息行；无 `鱼:` 专用行、open footer、thinking/toolResult | diff 与测试输出 | T6 |
 | F7 | 当前交付通过仓库全量既有检查，模型可见文档无已停用机制引导 | 本地 `npm run prompts`、`npm test`、`git diff --check` | 三命令 exit 0；runtime/tool_catalog/active TOOL.md/active messages 无 ammo/worker/旧账主动提醒；报告与计划记录真实验证结果 | 命令输出、计划执行记录 | T7 |
-| F8 | 合并转发保留三条触发路径与背景短标记；父消息使用标准行，展开附件后置且子消息有序，子图只走压缩链 | 本地源码核对、`npm test`、T8 人工核对记录 | 回复合集专用放行不恢复普通回复必答；无 @ 自带合集零成本丢弃；补展开附件不再前置；最多 10 条/2 图、嵌套不递归；不伪造子消息 ID/QQ；换页不补拉合集 | diff、测试输出与计划执行记录 | T1、T2、T6 |
+| F8 | 合并转发展开以 @ 为唯一前提（自带合集 / 引用合集 / 补展开三条路径都在 @ 之下），背景只留短标记；父消息使用标准行，展开附件后置且子消息有序，子图只走压缩链 | 本地源码核对、`npm test`、T8 人工核对记录 | 无 @ 的引用合集与无 @ 的自带合集都零成本拒掉、不进模型；引用合集 + @ 才展开；补展开附件不再前置；最多 10 条/2 图、嵌套不递归；不伪造子消息 ID/QQ；换页不补拉合集 | diff、测试输出与计划执行记录 | T1、T2、T6 |
 | F9 | `prompt/handoff.md` 相对实施前基线零改动 | 本地 `git diff --exit-code -- prompt/handoff.md` | 命令 exit 0；压缩 prompt 未被任何任务修改 | 命令输出、计划执行记录 | T6 |
 | F10 | decisions §10 矩阵中的每个 input 场景都由独立测试任务触发真实拼装，并与 decisions 权威模板精确比对 | 本地 `node --test test/model-input-templates.test.ts`，随后全量 `npm test` | 16 个 scene 均有真实入口触发器；文本、换行、附件顺序及图片 block 精确相等；open injection/shard 分别执行；缺场景、复制生产组装逻辑或修改 decisions 均不算通过 | 聚焦测试与全量测试输出、测试 diff | T7 |
 
@@ -507,7 +507,8 @@ helper 直接读取 decisions，严格校验标记唯一性、JSON、场景覆�
 | **B2（合规）** decisions 第三处修改（`前情 2→3`）未披露，且记录里写「未修改 decisions」自相矛盾 | 在「边界与未满足项」补齐 3 处 hunk 的完整披露与理由；保留该修改（3 个 entry 对应 3 行，`count` 取 `counted.length` 是改造前语义） | 文档层面核对 |
 | **B3（合规）** `round-images.ts` / `round-input.ts` / `news-broadcast.ts` 不在计划 WritePaths | 补「T7 前置修复（主会话，事后追认）」小节与「文件结构与职责」三行，并记录 `src/index.ts` 只转发、无第二套渲染 | `grep` 复核一处实现 |
 | **S1** 停用弹药后宵禁硬闸消失，AGENTS.md 仍称「宵禁硬边界生效」 | 改 AGENTS.md：明确宵禁只剩 prompt 软约束、browse 门与 `videoBvid` 无时段闸，标注待定产品项与补闸位置（`videoBrowseGateOf` 开窗计算加 `!ammoCurfewAt(now)`） | 文档层面核对 |
-| **S2** `_salvagePlainReply` 配置注释仍称「回复合集」必答 | 改 `fish.config.example`：仅私聊/被@是必答轮；回复合集只是闸放行 | `node -e` 解析 example JSON 通过 |
+| **S2** `_salvagePlainReply` 配置注释仍称「回复合集」必答 | 改 `fish.config.example`：仅私聊/被@是必答轮 | `node -e` 解析 example JSON 通过 |
+| **产品回退（用户 2026-11-04 定案）** 「回复合集直接放行」这个例外取消了：**看合集必须引用 + @ 鱼** | `gate.ts` 删 `forward_reply` reason，`repliedForward` 单独出现时按非 @ 拒（open 态也拒）；`onebot.ts` 的被引合集展开加 `parsed.mentionsBot` 前置；decisions §5.9 的 `forward-reply` 模板补 `[这条消息@了你]`、三条路径改为「@ 是唯一前提」；AGENTS.md §13 与 §7 同步；`F8` 判据从「回复合集专用放行」改为「无 @ 的引用合集零成本拒掉」 | 聚焦 19/19（`forward_reply` 场景改为 @ 形态）、全量 113/113、`gate-next` 6/6 |
 | **S3** `scripts/real-model-smoke.ts` 仍手拼 `回复msg:` | 改为直接调用生产 `renderMessageList`；`claimMaster` 语义改成「正文自称主人」（真实身份标签仍由宿主机械判定） | `grep -rn "回复msg:" src/ scripts/` 只剩一条描述性注释 |
 | **S4** 死函数 `gate.ts:renderForModel`、`onebot.ts:expandForwardById`（后者以空文案表触发 `model-input.ts` 中文字面兜底） | 两处均删除；`gate.ts` 的 `MessageTable` 保留（闸与渲染共用） | `npm test` + startup 检查通过 |
 | **S5** `bili_hot_bad_rid` 死 key + 过期注释 | 删 key 与回退，注释改为「宿主与工具字表脱节属配置事故」 | `npm run prompts` 显示 bili_hot 文案 6 key、无死文案告警 |

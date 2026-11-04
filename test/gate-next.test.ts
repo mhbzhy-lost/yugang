@@ -1,7 +1,7 @@
 /**
- * 门的 next-only 语义（开窗两态，legacy 判定已下线；2026-11-04 decisions §5.9 合集专用例外）：
+ * 门的 next-only 语义（开窗两态，legacy 判定已下线；合集不给 @ 之外的例外）：
  *  - @ 仍必答（含裸 @、@ 且回复合集）——@ 优先于一切窗口判定
- *  - 回复合集直接放行（forward_reply，合集专用例外，不需要 @）；普通回复仍只是
+ *  - 引用合集必须同时 @ 才展开（单独引用一律拒）；普通回复仍只是
  *    引用动作，不必答
  *  - 无 @ 的自带合集零成本拒掉（不展开、不进模型），合集 id 缓存在 onebot 解析层
  *    （闸前）无条件照记，不受本闸影响
@@ -54,16 +54,15 @@ test("@ 仍必答（含裸 @、@ 且回复合集）", async () => {
   assert.equal(duringClosed.reason, "mentioned");
 });
 
-test("回复合集直接放行（合集专用例外，不需要 @）；普通回复仍不必答", async () => {
+test("引用合集没 @ 一律拒（不展开）；@ 了才展开", async () => {
   const gate = build();
+  // 主体定案 2026-11-04：看合集得 @——单纯引用合集不给闸例外，open 态也不进模型
   const replied = await gate.decide({ msg: msg({ repliedForward: true }) });
-  assert.equal(replied.enter, true, "回复合集本身就是明确指令（decisions §5.9）");
-  assert.equal(replied.reason, "forward_reply");
-
-  // closed 态也放行：合集专用例外在开窗两态之前判定
-  const closed = await build({ isOpen: () => false }).decide({ msg: msg({ repliedForward: true }) });
-  assert.equal(closed.enter, true);
-  assert.equal(closed.reason, "forward_reply");
+  assert.equal(replied.enter, false, "引用合集但没有 @ 不该进模型");
+  assert.equal(replied.reason, "next_pending");
+  const open = await build({ isOpen: () => true }).decide({ msg: msg({ repliedForward: true }) });
+  assert.equal(open.enter, false, "open 态也不放行引用合集");
+  assert.equal(open.reason, "next_pending");
 
   // 普通回复（不是合集）不改变闸语义：非 @ 仍按开窗两态
   const plain = await gate.decide({ msg: msg({ replyIds: ["123"] }) });
