@@ -6,5 +6,8 @@
   "say_mention_private": "私聊里没有@这回事，直接说话就行",
   "say_mention_not_privileged": "主动@只在主人或你特别关注的人叫你点名时才行，这条别@",
   "say_mention_members_missing": "拿不到这个群的成员名单，没法核实要@谁，这条别@",
-  "say_mention_not_member": "{{userIds}} 不在这个群里，号可能抄错了，先核准再@"
+  "say_mention_not_member": "{{userIds}} 不在这个群里，号可能抄错了，先核准再@",
+  "video_bvid_invalid": "BV 号格式不对",
+  "video_share_denied": "这一轮不能分享视频",
+  "video_share_not_viewed": "没看过的视频不能分享"
 }

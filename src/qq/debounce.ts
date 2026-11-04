@@ -15,8 +15,15 @@
  * src/index.ts（便于注入假时钟验证）。pending 只活在内存里——重启时没 flush 的窗口
  * 直接丢弃，宁可少答一句，也不要在重启后补一句陈年旧话。
  */
-import { renderTemplate } from "../prompts.ts";
-import { renderForModel, type MessageTable } from "./gate.ts";
+import type { MessageTable } from "./gate.ts";
+import {
+  renderForwardAttachment,
+  renderMessageList,
+  renderQuotedOriginal,
+  type ForwardAttachment,
+  type ModelMessage,
+  type QuotedMessage,
+} from "./model-input.ts";
 import { orderByArrival, type IncomingMessage } from "./onebot.ts";
 
 /** 最近流水里的一条（背景栏与 burst 共用同一套字段）。 */
@@ -27,6 +34,8 @@ export interface RecentChatMessage {
   userId: number;
   nickname: string;
   text: string;
+  quoted?: QuotedMessage;
+  forward?: ForwardAttachment;
   at: number;
   /** 纯媒体消息形态（onebot 解析层透传，开窗积压/shard 过滤消费）：
  *  gif = 纯 GIF 消息，image = 纯图片无文字。undefined = 普通消息。 */
@@ -68,6 +77,9 @@ export interface BurstInput {
   msg: IncomingMessage;
   /** 模型可见文本（合集已折叠、bypass 已替换成占位）。 */
   text: string;
+  /** T2 接入共享消息渲染器时使用的结构化附件。 */
+  quoted?: QuotedMessage;
+  forward?: ForwardAttachment;
   /** 宿主绑定的 opaque 载荷（bypass 段），flush 时取整组里最近一条非空的。 */
   payload?: string;
   /** 首次 push 时绑定的不透明上下文（会话 / 人格）；之后的 push 改不动它。 */
@@ -123,7 +135,7 @@ export function createDebouncer(options: DebouncerOptions): Debouncer {
   };
 
   return {
-    push({ msg, text, payload, binding }) {
+    push({ msg, text, quoted, forward, payload, binding }) {
       const key = burstKey(msg.chatKey, msg.userId);
       const existing = bursts.get(key);
       // 同一发送者的新消息：取消旧 timer，整组继续加长
@@ -150,6 +162,8 @@ export function createDebouncer(options: DebouncerOptions): Debouncer {
         replyIds: [...(msg.replyIds ?? [])],
         ...(msg.messageId !== undefined ? { messageId: msg.messageId } : {}),
         ...(msg.arrivalSeq !== undefined ? { arrivalSeq: msg.arrivalSeq } : {}),
+        ...((quoted ?? msg.quoted) !== undefined ? { quoted: quoted ?? msg.quoted } : {}),
+        ...((forward ?? msg.forward) !== undefined ? { forward: forward ?? msg.forward } : {}),
         ...(payload !== undefined ? { payload } : {}),
       };
       burst.messages.push(line);
@@ -290,20 +304,16 @@ export function lastPayload(burst: readonly BurstMessage[]): string | undefined 
 }
 
 export interface ContextOptions {
-  /** 主人 QQ：renderForModel 用它标注「你主人」。 */
+  /** 主人 QQ：命中的行打 [主人] 标签（与 [特别关注] 互斥，master 优先）。 */
   master: string;
   /** prompt/messages.md 的文案表：所有可见文案从这里来。 */
   messages: MessageTable;
-  /** inline 附图标注（宿主按图选取结果现算）：attach=已附张数，more=未附张数。缺省不标注。 */
-  images?: { attach: number; more: number };
   /** 背景板条数上限（T5）：@（answer）轮传 engage.mentionContextSize，缺省 10。 */
   backgroundLimit?: number;
   /** 已读标记（决策 20）：背景板先取上限再剔除 arrivalSeq ≤ 它的行（已进过模型的不重复注入）；缺省不去重。 */
   seenSeq?: number;
-  /** 背景板注入时紧跟其后的引导行文案（ctx_seen_note，每次都带——不限于背景板非空或发生截减时）；缺省不带。 */
-  seenNote?: string;
-  /** 锚点行打标（[主人]/[特别关注]，master 优先互斥；「你主人」标注在行内保留）；缺省不打。 */
-  anchorMark?: string;
+  /** 特别关注判定（宿主现读 watchedByChat）：命中的行打 [特别关注] 标签（[主人] 行不重复打）。 */
+  watched?: (userId: number | string) => boolean;
 }
 
 /**
@@ -336,18 +346,21 @@ function seenOf(line: { messageId?: number | string; arrivalSeq?: number; at?: n
   };
 }
 
-/** counted entry 渲染行的 [m:<messageId>] 锚点前缀（T3 契约，机械结构标记）：没有 id 的旧流水不加。 */
-function withAnchor<T extends { messageId?: number | string }>(line: T, rendered: string): string {
-  return line.messageId !== undefined ? `[m:${line.messageId}] ${rendered}` : rendered;
+/** 合并排序槽：背景与整组按真实到达顺序进同一个消息列表（orderByArrival 只动有序号的槽）。 */
+interface ListSlot {
+  arrivalSeq?: number;
+  model: ModelMessage;
+  seen: SeenMessage;
 }
 
 /**
- * 这一轮的 user 文本：背景（带 QQ 号，给主动 @ 提供可信目标）+ 连续发言整组 + 锚点。
- *
- * 顺序是刻意的：先说「刚才群里聊了什么」，再说「这几条是同一个人连着的」，最后才是
- * 要回的那一行（带 @ / 回复 / 主人标注）。锚点之外的消息一律只作背景，且整组不会
- * 在背景里重复出现。每条消息行带 [m:id] 锚点（T4 quoteMsgId / T12 逐字校验的挂点），
- * 锚点集随返回值现算交给宿主登记 quoteIds。
+ * 这一轮的 user 文本（decisions §2–§5 标准群消息模板）：背景 + 整组合并成
+ * **一个**消息列表，严格按真实接收顺序排列（A-B-A 里 B 留在原位，当前消息留在
+ * 真实时间线位置，不为「锚点」重排或特殊渲染）；标签（[m:id][回复了][转发合集]
+ * [@了你][主人]/[特别关注]）由 renderMessageLine 机械拼装。引用原文与合集附件是
+ * 列表后的附加段（先引用原文、再合集附件；最近合集补展开与图片段由宿主接在
+ * 后面），不参与时间线排序。背景先取上限 N 再剔除已进过模型的（seenSeq）；
+ * 锚点集（seen）随返回值现算，宿主据此登记 quoteIds，顺序与渲染顺序一致。
  */
 export function withContext(
   anchor: IncomingMessage,
@@ -356,16 +369,33 @@ export function withContext(
   options: ContextOptions,
 ): RoundContext {
   const messages = options.messages;
-  const renderedAnchor = withAnchor(anchor, renderForModel(anchor, options.master, messages));
-  // 锚点行打标：[主人]/[特别关注]（master 优先互斥），放行首（[m:id] 之前）；
-  // 行内的「你主人」标注照旧保留。
-  const anchorLine = options.anchorMark ? `${options.anchorMark} ${renderedAnchor}` : renderedAnchor;
+  const masterOf = (userId: number | string): boolean =>
+    options.master.length > 0 && String(userId) === options.master;
+  const watchedOf = (userId: number | string): boolean =>
+    !masterOf(userId) && options.watched?.(userId) === true;
+
   if (!anchor.chatKey.startsWith("qq:group:")) {
-    return { content: anchorLine, seen: [seenOf(anchor)] };
+    // 私聊边界（decisions §5.3）：独立开场、只注入当前消息，不展示背景；
+    // 引用原文与合集附件照旧后置。
+    const model: ModelMessage = {
+      ...(anchor.messageId !== undefined ? { messageId: anchor.messageId } : {}),
+      userId: String(anchor.userId),
+      nickname: anchor.nickname,
+      text: anchor.text,
+      mentionsBot: false,
+      replyIds: [],
+      master: masterOf(anchor.userId),
+      watched: false,
+      ...(anchor.quoted ? { quoted: anchor.quoted } : {}),
+      ...(anchor.forward ? { forward: anchor.forward } : {}),
+    };
+    const parts = [renderMessageList([model], messages, "private")];
+    if (model.quoted) parts.push(renderQuotedOriginal(model.quoted, messages));
+    if (model.forward) parts.push(renderForwardAttachment(model.forward, messages));
+    if (model.quoted?.forward) parts.push(renderForwardAttachment(model.quoted.forward, messages));
+    return { content: parts.join("\n\n"), seen: [seenOf(anchor)] };
   }
 
-  const parts: string[] = [];
-  const seen: SeenMessage[] = [];
   // 背景板（决策 20）：先按上限取最近 N 条，再剔除已进过模型的部分（arrivalSeq ≤ seenSeq；
   // 旧流水没有序号的没法判已读，保守保留）。不传 seenSeq = 整段不去重。
   let background = backgroundFor(anchor, bucket, burst, options.backgroundLimit ?? 10);
@@ -373,43 +403,57 @@ export function withContext(
     const seenSeq = options.seenSeq;
     background = background.filter((line) => line.arrivalSeq === undefined || line.arrivalSeq > seenSeq);
   }
-  if (background.length > 0) {
-    parts.push(renderTemplate(messages["ctx_header"] ?? "", { count: String(background.length) }));
-    const template = messages["ctx_bg_line"] ?? "";
-    for (const line of background) {
-      parts.push(withAnchor(line, renderTemplate(template, { who: line.nickname, qq: String(line.userId), text: line.text })));
-      seen.push(seenOf(line));
-    }
+
+  const slots: ListSlot[] = [];
+  for (const line of background) {
+    // 背景行只陈述事实：不带 @/回复标签（流水没存这些字段），合集在入站记账时
+    // 已折叠成短标记（forward_collapsed），不渲染附加段。
+    slots.push({
+      ...(line.arrivalSeq !== undefined ? { arrivalSeq: line.arrivalSeq } : {}),
+      model: {
+        ...(line.messageId !== undefined ? { messageId: line.messageId } : {}),
+        userId: String(line.userId),
+        nickname: line.nickname,
+        text: line.text,
+        mentionsBot: false,
+        replyIds: [],
+        master: masterOf(line.userId),
+        watched: watchedOf(line.userId),
+      },
+      seen: seenOf(line),
+    });
   }
-  // 每次携带（终审 #4：不限于背景板非空——重启后首条 / 背景全已读时同样带，
-  // 引导模型把新消息接进历史而不是当孤立新话题）：不传 seenNote 就不带
-  if (options.seenNote) parts.push(options.seenNote);
-
-  // 多才叫「连续发言」：一条就还是原来的「要你回应的就是这一条」
-  if (burst.length > 1) {
-    const marker = messages["ctx_burst_marker"] ?? "";
-    const template = messages["ctx_burst_line"] ?? "";
-    parts.push(renderTemplate(messages["ctx_burst_header"] ?? "", { who: anchor.nickname, count: String(burst.length), marker }));
-    // 除锚点外都按普通行渲染；同一句只出现一次
-    for (const line of burst.slice(0, -1)) {
-      const rendered = renderTemplate(template, { who: line.nickname, qq: String(line.userId), text: line.text });
-      parts.push(`${marker} ${withAnchor(line, rendered)}`.trim());
-      seen.push(seenOf(line));
-    }
-    parts.push(messages["ctx_anchor_note"] ?? "");
-    // 锚点这一行走带结构化标注的那份（群号 / 昵称(QQ) / 回复 id / @ 目标），仍打同组标记
-    parts.push(`${marker} ${anchorLine}`.trim());
-    seen.push(seenOf(anchor));
-  } else {
-    parts.push(messages["ctx_target"] ?? "", anchorLine);
-    seen.push(seenOf(anchor));
+  for (const line of burst) {
+    slots.push({
+      ...(line.arrivalSeq !== undefined ? { arrivalSeq: line.arrivalSeq } : {}),
+      model: {
+        ...(line.messageId !== undefined ? { messageId: line.messageId } : {}),
+        userId: String(line.userId),
+        nickname: line.nickname,
+        text: line.text,
+        mentionsBot: line.mentionsBot === true,
+        replyIds: [...line.replyIds],
+        master: masterOf(line.userId),
+        watched: watchedOf(line.userId),
+        ...(line.quoted ? { quoted: line.quoted } : {}),
+        ...(line.forward ? { forward: line.forward } : {}),
+      },
+      seen: seenOf(line),
+    });
   }
 
-  // inline 附图标注：已附的告诉模型直接看，未附的引导 look（文案在 prompt/messages.md）
-  const attach = options.images?.attach ?? 0;
-  if (attach > 0) parts.push(renderTemplate(messages["ctx_image_attached"] ?? "", { count: String(attach) }));
-  const more = options.images?.more ?? 0;
-  if (more > 0) parts.push(renderTemplate(messages["ctx_images_more"] ?? "", { count: String(more) }));
-
-  return { content: parts.filter((part) => part.length > 0).join("\n"), seen };
+  // 严格真实接收顺序（decisions §2）；旧流水没序号时 orderByArrival 保持原位
+  //（背景在前、整组在后的保守序，与改版前一致）。
+  const ordered = orderByArrival(slots);
+  const parts = [renderMessageList(ordered.map((slot) => slot.model), messages, "group")];
+  // 列表后附加段（decisions §5.9）：先全部引用原文，再合集附件（自带合集在前、
+  // 被引合集在后）；最近合集补展开与图片段由宿主（flushBurst）接在最后。
+  for (const slot of ordered) {
+    if (slot.model.quoted) parts.push(renderQuotedOriginal(slot.model.quoted, messages));
+  }
+  for (const slot of ordered) {
+    if (slot.model.forward) parts.push(renderForwardAttachment(slot.model.forward, messages));
+    if (slot.model.quoted?.forward) parts.push(renderForwardAttachment(slot.model.quoted.forward, messages));
+  }
+  return { content: parts.join("\n\n"), seen: ordered.map((slot) => slot.seen) };
 }

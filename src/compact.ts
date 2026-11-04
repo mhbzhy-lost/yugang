@@ -23,6 +23,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Conversation, ConversationId } from "@earendil-works/pi-durable";
 import { renderTemplate, type PromptSet } from "./prompts.ts";
+import { renderMessageList, type ModelMessage } from "./qq/model-input.ts";
 import { extractMemories, type ExtractSaved } from "./memory-extract.ts";
 import { MEMORY_EVAL_KIND, MEMORY_INBOUND_KIND, MEMORY_ZERO_EXTRACT_PAGES, type EvalEventData, type MemoryInbound } from "./memory.ts";
 
@@ -63,6 +64,8 @@ export interface CompactorOptions {
   limits?: () => { maxEntries: number; maxChars: number };
   /** 或者攒够多少字就压。 */
   maxChars: number;
+  /** conversation → 当前人格的鱼昵称与真实 self QQ；拿不到 QQ 时留空，不伪造。 */
+  selfOf?: (conversationId: ConversationId) => { nickname: string; userId: string };
   onError?: (error: unknown) => void;
   /** 记忆抽取用的模型与提示词；不给就不拍取。 */
   extract?: { models: Models; model: { provider: string; modelId: string }; prompts: PromptSet };
@@ -99,7 +102,8 @@ export interface Compactor {
 export function createCompactor(options: CompactorOptions): Compactor {
   return {
     async maybeCompact(conversation, force = false) {
-      const counted = await renderCountedEntries(conversation);
+      const self = options.selfOf?.(conversation.id) ?? { nickname: "Elysia", userId: "" };
+      const counted = await renderCountedEntries(conversation, self);
       const transcript = counted.flatMap((e) => e.lines).join("\n");
       if (counted.length === 0) return { compacted: false, reason: "empty" };
 
@@ -404,11 +408,18 @@ async function profileBounded(
  * 背景板也是模型见过的内容，行进尾巴；但它们不进摘要输入（renderCountedEntries 的
  * lines 仍为空，摘要零变化；阈值字符数经 chars 计入，终审 #2）。
  */
-export function mechanicalTail(counted: CountedEntry[], limit: number): { lines: string[]; entries: number; start: string; end: string } {
+export function mechanicalTail(
+  counted: CountedEntry[],
+  limit: number,
+  messages: Record<string, string>,
+): { lines: string[]; entries: number; start: string; end: string } {
   const tail = counted.slice(-limit);
   const stamps = tail.map((e) => e.at).filter((at): at is number => typeof at === "number");
+  const models = tail.flatMap((entry) => entry.tailMessages ?? historyInputProjection((entry.tailLines ?? []).join("\n")).messages);
+  const attachments = tail.flatMap((entry) => entry.tailAttachments ?? historyInputProjection((entry.tailLines ?? []).join("\n")).attachments);
+  const history = models.length > 0 ? renderMessageList(models, messages, "history") : "";
   return {
-    lines: tail.flatMap((e) => e.tailLines ?? e.lines),
+    lines: history ? [history, ...attachments.map((attachment) => `\n${attachment}`)] : [],
     entries: tail.length,
     start: stamps.length ? formatStamp(Math.min(...stamps)) : "?",
     end: stamps.length ? formatStamp(Math.max(...stamps)) : "?",
@@ -422,7 +433,7 @@ export function mechanicalTail(counted: CountedEntry[], limit: number): { lines:
  * 可渲染）。任何模型都不再参与。
  */
 function mechanicalHandoff(counted: CountedEntry[], messages: Record<string, string>): string {
-  const tail = mechanicalTail(counted, FALLBACK_TAIL_ENTRIES);
+  const tail = mechanicalTail(counted, FALLBACK_TAIL_ENTRIES, messages);
   const header = renderTemplate(messages["compact_time_header"] ?? TIME_HEADER_FALLBACK, {
     count: String(tail.entries),
     start: tail.start,
@@ -438,7 +449,7 @@ function mechanicalHandoff(counted: CountedEntry[], messages: Record<string, str
  * 纯机械生成——模型不产出这两个字段，也就无从编造。
  */
 export function buildProfileHandoff(profile: PageProfile, counted: CountedEntry[], messages: Record<string, string>): string {
-  return [...renderProfileCard(profile, counted, messages), "", ...mechanicalTail(counted, FALLBACK_TAIL_ENTRIES).lines].join("\n");
+  return [...renderProfileCard(profile, counted, messages), "", ...mechanicalTail(counted, FALLBACK_TAIL_ENTRIES, messages).lines].join("\n");
 }
 
 /** 剖面卡片的机械渲染：时间头（整页口径）+ 成员 + 话头 + 承诺 + 氛围，总长 ≤ PROFILE_CARD_CHARS。 */
@@ -631,8 +642,37 @@ export interface CountedEntry {
   /** 计入换页阈值的字符数（lines 与 tailLines 的正文，不含宿主拼接的分隔换行）。 */
   chars: number;
   at?: number;
+  /** 旧字段：只保留作历史输入投影，不再直接拼成换页尾。 */
   tailLines?: string[];
+  /** 新尾部：真实顺序的标准消息行（旧 entry 只有可读文本时保留字符串，不伪造 m:id）。 */
+  tailMessages?: (ModelMessage | string)[];
+  /** 新尾部：当页模型实际见过的引用/合集附件，统一放在完整历史列表之后。 */
+  tailAttachments?: string[];
   speaker?: { userId: string; nickname: string };
+}
+
+/**
+ * 从模型实际见过的 user text 提取历史消息与附件。当前标准输入直接取列表内原文；
+ * 旧格式没有统一边界时只保留带真实 [m:id] 的可读行，旧窗口说明/footer/任务提示不进场。
+ * 附加段只认引用原文与合集附件；[本轮要求]、图片标签和工具过程不进历史尾。
+ */
+function historyInputProjection(text: string): { messages: string[]; attachments: string[] } {
+  const lines = text.split("\n");
+  const start = lines.indexOf("> 消息起始");
+  const end = start >= 0 ? lines.indexOf("> 消息结束", start + 1) : -1;
+  if (start >= 0 && end > start) {
+    const messages = lines.slice(start + 1, end).filter((line) => line.trim().length > 0);
+    const rest = lines.slice(end + 1).join("\n").trim();
+    const attachments = rest
+      .split(/\n\s*\n/)
+      .map((part) => part.trim())
+      .filter((part) => part.startsWith("[引用原文]") || part.startsWith("[转发合集"));
+    return { messages, attachments };
+  }
+  const messages = lines
+    .filter((line) => /^(?:➤\s*)?(?:\[特别关注\]\s*)?\[m:/.test(line))
+    .map((line) => line.replace(/^➤\s*/, ""));
+  return { messages, attachments: [] };
 }
 
 /** entry 时间戳：pi.user / fish.inbound 取首条 user message，fish.outbound 取 payload 的 at。 */
@@ -665,7 +705,7 @@ function entryTimestamp(entry: { kind: string; model?: unknown; data?: unknown }
  * stopReason:error 的空 assistant entry（生产观察：失败轮会留一条 content 空的错误
  * entry 在活跃链，重放成噪音）在这里显式跳过，不进摘要也不进尾巴。
  */
-async function renderCountedEntries(conversation: Conversation): Promise<CountedEntry[]> {
+async function renderCountedEntries(conversation: Conversation, self: { nickname: string; userId: string } = { nickname: "Elysia", userId: "" }): Promise<CountedEntry[]> {
   const view = await conversation.viewState(ctx);
   const counted: CountedEntry[] = [];
 
@@ -674,30 +714,51 @@ async function renderCountedEntries(conversation: Conversation): Promise<Counted
       if (isEmptyErrorAssistant(entry)) continue;
       if (entry.kind === "pi.user" || entry.kind === MEMORY_INBOUND_KIND) {
         const text = entryText(entry.model);
+        const projection = historyInputProjection(text);
         const data = entry.kind === MEMORY_INBOUND_KIND ? (entry.data as Partial<MemoryInbound> | undefined) : undefined;
         const speaker =
           typeof data?.userId === "string" && data.userId.trim() && typeof data?.nickname === "string"
             ? { userId: data.userId.trim(), nickname: data.nickname.trim() }
             : undefined;
         const lines = text ? [`群友: ${text}`] : [];
-        counted.push({ lines, chars: lines.join("\n").length, at: entryTimestamp(entry), ...(speaker ? { speaker } : {}) });
+        counted.push({
+          lines,
+          chars: lines.join("\n").length,
+          at: entryTimestamp(entry),
+          tailMessages: projection.messages,
+          tailAttachments: projection.attachments,
+          ...(speaker ? { speaker } : {}),
+        });
       } else if (entry.kind === MEMORY_ENGAGE_KIND || entry.kind === MEMORY_WORKER_KIND) {
         // engage_tick / worker_round：计入阈值（entries 与 chars），不进摘要输入；原文行只进换页尾巴（tailLines），
         // 时间戳保留给时间头
         const text = entryText(entry.model);
+        const projection = historyInputProjection(text);
         counted.push({
           lines: [],
           chars: text.length,
           at: entryTimestamp(entry),
-          ...(text ? { tailLines: [text] } : {}),
+          tailMessages: projection.messages,
+          tailAttachments: projection.attachments,
         });
       } else if (entry.kind === "fish.outbound") {
-        const data = entry.data as { items?: string[]; at?: unknown } | undefined;
+        const data = entry.data as { items?: string[]; at?: unknown; messageId?: number | string } | undefined;
         const lines = (data?.items ?? []).map((text) => `鱼: ${text}`);
+        const tailMessages: ModelMessage[] = (data?.items ?? []).map((text, index) => ({
+          ...(index === 0 && data?.messageId !== undefined ? { messageId: data.messageId } : {}),
+          userId: self.userId,
+          nickname: self.nickname,
+          text,
+          mentionsBot: false,
+          replyIds: [],
+          master: false,
+          watched: false,
+        }));
         counted.push({
           lines,
           chars: lines.join("\n").length,
           at: typeof data?.at === "number" ? data.at : undefined,
+          tailMessages,
         });
       }
     }

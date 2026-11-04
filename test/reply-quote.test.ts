@@ -1,11 +1,13 @@
 /**
  * onebot 水合 → debounce quoteFromReply 集成测试。
  *
- * 锁一个真上过线的 bug：#onFrame 水合回复（把占位符换成「昵称：「原文」」预览）后
- * 曾把 parsed.replyIds 清空，debounce 的 quoteFromReply（整组里任意一条是回复 →
- * 这一轮仍然引用，AGENTS.md 第 7 节）从 a99a628 上线起就永远是 false，
- * 真回复轮（锚点是 QQ 回复、无 @、模型也没主动 quote）一直裸发。
- * 入站渲染与 forwardIds / gate 行为不在本测试改动面内。
+ * 锁一个真上过线的 bug：#onFrame 水合回复后曾把 parsed.replyIds 清空，debounce 的
+ * quoteFromReply（整组里任意一条是回复 → 这一轮仍然引用，AGENTS.md 第 7 节）
+ * 从 a99a628 上线起就永远是 false，真回复轮（锚点是 QQ 回复、无 @、模型也没主动
+ * quote）一直裸发。
+ * 2026-11-04 decisions §3/§5.9 后引用原文不再拼进正文：水合产出结构化 quoted
+ *（附加段由装配方后置渲染），正文只留当前消息本身；replyIds 保留语义不变。
+ * 入站行渲染与 forwardIds / gate 行为不在本测试改动面内。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -132,8 +134,9 @@ test("真回复轮（无 @）：onebot 水合保留 replyIds，debounce quoteFro
   assert.equal(burst.mustAnswer, false, "回复普通消息不是回复合集，也没 @，不该必答");
   assert.equal(burst.quoteFromReply, true, "整组里任意一条是回复 → 这一轮仍然引用；水合后清空 replyIds 曾让它永远为假");
   assert.deepEqual(burst.messages[0].replyIds, ["666"], "水合后 replyIds 必须保留");
-  // 入站渲染不变：占位符照旧换成「昵称：「原文」」预览
-  assert.equal(burst.messages[0].text, "李四：「原文」 这句怎么讲");
+  // 引用原文不再拼进正文（decisions §3）：正文只有当前消息，被引内容水合成结构化 quoted
+  assert.equal(burst.messages[0].text, "这句怎么讲");
+  assert.deepEqual(burst.messages[0].quoted, { id: "666", nickname: "李四", userId: "", text: "原文", images: [] });
 });
 
 test("整组语义：组里普通消息 + 回复消息，quoteFromReply 同样为真", async () => {
@@ -157,7 +160,8 @@ test("整组语义：组里普通消息 + 回复消息，quoteFromReply 同样�
 
   assert.equal(flushed.length, 1, "同一发送者的两句要在同一组一起提交");
   const burst = flushed[0]!;
-  assert.deepEqual(burst.messages.map((m) => m.text), ["先说一句", "李四：「原文」 还有这个"]);
+  assert.deepEqual(burst.messages.map((m) => m.text), ["先说一句", "还有这个"], "引用原文不再拼进正文，两句都只留当前消息本身");
+  assert.equal(burst.messages[1].quoted?.text, "原文", "回复那条水合出结构化 quoted");
   assert.equal(burst.quoteFromReply, true, "整组里任意一条是回复就够，不必锚点本身是回复");
 });
 

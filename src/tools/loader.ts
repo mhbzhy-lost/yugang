@@ -16,6 +16,11 @@
  * 不延迟加载实现（没有动态 import 懒加载）。依赖不满足时 factory 返回 undefined，
  * 该工具直接跳过：不进 agent.tools、不进 agent.deferred、不进 tool_catalog。
  *
+ * 停用工具包（DISABLED_TOOL_PACKAGES，2026-11-04 模型输入计划 T3）：四件套完整性校验
+ * 照旧全部执行（manifest 解析、manifest ↔ factory 双向一一对应、tool.ts 存在性、
+ * messages.json 格式），但不进 active/deferred/catalog，factory 不调用，disabled 包的
+ * tool-messages 也不并入 active messages 合并视图；目录与源码保留作兼容，不得删目录规避校验。
+ *
  * eager/deferred 只在这里定：say_words / say_media / say_meme / say_voice / react /
  * tool_search 初始可见，其余已启用工具统一 deferred: true（factory 本体不写 deferred）。deferred 标记加在注册对象上，后续
  * withToolTimeout 用展开拷贝包装，会原样保留 deferred / callers / parameters / description。
@@ -86,6 +91,14 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
 /** 初始就提供给模型的工具：四个出口 say_*、轻回应 react、按需加载的检索入口 tool_search。 */
 const EAGER_TOOLS: ReadonlySet<string> = new Set(["say_words", "say_media", "say_meme", "say_voice", "react", "tool_search"]);
 
+/**
+ * 停用工具包（2026-11-04 模型输入计划 T3，弹药管线停用）：完整性校验照旧（孤儿 manifest /
+ * 孤儿 factory / 缺 tool.ts / messages.json 非法都仍报错），但不进 active/deferred/catalog，
+ * factory 不调用，tool-messages 不并入 active messages 合并视图。目录与源码保留作兼容，
+ * 不得删目录规避校验。
+ */
+export const DISABLED_TOOL_PACKAGES: ReadonlySet<string> = new Set(["ammo_list", "ammo_submit"]);
+
 /** loader 的产出：已启用工具的注册对象与 manifest（同序，按工具名排序）。 */
 export interface ToolSurface {
   /** 全部已启用工具（eager + deferred），按 name 排序。 */
@@ -104,11 +117,14 @@ export async function loadToolSurface(deps: ToolPackageDeps): Promise<ToolSurfac
   // manifest 与工具实现同住源码包根，按模块自身路径定位（不依赖 cwd 或 promptRoot）
   const root = fileURLToPath(new URL("./", import.meta.url));
   const manifests = loadToolManifests(root, { memeTags: deps.prompts.memeTags });
-  // 合并视图：工具专属文案就地并入 deps.prompts.messages，工具执行代码、宿主 section
-  // 与 scripts 都只认这一个 map，迁移前后语义不变。撞车（工具 ↔ 工具、工具 ↔ 中心）
-  // 在 mergeToolMessages 里直接抛错，绝不静默覆盖。
-  mergeToolMessages(manifests, deps.prompts.messages);
+  // 合并视图：active 工具包的专属文案就地并入 deps.prompts.messages，工具执行代码、宿主 section
+  // 与 scripts 都只认这一个 map。撞车（工具 ↔ 工具、工具 ↔ 中心）在 mergeToolMessages 里
+  // 直接抛错，绝不静默覆盖。disabled 包的 tool-messages 不并入（T3：停用包不进 active
+  // messages 合并视图，其文案不再是模型可见面）。
+  const activeManifests = new Map([...manifests].filter(([name]) => !DISABLED_TOOL_PACKAGES.has(name)));
+  mergeToolMessages(activeManifests, deps.prompts.messages);
 
+  // 完整性校验对全部包（含 disabled）照旧：双向一一对应 + tool.ts 存在性
   for (const name of Object.keys(FACTORIES)) {
     if (!manifests.has(name)) throw new Error(`有 factory 但缺少工具 manifest：src/tools/${name}/TOOL.md`);
   }
@@ -119,6 +135,8 @@ export async function loadToolSurface(deps: ToolPackageDeps): Promise<ToolSurfac
 
   const tools: ToolRegistration[] = [];
   for (const name of [...manifests.keys()].sort()) {
+    // disabled 包：校验已做完，不调 factory、不进任何模型面（active/deferred/catalog）
+    if (DISABLED_TOOL_PACKAGES.has(name)) continue;
     const registration = await FACTORIES[name]!(manifests.get(name)!, deps);
     // 依赖闸：factory 返回 undefined = 这个能力当前不可用（如无 master 的主人工具），
     // 不进入任何模型面（agent.tools / agent.deferred / tool_catalog 都没有它）

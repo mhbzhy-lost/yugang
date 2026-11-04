@@ -79,6 +79,26 @@ export const NEWS_SOURCE_IDS: readonly NewsSourceId[] = [
 
 type RssSourceId = "jiemian" | "huxiu" | "ithome" | "people";
 
+/**
+ * 来源署名的中文显示名（decisions §5.7）：宿主渲染新闻成品时用这份映射，模型不写来源名。
+ * 枚举 id 只用于配置/取数与审计，不进模型可见文本。
+ */
+export const NEWS_SOURCE_LABELS: Readonly<Record<NewsSourceId, string>> = {
+  "60s": "60秒",
+  jiemian: "界面",
+  huxiu: "虎嗅",
+  ithome: "IT之家",
+  people: "人民网",
+  zhihu_daily: "知乎日报",
+  weibo_hot: "微博热搜",
+  baidu_hot: "百度热搜",
+};
+
+/** 来源显示名：未知枚举原样回退（旧配置/新增源的兼容路径），不抛错。 */
+export function newsSourceLabelOf(source: string): string {
+  return (NEWS_SOURCE_LABELS as Readonly<Record<string, string>>)[source] ?? source;
+}
+
 export function isNewsSourceId(value: string): value is NewsSourceId {
   return (NEWS_SOURCE_IDS as readonly string[]).includes(value);
 }

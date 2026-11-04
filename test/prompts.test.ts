@@ -16,7 +16,7 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
 import { auditPrompts, loadPrompts, parseMessageTable, renderTemplate } from "../src/prompts.ts";
 import { loadToolManifests, parseToolManifest, toolFullDescription } from "../src/tools/manifest.ts";
-import { mergeToolMessages } from "../src/tools/loader.ts";
+import { mergeToolMessages, DISABLED_TOOL_PACKAGES } from "../src/tools/loader.ts";
 import { scanDir, scanSource } from "../src/prompt-lint.ts";
 import { REJECTION_CODES } from "../src/egress/policy.ts";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
@@ -170,19 +170,22 @@ test("messages.md 里没有死文案，tools/ 里没有死文件", async () => {
     }
     const defined = new Set(Object.keys(fish.prompts.messages));
     assert.deepEqual([...defined].filter((k) => !referenced.has(k)), [], "合并视图里有没人用的文案（中心或工具块）");
-    // 两处定义的 key 不许重复：合并视图条数 = 中心条数 + 各工具块条数
+    // 两处定义的 key 不许重复：合并视图条数 = 中心条数 + 各 active 工具块条数
+    //（disabled 包（DISABLED_TOOL_PACKAGES，2026-11-04 T3）的 tool-messages 不并入合并视图，
+    // 完整性校验照旧但不计入 active 断言）
     const manifests = loadToolManifests(TOOL_ROOT, { memeTags: prompts.memeTags });
-    const toolKeys = [...manifests.values()].flatMap((m) => Object.keys(m.messages));
+    const activeManifests = new Map([...manifests].filter(([name]) => !DISABLED_TOOL_PACKAGES.has(name)));
+    const toolKeys = [...activeManifests.values()].flatMap((m) => Object.keys(m.messages));
     assert.equal(new Set(toolKeys).size, toolKeys.length, "不同工具的 tool-messages 里有重复 key");
     assert.equal(
       defined.size,
       Object.keys(prompts.messages).length + toolKeys.length,
-      "合并视图条数与中心+工具块之和对不上",
+      "合并视图条数与中心+active 工具块之和对不上",
     );
 
-    // 工具包：每个 TOOL.md 都要对应一个真实注册的工具
+    // 工具包：每个 active TOOL.md 都要对应一个真实注册的工具（disabled 包不进工具面）
     assert.deepEqual(
-      [...manifests.keys()].filter((name) => !fish.toolNames.includes(name)),
+      [...activeManifests.keys()].filter((name) => !fish.toolNames.includes(name)),
       [],
       "src/tools/ 里有不对应任何工具的 TOOL.md",
     );

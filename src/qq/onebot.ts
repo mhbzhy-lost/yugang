@@ -5,6 +5,7 @@
  */
 
 import { isLookDisabled } from "../tools/look/tool.ts";
+import { renderForwardAttachment, type ForwardAttachment, type ForwardChildMessage, type QuotedMessage } from "./model-input.ts";
 
 export interface OneBotSegment {
   type: string;
@@ -70,10 +71,15 @@ export type IncomingMessage = {
   images: IncomingImage[];
   /** 收消息时临时用来下载的原始段，处理完就清空。 */
   imageSegments: OneBotSegment[];
-  /** reply 段引用的消息 id；#onFrame 只替换文本占位符，id 保留给 debounce 算 quoteFromReply（回复轮挂引用）。 */
+  /** reply 段引用的消息 id；#onFrame 据此水合结构化 quoted（不再替换文本占位），
+   * id 本身保留给 debounce 算 quoteFromReply（回复轮挂引用）。 */
   replyIds: string[];
-  /** forward 段的合集 id；宿主异步拉子消息展开成文本摘要后清空（见 #onFrame）。 */
+  /** forward 段的合集 id；不清空——gate 要用它把无 @ 的自带合集零成本拒掉。 */
   forwardIds?: string[];
+  /** 结构化的当前消息合集；展开内容不进入 text。 */
+  forward?: ForwardAttachment;
+  /** 结构化的直接引用；引用原文不进入 text。 */
+  quoted?: QuotedMessage;
   /** 这条消息回复的是不是一条合并转发合集；gate 用它放行（回复合集即明确指令，不需要 @）。 */
   repliedForward?: boolean;
   /** 分享卡片（小程序 / 结构化分享）；文本里留 [卡片#N] 占位，由宿主按 prompt 文案渲染。 */
@@ -132,6 +138,7 @@ export class OneBot {
   #selfId = 0;
   /** 收到消息帧即自增：入站补充（查名片/下头像/拉合集）是异步的，完成顺序可能倒过来。 */
   #arrivalSeq = 0;
+  #forwardImageSlots = new WeakMap<ForwardChildMessage, number[]>();
 
   #mediaRoot?: string;
 
@@ -207,45 +214,27 @@ export class OneBot {
     // 自带合集且被 @ = 明确指令，展开；回复合集且被 @ 在下面 reply 路径展开被回复的那条。
     for (const forwardId of parsed.forwardIds ?? []) {
       if (!forwardId) {
-        parsed.text = parsed.text.replace("[转发合集，展开中]", "[转发合集，展开失败]");
         continue;
       }
       if (!parsed.mentionsBot) {
-        // 没 @：不展开、不调 API，静态占位（这条消息会被闸直接拒，不进上下文）。
+        // 没 @：不展开、不调 API（这条消息会被闸零成本拒，不进上下文）。
         // 但记下「这个群最近有一条没展开的合集」——之后 @ 鱼问「上面那个合集」时能补展开。
         this.#recentForward.set(parsed.chatKey, { id: forwardId, at: Date.now() });
-        parsed.text = parsed.text.replace("[转发合集，展开中]", "[转发合集，未展开]");
         continue;
       }
-      const shown = await this.#expandForward(forwardId, parsed);
-      parsed.text = parsed.text.replace("[转发合集，展开中]", shown);
+      const expanded = await this.#expandForward(forwardId, parsed);
+      // 直接合集的来源消息就是当前消息本身（decisions §5.9：[来自m:父消息id]）。
+      parsed.forward = parsed.messageId !== undefined
+        ? { ...expanded, sourceMessageId: parsed.messageId }
+        : expanded;
     }
     // forwardIds 不清空：gate 要用它把无 @ 的合集零成本拒掉
 
-    // 图片落盘，把占位替换成真实引用；看图关闭时非 @ 消息不下载不暴露 ref——
-    // 模型只看到中性的 [图]，不会无端提看不了；@ 鱼要求看图的照常全链路
-    if (parsed.imageSegments.length > 0 && this.#mediaRoot) {
-      const skipImages = isLookDisabled() && !parsed.mentionsBot;
-      for (const [index, segment] of parsed.imageSegments.entries()) {
-        if (skipImages) {
-          parsed.text = parsed.text.replace(`[图片#${index}]`, "[图]");
-          continue;
-        }
-        const saved = await this.downloadImage(segment, this.#mediaRoot);
-        const shown = saved ? `[图片 ${saved.ref}]` : "[图片 读不到]";
-        parsed.text = parsed.text.replace(`[图片#${index}]`, shown);
-        // ref 回填到 images：宿主据此判断这张图是不是动图（自动收表情包用）
-        const slot = parsed.images[index];
-        if (saved && slot) slot.ref = saved.ref;
-      }
-    }
-    parsed.imageSegments = [];
-
-    // 回复引用：取回被引消息，里面的图落盘后替换占位符，否则看不见被讨论的图；
-    // 被引消息若是合并转发：直接展开（回复合集本身就是明确指令，不再要求 @）。
-    for (const [index, replyId] of (parsed.replyIds ?? []).entries()) {
+    // 回复引用：取回被引消息水合成结构化 quoted（引用原文不再拼进 parsed.text，
+    // 附加段由装配方后置渲染）；被引消息若是合并转发：结构化展开（回复合集
+    // 本身就是明确指令，不再要求 @），引用原文与合集附件分开渲染、不重复展开。
+    for (const replyId of parsed.replyIds ?? []) {
       if (!replyId) continue;
-      let shown = "[回复的图 读不到]";
       try {
         const quoted = await this.call("get_msg", { message_id: replyId });
         // 有的实现把被引消息给成 CQ 字符串而不是段数组；统一成段数组，否则一律「看不到内容」
@@ -258,11 +247,20 @@ export class OneBot {
           const fwdId = String((fwd?.data as Record<string, unknown> | undefined)?.["id"] ?? "");
           if (fwd && fwdId) {
             parsed.repliedForward = true;
-            shown = await this.#expandForward(fwdId, parsed);
+            const expanded = await this.#expandForward(fwdId, parsed);
+            parsed.quoted = {
+              id: replyId,
+              nickname: senderName(quoted),
+              userId: senderId(quoted),
+              text: "",
+              images: [],
+              // 回复合集的来源消息就是被引的那条父消息（decisions §5.9 forward-reply）。
+              forward: { ...expanded, sourceMessageId: replyId },
+            };
           }
         }
         // 被引消息是分享卡片（B 站小程序等）：把它挂到 cards 上，由宿主渲染成文本。
-        // 只取卡片时 shown 用 [卡片#N] 占位，宿主会替换成「[B站视频卡片] 标题 链接」。
+        // 卡片占位 [卡片#N] 进 quoted.text，宿主接线（T2）负责把它替换成可读文本。
         let cardToken = "";
         if (Array.isArray(quotedMessage)) {
           const jsonSeg = quotedMessage.find((s: OneBotSegment) => s?.type === "json");
@@ -285,30 +283,51 @@ export class OneBot {
               .trim()
               .slice(0, 200)
           : "";
-        const sender = (quoted?.data ?? quoted)?.sender ?? {};
-        const quotedFrom = String(sender.card || sender.nickname || "").trim().slice(0, 20);
-        const textPart = quotedText
-          ? `${quotedFrom ? `${quotedFrom}：` : ""}「${quotedText}」`
-          : "";
-        const savedList: string[] = [];
-        for (const seg of imageSegs) {
-          const saved = await this.downloadImage(seg, this.#mediaRoot);
-          if (saved) savedList.push(saved.ref);
-        }
-        if (savedList.length > 0) {
-          shown = [cardToken, textPart, ...savedList.map((r) => `[回复的图 ${r}]`)].filter(Boolean).join(" ");
-        } else if (imageSegs.length === 0) {
-          shown = [cardToken, textPart].filter(Boolean).join(" ") || "[回复的消息看不到内容]";
+        if (!parsed.quoted?.forward) {
+          const savedList: string[] = [];
+          for (const seg of imageSegs) {
+            const saved = await this.downloadImage(seg, this.#mediaRoot);
+            if (saved) savedList.push(saved.ref);
+          }
+          parsed.quoted = {
+            id: replyId,
+            nickname: senderName(quoted),
+            userId: senderId(quoted),
+            text: [cardToken, quotedText].filter(Boolean).join(" "),
+            images: savedList,
+          };
         }
       } catch {
-        // 保留默认占位符
+        parsed.quoted = {
+          id: replyId,
+          nickname: "",
+          userId: "",
+          text: "",
+          images: [],
+        };
       }
-      parsed.text = parsed.text.replace(`[回复某条消息#${index}]`, shown);
     }
+    // 直发图、合集子图和回复合集子图统一在结构化水合完成后落盘；引用正文仍不回写 parsed.text。
+    if (parsed.imageSegments.length > 0 && this.#mediaRoot) {
+      const skipImages = isLookDisabled() && !parsed.mentionsBot;
+      for (const [index, segment] of parsed.imageSegments.entries()) {
+        if (skipImages) {
+          parsed.text = parsed.text.replace(`[图片#${index}]`, "[图]");
+          continue;
+        }
+        const saved = await this.downloadImage(segment, this.#mediaRoot);
+        const shown = saved ? `[图片 ${saved.ref}]` : "[图片 读不到]";
+        parsed.text = parsed.text.replace(`[图片#${index}]`, shown);
+        const slot = parsed.images[index];
+        if (saved && slot) slot.ref = saved.ref;
+      }
+      this.#syncForwardImages(parsed);
+    }
+    parsed.imageSegments = [];
     // replyIds 不清空：debounce 的 quoteFromReply（整组里任意一条是回复 → 这一轮仍然引用）
     // 和私聊直提路径都靠它判定；水合只替换文本占位符，id 本身保留。清空曾让真回复轮永远裸发。
 
-    if (!parsed.text.trim()) return;
+    if (!parsed.text.trim() && parsed.replyIds.length === 0 && (parsed.forwardIds?.length ?? 0) === 0) return;
     for (const h of this.#handlers) h(parsed);
   }
 
@@ -323,8 +342,8 @@ export class OneBot {
     return hit.id;
   }
 
-  /** 展开指定合集（外部按 id 调用，失败返回 null，不抛）。 */
-  async expandForwardById(id: string, msg: IncomingMessage): Promise<string | null> {
+  /** 结构化的最近合集展开入口；内容由后续模型输入接线统一放在附件区。 */
+  async expandForwardAttachmentById(id: string, msg: IncomingMessage): Promise<ForwardAttachment | null> {
     try {
       return await this.#expandForward(id, msg);
     } catch {
@@ -495,7 +514,11 @@ export class OneBot {
   }
 
   /** 拉一条合并转发的子消息列表；超时 5s、连接断开等一切失败一律返回 null，由调用方保留失败占位。 */
-  async getForwardMsg(id: string): Promise<{ sender: { nickname?: string }; message: OneBotSegment[] }[] | null> {
+  async getForwardMsg(id: string): Promise<{
+    messageId?: number | string;
+    sender: { nickname?: string; userId?: string };
+    message: OneBotSegment[];
+  }[] | null> {
     try {
       // call 内建超时是 20s（对拉取来说太久），这里 race 一个 5s 时钟先到先得；
       // call 的承诺被 .catch 挂住，晚到的 20s 超时不会变成未处理拒绝。
@@ -507,7 +530,15 @@ export class OneBot {
       const raw = res?.data?.messages ?? res?.data ?? res?.messages;
       if (!Array.isArray(raw)) return null;
       return raw.map((item: any) => ({
-        sender: { nickname: item?.sender?.nickname == null ? undefined : String(item.sender.nickname) },
+        ...(typeof item?.message_id === "number" || typeof item?.message_id === "string"
+          ? { messageId: item.message_id }
+          : {}),
+        sender: {
+          nickname: item?.sender?.nickname == null ? undefined : String(item.sender.nickname),
+          ...(typeof item?.sender?.user_id === "number" || typeof item?.sender?.user_id === "string"
+            ? { userId: String(item.sender.user_id) }
+            : {}),
+        },
         message: (Array.isArray(item?.message)
           ? item.message
           : Array.isArray(item?.content)
@@ -519,23 +550,28 @@ export class OneBot {
     }
   }
 
-  /** 把一个转发合集展开成文本摘要（前 10 条）；子图 ≤2 张并入 imageSegments 走既有 downloadImage 路径。 */
-  async #expandForward(id: string, msg: IncomingMessage): Promise<string> {
+  /** 把一个转发合集展开成结构化附件（前 10 条）；子图 ≤2 张沿用统一压缩图路径。 */
+  async #expandForward(id: string, msg: IncomingMessage): Promise<ForwardAttachment> {
     const subs = await this.getForwardMsg(id);
-    if (!subs || subs.length === 0) return "[转发合集，展开失败]";
-    const lines = [`[转发合集 ${subs.length} 条]`];
+    if (!subs || subs.length === 0) {
+      return { id, total: 0, children: [], truncated: false };
+    }
+    const children: ForwardChildMessage[] = [];
     let subImages = 0;
     for (const [index, sub] of subs.slice(0, 10).entries()) {
       let body = "";
+      const images: string[] = [];
+      const imageSlots: number[] = [];
       for (const seg of sub.message ?? []) {
         if (seg.type === "text") body += String(seg.data?.["text"] ?? "");
         else if (seg.type === "image") {
           if (subImages < 2) {
-            // 占位与直发图同格式、共用 images.length 计数；images 与 imageSegments 始终成对推进，
-            // 占位号 = imageSegments 下标，落盘替换才不会错位。
-            body += ` [图片#${msg.images.length}] `;
+            const slot = msg.images.length;
+            body += ` [图片#${slot}] `;
             msg.imageSegments.push(seg);
             msg.images.push({ ref: "" });
+            imageSlots.push(slot);
+            images.push("");
             subImages++;
           } else {
             body += " [图片 未展开] ";
@@ -554,11 +590,36 @@ export class OneBot {
           body += " [不支持的消息] ";
         }
       }
-      const num = String.fromCharCode(0x2460 + index); // ①..⑩
-      lines.push(`${num}${sub.sender?.nickname ?? "?"}: ${body.replace(/\s+/g, " ").trim()}`);
+      const child: ForwardChildMessage = {
+        position: index + 1,
+        ...(sub.messageId !== undefined ? { messageId: sub.messageId } : {}),
+        ...(sub.sender.userId ? { userId: sub.sender.userId } : {}),
+        nickname: sub.sender.nickname ?? "",
+        text: body.replace(/\s+/g, " ").trim(),
+        images,
+      };
+      this.#forwardImageSlots.set(child, imageSlots);
+      children.push(child);
     }
-    if (subs.length > 10) lines.push(`…共 ${subs.length} 条`);
-    return lines.join("\n");
+    return {
+      id,
+      total: subs.length,
+      children,
+      truncated: subs.length > children.length,
+    };
+  }
+
+  #syncForwardImages(msg: IncomingMessage): void {
+    const attachments = [msg.forward, msg.quoted?.forward].filter(
+      (attachment): attachment is ForwardAttachment => attachment !== undefined,
+    );
+    for (const attachment of attachments) {
+      for (const child of attachment.children) {
+        const slots = this.#forwardImageSlots.get(child) ?? [];
+        if (slots.length === 0) continue;
+        (child as { images: string[] }).images = slots.map((slot) => msg.images[slot]?.ref ?? "");
+      }
+    }
   }
 
   /** 把图片落盘到 mediaRoot/inbound，返回相对引用。 */
@@ -649,6 +710,17 @@ function sniffImage(b: Uint8Array): { ext: string; convert?: "jpeg" } | null {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
+}
+
+function senderName(response: any): string {
+  const sender = (response?.data ?? response)?.sender ?? {};
+  return String(sender.card || sender.nickname || "").trim().slice(0, 20);
+}
+
+function senderId(response: any): string {
+  const sender = (response?.data ?? response)?.sender ?? {};
+  const id = sender.user_id;
+  return typeof id === "number" || typeof id === "string" ? String(id) : "";
 }
 
 /** 把 token 追加成 WS URL 的 ?access_token= 查询参数。Node 原生 WebSocket 会静默丢弃自定义 headers，鉴权只能走 query。 */
@@ -883,7 +955,6 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
         const u = String(seg.data?.["url"] ?? seg.data?.["file"] ?? "");
         if (u) text += ` [视频 ${u.slice(0, 200)}] `;
       } else if (seg.type === "reply") {
-        text += ` [回复某条消息#${replyIds.length}] `;
         replyIds.push(String(seg.data?.["id"] ?? ""));
       } else if (seg.type === "json") {
         const card = parseShareCard(seg.data?.["data"]);
@@ -894,10 +965,6 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
           text += " [卡片] ";
         }
       } else if (seg.type === "forward") {
-        // OB11 文档形态 {type:"forward", data:{id}}（开发机无生产日志，以文档为准，
-        // 上线后 F1 真机复验兜底）；同步阶段拿不到子消息数，占位不写 N，
-        // 异步展开在 #onFrame。本函数保持同步纯函数。
-        text += " [转发合集，展开中] ";
         forwardIds.push(String(seg.data?.["id"] ?? ""));
       }
     }
@@ -907,9 +974,11 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
   // 否则 chatlog 无痕，用户观感是鱼不理人。非 @ 的空文本维持丢弃。
   if (!text && mentionsBot) text = "（被 @ 了一下，没说话）";
   // 抠掉 @ 标记后只剩标点/空白/符号（含 emoji）的，也算没内容：这类消息不值得占一次抽签。
-  // @ 了鱼（mentionsBot）不受此限——被点名就算只发个问号也要答。
-  if (!mentionsBot && text.replace(/@\S+/g, " ").replace(/[\p{P}\p{S}\p{Z}\s]/gu, "") === "") return null;
-  if (!text) return null;
+  // @ 了鱼（mentionsBot）不受此限——被点名就算只发个问号也要答；带回复/合集段的也不受此限——
+  // 它们的正文可能全在引用/合集里（水合在 #onFrame），同步阶段不能丢。
+  if (!mentionsBot && replyIds.length === 0 && forwardIds.length === 0
+    && text.replace(/@\S+/g, " ").replace(/[\p{P}\p{S}\p{Z}\s]/gu, "") === "") return null;
+  if (!text && replyIds.length === 0 && forwardIds.length === 0) return null;
 
   const nickname = frame.sender?.card || frame.sender?.nickname || String(userId);
   const mediaOnly = mediaOnlyOf(text, segments);
