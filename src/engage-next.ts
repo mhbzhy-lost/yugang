@@ -49,6 +49,7 @@
  * stop 清相位时一并归零。
  */
 import { createHash } from "node:crypto";
+import { isCurfewAt } from "./curfew.ts";
 import { VIDEO_TOPICS } from "./external/video-browse.ts";
 
 /** 群白名单判定：chatKey 形如 qq:group:NNN（含人格后缀也认前缀），群号在名单内才算命中。 */
@@ -309,9 +310,14 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     state.shareOpen = random() < (deps.config().ammoShareChance ?? 0);
     // 视频浏览门（T3）：复用同一枚稳定 windowId 与 random 注入点，每窗只掷一次
     // video.browseChance（严格小于：0 永不开放），并随机选定本窗 topic——同窗稳定，
-    // 空窗零新增轮与 T4 的浏览工具都只认这一份结果，不重掷
-    state.videoBrowseOpen = random() < (deps.config().videoBrowseChance ?? 0);
+    // 空窗零新增轮与 T4 的浏览工具都只认这一份结果，不重掷。
+    // 宵禁（本地 02:00–09:00，src/curfew.ts）：门恒关——夜间纯搭话，不起主动轮、
+    // 不逛 B 站、不分享视频素材；关闸落在门上，没有 browse 授权时 bili_hot /
+    // say_words(videoBvid) 自然全拒（fail closed，不靠模型自觉）。先掷再判，
+    // 保证同一随机序列不因宵禁而串位（窗内 topic 可重现）。
+    const browseRoll = random();
     state.videoTopic = VIDEO_TOPICS[Math.floor(random() * VIDEO_TOPICS.length)] ?? VIDEO_TOPICS[0]!;
+    state.videoBrowseOpen = !isCurfewAt(at) && browseRoll < (deps.config().videoBrowseChance ?? 0);
     // 新窗从零观测开口（上一窗已在关窗时结算）；沉默计数跨窗保留，开口才清零
     state.spokeInWindow = false;
     // 忙（在途轮 / 换页 / 收图）时放弃注入（宁少勿答）；backlogOf 由宿主提供

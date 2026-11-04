@@ -187,7 +187,7 @@
   （上限 max(30, `engage.windowRelaxCap`)，缺省仍 30）、chatlog、昵称映射、`#recentForward`
   合集 id 缓存等旁路记账也照常。`@全体成员` / `@别人` 不置 mentionsBot，天然按非 @ 处理。
   非法值保留缺省并告警
-- **开窗输入统一为标准消息列表**：injection / shard 有消息时不再附加窗口说明、旧账或弹药栏；没有 `[这条消息@了你]` 就不构成必答。零新增空窗不再由沉默、nudge、旧账或弹药触发，只在每个 open 窗进入时一次 `video.browseChance`（缺省 0.3）门开时提交 `[主动交流机会]`，当前会话可自行 `bili_hot` 找候选、`video` 实际观看后用 `say_words(videoBvid)` 分享；ambient shard 不携带 browse 授权。末条自言禁言的机械边界仍生效；**宵禁在 2026-11-04 停用弹药管线后只剩 prompt 层软约束**（`ctx_engage_footer_night` 夜间文案 + runtime 的「不主动起话题不分享素材」），旧 `ammoCurfewAt` 只被已死的 ammoId 链与 disabled 的 `ammo_list` 引用，browse 门与 `videoBvid` 分享**没有**时段硬闸——夜间能不能分享素材目前靠提示词自律，属待定产品项（要给 browse 门补机械闸就在 `videoBrowseGateOf` 的开窗计算里加 `!ammoCurfewAt(now)`）。
+- **开窗输入统一为标准消息列表**：injection / shard 有消息时不再附加窗口说明、旧账或弹药栏；没有 `[这条消息@了你]` 就不构成必答。零新增空窗不再由沉默、nudge、旧账或弹药触发，只在每个 open 窗进入时一次 `video.browseChance`（缺省 0.3）门开时提交 `[主动交流机会]`，当前会话可自行 `bili_hot` 找候选、`video` 实际观看后用 `say_words(videoBvid)` 分享；ambient shard 不携带 browse 授权。末条自言禁言的机械边界仍生效；**宵禁（本地 02:00–09:00）落在 browse 门上**：`src/curfew.ts` 的 `isCurfewAt` 是唯一实现，开窗时 `videoBrowseOpen = !isCurfewAt(at) && roll < video.browseChance`，所以宵禁内根本不起 `[主动交流机会]` 轮，`bili_hot` / `video` / `say_words(videoBvid)` 的浏览授权随之全部失效（fail closed，不靠模型自律）；与 `ctx_engage_footer_night` 夜间文案、runtime 的「不主动起话题不分享素材」同阈同向。旧 `ammoCurfewAt` 保留为已停用弹药链的同源别名。
 - **闸放行 ≠ 立刻提交**：放行的群消息按「群 + 发送者」攒 **10 秒静默**（窗口固定，没有环境变量、没有最长等待），
   同一发送者的新消息取消旧计时并继续加长，不同发送者互不干扰；静默满 10 秒才把整组提交一次
   （这套按发送者的合并只管 @ 必答轮；open 态的非 @ free_pass 消息不进这里，改投 shard
