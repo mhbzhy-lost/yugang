@@ -50,6 +50,7 @@ import { DISABLED_TOOL_PACKAGES, mergeToolMessages } from "../src/tools/loader.t
 import { withContext, type BurstMessage, type RecentChatMessage } from "../src/qq/debounce.ts";
 import { planRoundImages, rewriteRoundForwardImages } from "../src/qq/round-images.ts";
 import {
+  appendAnswerRules,
   appendVoiceHint,
   assembleRoundContent,
   backgroundTextOf,
@@ -168,6 +169,8 @@ interface AnswerRoundOptions {
   recentForward?: ForwardAttachment;
   /** submitRound 的 0.3 语音门命中（index.ts L944-951）。 */
   voiceHint?: boolean;
+  /** @ 轮确定性追加的 `video_answer_rule`（index.ts 的 answer 轮规范段）。 */
+  answerRule?: boolean;
 }
 
 /**
@@ -191,7 +194,10 @@ function answerRound(options: AnswerRoundOptions): { text: string; submit: strin
     tags: plan.tags,
     lookHint: plan.lookHint,
   }, messages);
-  const text = options.voiceHint ? appendVoiceHint(assembled, messages["voice_hint"] ?? "") : assembled;
+  // 规范段与语音段都由共享装配器拼：顺序与宿主一致（先 video_answer_rule，再语音提示）
+  let text = assembled;
+  if (options.answerRule === true) text = appendAnswerRules(text, [messages["video_answer_rule"] ?? ""]);
+  if (options.voiceHint === true) text = appendVoiceHint(text, messages["voice_hint"] ?? "");
   return { text, submit: submitContentOf(text, plan.blocks), blocks: plan.blocks };
 }
 
@@ -444,6 +450,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       bucket,
       burst: [burstLine(2, 1110691775, 2627618651, "[有人@我]", anchor.text, { mentionsBot: true, replyIds: ["1262165350"], quoted })],
       inline: false,
+      answerRule: true,
     });
     return { ...round, via: "planRoundImages → withContext → assembleRoundContent → submitContentOf" };
   },
@@ -485,6 +492,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       burst,
       inline: true, // GIF 不 inline、不占编号；背景里的 jpg 不属本轮整组，不触发 look 提示
       watched: (userId) => String(userId) === String(WATCHED),
+      answerRule: true, // @ 轮确定性追加的看视频规范
       voiceHint: true, // submitRound 的 0.3 语音门命中（主人/特别关注对象的 answer 轮）
     });
     return { ...round, via: "planRoundImages → withContext → assembleRoundContent → appendVoiceHint" };
@@ -518,6 +526,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       anchor,
       burst: [burstLine(1, 1064654139, 2627618651, "[有人@我]", `[图片 ${JPG_REF}]`)],
       inline: true,
+      answerRule: true,
     });
     return { ...round, via: "planRoundImages(inline, 压缩 stub) → withContext → assembleRoundContent → submitContentOf" };
   },
@@ -536,6 +545,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       anchor,
       burst: [burstLine(1, 1064654139, 2627618651, "[有人@我]", `[图片 ${JPG_REF}]`)],
       inline: false,
+      answerRule: true,
     });
     return { ...round, via: "planRoundImages(fallback) → withContext → assembleRoundContent(lookHint)" };
   },
@@ -604,6 +614,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       anchor,
       burst: [burstLine(1, 1111529000, 2627618651, "[有人@我]", "看看这个", { mentionsBot: true, forward })],
       inline: true,
+      answerRule: true,
     });
     return { ...round, via: "planRoundImages(合集子图换编) → withContext(后置附件) → assembleRoundContent → submitContentOf" };
   },
@@ -639,6 +650,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       anchor,
       burst: [burstLine(1, 1111529001, 2627618651, "[有人@我]", "这个合集呢", { mentionsBot: true, replyIds: ["1111528999"], quoted })],
       inline: false,
+      answerRule: true,
     });
     return { ...round, via: "withContext(引用原文 + 被引合集附件后置)" };
   },
@@ -658,6 +670,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       anchor,
       burst: [burstLine(1, 1111529100, 2627618651, "[有人@我]", "看看上面的合集", { mentionsBot: true })],
       inline: false,
+      answerRule: true,
       recentForward: expanded,
     });
     return { ...round, via: "rewriteRoundForwardImages → assembleRoundContent(recentForward 最后一段)" };
@@ -692,6 +705,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       bucket,
       burst: [burstLine(2, 1111529201, 2627618651, "[有人@我]", anchor.text, { mentionsBot: true })],
       inline: false,
+      answerRule: true,
     });
     return { ...round, via: "backgroundTextOf(短标记) → withContext(背景行)" };
   },
