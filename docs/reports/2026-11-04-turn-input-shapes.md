@@ -3,6 +3,8 @@
 > 取证时间：2026-11-04；数据源：家中 Mac `~/yugang/var/fish.db`，只读查询。  
 > 范围：**只分析现行输入记录，不纳入历史 `pi.user`。** 所有示例直接摘自 `entries.record`，不按源码推定。
 
+> **基线标记：** §1–§5 是本次模型输入改造前的线上 DB 取证基线，来源为本机 `var/fish.db` 的只读查询。以下旧形态已被本次改造取代，仅用于和改造后实现对照，不参与本报告对当前实现的结论。改造后证据见 §8，来源是 T7 机械测试与生产导出入口源码，不是线上 DB 新取证。
+
 ## 1. 现行记录总览
 
 | kind | 数量 | 起始模型输入形态 |
@@ -171,7 +173,7 @@ ql今天玩什么 连着发了 2 条，这是一整组话（下面 ➤ 开头的
 …
 ```
 
-新闻同样使用 `fish.engage_tick`，不能把该 kind 全解释为自由水群。
+新闻同样使用 `fish.engage_tick`，不能把该 kind 全解释为自由水群。这里的 `（ithome）` 等枚举来源署名属于改造前基线；改造后由宿主 `NEWS_SOURCE_LABELS` 渲染中文名，例如 `（人民网）`、`（IT之家）`，见 §8。
 
 ## 4. GIF 静默收图：`fish.gif_ingest`
 
@@ -213,7 +215,36 @@ ql今天玩什么 连着发了 2 条，这是一整组话（下面 ➤ 开头的
 
 它是历史头，不是新入站 turn。
 
-## 7. 证据边界与复查
+## 8. 改造后的模型输入（实现证据）
+
+本节不是线上 DB 新取证，也不伪造新的 entry id。证据来自 T7 的 `node --test test/model-input-templates.test.ts`（19/19）和当前生产导出入口源码；16 个 scene 均由真实生产拼装入口触发，并与 decisions §10 权威模板逐字精确比较（图片场景另做 block deepEqual）。
+
+| scene | 改造后形态要点 |
+| --- | --- |
+| `answer_reply` | 标准群消息列表；消息行带 `[m:id]` 与回复/@标签；引用原文在列表后。 |
+| `answer_burst_voice` | 合并组按真实顺序保留；特别关注标签与引用后置；任务行使用 `[本轮要求]` 语音提示。 |
+| `private_master` | 私聊使用同一消息行合同和独立 `私聊有新消息啦。` 边界，不展示原始 JSON。 |
+| `inline_image` | 正文列表使用 `[图片#1]`，列表后有 `[图片#1 压缩图]`，text block 后接压缩 image block。 |
+| `fallback_image` | 保留 `inbound/` 图片路径并提示使用 `look`，不附原图 block。 |
+| `open_injection` | 开窗积压通过 `onPhase(open, backlog)` 触发，使用标准群消息列表。 |
+| `open_shard` | 窗内分片通过 `collectShard`/`onShard` 独立触发，使用与 injection 相同的标准列表，且不携带 browse 授权。 |
+| `browse_empty` | 空窗只在 browse 门开启时使用 `[主动交流机会]` 模板，不预选视频。 |
+| `news` | `[新闻播报]` 后接宿主成品；来源由 `NEWS_SOURCE_LABELS` 渲染中文名，链接由宿主索引渲染。 |
+| `gif_ingest` | 标准消息列表后接绑定真实 `[m:id]` 的 `[GIF 收图任务]`，只允许 look/meme_add，保持沉默不使用 `say_*`。 |
+| `forward_direct` | 自带合集且 @ 时，父消息留在真实列表位置，展开内容作为后置附件；最多 10 条、最多 2 张子图。 |
+| `forward_reply` | 回复合集专用放行；引用原文与被引合集附件分开后置，不重复展开。 |
+| `forward_recent` | @ 且提及合集/转发时补展开最近合集；没有真实来源消息 ID 时不伪造 `[来自m:id]`。 |
+| `forward_background` | 背景合集只保留 `[转发合集（内容略）]` 短标记，不补拉子消息。 |
+| `history_reset` | 剖面卡片后接 `[历史消息]` 与真实顺序标准消息尾巴；不混入 thinking/toolResult 或旧 open footer。鱼自己的行**没有 `[m:id]`**（`fish.outbound` entry 不含 messageId，实际 id 只在发送成功后落 `fish.sentmap`，历史尾是逐字投影，不编造）。 |
+| `history_forward` | 换页尾逐字投影当页见过的合集父消息与附件，父行保留 `[转发合集]`、`[这条消息@了你]` 标签，附件后置且不伪造子消息元数据。 |
+
+改造后的消息行、图片 block、合集附件和换页尾均由生产入口取得；T7 测试只读取 decisions §10 标记模板作为权威期望，不复制生产组装函数。
+
+两个 `history_*` scene 的证据强度单独说明：它们不是靠拉 `buildProfileHandoff` 传手造 `CountedEntry` 得到的，而是走真 harness——`openFish`（接 `selfOf` → `Elysia(3768557204)`）+ 真 `root.submit()` 产出 `fish.inbound`/`fish.outbound` + 真 `fish.compact()`，再从 `pi.reset` 读 handoff 文本。这样「鱼的行拿不到 `[m:id]`」这类只有真链路才暴露的差异不会被 fixture 掩盖（独立 reviewer 正是据此发现了旧版测试用 `tailMessages` 手造锚点的假绿）。
+
+F4 的自主浏览、会话私有视频池、出口事务与 self-mute 行为另由计划中的人工源码核对记录，不能从本节的 19 项机械测试推导为线上行为已验证。
+
+## 9. 证据边界与复查
 
 数据库保存的是 pi-durable model entry，不是完整 provider HTTP 请求体；动态 system、工具列表及当次完整 wire payload 不在本报告断言范围内。
 

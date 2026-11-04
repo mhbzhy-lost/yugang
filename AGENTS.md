@@ -19,7 +19,7 @@
 文字/图片/表情包/语音各一个，可引用，除语音外可点名 @ 群友）、`react`（只贴表情）、
 `look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`meme_import`（主人本地批量导入的登记入口）、
 `draw`（本地 SD 生图）、`gpt_image`（GPT Image 2 透传）、`search`/`video`（联网查）、
-`bili_hot`/`bili_video`/`ammo_submit`（B 站逛轮三件套，`ammo_submit` 仅 worker 逛轮或主人私聊手动逛轮可用）、`tags`（danbooru 词表）；
+`bili_hot`/`bili_video`（自主浏览候选与元数据核实，实际观看走 `video`）、`tags`（danbooru 词表）；
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
 
@@ -129,7 +129,7 @@
 
 - **禁止打开 pi-durable 内置的 compaction**（它会在中途注入库里写死的提示词，不可审查）
 - 压缩 = `src/compact.ts` 的换页 + `prompt/handoff.md` 的剖面提示词 + `prompt/messages.md` 的渲染模板（时间头与卡片，降级与剖面共用）
-- 换页新页结构 = **剖面卡片（≤300 字）+ 被压缩页尾部最近 50 条原文**：卡片字段 = 本页时间范围（纯机械）、活跃成员 top≤5（纯机械统计 fish.inbound 结构化数据）、进行中的话头/梗 ≤5（LLM 逐字引用原文短语附 [m:id] 锚点，禁转述）、鱼的未完话头与承诺（LLM 逐字引用）、氛围一行（LLM）；**尾巴只从被压缩页 transcript 机械截取**（不碰 recent/chatlog，不把鱼没见过的消息伪装成已读），保持原 entry 顺序与标注格式不二次渲染；engage_tick 背景板行也进尾巴（T12 裁定：背景板也是模型见过的内容），但不进摘要输入
+- 换页新页结构 = **剖面卡片（≤300 字）+ 被压缩页尾部最近 50 条标准历史消息**：卡片字段 = 本页时间范围（纯机械）、活跃成员 top≤5（纯机械统计 fish.inbound 结构化数据）、进行中的话头/梗 ≤5（LLM 逐字引用原文短语附 [m:id] 锚点，禁转述）、鱼的未完话头与承诺（LLM 逐字引用）、氛围一行（LLM）；**尾巴只从被压缩页 transcript 机械投影**（不碰 recent/chatlog，不把鱼没见过的消息伪装成已读），保持真实 entry 顺序，统一为 `[历史消息]` + 标准消息列表，引用/合集附件后置；旧窗口说明、旧账、工具过程不进尾部，旧数据缺真实 ID 时不伪造。engage_tick 背景板行也进尾巴（T12 裁定：背景板也是模型见过的内容），但不进摘要输入
 - 三道机械防线：逐字引用 substring 校验（quote/锚点必须命中本页 transcript 或上一页剖面原文，否则丢条目）；事务性（卡片校验通过才 reset，失败保留原页）；有界重试（3 次）耗尽走机械降级换页（时间头 + 尾巴原文，共用 `mechanicalTail` 纯函数，任何模型不再参与），不许在失败页死循环
 - 跨页字段级合并：上一页剖面从 pi.reset head 提取（提取失败按首换页处理），还开着的话头/未兑现承诺 verbatim 带入、完结的标掉，不重新叙事、不 summary-of-summary
 - 摘要只收「群友的话 + 鱼发出去的话」；thinking、tool 调用、tool 结果、stopReason:error 的空 assistant entry 一律不进摘要也不进尾巴；inline 附图的 image block 同样不进（compact 的 entryText 只取 text block），随换页退出活跃上下文
@@ -187,7 +187,7 @@
   （上限 max(30, `engage.windowRelaxCap`)，缺省仍 30）、chatlog、昵称映射、`#recentForward`
   合集 id 缓存等旁路记账也照常。`@全体成员` / `@别人` 不置 mentionsBot，天然按非 @ 处理。
   非法值保留缺省并告警
-- **开窗注入尾部三件可选附件（都不产生必答义务）**：① footer 宵禁二态（本地 02:00–09:00 用 `ctx_engage_footer_night` 夜间版——纯搭话模式：不鼓励主动开腔，别起话题别 @ 人别分享素材；其余时间用 `ctx_engage_footer` 白天版——鼓励自由发挥；纯文案层机械切换，@ 白名单等硬机制不动，injection / shard 轮尾部都带）；② 弹药栏（T13，决策 21：injection / nudge-only 轮尾部可选追加「旧账」段——上一页剖面还开着的未兑现承诺/话头（T12 卡片从 pi.reset head 机械回读）+ 记忆（公共+私有合并）里命中委托标记（托你查/帮我查/等我问问类，机械子串匹配、不做语义检索）的 lore/people 文本，逐条一行「N 天前…还没下文」式；只机械拼装不语义生成；空弹药整段不注入不占位（退化到纯背景板）；段预算机械裁决，超限丢条目；有弹药时 runtime 引导主动分享）；③ nudge（T8）的二级文案 `ctx_engage_nudge_2` 带 {{n}} 未兑现数（当前拼出的弹药条数）。
+- **开窗输入统一为标准消息列表**：injection / shard 有消息时不再附加窗口说明、旧账或弹药栏；没有 `[这条消息@了你]` 就不构成必答。零新增空窗不再由沉默、nudge、旧账或弹药触发，只在每个 open 窗进入时一次 `video.browseChance`（缺省 0.3）门开时提交 `[主动交流机会]`，当前会话可自行 `bili_hot` 找候选、`video` 实际观看后用 `say_words(videoBvid)` 分享；ambient shard 不携带 browse 授权。末条自言禁言的机械边界仍生效；**宵禁在 2026-11-04 停用弹药管线后只剩 prompt 层软约束**（`ctx_engage_footer_night` 夜间文案 + runtime 的「不主动起话题不分享素材」），旧 `ammoCurfewAt` 只被已死的 ammoId 链与 disabled 的 `ammo_list` 引用，browse 门与 `videoBvid` 分享**没有**时段硬闸——夜间能不能分享素材目前靠提示词自律，属待定产品项（要给 browse 门补机械闸就在 `videoBrowseGateOf` 的开窗计算里加 `!ammoCurfewAt(now)`）。
 - **闸放行 ≠ 立刻提交**：放行的群消息按「群 + 发送者」攒 **10 秒静默**（窗口固定，没有环境变量、没有最长等待），
   同一发送者的新消息取消旧计时并继续加长，不同发送者互不干扰；静默满 10 秒才把整组提交一次
   （这套按发送者的合并只管 @ 必答轮；open 态的非 @ free_pass 消息不进这里，改投 shard
@@ -269,7 +269,7 @@
 
 - **音色只认 `fish.config.json` 的 `voices[人格名]`**，没有任何兜底；没配 = 该会话没有语音能力
 - 人格解析必须走带 `#人格` 后缀的映射键（`mappingKeys`），`chatKeys` 只存剥离人格的 base 键给路由用
-- 触发提示：主人/特别关注对象的过闸轮以 0.3 概率追加「这一条必须用语音回」；**看到提示必须用语音**
+- 触发提示：主人/特别关注对象的过闸轮以 0.3 概率追加一条 `[本轮要求] 必须使用 say_voice 回复` 的任务行；**看到提示必须用语音**
 - 出口限制：一轮一条附件（图/表情包/语音互斥）、台词 ≤200 字、超长/含失败一律以 tool 错误返回
 - 服务端：GPT-SoVITS 常驻本机（launchd 托管；9884 爱莉希雅 v4 自训 elysia、9881 桑多涅、9882 凯尔希；
   9880 为旧 v2 保留可回滚，9883 为落选 v2ProPlus 试听实例，保留 7 天后回收），依赖 `~/nltk_data` 的
@@ -388,47 +388,24 @@
   上写 doc，与线上进程同库时建议低峰执行（或直接私聊 `/记忆` 让线上进程自己写）；
   发现旧 chatKey 级 / 会话级 `fish.memory` 会明确报冲突，不静默择一
 
-### 17. 外部信息源两管线（2026-11，外部计划 E1–E9）
+### 17. 外部信息源两链路（2026-11 修订）
 
-B 站弹药管线（逛 B 站 → 弹药库 → 开窗分享）与新闻播报管线（10:30 取料 → 归纳 → 定时播报）都跑在
-`src/external/scheduler.ts` 的 job 模型上：时点表热读、错过 ≤2h 补跑一次（幂等 key = date + slot）、
-watchdog 硬截止强制收束。共同铁律：**外部文本（标题/简介/热评/弹幕/RSS 正文）一律先过
+自主浏览与新闻播报共用同一条安全边界：**外部文本（标题/简介/热评/弹幕/RSS 正文）一律先过
 `sanitizeExternalText`（长度/控制字符/bidi/URL scheme 白名单）才见模型**；**链接一律由宿主从
 canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的模型侧文案唯一源是 `prompt/runtime.md`；
 新闻归纳提示词唯一源是 `prompt/news-digest.md`。
 
-- **B 站弹药管线**：worker 逛轮——独立后台会话
-  （`worker:bili`，默认人格、人格中立 doc，不进群白名单/记忆映射），`say_*` 机械拒绝
-  （`say_worker_round`），产出只有 `ammo_submit` 入库；硬截止 `ammo.browseMinutes`（缺省 10 分钟，
-  watchdog 到点收束、未提交候选丢弃）——触发源有两个：`ammo.slots` 时刻表（缺省空表 = 不按时刻起轮，
-  仍可显式配置）与**空库事件驱动补货**（2026-11-04 T1，缺省唯一触发源）：`ammo.refillTarget`
-  （0–20，缺省 5）——库内 available（未过期）数为 0 时自动起一轮 refill 逛轮（maxPicks 定格为
-  refillTarget，作业键 `refill-<HHmm>`）；挂点两个：外部分享落账后 fire-and-forget + 每 5 分钟
-  巡检定时器；30 分钟冷却（起轮即置 `lastRefillAttempt`）防抖——补货轮失败或空手而归时不追查，
-  等冷却过后自然重试（巡检每 5 分钟醒一次，实际重试节奏最多每 30 分钟一次）；`refillTarget: 0`
-  关闭自动补货。候选走 B 站游客 API，营销号三层筛选：`bili_hot` 取榜单
-  （已入库剔除 → 硬筛一票否决 → 软筛评分排序，多抓 4 倍防筛空；规则命中逐条落审计日志，仅元数据）
-  → `bili_video` 终选核实（完整卡片 + UP 评级 + 可选热评/高能弹幕）→ `ammo_submit` 入库
-  （BV 正则校验、summary≤60 字、topic 四枚举、BV 判重、每轮上限 `ammo.maxPicksPerRun` 缺省 3）。
-  入库入口除 worker 逛轮外另有一个**主人私聊窄口**（不是群内能力）：主人在 `qq:private:<master>`
-  发的普通 answer 轮由宿主钉上 `manualAmmoRun`（runKey 按该条私聊 messageId 稳定派生、
-  缺失时宿主时间戳，上限/TTL 每轮现读 `ammo` 配置），`ammo_submit` 放行前还会二次机械
-  核对 `master` + `chatKeyOf` 确为主人私聊且轮类型 answer——群聊、陌生私聊、无上下文的轮
-  一律 fail closed。手动逛轮是普通聊天轮，`say_*` 规则不变；工具结果也不直接出 QQ，
-  照旧等开窗分享。
-  弹药库 `fish.external_ammo`（全局抓取池、人格中立；TTL `ammo.ttlHours` 缺省 48h，惰性过期）。
-  分享：open 窗随机门（`ammo.shareChance` 缺省 0.2）**每窗最多 1 条外部**，`share` 的 `ammoId`
-  （字段名全文档统一，旧名 externalAmmoId 弃用）机械校验「本窗门已开 ∧ item available ∧ 本窗未消费外部」后原子 claim，b23/BV canonical 链接由宿主
-  拼进 payload；分享全时尊重宵禁二态（夜间窗口纯搭话、不分享素材）与末条自言禁言。T13 合并条目
-  `kind: debt|external`——旧账优先（段预算 `{debtChars, debtCap}` 只管 debt，超限丢条目截断不变）、
-  外部行独立渲染（在场必注，不受 debt 预算/cap 约束，2026-11-04 T1 预算分家）、nudge 的 {{n}} 只数 debt。
-  空窗也开口（2026-11-03）：开窗无积压且 nudge 未到档时，外部弹药在场（门开且非宵禁）
-  同样提交无行注入轮（空窗弹药轮）——分享是鱼自己想开口的事，不被「没新消息」压着；
-  debt 旧账单独不触发空窗轮。另补了只读查库工具 `ammo_list`（available 先入先出 + 门/宵禁状态），
-  模型不必再从弹药栏缺位反推库存空。
-  频控内核 `src/external/bili-client.ts`：白名单端点（7 个，URL 只从 switch 拼）、全局串行锁、
-  同端点 ≥2s、每日预算（`ammo.dailyBudget` 缺省 60，持久 `var/bili-budget.json`）、-412/-352 当日熔断、
-  buvid3 长期复用（`var/bili-state.json`）；**`video` 工具共用该客户端**，新增 B 站端点必须先进白名单。
+- **会话自主浏览**：旧弹药库、后台 worker 逛轮、补货、手动 ammo 入口与 `ammo_*` 工具已停用，
+  源码仅作兼容保留，不进 active 工具面、调度或模型文案。每个 open 窗进入时只掷一次
+  `video.browseChance`（缺省 0.3）并选定 topic；门开且零新增时给当前（群 × 人格）会话提交
+  `[主动交流机会]`，ambient shard 无 browse 授权。`bili_hot` 按宿主 topic 取候选并用当前
+  conversation 的 `fish.video_pool` 去重，`video` 实际成功观看才登记 viewed（每轮上限
+  `video.browseMaxViewsPerRound`，缺省 5）；`bili_video` 只做元数据核实，不算实际看过。
+  `say_words(videoBvid)` 核对当前 browseWindow 与本轮 viewed 后，在同一事务完成池写入、
+  canonical URL 与 outbox 入队，失败回滚不占出口额度；跨会话同 BV 不互斥。
+  频控内核 `src/external/bili-client.ts` 的白名单端点、串行锁、同端点 ≥2s、-412/-352 熔断与
+  buvid3 复用不变，每日预算改读 `video.dailyBudget`（缺省 60，旧 `ammo.dailyBudget` 只作回退）。
+  `fish.video_pool` 按 conversationId 隔离，不做全局库存或跨会话 claim。
 - **新闻播报管线**：`news.at`（缺省 10:30）触发第二 scheduler 实例（幂等账独立在 `fish.news_runs`，
   不写 `fish.external_jobs`）。取料 `src/external/news-client.ts`：自建 60s 服务（loopback 4399 的
   `/v2/60s`、`/v2/weibo`、`/v2/baidu/hot`）+ 界面/虎嗅/IT之家/人民网 RSS（fast-xml-parser 受限解析：
@@ -446,7 +423,7 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
 ## 命令
 
 ```bash
-npm test           # 102 项，含上面每条约束的兜底
+npm test           # 113 项，含上面每条约束的兜底
 npm run prompts    # 列出 prompt 文件 + sha256 + 25 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属 + 内嵌扫描结果
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
