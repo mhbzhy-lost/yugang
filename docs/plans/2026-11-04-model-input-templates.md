@@ -513,6 +513,8 @@ helper 直接读取 decisions，严格校验标记唯一性、JSON、场景覆�
 | **S4** 死函数 `gate.ts:renderForModel`、`onebot.ts:expandForwardById`（后者以空文案表触发 `model-input.ts` 中文字面兜底） | 两处均删除；`gate.ts` 的 `MessageTable` 保留（闸与渲染共用） | `npm test` + startup 检查通过 |
 | **S5** `bili_hot_bad_rid` 死 key + 过期注释 | 删 key 与回退，注释改为「宿主与工具字表脱节属配置事故」 | `npm run prompts` 显示 bili_hot 文案 6 key、无死文案告警 |
 
+| **产品改版（用户 2026-11-05 定案）** 去掉工具内的轮类型授权，改成调用侧策略 + prompt 规范 | `bili_hot` 删 injection/window/topic 核对（topic 改可选参数，缺省随机）；`video` 删 browse 门（只留每轮观看上限）；`say_words` 删 `videoBvid` 与门核对，改为**链接白名单**（`src/egress/seen-links.ts`：文本里每个 URL 必须是本轮工具结果里出现过的，宿主在工具包装层机械登记、轮末清账），分享视频从此就是「推荐语 + 链接 + share: true」；新增 `prompt/messages.md` 的 `video_answer_rule`（@ 轮确定性追加「没被要求看视频就别看」）；`say_link_not_allowed` 拒绝文案；AGENTS §17、runtime、三个 TOOL.md 同步 | 全量 113/113、聚焦 19/19、prompts exit 0；`/tmp` 临时脚本核对白名单：本轮工具结果里的链接放行、编造链接与外来链接被拒、轮末清账 |
+
 未处理的 reviewer 建议（明确保留为已知限制，不擅自改产品语义）：**S6** 删除 `@全体成员`/`@别人` 的机械澄清标注（decisions §3 标签合同本就没有，属行为面削弱，需上线观察）；**S7** 换页尾跨轮重复消息行（改造前后一致，去重口径未裁定）；**S8** 升级后首个换页周期内旧 `回复msg:` 行会按逐字投影进尾部（存量页兼容，F1 判据在该窗口为假）。
 
 ### 边界与未满足项

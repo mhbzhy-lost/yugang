@@ -1,7 +1,13 @@
 {
   "parameters": {
     "type": "object",
-    "properties": {},
+    "properties": {
+      "topic": {
+        "type": "string",
+        "enum": ["二次元", "游戏", "军事", "数码"],
+        "description": "想看哪个分区；不填就随机挑一个"
+      }
+    },
     "additionalProperties": false
   }
 }

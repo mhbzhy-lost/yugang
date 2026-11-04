@@ -147,21 +147,19 @@ export type SelfMuteDeps = ToolPackageDeps & {
 
 /**
  * 末条自言禁言的机械校验（决策 24，T15）：群里最新一条消息是鱼自己发的（lastWasFish）时，
- * ambient/injection 轮未声明分享的出口一律 tool 错误拒绝——分享意图认三个参数：
- * share: true（兑现承诺/交付委托结果）、ammoId（外部素材，旧弹药内核已停用、兼容保留）
- * 与 videoBvid（自主浏览看过的视频，2026-11-04 模型输入计划 T4），都是「素材分享」。
- * videoBvid 只是分享意图声明：能不能真分享由 say_words 的 browse 授权 + viewed 双重
- * 白名单裁决，填了无效 BV 照样被拒——普通文字不能借这个字段绕过禁言。
+ * ambient/injection 轮未声明分享的出口一律 tool 错误拒绝——分享意图认 share: true
+ * （兑现承诺/交付委托结果）与旧 ammoId（旧弹药内核已停用、兼容保留）。
+ * 2026-11-05 起没有 videoBvid 这种专用声明：分享视频就是普通文本带一个本轮见过的链接，
+ * 声不声明为素材分享由 share 决定，so 普通文字不能靠「带个 URL」绕过禁言。
  * answer 轮天然豁免（有人 @ 必有入站，标记已翻 false），trigger 拿不到时
  * 同样豁免；lastWasFishOf 未接线时缺省放行（宁松勿严）。调用点必须在 chargeSayRound
  * 之前：被拒的尝试不占开口额度；既有 @/quote/额度校验不受影响。
  */
-export function assertShareAllowed(deps: SelfMuteDeps, api: SayApi, trigger: SayRound["trigger"], share: unknown, ammoId?: unknown, videoBvid?: unknown): void {
+export function assertShareAllowed(deps: SelfMuteDeps, api: SayApi, trigger: SayRound["trigger"], share: unknown, ammoId?: unknown): void {
   const kind: RoundKind = trigger?.kind ?? "answer";
   if (kind === "answer") return;
   if (share === true) return;
   if (typeof ammoId === "string" && ammoId.trim().length > 0) return;
-  if (typeof videoBvid === "string" && videoBvid.trim().length > 0) return;
   if (deps.lastWasFishOf?.(String(api.conversationId)) !== true) return;
   throw new Error(deps.prompts.messages["say_self_mute"] ?? "say_self_mute");
 }

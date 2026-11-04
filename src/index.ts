@@ -67,6 +67,7 @@ import { createNewsClient, type NewsItem, type NewsTopicFeed } from "./external/
 import { sanitizeExternalText } from "./external/sanitize.ts";
 import { getBiliClient } from "./external/bili-client.ts";
 import { clearViewedVideos, videoBrowseGateOf, wireVideoBrowseHost } from "./external/video-browse.ts";
+import { clearSeenLinks, recordSeenLinks } from "./egress/seen-links.ts";
 import { planRoundImages, rewriteRoundForwardImages } from "./qq/round-images.ts";
 import { appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderGifIngestInput, renderOpenMessageList, submitContentOf } from "./qq/round-input.ts";
 import { NEWS_BROADCAST_MAX_CHARS, renderNewsBroadcast, renderNewsTask, type NewsDigest, type NewsDigestItem, type NewsDigestSection } from "./external/news-broadcast.ts";
@@ -944,6 +945,10 @@ async function submitRound(input: {
   // 语音提示的 0.3 概率门（仅 answer 轮，决策 7）：主人/特别关注对象过闸的轮里，三成概率追加一行
   // `[本轮要求] 必须使用 say_voice 回复`。只是提示，不是门禁——用不用由鱼自己判断（说没配音色就不提示）。
   // ambient/injection 环境轮一律不掷：零出口合法的轮不该被语音义务逼着开口。
+  // 看视频的调用侧规范（2026-11-05，decisions 定案）：工具不再按轮类型卡人，改成在 @ 轮
+  // 明确写一条要求——没被要求就别去看视频。确定性追加（不掷概率），与语音提示同为附加段。
+  const watchRule = fish.prompts.messages["video_answer_rule"] ?? "";
+  if (roundKind === "answer" && watchRule.length > 0) content = appendVoiceHint(content, watchRule);
   if (roundKind === "answer" && voiceConfigFor(mappingKeys.get(String(conv.id)) ?? chatKey) && isVoiceVip(chatKey, trigger.userId) && Math.random() < 0.3) {
     const hint = fish.prompts.messages["voice_hint"] ?? "";
     // 附加段之间统一空一行（decisions §5.2：[本轮要求] 段前是空行）
@@ -1027,6 +1032,9 @@ async function submitRound(input: {
         // viewed 登记只活本轮（T3/T4）：done、没答上来、wait 抛错都整份清掉，
         // browse 轮的「实际看过」授权不跨轮残留
         clearViewedVideos(String(submission.id));
+        // 本轮「见过的链接」白名单同一生命周期：出口侧只认本轮工具结果里的 URL，
+        // 轮末整份清掉，跨轮不残留（不把上一轮的链接变成下一轮的通行证）
+        clearSeenLinks(String(submission.id));
         bypassOf.delete(String(submission.id));
         // 导入清单只属于这一轮：成功、失败、抛错都在这里清掉
         clearMemeImportRound(String(submission.id));

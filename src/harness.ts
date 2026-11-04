@@ -18,6 +18,7 @@ import {
   defineDoc,
   defineEntry,
   defineExtension,
+  LiveDoc,
   section,
   type Conversation,
   type ConversationId,
@@ -32,7 +33,7 @@ import { loadToolSurface } from "./tools/loader.ts";
 import { renderToolCatalog } from "./tools/catalog.ts";
 import type { RoundKind, RoundTrigger, ToolManifest, ToolPackageDeps } from "./tools/types.ts";
 import type { EngagementMode } from "./fish-config.ts";
-import { withToolTimeout } from "./tools/timeout.ts";
+import { withSeenLinkHarvest, withToolTimeout } from "./tools/timeout.ts";
 import { WatchDoc } from "./store.ts";
 import { createCompactor, MemoryExtractError, type CompactResult, type Compactor } from "./compact.ts";
 import { ChatsDoc, MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc, OutboxDoc } from "./store.ts";
@@ -439,7 +440,12 @@ export async function openFish(options: FishOptions): Promise<Fish> {
   const toolTimeoutMessage = prompts.messages["tool_timeout"] ?? "tool_timeout";
   const fishTools: readonly ToolRegistration[] = surface.tools.map((tool) => {
     const override = options.toolTimeoutOverrides?.[tool.name];
-    return withToolTimeout(tool, override === undefined ? toolTimeoutMs : override * 1000, toolTimeoutMessage);
+    const wrapped = withToolTimeout(tool, override === undefined ? toolTimeoutMs : override * 1000, toolTimeoutMessage);
+    return withSeenLinkHarvest(wrapped, async (api, context) => {
+      const live = (await (api as { snapshot: (doc: unknown, id: string, c: unknown) => Promise<unknown>; conversationId: string })
+        .snapshot(LiveDoc, (api as { conversationId: string }).conversationId, context)) as { run?: { inputs?: unknown[] } } | undefined;
+      return live?.run?.inputs?.[0];
+    });
   });
   const fishExtension = makeFishExtension("fish", prompts.persona, { tools: fishTools, prompts, manifests: surface.manifests, memoryKeyOf: memoryKeyOfConversation, chatKeyOf: chatKeyOfConversation, engagementOf: (chatKey: string) => options.engagementOf?.(chatKey) ?? "legacy" });
   const personaExtensions = new Map<string, Extension>();

@@ -8,7 +8,7 @@
  * browseWindow / browseTopic 随 RoundTrigger 钉在轮上；ambient shard 与其它轮不携带。
  *
  * viewed 登记是 T4 的窄依赖：`video` 工具在 browse 轮实际成功观看一条视频后
- * recordViewedVideo(roundId, bvid)，say_words(videoBvid) 分享前用 viewedVideoOf(roundId)
+ * recordViewedVideo(roundId, bvid)，每轮观看上限用 viewedVideoOf(roundId)
  * 机械核对「本轮真的看过」。登记只活在当前会话当前 browse 轮：宿主在轮 settle 时
  * clearViewedVideos(roundId) 整份清掉（与 triggerOf 同生命周期），跨轮 / 跨会话一律查不到。
  *
@@ -58,7 +58,7 @@ export function recordViewedVideo(roundId: unknown, bvid: string): void {
   set.add(bvid);
 }
 
-/** 当前轮已实际观看的 BV 集合（T4 的 say_words(videoBvid) 分享前机械核对）；没登记过 = 空集。 */
+/** 当前轮已实际观看的 BV 集合（video 的每轮观看上限据此计数）；没登记过 = 空集。 */
 export function viewedVideoOf(roundId: unknown): ReadonlySet<string> {
   return viewedByRound.get(String(roundId)) ?? new Set<string>();
 }
