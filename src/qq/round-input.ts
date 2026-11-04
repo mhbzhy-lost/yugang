@@ -82,7 +82,20 @@ export function submitContentOf(content: string, imageBlocks: readonly { type: "
   return imageBlocks.length > 0 ? [{ type: "text", text: content }, ...imageBlocks] : content;
 }
 
-/** 强制语音附加段与引用/图片附加段之间统一空一行。 */
+/** 附加段之间统一空一行（语音提示、answer 轮规范段共用这条拼装）。 */
 export function appendVoiceHint(content: string, hint: string): string {
   return hint.length > 0 ? `${content}\n\n${hint}` : content;
+}
+
+/**
+ * answer 轮的规范段（目前是 `video_answer_rule`：没被要求看视频就别看）。
+ *
+ * 放在这里而不是 `src/index.ts`：宿主与权威模板测试必须走同一段拼装，否则测试会
+ * 在「多一段 / 少一段」时仍然全绿（2026-11-05 就是这么发现的）。顺序按数组顺序
+ * 依次追加，每段之间空一行。
+ */
+export function appendAnswerRules(content: string, rules: readonly string[]): string {
+  let out = content;
+  for (const rule of rules) out = appendVoiceHint(out, rule);
+  return out;
 }

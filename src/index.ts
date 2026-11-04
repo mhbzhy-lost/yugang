@@ -69,7 +69,7 @@ import { getBiliClient } from "./external/bili-client.ts";
 import { clearViewedVideos, videoBrowseGateOf, wireVideoBrowseHost } from "./external/video-browse.ts";
 import { clearSeenLinks, recordSeenLinks } from "./egress/seen-links.ts";
 import { planRoundImages, rewriteRoundForwardImages } from "./qq/round-images.ts";
-import { appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderGifIngestInput, renderOpenMessageList, submitContentOf } from "./qq/round-input.ts";
+import { appendAnswerRules, appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderGifIngestInput, renderOpenMessageList, submitContentOf } from "./qq/round-input.ts";
 import { NEWS_BROADCAST_MAX_CHARS, renderNewsBroadcast, renderNewsTask, type NewsDigest, type NewsDigestItem, type NewsDigestSection } from "./external/news-broadcast.ts";
 
 // 每条入站消息的原始文本（卡片渲染 / bypass 剥离之前取）：记忆 entry 只存群友原话，
@@ -948,7 +948,9 @@ async function submitRound(input: {
   // 看视频的调用侧规范（2026-11-05，decisions 定案）：工具不再按轮类型卡人，改成在 @ 轮
   // 明确写一条要求——没被要求就别去看视频。确定性追加（不掷概率），与语音提示同为附加段。
   const watchRule = fish.prompts.messages["video_answer_rule"] ?? "";
-  if (roundKind === "answer" && watchRule.length > 0) content = appendVoiceHint(content, watchRule);
+  if (roundKind === "answer" && trigger.mentionsBot && watchRule.length > 0) {
+    content = appendAnswerRules(content, [watchRule]);
+  }
   if (roundKind === "answer" && voiceConfigFor(mappingKeys.get(String(conv.id)) ?? chatKey) && isVoiceVip(chatKey, trigger.userId) && Math.random() < 0.3) {
     const hint = fish.prompts.messages["voice_hint"] ?? "";
     // 附加段之间统一空一行（decisions §5.2：[本轮要求] 段前是空行）
