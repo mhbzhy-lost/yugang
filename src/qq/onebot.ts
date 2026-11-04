@@ -80,7 +80,8 @@ export type IncomingMessage = {
   forward?: ForwardAttachment;
   /** 结构化的直接引用；引用原文不进入 text。 */
   quoted?: QuotedMessage;
-  /** 这条消息回复的是不是一条合并转发合集；gate 用它放行（回复合集即明确指令，不需要 @）。 */
+  /** 这条消息是否「引用了一条合并转发合集且 @ 了鱼」——只有这种组合才展开被引合集；
+   *  单纯的引用在闸上按非 @ 消息处理（主人定案 2026-11-04：看合集得 @）。 */
   repliedForward?: boolean;
   /** 分享卡片（小程序 / 结构化分享）；文本里留 [卡片#N] 占位，由宿主按 prompt 文案渲染。 */
   cards?: ShareCard[];
@@ -231,8 +232,8 @@ export class OneBot {
     // forwardIds 不清空：gate 要用它把无 @ 的合集零成本拒掉
 
     // 回复引用：取回被引消息水合成结构化 quoted（引用原文不再拼进 parsed.text，
-    // 附加段由装配方后置渲染）；被引消息若是合并转发：结构化展开（回复合集
-    // 本身就是明确指令，不再要求 @），引用原文与合集附件分开渲染、不重复展开。
+    // 附加段由装配方后置渲染）；被引消息若是合并转发：只有同时 @ 了鱼才结构化展开
+    // （主人定案 2026-11-04：看合集得 @），引用原文与合集附件分开渲染、不重复展开。
     for (const replyId of parsed.replyIds ?? []) {
       if (!replyId) continue;
       try {
@@ -245,7 +246,7 @@ export class OneBot {
         if (Array.isArray(quotedMessage)) {
           const fwd = quotedMessage.find((s: OneBotSegment) => s?.type === "forward");
           const fwdId = String((fwd?.data as Record<string, unknown> | undefined)?.["id"] ?? "");
-          if (fwd && fwdId) {
+          if (fwd && fwdId && parsed.mentionsBot) {
             parsed.repliedForward = true;
             const expanded = await this.#expandForward(fwdId, parsed);
             parsed.quoted = {

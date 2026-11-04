@@ -608,7 +608,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
     return { ...round, via: "planRoundImages(合集子图换编) → withContext(后置附件) → assembleRoundContent → submitContentOf" };
   },
 
-  // 回复合集（decisions §5.9 forward-reply）：引用原文里的父消息与合集附件分开渲染
+  // 引用合集并 @（decisions §5.9 forward-reply）：只有 @ 才展开；引用原文里的父消息与合集附件分开渲染
   forward_reply: () => {
     const quoted: QuotedMessage = {
       id: "1111528999",
@@ -630,13 +630,14 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       userId: 2627618651,
       nickname: "[有人@我]",
       text: "这个合集呢",
+      mentionsBot: true,
       replyIds: ["1111528999"],
       repliedForward: true,
       quoted,
     });
     const round = answerRound({
       anchor,
-      burst: [burstLine(1, 1111529001, 2627618651, "[有人@我]", "这个合集呢", { replyIds: ["1111528999"], quoted })],
+      burst: [burstLine(1, 1111529001, 2627618651, "[有人@我]", "这个合集呢", { mentionsBot: true, replyIds: ["1111528999"], quoted })],
       inline: false,
     });
     return { ...round, via: "withContext(引用原文 + 被引合集附件后置)" };
