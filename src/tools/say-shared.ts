@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { LiveDoc, defineEntry } from "@earendil-works/pi-durable";
 import { renderTemplate } from "../prompts.ts";
+import { isCurfewAt } from "../curfew.ts";
 import { OutboxDoc } from "../store.ts";
 import type { Rejection } from "../egress/policy.ts";
 import type { RoundKind, RoundTrigger, ToolPackageDeps } from "./types.ts";
@@ -284,10 +285,10 @@ export function ammoShareGateOf(chatKey: string): AmmoShareGate | undefined {
   return ammoShareHost?.gateOf(chatKey);
 }
 
-/** claim 时刻的宵禁（与 engage footer 二态同阈）：本地 02:00–09:00 门恒关，同窗白天门开着也不发。 */
+/** claim 时刻的宵禁（与 engage footer 二态同阈）：本地 02:00–09:00 门恒关，同窗白天门开着也不发。
+ *  实现已收到 `src/curfew.ts` 的 `isCurfewAt`（browse 门同源），这里保留旧名给已停用的弹药链。 */
 export function ammoCurfewAt(nowMs: number): boolean {
-  const hour = new Date(nowMs).getHours();
-  return hour >= 2 && hour < 9;
+  return isCurfewAt(nowMs);
 }
 
 /**
