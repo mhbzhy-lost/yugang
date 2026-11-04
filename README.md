@@ -18,7 +18,7 @@
   react   只贴表情，不说话
 ```
 
-其余是可枚举的能力工具（`look` / `meme` / `search` / `video` / `bili_hot` / `bili_video` / `ammo_submit` / `draw` / `gpt_image` / `tags`）
+其余是可枚举的能力工具（`look` / `meme` / `search` / `video` / `bili_hot` / `bili_video` / `draw` / `gpt_image` / `tags`）
 和主人专属的工具（`meme_add` / `meme_import` / `read` / `grep` / `write` / `tree` / `config` / `restart` / `watch`）。
 完整清单就是 `src/tools/loader.ts` 里那份 factory 名单。
 
@@ -103,17 +103,15 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
 
 ## 外部信息源两管线
 
-鱼不止被动接话，还有两条定时外部管线（`src/external/`，同一套 job 调度：时点表热读、错过 ≤2h 补跑一次、
-watchdog 硬截止收束）：
+鱼不止被动接话，还有自主浏览与定时新闻两条外部链路：
 
-- **B 站弹药管线**：每天四个时点（`ammo.slots`，缺省 09:00/12:00/18:00/24:00）起独立 worker 逛轮刷
-  B 站游客 API——`bili_hot` 拿榜单候选（已入库剔除 → 营销号/标题党硬筛一票否决 → 软筛评分排序）、
-  `bili_video` 终选核实（完整卡片 + UP 评级），中意的用 `ammo_submit` 入弹药库 `fish.external_ammo`
-  （BV 判重、小结 ≤60 字、topic 四枚举、TTL 缺省 48h）。worker 轮是后台作业不是聊天：出口工具一律
-  机械拒绝，鱼在那轮不说话，产出只有结构化弹药。自由交流 open 窗经随机门（`ammo.shareChance` 缺省 0.2）
-  每窗最多分享 1 条：`share` 机械校验后原子 claim，b23 短链由宿主从 canonical 记录渲染，模型只写推荐语；
-  开窗注入的弹药栏（T13 合并）里旧账优先、外部最多 1 条。B 站请求全走 `bili-client` 频控内核
-  （白名单端点、串行 + 同端点 ≥2s + 每日预算缺省 60/天 + 风控当日熔断），`video` 工具共用。
+- **会话自主浏览**：每个 open 窗进入时按 `video.browseChance`（缺省 0.3）掷一次门，门开才给当前
+  （群 × 人格）会话一个零新增主动交流机会。会话用 `bili_hot` 按本窗 topic 取候选，用 `video` 实际观看
+  （每轮最多 `video.browseMaxViewsPerRound`，缺省 5），再通过 `say_words(videoBvid)` 把推荐语和宿主
+  canonical 链接发到群里。`fish.video_pool` 按 conversationId 隔离去重，跨会话同 BV 不互斥；写入与
+  outbox 入队同事务。旧弹药库、后台逛轮和 `ammo_*` 工具只保留兼容源码，不进入 active 工具面或调度。
+  B 站请求全走 `bili-client` 频控内核（白名单端点、串行 + 同端点 ≥2s、`video.dailyBudget` 缺省
+  60/天 + 风控当日熔断），普通 `video` 工具共用。
 - **新闻播报管线**：每天 `news.at`（缺省 10:30）取当日新闻——自建 60s 服务（Docker loopback 4399）
   + 界面/虎嗅/IT之家/人民网 RSS + 知乎日报，单源失败降内容不阻断、全源失败当日不发；按 topic 两层映射
   （sources+keywords 命中优先、未命中兜底）+ exclude 黑名单（娱乐圈词表）选料，main 模型按严格 JSON
@@ -287,7 +285,7 @@ npm run token             # 生成 OneBot token，同步到 .env 和 NapCat 配�
 
 其余行为参数不在 `.env` 里，在 `fish.config.json`（模板 `fish.config.example`，mtime 热加载）：
 `ambientMinIntervalSeconds` / `watchAmbientChance` / `thinkingLevel` / `compact` / `memeCooldownMinutes` /
-`toolTimeoutSeconds` / `voices` / `ammo` / `news`。**旧的 `AMBIENT_CHANCE` / `COOLDOWN_MS` / `DAILY_QUOTA` / `QUIET_HOURS` / `KEYWORDS`
+`toolTimeoutSeconds` / `voices` / `video` / `news`。**旧的 `AMBIENT_CHANCE` / `COOLDOWN_MS` / `DAILY_QUOTA` / `QUIET_HOURS` / `KEYWORDS`
 已经下线，写进 `.env` 也不会生效**（旧 `AMBIENT_MIN_INTERVAL_SECONDS` / `WATCH_AMBIENT_CHANCE` 仍作为兜底，
 但请改 `fish.config.json`）。**建议第一次先设 `GROUPS` 只放一个测试群。**
 
@@ -295,12 +293,9 @@ npm run token             # 生成 OneBot token，同步到 .env 和 NapCat 配�
 
 | 字段 | 缺省 | 说明 |
 |---|---|---|
-| `ammo.slots` | `["09:00","12:00","18:00","24:00"]` | 每天逛 B 站时点表（HH:MM，去重保序，24:00 = 当天末尾） |
-| `ammo.browseMinutes` | `10` | 单次逛轮硬截止（分钟），到点收束、未提交候选丢弃 |
-| `ammo.shareChance` | `0.2` | open 窗随机门：本窗可分享一条外部弹药的概率（0–1，每窗最多 1 条） |
-| `ammo.ttlHours` | `48` | 弹药入库后存活时长（小时），过期惰性清理 |
-| `ammo.dailyBudget` | `60` | B 站每日请求总预算（次），跨重启持久计数 |
-| `ammo.maxPicksPerRun` | `3` | 单次逛轮最多入库条数 |
+| `video.browseChance` | `0.3` | 每个 open 窗进入时一次自主浏览门概率（0–1，同窗稳定） |
+| `video.browseMaxViewsPerRound` | `5` | 每个 browse 轮最多实际观看视频数 |
+| `video.dailyBudget` | `60` | B 站每日请求总预算（次），跨重启持久计数；缺省时回退旧 `ammo.dailyBudget` |
 | `news.at` | `"10:30"` | 每天播报时点（HH:MM） |
 | `news.targetGroup` | `""` | 播报目标群号（纯数字；空串 = 不启用；必须 ∈ `.env GROUPS`，域校验在运行时） |
 | `news.topics` | 缺省五 topic | topic 表，每条只认 `name` / `sources` / `keywords` / `exclude`；sources 枚举 60s/jiemian/huxiu/ithome/people/zhihu_daily/weibo_hot/baidu_hot；显式给 topics 就整体覆盖缺省五 topic（AI/时政/军事/科技数码/趣闻二次元，趣闻二次元自带娱乐圈 exclude 词表） |

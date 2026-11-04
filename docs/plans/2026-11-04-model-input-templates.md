@@ -52,6 +52,9 @@
 - `src/qq/onebot.ts`：把直接回复水合为结构化 `QuotedMessage`，把合集展开为结构化 `ForwardAttachment`，不再把引用或合集原文混入当前正文。
 - `src/qq/debounce.ts`：answer 的真实顺序消息选择、合并组、后置附加段与图片编号。
 - `src/qq/gate.ts`：结构化标签和昵称渲染，不再输出旧 `回复msg:` 头。
+- `src/qq/round-images.ts`：一轮图片输入规划（编号、压缩 block、末尾标签、`look` fallback、合集子图换编）的唯一实现；宿主与 T7 测试共用同一入口。
+- `src/qq/round-input.ts`：轮级输入装配（`backgroundTextOf` / `renderOpenMessageList` / `renderBrowseOpportunity` / `renderGifIngestInput` / `assembleRoundContent` / `submitContentOf` / `appendVoiceHint`）的唯一实现；宿主与 T7 测试共用同一入口。
+- `src/external/news-broadcast.ts`：新闻成品与任务输入渲染（`renderNewsBroadcast` / `renderNewsTask` / 预算常量）的唯一实现；宿主与 T7 测试共用同一入口。
 - `src/external/video-browse.ts`：open gate、当前轮 viewed BV 注册与清理。
 - `src/external/video-pool.ts`：会话私有视频池、BV 去重与 canonical URL。
 - `src/index.ts`：各场景接线、图片 block、主动轮与调度启停，不写模型文案。
@@ -60,6 +63,20 @@
 - `test/model-input-templates.test.ts`：独立测试专用，以固定输入触发各真实场景拼装并精确比较完整 content。
 
 ## DAG
+
+### T7 前置修复（主会话，2026-11-04，事后追认）
+
+T7 首次启动即停在停点上报：decisions §10 的 16 个 scene 里有 10–11 个的真实拼装代码在零导出、
+导入即启动宿主的 `src/index.ts` 内，测试无法安全触达；而合同禁止测试复制生产组装逻辑。裁定 A：
+把这些拼装抽成可导入的生产模块，让 `src/index.ts` 调用同一实现（不开测试后门、不复制组装），T7 再从真实
+模块入口取得 actual。由此新增的三个模块是**生产代码**（不是测试专用 shim），其写路径不在 T2/T3/T5
+原始声明内，在此追认并补进「文件结构与职责」：
+
+- `src/qq/round-images.ts`（原 `src/index.ts` 的 `planRoundImages` / 合集子图换编）
+- `src/qq/round-input.ts`（原 `src/index.ts` 的 `backgroundTextOf` / `engageModelMessages` / 主动轮文案 / GIF 输入装配 / answer 附加段装配 / content block 组装 / 语音提示拼接）
+- `src/external/news-broadcast.ts`（原 `src/index.ts` 的新闻渲染与任务输入）
+
+核对口径：`src/index.ts` 对应调用点只做转发（`flushBurst`、`submitRound`、`maybeIngestGif`、`submitInjectionRound`、`submitShardRound`、`runNewsJob`），没有第二套渲染实现；三模块内无测试专用开关、无环境变量分支。
 
 ```text
 T1（消息/回复/合集结构契约）──> T2（answer/私聊/图片）
@@ -122,15 +139,15 @@ T7 ─────────────────────────> 
 
 **验收标准：**
 
-- [ ] **步骤 1：核对真实入口、身份和已有合同**
+- [x] **步骤 1：核对真实入口、身份和已有合同**
 
 确认 `get_msg` 只展开直接一层，文本 200 字、图片 2 张的现有限额不变；确认回复段原文从 `parsed.text` 移除后仍保留 replyIds 供出口强制引用。核对合集三条触发路径、最近合集 10 分钟缓存、前 10 条/2 子图/嵌套不递归限制，以及当前 gate 与仓库已裁定合集专用例外的差异。
 
-- [ ] **步骤 2：完成最小实现**
+- [x] **步骤 2：完成最小实现**
 
 实现标签顺序 `m → 回复 → 转发合集 → @ → 主人/特别关注`，昵称与 QQ 始终在 `: ` 前；实现群聊/私聊/历史三种边界模板、`[引用原文]` 与后置合集附件。`onebot` 水合填充 `quoted` / `forward`，失败保留显式读取失败附加信息，不把引用或合集文本混进当前正文；子消息只使用 API 真实返回的 ID/QQ。gate 对回复合集放行、对无 @ 自带合集零成本拒绝，普通回复仍按 @/open 判定。
 
-- [ ] **步骤 3：运行适用的既有检查并记录结果**
+- [x] **步骤 3：运行适用的既有检查并记录结果**
 
 运行：`npm test`、`npm run prompts`。只记录当前契约改动造成的预期回归，不在后续任务未完成时误判终态。
 
@@ -161,15 +178,15 @@ T7 ─────────────────────────> 
 
 **验收标准：**
 
-- [ ] **步骤 1：核对真实入口、身份和已有合同**
+- [x] **步骤 1：核对真实入口、身份和已有合同**
 
 确认 answer 锚点、burst、背景与 quoteIds 仍来自同一组消息，禁止渲染重排后出口引用绑定到别的消息；GIF 不进入 inline，普通轮最多 2 张的限制不变；合集子图与直发图共享编号和压缩路径，背景合集仍只显示短标记。
 
-- [ ] **步骤 2：完成最小实现**
+- [x] **步骤 2：完成最小实现**
 
 answer 与私聊接入共享模板；将 inline 选图结果映射为 `[图片#N]`，文本末尾附 `[图片#N 压缩图]`，每个标签后仅附对应 `shrinkForModel` block。非 inline 保留 `inbound/` 路径，并追加 `[本轮要求] 使用 look 工具读取消息中的图片。` 直接合集、回复合集与最近合集补展开都使用后置附件，不再把补展开内容前置到标准消息列表之前。
 
-- [ ] **步骤 3：运行适用的既有检查并记录结果**
+- [x] **步骤 3：运行适用的既有检查并记录结果**
 
 运行：`npm test`、`npm run prompts`。记录引用白名单、inline/fallback、图片压缩及普通视频等回归结果。
 
@@ -211,17 +228,19 @@ answer 与私聊接入共享模板；将 inline 选图结果映射为 `[图片#N
 
 **验收标准：**
 
-- [ ] **步骤 1：核对真实入口、身份和已有合同**
+- [x] **步骤 1：核对真实入口、身份和已有合同**
 
 确认新闻 scheduler 与 external B 站 scheduler 独立；ambient shard 不获得 browse 授权；空窗债务和外部弹药不再成为起轮理由。
 
-- [ ] **步骤 2：完成最小实现**
+- [x] **步骤 2：完成最小实现**
 
 open 进入时一次掷门并选 topic；仅 gate 开且无积压时提交 `[主动交流机会]` 模板；有消息 injection/shard 统一标准列表。停用 active ammo 工具、scheduler、refill、manual trigger、分享挂点及其中心/工具包文案但保留旧文件；同步新的每日预算热加载挂点。
 
-- [ ] **步骤 3：运行适用的既有检查并记录结果**
+- [x] **步骤 3：运行适用的既有检查并记录结果**
 
 运行：`npm test`、`npm run prompts`。记录工具 surface、active messages 合并视图、新闻接线、gate 与配置兼容结果。`test/tools.test.ts` 的 deferred 名单、`test/prompts.test.ts` 的“所有 manifest 都进入工具面”和“中心文案条数 + tool message 条数”断言属于本任务直接相关预期回归，可按全局约束随生产修复同步调整；不得新增测试文件。
+
+补充（T8 终验发现 → 主会话修复 → 复验）：T8 初判 F3 未满足——`src/index.ts` settle 的 `finally` 仍调用 `engageNext.noteExit(chatKey)`，沉默计数仍由宿主上报。复核确认 `silenceOf` 在宿主与脚本侧零调用（该计数当时只写日志、不驱动任何模型面），但保留上报就是给 nudge 留了活接线。修复：删除该调用与 `exits` 读数，`src/index.ts` 与 `src/engage-next.ts` 的注释改为明确「noteExit / silenceOf 与 shareGateOf 同待遇：兼容源码、宿主无消费方、不得据此重新接线」。复验：`node --test test/model-input-templates.test.ts` 19/19、`npm test` 113/113、`node --test test/startup.test.ts` 通过、`npm run prompts` exit 0。
 
 - [ ] **建议（待用户授权）：新增测试或全新 fixture/压力场景**
 
@@ -262,15 +281,15 @@ open 进入时一次掷门并选 topic；仅 gate 开且无积压时提交 `[主
 
 **验收标准：**
 
-- [ ] **步骤 1：核对真实入口、身份和已有合同**
+- [x] **步骤 1：核对真实入口、身份和已有合同**
 
 确认 `bili_hot` 不再读全局 ammo 过滤；普通 answer 的 video URL/opus 路径不登记 browse viewed；`bili_video` 元数据核实同样不登记 viewed；浏览授权不能只按群 open 推断。
 
-- [ ] **步骤 2：完成最小实现**
+- [x] **步骤 2：完成最小实现**
 
 实现 topic 映射、pool 过滤、连续查看上限与 viewed 绑定；在 `say_words` 中核对 browseWindow 和 viewed BV，事务完成 pool 去重写入、canonical URL 和 outbox 入队，跨会话无 claim。
 
-- [ ] **步骤 3：运行适用的既有检查并记录结果**
+- [x] **步骤 3：运行适用的既有检查并记录结果**
 
 运行：`npm test`、`npm run prompts`。记录普通 video、出口额度、self-mute、Schema 和事务失败路径。
 
@@ -300,15 +319,15 @@ open 进入时一次掷门并选 topic；仅 gate 开且无积压时提交 `[主
 
 **验收标准：**
 
-- [ ] **步骤 1：核对真实入口、身份和已有合同**
+- [x] **步骤 1：核对真实入口、身份和已有合同**
 
 确认 GIF 任务不包含 say 出口、图片仍是压缩路径；新闻渲染的日期、topic、source、canonical URL 和幂等键不变。
 
-- [ ] **步骤 2：完成最小实现**
+- [x] **步骤 2：完成最小实现**
 
 用标准列表渲染 GIF 环境与目标消息，追加任务段；新闻只保留 `[新闻播报]` 与成品正文，不改变调度及失败降级。
 
-- [ ] **步骤 3：运行适用的既有检查并记录结果**
+- [x] **步骤 3：运行适用的既有检查并记录结果**
 
 运行：`npm test`、`npm run prompts`。记录 GIF 收图、meme_add、新闻 scheduler 与出口回归。
 
@@ -343,15 +362,15 @@ open 进入时一次掷门并选 topic；仅 gate 开且无积压时提交 `[主
 
 **验收标准：**
 
-- [ ] **步骤 1：核对真实入口、身份和已有合同**
+- [x] **步骤 1：核对真实入口、身份和已有合同**
 
 确认尾部只来自被压缩页模型实际见过的消息，不读 recent/chatlog；群友与鱼的消息 ID 必须来自原 entry，不得编造。
 
-- [ ] **步骤 2：完成最小实现**
+- [x] **步骤 2：完成最小实现**
 
 保留 `buildProfileHandoff` 的剖面前部，替换 `mechanicalTail` 投影为标准列表；没有真实 ID 的历史兼容项按既有锚点规则保留可读文本但不伪造 `[m:id]`。合集父消息与当页已见附件按同一渲染合同保留，缺子消息 ID/QQ 时不伪造。更新 system、配置示例与运维文档。
 
-- [ ] **步骤 3：运行适用的既有检查并记录结果**
+- [x] **步骤 3：运行适用的既有检查并记录结果**
 
 运行：`npm test`、`npm run prompts`、`git diff --exit-code -- prompt/handoff.md`，记录三者 exit；最后一条为 F9 的机械终检。
 
@@ -381,19 +400,19 @@ open 进入时一次掷门并选 topic；仅 gate 开且无积压时提交 `[主
 
 **验收标准：**
 
-- [ ] **步骤 1：只读核对权威矩阵和真实入口**
+- [x] **步骤 1：只读核对权威矩阵和真实入口**
 
 完整读取 decisions，建立 scene → 模板/图片 block → 真实拼装入口映射。确认 answer、私聊、inline/fallback、open injection、open shard、零新增、新闻、GIF、三类合集展开、背景合集、普通/合集换页均有可触达入口。不得复制生产组装函数生成 actual；入口无法触达时列出事实并停止上报。
 
-- [ ] **步骤 2：实现独立测试 helper 与全场景机械测试**
+- [x] **步骤 2：实现独立测试 helper 与全场景机械测试**
 
 helper 直接读取 decisions，严格校验标记唯一性、JSON、场景覆盖和占位符残留；只移除围栏，不 trim 或归一化正文。测试以固定内存消息/卡片/entry 触发真实入口，精确比较多段模板拼接后的完整文本；图片额外断言 text block 在前、压缩 image blocks 顺序、base64 和 MIME。open injection 与 shard 分别执行。不得修改 decisions、生产代码、既有测试或新增二进制 fixture。
 
-- [ ] **步骤 3：运行聚焦与全量检查并记录结果**
+- [x] **步骤 3：运行聚焦与全量检查并记录结果**
 
 运行：`node --test test/model-input-templates.test.ts`、`npm test`、`npm run prompts`。记录 exit、16 个 scene 的实际覆盖及失败差异。actual 与 decisions 不一致时保持测试失败并交回对应生产 repair task，不得改权威模板或放宽断言。
 
-- [ ] **步骤 4：核对独立性与授权边界**
+- [x] **步骤 4：核对独立性与授权边界**
 
 确认 diff 只含本任务两个测试文件；本任务新增测试已获用户明确授权。确认没有写入 decisions、生产文件，没有为了通过测试而调整模板、增加生产测试后门或把第三方组装副本当作真实输入。
 
@@ -419,21 +438,95 @@ helper 直接读取 decisions，严格校验标记唯一性、JSON、场景覆�
 
 **验收标准：**
 
-- [ ] **步骤 1：核对真实入口、身份和已有合同**
+- [x] **步骤 1：核对真实入口、身份和已有合同**
 
 扫描 active prompt、active messages、工具 catalog、scheduler、出口、合集附件和换页尾部，区分保留兼容源码与 active 引用。
 
-- [ ] **步骤 2：完成最小实现**
+- [x] **步骤 2：完成最小实现**
 
 更新报告与计划执行记录；逐项回填自主浏览、私有池事务等 F10 未覆盖行为的人工核对证据，记录仅 T7 两个测试文件获新增授权、未部署生产、执行环境需已安装依赖等验证边界。不得仅引用 `npm test` 成功就宣称机械测试未覆盖的新行为成立。
 
-- [ ] **步骤 3：运行适用的既有检查并记录结果**
+- [x] **步骤 3：运行适用的既有检查并记录结果**
 
 依次运行：`node --test test/model-input-templates.test.ts`、`npm run prompts`、`npm test`、`git diff --check`、`git diff --exit-code -- prompt/handoff.md`。命令均 exit 0 且 F1–F10 的证据成立才通过终验；失败则回到对应 repair task。
 
 - [ ] **建议（待用户授权）：新增测试或全新 fixture/压力场景**
 
 增加两会话在同一 open 门看同一 BV 并独立分享、以及 answer/open/GIF/新闻/合集/换页输入快照验收。
+
+## 成果独立验收（用户已授权）
+
+- T8 完成后，由未参与 T1–T8 的独立 `reviewer` 新开 run，只读审查当前交付 diff、decisions、16 个场景的机械测试证据及 F1–F10 终态，不修改文件、不派发其他代理。
+- 主会话核对 review 发现；需要修复时在已授权范围内修复并重跑受影响检查。该轮之后的额外成果 review 仍需用户明确授权。
+- 成果 review 是交付后的独立验收，不替代 T7 的独立机械测试，也不把 reviewer 自报意见当作测试证据。
+
+## T8 执行记录（2026-11-04）
+
+本记录对应当前工作区候选；五条命令均在 `/Users/leshi.zhy/yugang` 依次实跑，未使用线上进程、生产 Mac 或数据库写入。
+
+### 命令证据
+
+| 命令 | exit | 关键输出 |
+| --- | ---: | --- |
+| `node --test test/model-input-templates.test.ts` | 0 | `tests 19`、`pass 19`、`fail 0`；16 个 scene、矩阵/helper 严格性、open injection/shard 均通过。 |
+| `npm run prompts` | 0 | 输出 `工具包 24 个`、`源码内嵌扫描：干净`；active catalog 不含 `ammo_list` / `ammo_submit`。 |
+| `npm test` | 0 | `tests 113`、`pass 113`、`fail 0`。运行中仅有本地缺失 `var/bili-filters.json` 的回缺省日志。 |
+| `git diff --check` | 0 | 无输出。 |
+| `git diff --exit-code -- prompt/handoff.md` | 0 | 无输出，`prompt/handoff.md` 无改动。 |
+
+**F3 修复后复验**（上表为 T8 首次实跑；F3 未满足项修复后，受影响命令重跑同结果）：`node --test test/model-input-templates.test.ts` 19/19；`npm test` 113/113；`node --test test/startup.test.ts` 通过；`npm run prompts` exit 0；`git diff --check` 与 `git diff --exit-code -- prompt/handoff.md` 仍 exit 0。
+
+### F1–F10 逐项核对
+
+| 条件 | 判定 | 当前证据 |
+| --- | --- | --- |
+| F1 | 满足 | `src/qq/model-input.ts` 的 `renderMessageLine` 固定生成 `[m:id][标签] 昵称(QQ): 正文`，`src/qq/debounce.ts` 以 arrival 顺序组装列表并将引用/合集放在列表后；源码生成路径未再输出 `回复msg:` 或 `➤`，`src/compact.ts` 的 `historyInputProjection` 仅对旧存量尾行兼容剥离 `➤`。聚焦测试覆盖 `answer_reply`、`answer_burst_voice`、`private_master`、`open_injection`、`open_shard`、`gif_ingest`。 |
+| F2 | 满足 | `src/qq/round-images.ts` 的 `planRoundImages` 统一分配图片编号、标签和压缩 blocks；`src/qq/round-input.ts` 的 `submitContentOf` 将唯一 text block 放在 image blocks 前；`npm test` 通过 inline/fallback 回归，源码无 `ctx_image_attached`。 |
+| F3 | 满足（T8 初判未满足 → 主会话修复 → 复验） | 已核对 `src/tools/loader.ts`：`DISABLED_TOOL_PACKAGES` 含 `ammo_list` / `ammo_submit`，disabled 包不调 factory、不进 active/deferred/catalog，文案不并入 active 合并视图；`src/index.ts` 的 worker/refill/manual ammo/全局分享接线已摘除，新闻仍由独立 `newsScheduler` 接线。open injection/shard 与空窗门均由测试和 `src/qq/round-input.ts` 入口覆盖。**T8 初判未满足的原因已修复**：原 `src/index.ts` settle 的 `finally` 仍调 `engageNext.noteExit(chatKey)`，沉默计数仍有宿主上报；复核确认 `silenceOf` 在宿主/脚本侧零调用（当时只写日志、不驱动任何模型面），已删除该调用与 `exits` 读数，并把 `src/index.ts` / `src/engage-next.ts` 注释改成「noteExit / silenceOf 与 shareGateOf 同待遇：兼容源码、宿主无消费方、不得据此重新接线」。复验：`grep -rn noteExit src/` 仅剩 engage-next 自身声明/实现与两处停用注释；聚焦 19/19、全量 113/113、startup 检查通过。 |
+| F4 | 满足（人工核对） | F10/`npm test` 未覆盖完整自主浏览事务，以下为源码人工证据：`src/external/video-pool.ts` 的 `VideoPoolDoc` 使用 `scope: "conversation"`，`videoUrlOf` 生成 canonical URL，`applyVideoPoolAdd` 按 BV 去重；`src/tools/say_words/tool.ts` 约 L117–L132 要求 injection 的 `browseWindow`/`browseTopic`、现窗 `videoBrowseGateOf` 的 window/topic/open 三项匹配并命中 `viewedVideoOf(round)`；约 L138–L155 在同一 `api.commit` 写池、`OutboundEntry` 与 `OutboxDoc` queued 项，约 L157 才 `chargeSayRound`，失败路径不占额度；`src/tools/say-shared.ts` 的 `assertShareAllowed` 约 L158–L163 将 `videoBvid` 作为 self-mute 素材分享豁免；`src/external/video-browse.ts` 的 `recordViewedVideo`/`viewedVideoOf`/`clearViewedVideos` 与 `src/index.ts` settle finally 约 L1029 清理轮内 viewed。 |
+| F5 | 满足 | `prompt/messages.md` 的 `news_broadcast_task` 为 `[新闻播报]`；`src/external/news-broadcast.ts` 的 `renderNewsTask` 与 `src/index.ts` 的 `newsScheduler`（约 L2140–L2148）独立；GIF 由 `renderGifIngestInput` 绑定真实消息 ID 并追加 `[GIF 收图任务]`，prompt 明确只 look 压缩图且不使用 `say_*`。 |
+| F6 | 满足（首轮为「部分满足」，已在 review 后修复并复验） | `src/compact.ts` 的 `historyInputProjection`、`mechanicalTail`、`buildProfileHandoff` 只从被压缩页尾部投影消息和已见附件，输出 history 标准列表；工具过程、thinking、旧 open footer 不进入尾巴，不补拉合集。**首轮问题**：鱼自己的行在生产里永远拿不到 `[m:id]`（`OutboundPayload` 无 `messageId`，drain 只写 `fish.sentmap`），而权威 `history-tail` 要求有；`history_*` 场景当时手造 `CountedEntry.tailMessages`，绕过了唯一生产者 `renderCountedEntries`，属假绿。**修复**：裁定「不伪造」——鱼的行省略 `[m:id]`，decisions §7.2 同步加规则；两个 scene 改为真 harness（`openFish` + 接 `selfOf` → `Elysia(3768557204)` + 真 `submit` 产出 `fish.inbound`/`fish.outbound` + 真 `fish.compact` → 从 `pi.reset` 读 handoff）。复验：聚焦 19/19（`history_reset` 23ms、`history_forward` 7ms，走真链路），全量 113/113。 |
+| F7 | 满足（按 active 面判定） | `prompt/runtime.md`、`prompt/messages.md` 和 `npm run prompts` 的 runtime/tool_catalog 输出没有停用机制的主动提醒，prompts 报告“源码内嵌扫描：干净”；旧 ammo/worker 文件及 config 的兼容说明仍保留，但不属于 active 工具面或主动引导。 |
+| F8 | 满足 | `src/qq/gate.ts` 约 L58–L63 保留回复合集专用放行、无 @ 自带合集零成本拒绝；`src/index.ts` 约 L1172–L1176 将最近合集作为列表后附件；`src/qq/onebot.ts` 约 L564–L592 限前 10 条、子图最多 2 张、嵌套不递归且只带真实 ID/QQ。聚焦测试覆盖 `forward_direct`、`forward_reply`、`forward_recent`、`forward_background`、`history_forward`。 |
+| F9 | 满足 | `git diff --exit-code -- prompt/handoff.md` exit 0、无输出。 |
+| F10 | 满足（首轮在 `history_*` 上不成立，已修复） | 聚焦命令真实结果为 19/19；矩阵严格覆盖 16 个 scene，测试分别触发 open injection 与 open shard，图片 block 做类型/顺序/base64/MIME deepEqual，且生产入口链路来自 `planRoundImages`、`withContext`、`submitContentOf`、`createEngageNext`、`renderNewsTask`、`renderGifIngestInput`、`buildProfileHandoff`。**首轮缺陷**：`history_reset`/`history_forward` 的 `CountedEntry`（含 `tailMessages`/`tailAttachments`）由测试手造，生产造不出来 → 「真实入口」在这两个 scene 上名不副实。**修复**后这两个 scene 走真 harness，手造 fixture 已删除；断言仍为整串 `assert.equal`，未放宽。 |
+
+### 三个已裁定差异的复核
+
+1. `answer_burst_voice`：当前 `prompt/messages.md` 的 `voice_hint`、`prompt/runtime.md`、`src/tools/say_voice/TOOL.md` 与 decisions §5.2 均使用 `[本轮要求] 必须使用 say_voice 回复，不要使用文字。`；聚焦 `answer_burst_voice` 通过。
+2. `news` 来源署名：当前 `src/external/news-client.ts` 的 `NEWS_SOURCE_LABELS` / `newsSourceLabelOf` 覆盖 60秒、界面、虎嗅、IT之家、人民网、知乎日报、微博热搜、百度热搜，`src/external/news-broadcast.ts` 在宿主渲染时调用；聚焦新闻场景输出 `（人民网）` / `（IT之家）`，旧报告中的 `（ithome）` 仅属改造前基线。
+3. `history_forward`：当前 decisions §7.2 已将尾巴父消息修正为同时带 `[转发合集]` 与 `[这条消息@了你]`；这是与 `renderMessageLine` 逐字投影一致的唯一决策文档修正，聚焦 `history_forward` 通过。
+
+### 成果独立 reviewer 后的修复（2026-11-04）
+
+独立 `reviewer`（未参与 T1–T8，`qoder-pool/Qwen3.8-Max`）结论为「有条件通过」，抓出两处真实缺陷与三项合规问题。处理如下：
+
+| 发现 | 处理 | 复验 |
+| --- | --- | --- |
+| **B1（阻塞 F6/F10）** 换页尾里鱼的行永远没有 `[m:id]`，测试手造 `tailMessages` 掩盖 | 裁定不伪造 id：decisions §7.2 鱼行去锚点并加规则；两个 `history_*` scene 改走真 harness（真 `openFish`/`submit`/`compact`，接 `selfOf`） | 聚焦 19/19、全量 113/113；`history_reset` 23ms / `history_forward` 7ms 为真链路耗时 |
+| **B2（合规）** decisions 第三处修改（`前情 2→3`）未披露，且记录里写「未修改 decisions」自相矛盾 | 在「边界与未满足项」补齐 3 处 hunk 的完整披露与理由；保留该修改（3 个 entry 对应 3 行，`count` 取 `counted.length` 是改造前语义） | 文档层面核对 |
+| **B3（合规）** `round-images.ts` / `round-input.ts` / `news-broadcast.ts` 不在计划 WritePaths | 补「T7 前置修复（主会话，事后追认）」小节与「文件结构与职责」三行，并记录 `src/index.ts` 只转发、无第二套渲染 | `grep` 复核一处实现 |
+| **S1** 停用弹药后宵禁硬闸消失，AGENTS.md 仍称「宵禁硬边界生效」 | 改 AGENTS.md：明确宵禁只剩 prompt 软约束、browse 门与 `videoBvid` 无时段闸，标注待定产品项与补闸位置（`videoBrowseGateOf` 开窗计算加 `!ammoCurfewAt(now)`） | 文档层面核对 |
+| **S2** `_salvagePlainReply` 配置注释仍称「回复合集」必答 | 改 `fish.config.example`：仅私聊/被@是必答轮；回复合集只是闸放行 | `node -e` 解析 example JSON 通过 |
+| **S3** `scripts/real-model-smoke.ts` 仍手拼 `回复msg:` | 改为直接调用生产 `renderMessageList`；`claimMaster` 语义改成「正文自称主人」（真实身份标签仍由宿主机械判定） | `grep -rn "回复msg:" src/ scripts/` 只剩一条描述性注释 |
+| **S4** 死函数 `gate.ts:renderForModel`、`onebot.ts:expandForwardById`（后者以空文案表触发 `model-input.ts` 中文字面兜底） | 两处均删除；`gate.ts` 的 `MessageTable` 保留（闸与渲染共用） | `npm test` + startup 检查通过 |
+| **S5** `bili_hot_bad_rid` 死 key + 过期注释 | 删 key 与回退，注释改为「宿主与工具字表脱节属配置事故」 | `npm run prompts` 显示 bili_hot 文案 6 key、无死文案告警 |
+
+未处理的 reviewer 建议（明确保留为已知限制，不擅自改产品语义）：**S6** 删除 `@全体成员`/`@别人` 的机械澄清标注（decisions §3 标签合同本就没有，属行为面削弱，需上线观察）；**S7** 换页尾跨轮重复消息行（改造前后一致，去重口径未裁定）；**S8** 升级后首个换页周期内旧 `回复msg:` 行会按逐字投影进尾部（存量页兼容，F1 判据在该窗口为假）。
+
+### 边界与未满足项
+
+§1–§5 的线上 DB 记录仅是改造前基线；本记录的改造后结论来自当前源码与 T7 机械测试，不是线上 DB 新取证。F4 的自主浏览、私有池事务、出口额度和 self-mute 只完成人工源码核对，不能用 `npm test` 或 F10 夸大为自动验证。F3 的初判未满足项（宿主仍上报沉默计数）已按上文修复并复验通过，不再是未满足项；T3 步骤 1、2 随修复完成补勾。
+
+**decisions 的修改清单（完整披露，共 3 处 hunk；T7 自身未改文档，均为主会话裁定后修改）**：
+
+1. §7.2 `history-profile` 卡片头 `（前情 2 条 …）` → `（前情 3 条 …）`：原文与同节 `history-tail` 的 3 行消息自相矛盾；`count` 来自 `counted.length`（改造前既有语义，未动），3 个 entry 对应 3 行，故改文档而非改生产计数。
+2. §7.2 `history-forward-tail` 父消息补齐 `[转发合集]` 与 `[这条消息@了你]`：尾巴是被压缩页输入的逐字投影，自带合集靠 @ 才展开，该行必然带这两个标签（与 §5.9 `forward-direct` 同一套标签）。
+3. §7.2 `history-tail` 鱼自己的行去掉 `[m:2123920690]`，并新增「鱼的行没有真实 id 时省略 `[m:id]`」规则：`fish.outbound` entry 不携带 messageId（实际 id 发送成功后才落 `fish.sentmap`），历史尾是 entry 的逐字投影，不得编造 ID（与合集子消息同一规则）。
+
+这三处均是「文档与机械事实不一致」的修正，方向上没有一处是「改文档让实现变绿」：对应生产侧一律未动（count 语义、逐字投影、不伪造 ID 都是改造前就有的约束）。
+
+T7 只新增了获授权的两个测试文件；本次未新增其它测试、未 commit、未 push、未部署。
 
 <!-- goal-runtime-contract:start -->
 ```json
