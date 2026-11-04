@@ -13,13 +13,13 @@
     "groups": []
   },
   "sendPacingSeconds": 6,
+  "video": {
+    "browseChance": 0.3,
+    "browseMaxViewsPerRound": 5,
+    "dailyBudget": 60
+  },
   "ammo": {
-    "slots": ["09:00", "12:00", "18:00", "24:00"],
-    "browseMinutes": 10,
-    "shareChance": 0.2,
-    "ttlHours": 48,
-    "dailyBudget": 60,
-    "maxPicksPerRun": 3
+    "dailyBudget": 60
   },
   "news": {
     "at": "10:30",
@@ -76,10 +76,11 @@
   },
   "toolTimeoutSeconds": 30,
   "_engagement": "注释：搭话总开关。legacy = 现行全部搭话判定；next = 定时开窗两态——closed 态非 @ 群消息 skip:next_pending 不进模型，open 态（每 closedMinutes 分钟开 openMinutes 分钟）非 @ 群消息 free_pass 按 shardSeconds 分片、全部发送者合并一轮（@ 恒必答；私聊、/ 指令、GIF 收图轮与记账不受影响）；next 还要过 engage.groups 群白名单：开关 & 白名单双闸，缺省空名单 = 任何群都不进 next（fail-safe）。热生效，只认 legacy/next，非法值保留缺省并告警",
-  "_engage": "注释：next 搭话开窗参数，仅 engagement=next 时消费。closedMinutes=关窗时长（分钟）、openMinutes=开窗时长、windowSize=开窗积压注入上限（条）、mentionContextSize=@ 轮背景条数（legacy 恒 10 不变）、silenceThreshold=连续多少个开窗零出口后注入 nudge、windowRelaxCap=零出口翻倍后积压放宽上限（recent 流水上限同步提升为 max(30, windowRelaxCap)）、shardSeconds=open 态分片节拍（秒，缺省 20）——每拍把窗内全部发送者的新消息合成一轮提交，在途时累积不并发、groups=群白名单（群号字符串数组），engagement=next 仅对这些群生效，空 = 不生效。逐字段校验，非法值告警保留缺省，热生效",
+  "_engage": "注释：next 搭话开窗参数，仅 engagement=next 时消费。closedMinutes=关窗时长（分钟）、openMinutes=开窗时长、windowSize=开窗积压注入上限（条）、mentionContextSize=@ 轮背景条数、windowRelaxCap=recent 流水上限兜底、shardSeconds=open 态分片节拍（秒，缺省 20）——每拍把窗内全部发送者的新消息合成一轮提交，在途时累积不并发。开窗群表直取 .env GROUPS，不再有独立安全域；silenceThreshold/groups 仅兼容保留，不再驱动 nudge 或群白名单。逐字段校验，非法值告警保留缺省，热生效",
   "_sendPacingSeconds": "注释：出站配速（秒）——发送队列同会话相邻两次实际发送至少隔这么多秒，防连珠炮；0 = 关闭。对全部消息生效（@ 轮/环境轮/机械回执一样配速），改完下一拍生效。合法 0–60，非法告警保留缺省",
-  "_ammo": "注释：B 站弹药管线参数。slots=每天逛 B 站的时点表（HH:MM，去重保序，24:00 = 当天末尾）、browseMinutes=单次逛轮硬截止（分钟，到点收束、未提交候选丢弃）、shareChance=open 窗分享外部弹药的随机门概率（0–1，每窗最多 1 条）、ttlHours=弹药入库后存活时长（小时，过期清理）、dailyBudget=B 站每日请求总预算（次）、maxPicksPerRun=单次逛轮最多入库条数。逐字段校验，非法值告警保留缺省，未知键告警，热生效",
+  "_video": "注释：当前会话自主浏览参数。browseChance=每个 open 窗进入时一次自主浏览门概率（0–1，同窗稳定）、browseMaxViewsPerRound=每个 browse 轮最多实际观看视频数（缺省 5）、dailyBudget=B 站每日请求总预算（缺省 60，跨重启持久计数）。逐字段校验，非法值告警保留缺省，未知键告警，热生效",
+  "_ammo": "注释：旧弹药管线已停用，源码仅作兼容保留。只有 dailyBudget 在 video.dailyBudget 缺失时回退使用；slots/browseMinutes/shareChance/ttlHours/maxPicksPerRun 等旧字段不再驱动 active 调度、工具或分享",
   "_news": "注释：新闻播报参数。at=每天播报时点（HH:MM）、targetGroup=播报目标群号（纯数字，空串 = 不启用；必须是 .env GROUPS 白名单内的群号，域校验在运行时播报编排处执行，config 工具改值时会提示）、topics=topic 表（每条只认 name/sources/keywords/exclude；sources 枚举 60s/jiemian/huxiu/ithome/people/zhihu_daily/weibo_hot/baidu_hot；显式给 topics 就整体覆盖缺省五 topic：AI/时政/军事/科技数码/趣闻二次元，趣闻二次元自带娱乐圈 exclude 词表，词表可热改）、perTopicInput=每 topic 送模型输入上限（条）、perTopicOutput=每 topic 输出上限（条）。逐字段校验，非法值告警保留缺省，未知键告警，热生效",
-  "_salvagePlainReply": "注释：模型忘调 say 时的正文兜底，仅必答轮（私聊/被@/回复合集）生效——零 say 时取正文首行截 120 字补发；误发可把下面的键改成 false 关掉",
+  "_salvagePlainReply": "注释：模型忘调 say 时的正文兜底，仅必答轮（私聊/被@）生效——零 say 时取正文首行截 120 字补发；回复合集只是闸放行（合集专用例外，不构成必答，不触发本兜底）；误发可把下面的键改成 false 关掉",
   "salvagePlainReply": true
 }

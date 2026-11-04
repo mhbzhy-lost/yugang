@@ -25,22 +25,31 @@
  * （忙则丢弃并留日志，宁少勿答）；stop 同样清掉。@ 消息不走 shard，
  * 仍由 debounce 的 burst 即时路径提交（answer 轮）。
  *
- * 沉默递进（T8）：宿主在 ambient/injection 轮 settle 时发现出口数 >0 就调 noteExit，
- * 状态机只给当前 open 窗记一笔「本窗开过口」；关窗时结算——开过口则连续零出口计数
- * 清零，全程零出口则 +1。仅统计 open 窗：@ 轮/私聊不开口上报，关窗后的残轮 settle
- * 也找不到 open 窗，一律不计不清。计数供宿主定 nudge 档位（达 silenceThreshold 尾部
- * 追加 nudge 文案，2×阈值另放宽积压窗口），状态机本身不读阈值配置。
+ * 沉默递进（旧 T8 nudge，2026-11-04 模型输入计划 T3 停用）：原本由宿主在 ambient/injection
+ * 轮 settle 且出口数 >0 时调 noteExit 上报，状态机在关窗时结算连续零出口窗数，宿主据此决定
+ * nudge 档位。空窗不再由沉默触发后，宿主侧已无调用方（noteExit / silenceOf 与 shareGateOf
+ * 同待遇：保留为兼容源码，不驱动任何模型面）；内部簿记照旧自洽，不得据此重新接线。
  *
  * 分享门（外部计划 E5，决策 9）：open 进入瞬间生成稳定 windowId（chatKey+开窗时刻
  * sha256 派生，同窗恒定、跨窗不撞）并**一次挷随机门**（严格 random() < ammo.shareChance，shareChance=0 永不开放，
  * 每 tick 现读热生效）落相位内存——窗内不变，关窗作废。出口层（say_words 的 ammoId
  * 链）经 shareGateOf(chatKey) 查询：closed/未跟踪 = undefined（门没开，claim 一律拒）。
  * 门只定「本窗能不能分享」，每窗一条与 available 校验在 claim 事务里机械保证。
+ * 【2026-11-04 模型输入计划 T3】弹药管线已停用：宿主不再接线 shareGateOf（出口 claim
+ * 恒 fail closed），这套门与沉默计数保留为兼容源码，不再驱动任何模型面。
+ *
+ * 视频浏览门（2026-11-04 模型输入计划 T3）：open 进入瞬间复用同一枚稳定 windowId 与
+ * random 注入点，**只掷一次** video.browseChance（严格 random() < 概率，缺省 0 = 恒关，
+ * 每 tick 现读热生效）并从 VIDEO_TOPICS 里随机选定本窗 topic——同窗稳定、关窗作废。
+ * 宿主经 videoBrowseGateOf(chatKey) 查询：门开时空窗零新增轮才提交「主动交流机会」模板
+ * 并把 windowId/topic 钉上 RoundTrigger（browseWindow/browseTopic）；ambient shard 与其它
+ * 轮不携带，即无浏览授权。
  * 相位、lastCloseSeq 与 shard 收集器都只活在内存里：重启回到 closed 从零计时，与
  * debounce 的 pending 同一个取舍——宁可少说一句，不补陈年旧话。沉默计数同生命周期，
  * stop 清相位时一并归零。
  */
 import { createHash } from "node:crypto";
+import { VIDEO_TOPICS } from "./external/video-browse.ts";
 
 /** 群白名单判定：chatKey 形如 qq:group:NNN（含人格后缀也认前缀），群号在名单内才算命中。 */
 export function engageGroupsIncludes(groups: readonly string[], chatKey: string): boolean {
@@ -73,8 +82,12 @@ export interface EngageTickConfig {
   openMinutes: number;
   /** open 态分片节拍（秒，engage.shardSeconds）：每拍排程时现读，热加载下一拍生效。 */
   shardSeconds: number;
-  /** open 窗随机门概率（ammo.shareChance）：开窗挷一次，窗内不变；缺省 0 = 门恒关（fail closed）。 */
+  /** open 窗随机门概率（ammo.shareChance）：开窗挷一次，窗内不变；缺省 0 = 门恒关（fail closed）。
+   *  弹药管线已停用（T3），保留为兼容字段。 */
   ammoShareChance?: number;
+  /** open 窗视频浏览门概率（video.browseChance）：开窗挷一次并选定 topic，窗内不变；
+   *  缺省 0 = 门恒关（fail closed，零新增主动轮不提交）。 */
+  videoBrowseChance?: number;
 }
 
 export type EngageTimer = ReturnType<typeof setTimeout>;
@@ -125,18 +138,23 @@ export interface EngageNext {
    */
   collectShard(chatKey: string, message: EngageShardItem): boolean;
   /**
-   * 零出口观测上报（T8）：宿主在某 ambient/injection 轮 settle 时发现出口数 >0 就调
-   * 它，状态机给该群当前 open 窗记一笔「本窗开过口」（关窗时据此清零/累加沉默计数）。
-   * 仅 open 窗记账：@ 轮/私聊不报，closed / 未跟踪（关窗后的残轮）不计不清。
+   * 零出口观测上报（旧 T8 nudge，已停用）：宿主已不再调用（空窗不由沉默触发）；
+   * 保留为兼容接口，内部账照旧自洽，不要据此重新接回 nudge。
    */
   noteExit(chatKey: string): void;
-  /** 该群当前连续全程零出口的 open 窗数（T8 沉默计数，宿主据此定 nudge 档位）；未跟踪 = 0。 */
+  /** 该群当前连续全程零出口的 open 窗数（旧 T8 nudge 档位依据）；宿主无消费方，仅诊断可见。 */
   silenceOf(chatKey: string): number;
   /**
-   * 当前 open 窗的分享门（E5）：windowId + 开窗时一次挷出的门结果；closed / 未跟踪 /
+   * 当前 open 窗的分享门（E5，兼容保留）：windowId + 开窗时一次挷出的门结果；closed / 未跟踪 /
    * 白名单外 = undefined（出口层的 ammoId 链据此拒绝且不占额度）。
    */
   shareGateOf(chatKey: string): { windowId: string; open: boolean } | undefined;
+  /**
+   * 当前 open 窗的视频浏览门（T3）：与 shareGateOf 同一枚稳定 windowId + 开窗时一次挷出的
+   * browseChance 结果与随机选定的 topic；closed / 未跟踪 / 白名单外 = undefined（宿主与工具侧
+   * 据此拒绝零新增主动轮与一切浏览授权）。
+   */
+  videoBrowseGateOf(chatKey: string): { windowId: string; topic: string; open: boolean } | undefined;
 }
 
 interface GroupPhase {
@@ -152,8 +170,12 @@ interface GroupPhase {
   spokeInWindow: boolean;
   /** 本窗稳定 windowId（E5，chatKey+开窗时刻派生）：窗内恒定，关窗作废。 */
   windowId?: string;
-  /** 本窗随机门结果（E5）：开窗进入时一次落定，窗内不变。 */
+  /** 本窗随机门结果（E5，兼容保留）：开窗进入时一次落定，窗内不变。 */
   shareOpen?: boolean;
+  /** 本窗视频浏览门结果（T3）：开窗进入时一次挷落定，窗内不变，关窗作废。 */
+  videoBrowseOpen?: boolean;
+  /** 本窗视频浏览 topic（T3）：开窗进入时从 VIDEO_TOPICS 随机选定，窗内稳定，关窗作废。 */
+  videoTopic?: string;
 }
 
 export function createEngageNext(deps: EngageNextDeps): EngageNext {
@@ -242,9 +264,12 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
   const enterClosed = (chatKey: string, state: GroupPhase, at: number): void => {
     state.phase = "closed";
     state.phaseSince = at;
-    // 分享门随窗作废（E5）：closed 后 shareGateOf 必须 undefined，出口层拒无可拒
+    // 分享门随窗作废（E5，兼容保留）：closed 后 shareGateOf 必须 undefined，出口层拒无可拒
     state.windowId = undefined;
     state.shareOpen = undefined;
+    // 视频浏览门同生命周期（T3）：关窗即作废，下窗重掷重选 topic
+    state.videoBrowseOpen = undefined;
+    state.videoTopic = undefined;
     // 关窗即懒定基线：open 期的消息已进过模型（injection / shard），不再算积压
     state.lastCloseSeq = lastSeqOf(deps.recentOf(chatKey));
     // 收集器里还有整拍消息就补交一拍；忙则丢弃留日志（宁少勿答）。
@@ -282,6 +307,11 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     // 严格小于（终验 #5 修复）：random() 会精确返回 0，<= 会让 shareChance=0 在 RNG=0 时
     // 错误开门；< 之后 0 永不开放、1 全开放（random() ∈ [0,1) 恒 < 1）。
     state.shareOpen = random() < (deps.config().ammoShareChance ?? 0);
+    // 视频浏览门（T3）：复用同一枚稳定 windowId 与 random 注入点，每窗只掷一次
+    // video.browseChance（严格小于：0 永不开放），并随机选定本窗 topic——同窗稳定，
+    // 空窗零新增轮与 T4 的浏览工具都只认这一份结果，不重掷
+    state.videoBrowseOpen = random() < (deps.config().videoBrowseChance ?? 0);
+    state.videoTopic = VIDEO_TOPICS[Math.floor(random() * VIDEO_TOPICS.length)] ?? VIDEO_TOPICS[0]!;
     // 新窗从零观测开口（上一窗已在关窗时结算）；沉默计数跨窗保留，开口才清零
     state.spokeInWindow = false;
     // 忙（在途轮 / 换页 / 收图）时放弃注入（宁少勿答）；backlogOf 由宿主提供
@@ -366,6 +396,11 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
       const state = phases.get(chatKey);
       if (!state || state.phase !== "open" || state.windowId === undefined) return undefined;
       return { windowId: state.windowId, open: state.shareOpen === true };
+    },
+    videoBrowseGateOf(chatKey) {
+      const state = phases.get(chatKey);
+      if (!state || state.phase !== "open" || state.windowId === undefined || state.videoTopic === undefined) return undefined;
+      return { windowId: state.windowId, topic: state.videoTopic, open: state.videoBrowseOpen === true };
     },
   };
 }

@@ -1,25 +1,33 @@
 /**
- * bili_hot —— 逛 B 站的候选榜单（外部计划 Task E2）。
+ * bili_hot —— 逛 B 站的候选榜单（2026-11-04 模型输入计划 T4：自主浏览专用）。
  *
- * 机械漏斗：榜单取数 → 已入库剔除 → 硬筛一票否决 → 软筛评分排序 → 紧凑行式返回。
+ * 授权闸（fail closed）：只在带有效 browseWindow/browseTopic 的 open injection browse 轮
+ * （「主动交流机会」零新增主动轮）可用——轮上下文经 LiveDoc → triggerOf 解析，还要与
+ * 宿主当前 browse 门（videoBrowseGateOf）现窗核对：门已关 / windowId / topic 不匹配
+ * 一律 tool error。ambient shard、injection 有消息轮、answer 轮与私聊轮都没有授权。
+ *
+ * 候选来源是宿主 topic 固定映射（TOPIC_ZONE：本窗 browseTopic → ranking 分区号），
+ * 模型不选 source/rid（Schema 无参数）；已分享过滤改用当前 conversation 的私有视频池
+ * （fish.video_pool），不再读全局弹药库（ammo 管线已停用，源码保留在 ammo-store.ts）。
+ *
+ * 机械漏斗：榜单取数 → 池内已分享剔除 → 硬筛一票否决 → 软筛评分排序 → 紧凑行式返回。
  * 要点：
  *   - 多抓 4 倍（上限 50）再筛：筛选再严也不容易把榜单筛空；
- *   - 已入库 BV 过滤：fish.external_ammo 里 available/shared 的不再重复推荐
- *     （本工具只读；写入方与正式 doc 定义在 E4，token 形状必须与决策 4 一致）；
+ *   - 池内 BV 过滤：本会话 fish.video_pool 里已分享过的不再重复推荐（跨会话不互斥）；
  *   - 规则命中逐条审计：只打元数据（BV + 规则名 + 数值/命中的正则来源），
  *     不打标题、简介、UP 名等内容；
  *   - 标题/UP/分区/简介全是不可信文本，出工具前统一过 sanitizeExternalText；
  *   - 筛选配置每轮现取（var/bili-filters.json mtime 热加载，主人改文件即生效）。
  *
  * UP 等级/认证的软筛信号不在这条查（每候选一次 card 请求会打爆每日预算），
- * 终选时由 bili_video 的 UP 评级承担；这里的软筛只用榜单自带的
- * 播放/赞/币/收藏/时长/简介。取数：popular 按 ps=20 分页翻 ceil(min(50, 4×limit)/20) 页，
- * rank 一次拉全榜截前 50；全部请求经 bili-client 共享单例（频控/预算/熔断全仓一份）。
+ * 深看时由 video 工具的画面/弹幕/热评承担；这里的软筛只用榜单自带的
+ * 播放/赞/币/收藏/时长/简介。取数：rank 一次拉全榜截前 50；全部请求经 bili-client
+ * 共享单例（频控/预算/熔断全仓一份）。
  *
  * 漏斗本体 runBiliHotFunnel 是纯函数（注入假榜单即可内联验证，不必起会话）；
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest。
  */
-import { defineDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
+import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import {
   compileFilterPatterns,
   createBiliFiltersLoader,
@@ -30,12 +38,14 @@ import {
   isValidBvid,
 } from "../../external/bili-client.ts";
 import { sanitizeExternalText } from "../../external/sanitize.ts";
+import { videoBrowseGateOf } from "../../external/video-browse.ts";
+import { VideoPoolDoc, type VideoPoolState } from "../../external/video-pool.ts";
 import { renderTemplate } from "../../prompts.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 
 // =====================================================================================
-// 排行榜分区枚举（写死，TOOL.md 的 rid enum 与这里一一对应）
+// 排行榜分区枚举（写死；TOPIC_ZONE 的固定映射只认这里列过的分区号）
 // =====================================================================================
 
 export interface BiliRankZone {
@@ -61,49 +71,32 @@ export const BILI_RANK_ZONES: readonly BiliRankZone[] = [
 ];
 
 // =====================================================================================
-// fish.external_ammo 的读取投影（已入库 BV 过滤用）
+// 宿主 topic 固定映射（T4）：browseTopic → ranking 分区号
 // =====================================================================================
 
-/** 弹药库条目（计划决策 4 的形状；本工具只读，写入方是 E4 的 ammo_submit）。 */
-export interface ExternalAmmoItem {
-  id: string;
-  kind: string;
-  bvid: string;
-  title: string;
-  summary: string;
-  topic: string;
-  pickedAt: number;
-  ttlAt: number;
-  state: "available" | "claimed" | "shared" | "expired";
-}
-
-export interface ExternalAmmoState {
-  items: ExternalAmmoItem[];
-}
-
 /**
- * fish.external_ammo 的读取 token：E2 只需要读，先与工具包同住；kind/version/scope
- * 与计划决策 4 一致。E4 落正式 doc 定义时两边必须同形（或改成从一处导入）——
- * pi-durable 对语义不符的存档会当场抛错，不会静默错读。
+ * 本窗 topic 到候选源的固定映射（宿主侧机械词表，模型不可改）：二次元→动画(1)、
+ * 游戏→游戏(4)、军事→知识(36)（ranking/v2 没有军事主分区，军事/历史/社科内容
+ * 集中在知识区，这是白名单端点里最贴近的固定落点）、数码→科技(188)（数码是
+ * 子分区 95，该端点不收，归科技，与 BILI_RANK_ZONES 的注释同源）。
+ * browseTopic 不在映射里 = fail closed 拒绝，不猜候选源。
  */
-export const ExternalAmmoReadDoc = defineDoc<ExternalAmmoState>({
-  kind: "fish.external_ammo",
-  version: 1,
-  scope: "session",
-  initial: () => ({ items: [] }),
-  checkpointWhen: () => true,
-});
+export const TOPIC_ZONE: Readonly<Record<string, number>> = {
+  二次元: 1,
+  游戏: 4,
+  军事: 36,
+  数码: 188,
+};
 
 // =====================================================================================
 // 参数与常量
 // =====================================================================================
 
-/** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
-interface BiliHotArgs {
-  source: "popular" | "rank";
-  rid?: number;
-  limit?: number;
-}
+/** args 静态类型：Schema 无参数（候选源由宿主 topic 映射决定，模型不选）。 */
+type BiliHotArgs = Record<string, never>;
+
+/** browse 轮固定取的候选条数（旧 limit 参数已随 source/rid 一并从 Schema 移除）。 */
+const BROWSE_LIMIT = 10;
 
 /** 文本字段各自的清洗上限（字）：行式返回要紧凑。 */
 const LIMITS = { title: 60, name: 30, tname: 20, desc: 60 };
@@ -361,25 +354,44 @@ export function createBiliHotTool(manifest: ToolManifest, deps: ToolPackageDeps,
     description: toolFullDescription(manifest),
     callers: ["model"],
     parameters: manifestParameters<BiliHotArgs>(manifest),
-    execute: async (args, api, context) => {
-      const source = args.source === "rank" ? "rank" : "popular";
-      const limit = Math.min(20, Math.max(1, Math.floor(args.limit ?? 10)));
-      const zone = source === "rank" ? BILI_RANK_ZONES.find((z) => z.rid === (args.rid ?? 0)) : undefined;
-      if (source === "rank" && zone === undefined) {
-        throw new Error(messages["bili_hot_bad_rid"] ?? "分区号不认识");
+    execute: async (_args, api, context) => {
+      // 授权闸（T4，fail closed）：只有带有效 browseWindow/browseTopic 的 open injection
+      // browse 轮可用，且与宿主当前门现窗核对（门已关 / windowId / topic 不匹配都拒）
+      const live = (await api.snapshot(LiveDoc, api.conversationId, context)) as
+        | { run?: { inputs?: unknown[] } }
+        | undefined;
+      const round = live?.run?.inputs?.[0];
+      const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
+      const browseWindow = typeof trigger?.browseWindow === "string" && trigger.browseWindow.length > 0 ? trigger.browseWindow : undefined;
+      const browseTopic = typeof trigger?.browseTopic === "string" && trigger.browseTopic.length > 0 ? trigger.browseTopic : undefined;
+      if (trigger?.kind !== "injection" || browseWindow === undefined || browseTopic === undefined) {
+        throw new Error(messages["bili_hot_not_browse"] ?? "bili_hot_not_browse");
       }
+      const chatKey = deps.chatKeyOf?.(String(api.conversationId));
+      const gate = chatKey === undefined ? undefined : videoBrowseGateOf(chatKey);
+      if (!gate?.open || gate.windowId !== browseWindow || gate.topic !== browseTopic) {
+        throw new Error(messages["bili_hot_not_browse"] ?? "bili_hot_not_browse");
+      }
+      const rid = TOPIC_ZONE[browseTopic];
+      if (rid === undefined) {
+        // 话题是宿主机器的枚举值，走到这里说明宿主与工具的字表脱节（配置事故，不是模型参数错）
+        throw new Error(messages["bili_hot_bad_topic"] ?? "bili_hot_bad_topic");
+      }
+      const zone = BILI_RANK_ZONES.find((z) => z.rid === rid);
+      const limit = BROWSE_LIMIT;
 
-      // 已入库 BV（全部库内状态，终验 #3 修复）：available/claimed/shared/expired 都算已入库——
-      // applyAmmoSubmit 对任意状态的同 BV 都判重，榜单候选不该再浪费请求与轮次去撞库内条目
-      const ammo = await api.snapshot(ExternalAmmoReadDoc, context);
+      // 本会话私有池过滤（T4）：fish.video_pool 里已分享过的 BV 不再重复推荐——
+      // conversation scope doc 按 conversationId 隔离，跨会话同 BV 不互斥；
+      // 不再读全局 fish.external_ammo（弹药管线已停用）
+      const pool = (await api.snapshot(VideoPoolDoc, api.conversationId, context)) as VideoPoolState | undefined;
       const inLibrary = new Map<string, string>();
-      for (const item of ammo?.items ?? []) {
+      for (const item of pool?.items ?? []) {
         inLibrary.set(item.bvid, item.state);
       }
 
       let cards: BiliVideoCard[];
       try {
-        cards = await fetchCandidates(options.client ?? getBiliClient(), source, zone?.rid ?? 0, limit);
+        cards = await fetchCandidates(options.client ?? getBiliClient(), "rank", rid, limit);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         throw new Error(renderTemplate(messages["bili_hot_failed"] ?? "榜单没拿到", { reason }));

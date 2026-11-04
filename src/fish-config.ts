@@ -52,6 +52,8 @@ export const ENGAGE_DEFAULTS: EngageConfig = {
 /**
  * B 站弹药管线（外部计划 E1–E5）的行为参数：逛轮时点、硬截止、随机门、TTL、预算与空库补货目标。
  * 逐字段校验，非法告警保留缺省，热生效。
+ * 【2026-11-04 模型输入计划 T3】弹药管线已停用：这些字段保留为兼容配置（config 工具仍受理），
+ * 不再驱动 worker 逛轮/分享；仅 dailyBudget 在 video.dailyBudget 缺省时作回退。
  */
 export interface AmmoConfig {
   /** 每天逛 B 站的时点表（HH:MM，去重保序；24:00 = 当天末尾）。 */
@@ -79,6 +81,26 @@ export const AMMO_DEFAULTS: AmmoConfig = {
   dailyBudget: 60,
   maxPicksPerRun: 3,
   refillTarget: 5,
+};
+
+/**
+ * 视频浏览管线（2026-11-04 模型输入计划 T3）的行为参数：open 空窗主动门、单轮观看上限与
+ * B 站每日预算。逐字段校验，非法告警保留缺省，热生效。取代已停用的 ammo 管线：
+ * 旧 ammo.dailyBudget 仅在 video.dailyBudget 缺省时作回退（见 loadFishConfig）。
+ */
+export interface VideoConfig {
+  /** 每个 open 窗进入时只掷一次的主动轮概率（0–1，缺省 0.3）：门开且空窗才提交「主动交流机会」轮；0 = 恒关。 */
+  browseChance: number;
+  /** 单个 browse 轮内实际观看视频的次数上限（缺省 5；T4 的 video 工具消费）。 */
+  browseMaxViewsPerRound: number;
+  /** bili-client 每日请求总预算（次，缺省 60），跨重启持久计数；取代 ammo.dailyBudget。 */
+  dailyBudget: number;
+}
+
+export const VIDEO_DEFAULTS: VideoConfig = {
+  browseChance: 0.3,
+  browseMaxViewsPerRound: 5,
+  dailyBudget: 60,
 };
 
 /** 新闻 topic 的来源枚举：与新闻客户端（外部计划 E6）的取数实现一一对应。 */
@@ -142,8 +164,10 @@ export const NEWS_DEFAULTS: NewsConfig = {
 export interface FishConfig {
   /** next 搭话开窗参数：closed/open 节拍、积压与背景上限、nudge 阈值。 */
   engage: EngageConfig;
-  /** B 站弹药管线参数：逛轮时点、硬截止、随机门、TTL、每日预算、单轮入库上限与空库补货目标。 */
+  /** B 站弹药管线参数（已停用，兼容保留）：仅 dailyBudget 在 video.dailyBudget 缺省时作回退。 */
   ammo: AmmoConfig;
+  /** 视频浏览管线参数：open 空窗主动门概率、单轮观看上限与 B 站每日预算。 */
+  video: VideoConfig;
   /** 新闻播报管线参数：播报时点、目标群、topic 供料与输入/输出上限。 */
   news: NewsConfig;
   /** 出站配速（秒）：outbox drain 同会话相邻两次实际发送的最小间隔，防连珠炮（0 = 关闭）。 */
@@ -400,6 +424,53 @@ function checkAmmoBlock(raw: unknown): FieldCheck {
   return { ok: true, value: { ...AMMO_DEFAULTS, ...parsed }, ...(problems.length > 0 ? { problems } : {}) };
 }
 
+/**
+ * video 块的校验（config 工具 set 与 parseFile 共用这一份，区间以此处为准）：
+ * 逐字段校验，非法字段回默认并记入 problems（沿用 checkAmmoBlock 的「非法回默认、
+ * 合法照用」语义）；全部字段非法才整块拒绝。
+ */
+function checkVideoBlock(raw: unknown): FieldCheck {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "video 必须是对象" };
+  const v = raw as Record<string, unknown>;
+  const parsed: Partial<VideoConfig> = {};
+  const problems: string[] = [];
+  let any = false;
+
+  if (v["browseChance"] !== undefined) {
+    const c = chance(v["browseChance"]);
+    if (c !== undefined) {
+      parsed.browseChance = c;
+      any = true;
+    } else problems.push("video.browseChance 必须是 0–1，已回默认");
+  }
+
+  const ranges: Array<[keyof VideoConfig, number, number]> = [
+    ["browseMaxViewsPerRound", 1, 20],
+    ["dailyBudget", 10, 500],
+  ];
+  for (const [key, lo, hi] of ranges) {
+    if (v[key] === undefined) continue;
+    const r = numberIn(`video.${key} 必须在 ${lo}–${hi}`, lo, hi, true)(v[key]);
+    if (r.ok) {
+      (parsed as Record<string, number>)[key] = r.value as number;
+      any = true;
+    } else {
+      problems.push(`${r.reason}，已回默认`);
+    }
+  }
+
+  // 未知嵌套键显式告警（与 engage/ammo 同款）：拼错的键名保留忽略语义，但 problems 必须可见
+  const known = new Set<string>(["browseChance", ...ranges.map(([key]) => key)]);
+  for (const key of Object.keys(v)) {
+    if (known.has(key)) continue;
+    problems.push(`video.${key} 不是受控字段，已忽略`);
+  }
+  if (!any) {
+    return { ok: false, reason: problems.length > 0 ? `video 至少要有一个合法参数（${problems.join("；")}）` : "video 至少要有一个合法参数" };
+  }
+  return { ok: true, value: { ...VIDEO_DEFAULTS, ...parsed }, ...(problems.length > 0 ? { problems } : {}) };
+}
+
 /** 字符串数组（topic 的 keywords/exclude）：结构非法返回 undefined，由调用方回空并告警。 */
 function stringList(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw) || !raw.every((x) => typeof x === "string")) return undefined;
@@ -514,6 +585,7 @@ function checkNewsBlock(raw: unknown): FieldCheck {
 export const FISH_CONFIG_FIELDS: readonly FishConfigFieldSpec[] = [
   { name: "engage", effect: "hot", check: checkEngageBlock },
   { name: "ammo", effect: "hot", check: checkAmmoBlock },
+  { name: "video", effect: "hot", check: checkVideoBlock },
   { name: "news", effect: "hot", check: checkNewsBlock },
   { name: "sendPacingSeconds", effect: "hot", check: numberIn("sendPacingSeconds 必须在 0–60", 0, 60) },
   { name: "thinkingLevel", effect: "restart", check: oneOf("thinkingLevel 不认识", THINKING_LEVELS as readonly string[]) },
@@ -582,6 +654,7 @@ function parseEnv(env: NodeJS.ProcessEnv, problems: string[]): Partial<FishConfi
 const DEFAULTS: FishConfig = {
   engage: ENGAGE_DEFAULTS,
   ammo: AMMO_DEFAULTS,
+  video: VIDEO_DEFAULTS,
   news: NEWS_DEFAULTS,
   sendPacingSeconds: 6,
   thinkingLevel: "low",
@@ -617,8 +690,15 @@ export function loadFishConfig(options: { path?: string; env?: NodeJS.ProcessEnv
     compact: { ...DEFAULTS.compact, ...(fromEnv.compact ?? {}), ...(fromFile.compact ?? {}) },
     engage: { ...DEFAULTS.engage, ...(fromEnv.engage ?? {}), ...(fromFile.engage ?? {}) },
     ammo: { ...DEFAULTS.ammo, ...(fromEnv.ammo ?? {}), ...(fromFile.ammo ?? {}) },
+    video: { ...DEFAULTS.video, ...(fromEnv.video ?? {}), ...(fromFile.video ?? {}) },
     news: { ...DEFAULTS.news, ...(fromEnv.news ?? {}), ...(fromFile.news ?? {}) },
   };
+
+  // 旧 ammo.dailyBudget 回退（2026-11-04 模型输入计划 T3）：文件里没给新的 video.dailyBudget
+  // 而旧 ammo 块带了值时沿用旧值，避免线上存量配置一夜失效；新值在场时旧字段不再参与
+  if (fromFile.video?.dailyBudget === undefined && fromFile.ammo?.dailyBudget !== undefined) {
+    config.video = { ...config.video, dailyBudget: fromFile.ammo.dailyBudget };
+  }
 
   const usesEnv = Object.keys(fromEnv).length > 0;
   const source: ConfigLoadResult["source"] = hasFile && usesEnv ? "mixed" : hasFile ? "file" : usesEnv ? "env" : "default";

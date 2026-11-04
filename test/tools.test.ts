@@ -57,10 +57,12 @@ test("工具面为窄接口：无 bash，自改工具已注册", async () => {
     assert.deepEqual(names, ["react", "say_media", "say_meme", "say_voice", "say_words", "tool_search"]);
     assert.ok(!names.includes("bash"), "bash 必须不存在");
     assert.ok(!names.includes("shell"), "shell 必须不存在");
-    // 其余已启用工具（含 meme_import）全部等在 deferred 里，等 tool_search 加载
+    // 其余已启用工具（含 meme_import）全部等在 deferred 里，等 tool_search 加载；
+    // ammo_list / ammo_submit 已进 loader 的 DISABLED_TOOL_PACKAGES（2026-11-04 T3 弹药管线停用），
+    // 完整性校验照旧但不进 active/deferred/catalog
     assert.deepEqual(
       agent.deferred.map((t) => t.name),
-      ["ammo_list", "ammo_submit", "bili_hot", "bili_video", "config", "draw", "gpt_image", "grep", "look", "meme", "meme_add", "meme_import", "read", "restart", "search", "tags", "tree", "video", "watch", "write"],
+      ["bili_hot", "bili_video", "config", "draw", "gpt_image", "grep", "look", "meme", "meme_add", "meme_import", "read", "restart", "search", "tags", "tree", "video", "watch", "write"],
     );
   } finally {
     await open.close();

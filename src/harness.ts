@@ -231,6 +231,8 @@ export interface FishOptions {
   triggerOf?: (roundId: unknown) => RoundTrigger | undefined;
   /** conversationId → 原始 chatKey（不带人格后缀）：config 工具判定「主人私聊轮」用。 */
   chatKeyOf?: (conversationId: string) => string | undefined;
+  /** conversationId → 当前人格的鱼昵称与真实 self QQ，供换页历史统一消息行使用。 */
+  selfOf?: (conversationId: string) => { nickname: string; userId: string };
   /**
    * 主动 @ 的身份闸：由宿主机械提供（私聊 = not_group；群内白名单 = allow），按轮类型
    * （决策 7）：answer/legacy 轮 userId 是本轮触发者；ambient/injection 环境轮对每个
@@ -516,6 +518,7 @@ export async function openFish(options: FishOptions): Promise<Fish> {
         models,
         model: options.compact.model ?? options.model,
         prompts,
+        selfOf: options.selfOf,
         maxEntries: options.compact.maxEntries ?? 80,
         maxChars: options.compact.maxChars ?? 12_000,
         ...(options.compact.limits ? { limits: options.compact.limits } : {}),

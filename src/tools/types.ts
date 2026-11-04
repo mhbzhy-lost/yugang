@@ -45,13 +45,24 @@ export interface RoundTrigger {
    */
   workerRun?: { runKey: string; maxPicks: number; ttlHours: number };
   /**
-   * 主人私聊手动逛轮的窄口上下文（与 workerRun 同形）：只在主人私聊的普通 answer 轮由
+   * 主人私聊手动逛轮的窄口上下文（与 workerRun 同形，已停用、兼容保留）：只在主人私聊的普通 answer 轮由
    * 宿主钉上（身份与 chatKey 双重机械核对 config.master）；runKey = 该条私聊 messageId
    * 稳定派生（缺失时宿主时间戳，同一条消息的轮内重试共用一键 → 上限按消息计），
    * maxPicks/ttlHours 每轮从 ammo 配置现读。ammo_submit 放行前还会二次机械核对当前
    * 会话确为主人私聊（chatKeyOf + master）；群聊、陌生私聊、无此上下文的轮一律 fail closed。
+   * 【2026-11-04 模型输入计划 T3】宿主已不再钉这个字段（manual ammo 接线已摘除）。
    */
   manualAmmoRun?: { runKey: string; maxPicks: number; ttlHours: number };
+  /**
+   * 视频浏览授权（2026-11-04 模型输入计划 T3）：只在 open 空窗的零新增主动轮
+   * （「主动交流机会」模板）由宿主钉上——browseWindow = 本窗稳定 windowId（engage-next
+   * 派生，同窗恒定、关窗作废），browseTopic = 本窗随机选定的 topic（VIDEO_TOPICS 枚举）。
+   * ambient shard、injection 有消息轮、answer 轮与私聊轮一律不携带 = 无浏览授权；
+   * T4 的 bili_hot（按 topic 取候选）/ video（登记实际观看）/ say_words（videoBvid 分享）
+   * 只认这两个字段，不得按群 open 相位自行推断授权。
+   */
+  browseWindow?: string;
+  browseTopic?: string;
 }
 
 /** loadToolManifests 的动态上下文；词表为空时对应属性退化为普通字符串（与现行为一致）。 */

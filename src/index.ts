@@ -21,17 +21,19 @@ import { openFish, SentmapDoc, type GroupProfile } from "./harness.ts";
 import { OneBot, orderByArrival, type IncomingMessage, type OneBotSendFailure } from "./qq/onebot.ts";
 import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "./voice-route.ts";
 import { createGate } from "./qq/gate.ts";
+import type { ForwardAttachment, ModelMessage } from "./qq/model-input.ts";
 import { engageGroupsIncludes, createEngageNext, type EngageBacklogItem, type EngageShardItem } from "./engage-next.ts";
 import {
   createDebouncer,
   withContext,
   DEBOUNCE_WINDOW_MS,
   lastPayload,
+  type BurstMessage,
   type PendingBurst,
   type RecentChatMessage,
 } from "./qq/debounce.ts";
 import { replaceWatched, type WatchedMap } from "./qq/watch-state.ts";
-import { MEMORY_ENGAGE_KIND, MEMORY_WORKER_KIND, profileAmmoOf, type CompactResult } from "./compact.ts";
+import { MEMORY_ENGAGE_KIND, type CompactResult } from "./compact.ts";
 import type { RoundKind, RoundTrigger } from "./tools/types.ts";
 import { setLookDisabled } from "./tools/look/tool.ts";
 import { clearMemeImportRound } from "./tools/meme_import/shared.ts";
@@ -45,40 +47,32 @@ import { localDay } from "./usage.ts";
 import { weeklyStats, renderWeekly } from "./stats.ts";
 import { createUsageLedger, sumUsage } from "./usage.ts";
 import { bypassAllowed, splitBypass, BYPASS_RE } from "./bypass.ts";
-import { ChatsDoc, MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc, WatchDoc } from "./store.ts";
+import { ChatsDoc, MemoryPendingDoc, WatchDoc } from "./store.ts";
 import { renderTemplate } from "./prompts.ts";
-import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, mergeMemoryStates, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "./memory.ts";
-import { memoryKeyOf, privateMemoryKeyOf, pushScope, shiftScope } from "./memory-scope.ts";
-import { beginNewsBroadcastRound, endNewsBroadcastRound, newsBroadcastDelivered, OutboundEntry, stripOutboundLinks, takeAmmoShare, wireAmmoShareHost, type OutboundPayload } from "./tools/say-shared.ts";
+import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "./memory.ts";
+import { memoryKeyOf, pushScope, shiftScope } from "./memory-scope.ts";
+import { beginNewsBroadcastRound, endNewsBroadcastRound, newsBroadcastDelivered, OutboundEntry, stripOutboundLinks, type OutboundPayload } from "./tools/say-shared.ts";
 import { createConfigLoader } from "./fish-config.ts";
 import { UsageDoc, defineDoc } from "@earendil-works/pi-durable";
-// —— 外部信息源基础设施（docs/plans/2026-11-02-external-ammo.md Task E1/E4）——
-// scheduler 四时点（fish.config 的 ammo.slots，热读，缺省空表 = 不按时刻起轮）起 worker 逛轮：独立后台会话
-//（WORKER_CHAT_KEY，默认人格、人格中立 doc），say_* 机械拒绝，产出只有 ammo_submit 入库；
-// 错过时点 ≤2h 补跑一次（幂等 date+slot，fish.external_jobs）；硬截止在 runBrowseJob 里
-// 取消在途 submission，scheduler 的 jobTimeout 再兜一层。空库补货（2026-11-04 计划 T1）：
-// ammo.refillTarget>0 且库内 available=0 时由 maybeRefillAmmo 起 refill 逛轮（挂点：外部分享
-// 落账后 + 每 5 分钟巡检，30 分钟冷却），maxPicks 定格 refillTarget。E7（新闻播报）走第二个调度器实例
-//（news.at 时点，幂等账是 fish.news_runs，不写 external_jobs——date+slot 键与逛轮共用，
-// 同时点配置会互相覆盖）。频控客户端与筛选配置见 src/external/bili-client.ts，
-// 不可信文本清洗见 src/external/sanitize.ts，弹药库读写见 src/external/ammo-store.ts，
-// 新闻取料客户端见 src/external/news-client.ts。
-import { createScheduler, jobKeyOf, jobsHandleOf, nodeTimers, type Scheduler } from "./external/scheduler.ts";
-import {
-  AMMO_TOPICS,
-  ExternalAmmoDoc,
-  applyAmmoShared,
-  renderAmmoSectionOf,
-  shareableAmmoOf,
-  type ExternalAmmoItem,
-} from "./external/ammo-store.ts";
+// —— 外部信息源基础设施（docs/plans/2026-11-02-external-ammo.md；2026-11-04 模型输入计划 T3）——
+// B 站弹药管线（worker 逛轮 / 空库补货 / 手动逛轮 / 全局分享挂点）已停用：旧源码
+// （external/scheduler、external/ammo-store、ammo_list / ammo_submit 工具包、say-shared 的
+// ammoId 链）保留作兼容，本文件不再接线。仍在的外部管线只有新闻播报（E7）：第二个
+// scheduler 实例（news.at 时点，幂等账是 fish.news_runs，不写 external_jobs）。频控客户端见
+// src/external/bili-client.ts（仍 active 的 video 工具共用，每日预算改由 video.dailyBudget 灌入），
+// 不可信文本清洗见 src/external/sanitize.ts，新闻取料客户端见 src/external/news-client.ts，
+// 视频浏览门与 viewed 登记见 src/external/video-browse.ts。
+import { createScheduler, nodeTimers } from "./external/scheduler.ts";
 import { createNewsClient, type NewsItem, type NewsTopicFeed } from "./external/news-client.ts";
 import { sanitizeExternalText } from "./external/sanitize.ts";
 import { getBiliClient } from "./external/bili-client.ts";
-let externalScheduler: Scheduler | undefined; // 下方实例化并 .start()；SIGTERM 时 .stop()
+import { clearViewedVideos, videoBrowseGateOf, wireVideoBrowseHost } from "./external/video-browse.ts";
+import { planRoundImages, rewriteRoundForwardImages } from "./qq/round-images.ts";
+import { appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderGifIngestInput, renderOpenMessageList, submitContentOf } from "./qq/round-input.ts";
+import { NEWS_BROADCAST_MAX_CHARS, renderNewsBroadcast, renderNewsTask, type NewsDigest, type NewsDigestItem, type NewsDigestSection } from "./external/news-broadcast.ts";
 
 // 每条入站消息的原始文本（卡片渲染 / bypass 剥离之前取）：记忆 entry 只存群友原话，
-// 不把 card_bilibili / ctx_header 等宿主文案写进 fish.inbound。WeakMap 键是消息对象，
+// 不把 card_bilibili / forward_collapsed 等宿主文案写进 fish.inbound。WeakMap 键是消息对象，
 // flush 时按 anchor 取回，消息对象丢弃后条目自动回收。
 const rawMemoryText = new WeakMap<IncomingMessage, string>();
 
@@ -114,16 +108,6 @@ const silentRounds = new Set<string>();
 // （emit 要解析数字 id），人格相关的配置（音色）必须走这张表，否则重启后
 // 人格身份丢失 → personaOf 回退「默认」→ 拿默认音色开口（长征机用爱莉声音说话）
 const mappingKeys = new Map<string, string>();
-
-/**
- * 背景栏里的合集只留一个短标记：一次展开是 10 条起，若上面十条全是合集，
- * 上下文会被瞬间撑爆。鱼看不到就看不到，没关系。
- */
-function collapseForward(text: string): string {
-  if (!/\[转发合集 \d+ 条\]/.test(text)) return text;
-  const marker = fish.prompts.messages["forward_collapsed"] ?? "";
-  return marker.length > 0 ? marker : "[收集]";
-}
 
 /**
  * 六个重耗时工具的「正在执行」文案（prompt/messages.md 的 working_*）：逐个显式取，
@@ -454,6 +438,14 @@ const fish = await openFish({
   modelsPath: modelSelection.main.configSource,
   // config 工具判定「主人私聊轮」用：与 chatKeyFor 同源（两种历史键写法都认）
   chatKeyOf: (conversationId) => chatKeyFor(conversationId),
+  selfOf: (conversationId) => {
+    const mapping = mappingKeys.get(String(conversationId)) ?? chatKeyFor(conversationId) ?? "";
+    const persona = personaOf(mapping);
+    return {
+      nickname: persona === DEFAULT_PERSONA_NAME ? "Elysia" : persona,
+      userId: onebot.selfId > 0 ? String(onebot.selfId) : "",
+    };
+  },
   sdUrl: process.env.SD_WEBUI_URL,
   // （sdUrl 存在时见启动处的邻居保温定时器）
   tagsCsv: join(HOME, "danbooru.csv"),
@@ -610,21 +602,7 @@ const fish = await openFish({
     // 记账必须在真的发完之后：先记账后发，发送抛错时这一条就被当成已发，
     // harness 把 outbox 放回 queued 也重试不出来（幂等表先把它拦了）。
     // 紧接着发送就记，不等下面的日志：日志写失败不能让 drain 重发一遍（宁可少一条日志，不要重复发言）。
-    // 外部弹药（E5）先于幂等表置 shared：实发已成功，按登记（payload key）取走记账关账；
-    // 置位失败只打日志不抛——消息已出去不能为它重发，条目最多滞留 claimed 等 TTL 收走
-    const ammoBook = takeAmmoShare(payload.key);
-    if (ammoBook) {
-      try {
-        await fish.harness.commit(async (tx) => {
-          const doc = await tx.doc(ExternalAmmoDoc);
-          applyAmmoShared(doc, ammoBook.id, ammoBook.windowId);
-        }, ctx);
-      } catch (error) {
-        console.error("[鱼缸] 弹药 markShared 失败", error instanceof Error ? error.message : error);
-      }
-      // 补货挂点 a（2026-11-04 计划 T1）：分享落账后查空库，fire-and-forget，不挡发送链收尾
-      void maybeRefillAmmo("分享后");
-    }
+    // 外部弹药落账挂点（takeAmmoShare / applyAmmoShared / 分享后补货）已随弹药管线停用摘除（T3）。
     markSent(payload.key);
 
     // 末条自言标记（决策 24）已下沉到 onebot 层逐条置位（构造参数 onSent）：置位错点
@@ -717,9 +695,10 @@ async function conversationFor(chatKey: string): Promise<Conversation> {
  *
  * 边界：只认 .gif（白名单，避免把截图/照片也拖进模型）；md5 已在库里的跳过。
  */
-async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; text: string }[]): Promise<void> {
+async function maybeIngestGif(msg: IncomingMessage, bucket: RecentChatMessage[]): Promise<void> {
   if (!msg.chatKey.startsWith("qq:group:")) return;
   if (!config.groups.length || !config.groups.includes(String(msg.groupId))) return;
+  if (msg.messageId === undefined) return;
   const gifs = msg.images.filter((img) => typeof img.ref === "string" && img.ref.toLowerCase().endsWith(".gif"));
   if (gifs.length === 0) return;
 
@@ -741,13 +720,29 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: { nickname: string; 
       return;
     }
     const prior = bucket.slice(0, -1).slice(-10);
-    const header = renderTemplate(fish.prompts.messages["gif_ingest_header"] ?? "", { count: String(prior.length) });
-    const context = prior.map((m) => `${m.nickname}: ${m.text}`).join("\n");
-    const task = renderTemplate(fish.prompts.messages["gif_ingest_task"] ?? "", {
-      ref: gif.ref,
-      who: msg.nickname,
-    });
-    const content = [header, context, task].filter((line) => line.length > 0).join("\n");
+    const history = prior.map((line): ModelMessage => ({
+      ...(line.messageId !== undefined ? { messageId: line.messageId } : {}),
+      userId: String(line.userId),
+      nickname: line.nickname,
+      text: line.text,
+      mentionsBot: false,
+      replyIds: [],
+      master: String(line.userId) === config.master,
+      watched: watchedByChat.get(baseChatKey(msg.chatKey))?.has(String(line.userId)) === true,
+    }));
+    const target: ModelMessage = {
+      messageId: msg.messageId,
+      userId: String(msg.userId),
+      nickname: msg.nickname,
+      text: msg.text,
+      mentionsBot: msg.mentionsBot,
+      replyIds: [...msg.replyIds],
+      master: String(msg.userId) === config.master,
+      watched: watchedByChat.get(baseChatKey(msg.chatKey))?.has(String(msg.userId)) === true,
+      ...(msg.quoted ? { quoted: msg.quoted } : {}),
+      ...(msg.forward ? { forward: msg.forward } : {}),
+    };
+    const content = renderGifIngestInput(history, target, fish.prompts.messages);
     ingestRounds.add(String(conv.id));
     try {
       // 留痕：这一轮是收图轮，起止都打日志，否则「为什么不收」永远查不到
@@ -911,8 +906,10 @@ async function submitRound(input: {
     mentionsBot: boolean;
     userId?: number;
     kind?: RoundKind;
-    /** 主人私聊手动逛轮窄口（manualAmmoRunOf 的产物）；仅普通 answer 轮携带，随 triggerOf 钉上 */
-    manualAmmoRun?: { runKey: string; maxPicks: number; ttlHours: number };
+    /** 视频浏览授权（T3）：仅 open 空窗的零新增主动轮携带，随 triggerOf 钉上；
+     *  ambient shard 与其它轮不传 = 无授权（T4 的浏览/分享工具只认这两个字段）。 */
+    browseWindow?: string;
+    browseTopic?: string;
   };
   /** 本轮是不是在回复别人（回复链要引用） */
   reply: boolean;
@@ -923,8 +920,9 @@ async function submitRound(input: {
   /** 记忆：结构化入站 entry（fish.inbound，原始文本）与本轮在场人物（memory scope）。 */
   /** 不传（injection / shard 轮）= 不写 fish.inbound、不压 scope（背景板非对话输入） */
   memory?: { inbound: MemoryInbound; speakers: { subject: string; name: string }[] };
-  /** inline 附图（绝对路径，≤2 张）：压缩后以 image block 附在文本后；失败静默跳过 */
-  imageFiles?: string[];
+  /** inline 附图（已压缩的 image blocks，≤2 张）：按编号顺序附在唯一 text block 之后，
+   * 与文本里的 [图片#N] / [图片#N 压缩图] 标签对齐（压缩与编号在 planRoundImages 完成） */
+  imageBlocks?: ReadonlyArray<{ type: "image"; data: string; mimeType: string }>;
   /** entry kind：缺省 fish.inbound（写结构化数据）；injection / shard 轮传 fish.engage_tick */
   entryKind?: string;
   /** 本轮注入窗口的消息 id（T4 quoteMsgId 合法目标）；随 triggerOf 在 settle 清除 */
@@ -944,21 +942,18 @@ async function submitRound(input: {
 
   let content = input.content;
   // 语音提示的 0.3 概率门（仅 answer 轮，决策 7）：主人/特别关注对象过闸的轮里，三成概率追加一行
-  // 「这一条必须用语音回」。只是提示，不是门禁——用不用由鱼自己判断（说没配音色就不提示）。
+  // `[本轮要求] 必须使用 say_voice 回复`。只是提示，不是门禁——用不用由鱼自己判断（说没配音色就不提示）。
   // ambient/injection 环境轮一律不掷：零出口合法的轮不该被语音义务逼着开口。
   if (roundKind === "answer" && voiceConfigFor(mappingKeys.get(String(conv.id)) ?? chatKey) && isVoiceVip(chatKey, trigger.userId) && Math.random() < 0.3) {
     const hint = fish.prompts.messages["voice_hint"] ?? "";
-    if (hint) content = content + "\n" + hint;
+    // 附加段之间统一空一行（decisions §5.2：[本轮要求] 段前是空行）
+    if (hint) content = appendVoiceHint(content, hint);
   }
 
-  // inline 附图：压图规格见 src/media/shrink-image.ts；任何一张失败都只跳过那张，不阻塞整轮
-  const imageBlocks: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
-  for (const file of input.imageFiles ?? []) {
-    const shrunk = shrinkForModel({ file });
-    if (!shrunk.ok) continue;
-    imageBlocks.push({ type: "image", data: shrunk.buffer.toString("base64"), mimeType: shrunk.mimeType });
-  }
-  const submitContent = imageBlocks.length > 0 ? [{ type: "text" as const, text: content }, ...imageBlocks] : content;
+  // inline 附图：flushBurst 的 planRoundImages 已完成选图、压缩与编号（失败的跳过、
+  // 不占编号）；content = 一个 text block，压缩 image blocks 按编号顺序在后（decisions §5.4）
+  const imageBlocks = [...(input.imageBlocks ?? [])];
+  const submitContent = submitContentOf(content, imageBlocks);
 
   const scopeToken = input.memory !== undefined
     ? pushScope(String(conv.id), { speakers: input.memory.speakers, text: input.memory.inbound.text })
@@ -996,8 +991,9 @@ async function submitRound(input: {
         userId: trigger.userId,
         kind: roundKind,
         ...(input.quoteIds !== undefined && input.quoteIds.size > 0 ? { quoteIds: input.quoteIds } : {}),
-        // 主人私聊手动逛轮窄口：随轮绑定（ammo_submit 放行前还会二次机械核对身份）
-        ...(trigger.manualAmmoRun !== undefined ? { manualAmmoRun: trigger.manualAmmoRun } : {}),
+        // 视频浏览授权（T3）：只随零新增主动轮钉上（T4 的 bili_hot/video/say_words 消费）
+        ...(trigger.browseWindow !== undefined ? { browseWindow: trigger.browseWindow } : {}),
+        ...(trigger.browseTopic !== undefined ? { browseTopic: trigger.browseTopic } : {}),
       });
       // 重耗时工具的机械提示要落回本轮会话：登记轮的会话，settle 的 finally 里删
       roundConv.set(String(submission.id), conv);
@@ -1028,15 +1024,16 @@ async function submitRound(input: {
         return result;
       } finally {
         triggerOf.delete(String(submission.id));
+        // viewed 登记只活本轮（T3/T4）：done、没答上来、wait 抛错都整份清掉，
+        // browse 轮的「实际看过」授权不跨轮残留
+        clearViewedVideos(String(submission.id));
         bypassOf.delete(String(submission.id));
         // 导入清单只属于这一轮：成功、失败、抛错都在这里清掉
         clearMemeImportRound(String(submission.id));
-        // 出口计数同样只活这一轮：done、没答上来、wait 抛错都不残留
-        // T8 沉默递进的观测点：settle 时出口数 >0 且属 ambient/injection 轮 = 本窗开过口，
-        // 上报状态机（关窗时据此清零/累加）；@ 轮（answer）与私聊不报，不计不清。
-        // sayCalled 直到本 finally 才删，读数就是本轮完整的出口数（含全部重试尝试）
-        const exits = sayCalled.get(String(submission.id)) ?? 0;
-        if (exits > 0 && (roundKind === "ambient" || roundKind === "injection")) engageNext.noteExit(chatKey);
+        // 出口计数同样只活这一轮：done、没答上来、wait 抛错都不残留。
+        // 沉默递进（旧 T8 nudge）的宿主上报已随 2026-11-04 模型输入计划 T3 摘除：
+        // 空窗不再由连续沉默触发，engageNext 的 noteExit / silenceOf 在宿主侧无消费方，
+        // 降为兼容源码（与 shareGateOf 同待遇）；sayCalled 仍只作本轮出口额度计数。
         sayCalled.delete(String(submission.id));
         // 机械提示的会话映射与轮内去重集合同样只活这一轮
         roundConv.delete(String(submission.id));
@@ -1149,35 +1146,41 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     }
   }
 
-  // inline 附图选取：锚点图优先、burst 内按序补足，普通轮 ≤2 张；GIF 与缺失文件不附（也不占额度）
-  const inlinePick = inlineVisionOn() ? pickInlineImages(anchor, burst.messages, config.mediaRoot) : { attach: [], more: 0 };
-  const roundContext = withContext(anchor, recent.get(anchor.chatKey) ?? [], burst.messages, {
+  // 图片输入（decisions §5.4）：inline 模式把本轮图换成 [图片#N] 编号 + 末尾压缩图
+  // 标签与 image block；fallback 保留 [图片 inbound/…] 路径并提示 look。GIF 与缺失
+  // 文件不 inline（也不占额度），普通轮 ≤2 张，压缩失败的跳过不占编号。
+  const plan = planRoundImages(anchor, burst.messages, config.mediaRoot, inlineVisionOn(), fish.prompts.messages);
+  const roundContext = withContext(anchor, recent.get(anchor.chatKey) ?? [], plan.messages, {
     master: config.master,
     messages: fish.prompts.messages,
     // @（answer）轮背景（T5/决策 20）：上限缩为 engage.mentionContextSize（热加载）、
-    // 先取 N 再剔除已进过模型的（lastSeenByModel），每次携带 ctx_seen_note，注入后随
-    // 整组推进标记（下方 advanceSeenSeq）；锚点行打 [主人]/[特别关注] 标（master 优先互斥）
+    // 先取 N 再剔除已进过模型的（lastSeenByModel），注入后随整组推进标记（下方
+    // advanceSeenSeq）；[主人]/[特别关注] 标签由渲染器逐行机械打（master 优先互斥）
     backgroundLimit: fishConfig().config.engage.mentionContextSize,
     seenSeq: seenSeqOf(conv.id),
-    seenNote: fish.prompts.messages["ctx_seen_note"] ?? "",
-    anchorMark: engageMarkOf(anchor.chatKey, anchor.userId),
-    ...(inlinePick.attach.length > 0 ? { images: { attach: inlinePick.attach.length, more: inlinePick.more } } : {}),
+    watched: (userId) => watchedByChat.get(baseChatKey(anchor.chatKey))?.has(String(userId)) === true,
   });
-  let content = roundContext.content;
-
   // @ 鱼 + 文字里提到合集/转发：把这个群最近一条没展开的合集拉出来（10 分钟内有效）。
-  // 场景：先发合集（不 @，被闸丢弃）→ 再 @ 问「上面那个能看吗」。合集记录里明确标了它是什么。
+  // 场景：先发合集（不 @，被闸丢弃）→ 再 @ 问「上面那个能看吗」。补展开没有可确认
+  // 的来源消息 ID，不伪造 [来自m:id]；子图不落盘（ref 为空），统一换回 [图片 未展开]。
+  let recentForward: ForwardAttachment | undefined;
   if (burst.messages.some((m) => m.mentionsBot && /合集|转发/.test(m.text))) {
     const pending = onebot.recentForward(anchor.chatKey, 10 * 60_000);
     if (pending) {
-      const expanded = await onebot.expandForwardById(pending, anchor);
+      const expanded = await onebot.expandForwardAttachmentById(pending, anchor);
       if (expanded) {
-        // 拼接式而非模板字面量（\n 在模板内同样破坏 prompt-lint 的栅栏号配对）
-        content = (fish.prompts.messages["forward_recent_prefix"] ?? "") + "\n" + expanded + "\n" + content;
+        // 拉取失败/空合集也要可见：renderForwardAttachment 对空 children 渲染读取失败标记，不伪造条数
+        recentForward = rewriteRoundForwardImages(expanded, plan.numbers, fish.prompts.messages);
         console.log(`[鱼缸] ${anchor.chatKey} 补展开最近合集`);
       }
     }
   }
+
+  const content = assembleRoundContent(roundContext.content, {
+    ...(recentForward ? { recentForward } : {}),
+    tags: plan.tags,
+    lookHint: plan.lookHint,
+  }, fish.prompts.messages);
 
   // 整组里最近一条非空 bypass 段：指令后面又跟了两句普通闲聊时，只取最后一条会让 draw 静默失效
   const payload = lastPayload(burst.messages);
@@ -1206,7 +1209,7 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     mustAnswer,
     quoteIds: quoteIdsOf(roundContext.seen),
     ...(payload !== undefined ? { bypass: payload } : {}),
-    ...(inlinePick.attach.length > 0 ? { imageFiles: inlinePick.attach } : {}),
+    ...(plan.blocks.length > 0 ? { imageBlocks: plan.blocks } : {}),
     memory: { inbound: memoryInbound, speakers },
   });
   // @ 轮整组（burst 本体）不属背景板：照常注入并推进已读标记（决策 20，T5 的背景去重消费）
@@ -1215,33 +1218,13 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
 
 // ── 携话 next 的注入轮（injection / ambient shard，T3）─────────────────────
 
-/** 打标（T1 契约，master 优先互斥）：注入行 {{name}} 并入「[主人]」/「[特别关注]」。 */
-const MASTER_MARK = "[主人]";
-const WATCHED_MARK = "[特别关注]";
-
-function engageMarkOf(chatKey: string, userId: number): string {
-  if (config.master && String(userId) === config.master) return MASTER_MARK;
-  return watchedByChat.get(baseChatKey(chatKey))?.has(String(userId)) ? WATCHED_MARK : "";
-}
-
-/** 积压 / shard 行渲染：ctx_engage_line（[m:id] 锚点在模板里），{{name}} 并入打标。
- *  行序最新在前、最早在后（决策 2026-11-03）：模型从最新一条读起，按锚点向上回溯更早上下文。 */
-function renderEngageLines(chatKey: string, items: readonly EngageBacklogItem[]): string[] {
-  const template = fish.prompts.messages["ctx_engage_line"] ?? "";
-  return [...items].reverse().map((item) => renderTemplate(template, {
-    id: item.messageId !== undefined ? String(item.messageId) : "",
-    name: `${engageMarkOf(chatKey, item.userId)}${item.nickname}`,
-    qq: String(item.userId),
-    text: item.text,
-  }));
-}
-
 /**
  * 开窗积压查询（injection 轮的输入）：窗口 = (lastCloseSeq, 开窗时刻] 的 recent 流水，
  * 排除 pending burst 内消息（它们归 @ 轮的整组注入）、过滤 `/` 指令与纯 GIF 收图消息，
  * 超上限截最近 N。lastSeenByModel 去重在提交侧做（键是会话，得先解出会话）。
- * 上限热读：常态 = windowSize；沉默递进达 2×阈值（T8）的本窗放宽到 windowRelaxCap
- *（受 recent 流水上限 max(30, windowRelaxCap) 兑底，T2 已提；开口清零后恢复常态）。 */
+ * 上限热读 engage.windowSize（沉默递进 2×阈值的放宽已随 nudge 机制停用，2026-11-04 T3；
+ * recent 流水上限仍是 max(30, windowRelaxCap) 兑底）。
+ */
 function engageBacklogOf(chatKey: string, afterSeq: number | undefined): readonly EngageBacklogItem[] {
   if (afterSeq === undefined) return [];
   // 旧流水没有序号：宁少勿答，不注入
@@ -1253,9 +1236,7 @@ function engageBacklogOf(chatKey: string, afterSeq: number | undefined): readonl
       if (message.arrivalSeq !== undefined) pendingSeqs.add(message.arrivalSeq);
     }
   }
-  const cap = engageNudgeLevel(chatKey) === 2
-    ? fishConfig().config.engage.windowRelaxCap
-    : fishConfig().config.engage.windowSize;
+  const cap = fishConfig().config.engage.windowSize;
   return (recent.get(chatKey) ?? [])
     .filter((m) => m.arrivalSeq !== undefined && m.arrivalSeq > afterSeq)
     .filter((m) => !((m.messageId !== undefined && pendingIds.has(String(m.messageId))) || (m.arrivalSeq !== undefined && pendingSeqs.has(m.arrivalSeq))))
@@ -1264,228 +1245,40 @@ function engageBacklogOf(chatKey: string, afterSeq: number | undefined): readonl
 }
 
 /**
- * 沉默递进档位（T8，F11）：连续全程零出口的 open 窗数（engageNext 计数，窗内有
- * ambient/injection 开口即清零）达 silenceThreshold → 1（下窗注入尾部追加 nudge_1，
- * 积压为空时改提 nudge-only 轮）；达 2×阈值 → 2（改用 nudge_2，且该窗积压窗口放宽
- * windowRelaxCap）；否则 0。阈值每窗现读配置（mtime 热生效）；@ 轮/私聊不计不清，
- * 计数口径见 src/engage-next.ts。
- */
-function engageNudgeLevel(chatKey: string): 0 | 1 | 2 {
-  const { silenceThreshold } = fishConfig().config.engage;
-  const count = engageNext.silenceOf(chatKey);
-  if (count >= silenceThreshold * 2) return 2;
-  if (count >= silenceThreshold) return 1;
-  return 0;
-}
-
-// ── 开窗弹药栏（T13，决策 21）与宵禁二态 footer ─────────────────────────────
-
-/** 宵禁（本地 02:00–09:00，与 footer 夜间态同阈）：外部库存行不注入、出口 claim 拒绝。 */
-function engageFooterOfNight(): boolean {
-  const hour = new Date().getHours();
-  return hour >= 2 && hour < 9;
-}
-
-/**
- * 注入 footer 的宵禁二态（纯文案层切换，@ 白名单等硬机制不动）：本地 02:00–09:00
- * 用夜间版（纯搭话模式：不鼓励主动开腔），其余时间用白天版（自由发挥）。每小时
- * 天然分档，不引入配置项；模板 key 用直接下标取（test/prompts.test.ts 逐字扫 src）。
- */
-function engageFooterOf(): string {
-  return (engageFooterOfNight() ? fish.prompts.messages["ctx_engage_footer_night"] : fish.prompts.messages["ctx_engage_footer"]) ?? "";
-}
-
-/**
- * 记忆委托的机械标记（T13）：lore/people 文本命中任一即视为一条未了的群友委托。
- * 硬边界：纯子串匹配、不做语义检索——标记面宁窄勿宽，漏捡只是少一条可选弹药，
- * 误捡会把闲聊当成欠账塞进注入轮。样本取自计划契约（托你查/帮我查/等我问问类）；
- * 写成正则字面量（test/prompt-lint 只扫引号字面量，标记是匹配模式不是模型可见文案）。
- */
-const AMMO_DELEGATION_RE = /托你查|托我查|帮我查|帮忙查|让你查|帮我问问|等我问问/;
-
-/** 弹药条目：一段原文（逐字，不生成）+ 谁（可空）+ 时间锚（可空）；kind 区分旧账与外部库存（T13）。 */
-interface AmmoCandidate {
-  what: string;
-  who: string;
-  at?: number;
-  /** 缺省 = debt（旧账）；external = 弹药库捡的视频（最多 1 条，只占剩余预算）。 */
-  kind?: "debt" | "external";
-  /** external 专用：分享要带的编号（开窗弹药栏给模型，出口调用原样传回）。 */
-  ammoId?: string;
-  /** external 专用：topic（独立行模板展示用）。 */
-  topic?: string;
-}
-
-/** 弹药段 debt 字符预算（头 + debt 行合计）：机械裁决，超限丢条目而不是放宽；external 行不受它约束。 */
-const AMMO_SECTION_CHARS = 300;
-/** debt 条数上限：先截条数，预算再裁；external 行独立渲染不受它约束（2026-11-04 T1 预算分家）。 */
-const AMMO_ITEM_CAP = 5;
-/** 单条弹药原文截断：一行能放下的短语级文本，不是整段搬运。 */
-const AMMO_TEXT_CHARS = 60;
-
-/** 锚点消息 → 发送者昵称（「名字」）：只认 recent 流水里还在的那条，查不到留空。 */
-function nicknameOfMessage(chatKey: string, messageId: string | number | undefined): string {
-  if (messageId === undefined) return "";
-  const hit = (recent.get(chatKey) ?? []).find((m) => String(m.messageId) === String(messageId));
-  return hit ? "「" + hit.nickname + "」" : "";
-}
-
-function isDelegationText(text: string): boolean {
-  return AMMO_DELEGATION_RE.test(text);
-}
-
-/**
- * 弹药来源②（记忆委托）：公共 + 本会话私有记忆合并后，机械扫 people 事实与 lore
- * 文本里的委托标记；失效事实（invalidAt）不算。who 取人物档首个名字，lore 没有
- * 归属人则留空。读的是已批准入库的记忆，只读不写。
- */
-async function memoryDelegationsOf(chatKey: string): Promise<AmmoCandidate[]> {
-  const { effective } = await personaOfChatKey(chatKey);
-  const [pub, priv] = await Promise.all([
-    fish.harness.snapshot(MemoryDoc, effective, ctx),
-    fish.harness.snapshot(MemoryPrivateDoc, privateMemoryKeyOf(effective, chatKey), ctx),
-  ]);
-  if (!pub && !priv) return [];
-  const state = mergeMemoryStates(pub, priv);
-  const out: AmmoCandidate[] = [];
-  for (const person of Object.values(state.people)) {
-    for (const fact of person.facts) {
-      if (fact.invalidAt !== undefined || !isDelegationText(fact.text)) continue;
-      out.push({
-        what: fact.text.trim().slice(0, AMMO_TEXT_CHARS),
-        who: person.names[0] ? "「" + person.names[0] + "」" : "",
-        at: fact.at,
-      });
-    }
-  }
-  for (const lore of state.lore) {
-    if (!isDelegationText(lore.text)) continue;
-    out.push({ what: lore.text.trim().slice(0, AMMO_TEXT_CHARS), who: "", at: lore.at });
-  }
-  return out;
-}
-
-/**
- * 弹药来源③（外部库存，外部计划 E5/T13）：门开且非宵禁才出——门没开/深夜注入了
- * 也发不出去（claim 拒绝），宁少勿扰。读库走 snapshot 只读路径（2026-11-04 根因修复：
- * 唐住 commit 事务读会偶发 chord「Cannot use a settled overlay」TypeError，被 catch
- * 吞掉后外部行永远注不进去；TTL 清扫不再在读侧做，claim 路径 applyAmmoClaim 自带
- * sweep、shareableAmmoOf 本身也过滤过期）；FIFO 取最旧 available。链接不进
- * 注入：模型只拿标题/topic/ammoId，canonical URL 由宿主在出口渲染（P0-5）。
- */
-async function externalAmmoOf(chatKey: string): Promise<AmmoCandidate[]> {
-  let picked: ExternalAmmoItem | undefined;
-  try {
-    const doc = await fish.harness.snapshot(ExternalAmmoDoc, ctx);
-    picked = shareableAmmoOf({ items: doc?.items ?? [] }, Date.now());
-  } catch (error) {
-    console.log("[鱼缸] 弹药库读取失败", error instanceof Error ? error.message : error);
-    return [];
-  }
-  const gate = engageNext.shareGateOf(chatKey);
-  if (!gate?.open || engageFooterOfNight() || picked === undefined) return [];
-  return [{ what: picked.title, who: "", kind: "external", ammoId: picked.id, topic: picked.topic }];
-}
-
-/**
- * 开窗弹药（T13）：机械拼装三路来源——①上一页剖面还开着的未兑现承诺/话头
- * （T12 字段，profileAmmoOf 从 pi.reset head 提取）；②记忆里命中委托标记的文本；
- * ③外部库存（E5：随机门开且非宵禁时至多 1 条）。合并口径（决策 8/P1-4）：debt
- * （①②）优先，external 最多 1 条且只占剩余预算（排在最后，条数 cap 自然截断）；
- * 只拼装不生成：文本逐字取自剖面/记忆/弹药库 doc，who 与天数由锚点/时间戳机械推导，
- * 拿不到就留空退化。①②按 what 去重（同一句话可能两边各收一次）；全空 = 空弹药，
- * 整段不注入（零占位，F16）。任何一路失败都只少一路，不阻塞开窗。
- */
-async function ammoOf(chatKey: string, conv: Conversation): Promise<AmmoCandidate[]> {
-  const [profile, delegations, external] = await Promise.all([
-    profileAmmoOf(conv).catch(() => ({ items: [] })),
-    memoryDelegationsOf(chatKey).catch(() => [] as AmmoCandidate[]),
-    externalAmmoOf(chatKey).catch(() => [] as AmmoCandidate[]),
-  ]);
-  const candidates: AmmoCandidate[] = [
-    ...profile.items.map((item) => ({ what: item.quote, who: nicknameOfMessage(chatKey, item.anchor), ...(profile.at !== undefined ? { at: profile.at } : {}) })),
-    ...delegations,
-    // external 排最后（决策 8）：debt 优先；总条数上限在这里机械截断，渲染层外部行独立、
-    // 不受 debt 预算约束（2026-11-04 T1 预算分家）
-    ...external,
-  ];
-  const seen = new Set<string>();
-  const out: AmmoCandidate[] = [];
-  for (const item of candidates) {
-    if (!item.what || seen.has(item.what)) continue;
-    seen.add(item.what);
-    out.push(item);
-    if (out.length >= AMMO_ITEM_CAP) break;
-  }
-  return out;
-}
-
-/**
- * 弹药段渲染：合并口径的唯一实现在 ammo-store.renderAmmoSectionOf（可内联验证的纯函数），
- * 这里只负责从 prompt/messages.md 直取模板与预算（直接下标取，test/prompts.test.ts 逐字扫 src）。
- */
-function renderAmmoSection(items: readonly AmmoCandidate[]): { lines: string[]; count: number } {
-  return renderAmmoSectionOf(items, {
-    header: fish.prompts.messages["ctx_engage_ammo_header"] ?? "",
-    debtLine: fish.prompts.messages["ctx_engage_ammo_line"] ?? "",
-    externalLine: fish.prompts.messages["ctx_engage_ammo_external"] ?? "",
-  }, { debtChars: AMMO_SECTION_CHARS, debtCap: AMMO_ITEM_CAP }, Date.now());
-}
-
-/**
- * 开窗注入轮（injection，背景板语义）：open 进入瞬间把积压一轮注入（行序最新到最早）。这些消息只是
+ * 开窗注入轮（injection，背景板语义）：open 进入瞬间把积压一轮注入。这些消息只是
  * 背景板——无必答、无 salvage、模型不必逐条回应也不必补回复任何人；遇忙放弃
  * （宁少勿答，积压不重放）；注入后已读标记只推进到本轮实际注入集合（fresh）的
- * maxArrivalSeq——提交等待期间新到的未注入消息不算已读，仍归下一窗（决策 3：之后归 shard，
- * 不重复注入）。entry kind = fish.engage_tick（不写 fish.inbound、不进摘要与抽取，
- * 但计入换页阈值）；不附 inline 图；quoteIds = 本轮注入的积压消息集。
- * 沉默递进（T8）：连续零出口达阈值时注入尾部追加 nudge 文案（2×阈值换 nudge_2，
- * 且本窗积压窗口放宽到 windowRelaxCap，见 engageBacklogOf）；积压为空但档位到位
- * 时改提 nudge-only 轮（header+footer+nudge，无行，同管线同遇忙放弃）；nudge_2 带
- * {{n}} 未兑现数（当前拼出的弹药条数，决策 21）。
- * 弹药栏（T13）：注入尾部可选追加旧账弹药段（剖面未兑现承诺 + 记忆委托，机械拼装），
- * 空弹药整段不注入不占位；footer 按宵禁二态（engageFooterOf）。
+ * maxArrivalSeq——提交等待期间新到的未注入消息不算已读，仍归下一窗（决策 3：之后归
+ * shard，不重复注入）。entry kind = fish.engage_tick（不写 fish.inbound、不进摘要与
+ * 抽取，但计入换页阈值）；不附 inline 图；quoteIds = 本轮注入的积压消息集。
+ * 输入统一用标准群消息列表（decisions §5.5：与 shard 同一模板，不在 user input 区分
+ * 窗口规则）；沉默递进 nudge、旧账/弹药栏与宵禁 footer 已停用（2026-11-04 T3）。
+ * 空窗（零新增）不再由沉默/nudge/debt/ammo 触发：只在本窗 video.browseChance 门开时
+ * 提交「主动交流机会」固定模板（decisions §5.6），并把 browseWindow/browseTopic 钉上
+ * trigger（T4 浏览与分享授权的唯一来源）；ambient shard 与其它轮一律不携带。
  */
 async function submitInjectionRound(chatKey: string, backlog: readonly EngageBacklogItem[]): Promise<void> {
   console.log(`[鱼缸] ${chatKey} 携话窗口 → open（积压 ${backlog.length} 条）`);
-  // 沉默递进档位（T8）：每窗现读，进入即定（窗内计数不变动，开口要等关窗才结算）；
-  // 文案档位用直接下标取（test/prompts.test.ts 按 messages["key"] 逐字扫 src，间接拼 key 不算引用）
-  const nudge = engageNudgeLevel(chatKey);
-  const nudgeTemplate = nudge === 2
-    ? fish.prompts.messages["ctx_engage_nudge_2"]
-    : fish.prompts.messages["ctx_engage_nudge_1"];
   if (backlog.length === 0) {
-    // 无积压不注入；但两种情况例外，改提无行注入轮（header+footer+弹药段，无行）：
-    // ①沉默递进到位时的 nudge（T8）；②外部弹药在场（门开且非宵禁，2026-11-03 新增）——
-    // 分享是鱼自己想开口的事，不该被「没新消息」压着：门开着就该给她看到库存与编号。
-    // 同走 injection 管线（fish.engage_tick、非必答、无 salvage、无 quoteIds）；
-    // 遇忙放弃（宁少勿答，不重试不补发，下窗自然重试）
+    // 零新增主动轮：门没开就整窗不提交（每窗只在开窗时掷过一次，不重掷、不补掷）；
+    // 门开时同走 injection 管线（fish.engage_tick、非必答、无 salvage、无 quoteIds），
+    // 遇忙放弃（宁少勿答，不重试不补发，下窗自然重掷）
+    const gate = videoBrowseGateOf(chatKey);
+    if (!gate?.open) return;
     const conv0 = await conversationFor(chatKey);
     if (conversationBusy(conv0.id)) {
-      console.log(`[鱼缸] ${chatKey} 空窗注入放弃（忙）`);
+      console.log(`[鱼缸] ${chatKey} 主动轮放弃（忙）`);
       return;
     }
-    // 弹药段先拼（T13）：未兑现数 {{n}} 喂 nudge_2；外部在场与否由此判定（debt 旧账
-    // 不单独触发空窗轮——只有 nudge 或外部弹药才是开口理由，防止旧账把空窗变成常态轮）
-    const candidates = await ammoOf(chatKey, conv0);
-    const hasExternal = candidates.some((item) => item.kind === "external");
-    if (nudge === 0 && !hasExternal) return;
-    const ammo = renderAmmoSection(candidates);
-    const nudgeText = nudge > 0 ? renderTemplate(nudgeTemplate ?? "", { n: String(ammo.count) }) : "";
-    const content = [
-      renderTemplate(fish.prompts.messages["ctx_engage_header"] ?? "", { count: "0" }),
-      engageFooterOf(),
-      // 该轮也是注入轮（终验 #5）：已读引导照常携带，与常规 injection 轮同位序
-      fish.prompts.messages["ctx_seen_note"] ?? "",
-      ...ammo.lines,
-      nudgeText,
-    ].filter((line) => line.length > 0).join("\n");
-    console.log(`[鱼缸] ${chatKey} ${nudge > 0 ? `nudge-only 轮提交（沉默递进档位 ${nudge}）` : "空窗弹药轮提交"}`);
+    // decisions §5.6 固定模板：四段逐字拼装（两段之间空一行），不预选具体视频、
+    // 不注入编号、不附加元说明
+    const content = renderBrowseOpportunity(fish.prompts.messages);
+    console.log(`[鱼缸] ${chatKey} 主动轮提交（browse 门开）`);
     await submitRound({
       chatKey,
       conv: conv0,
       content,
-      trigger: { mentionsBot: false, kind: "injection" },
+      trigger: { mentionsBot: false, kind: "injection", browseWindow: gate.windowId, browseTopic: gate.topic },
       reply: false,
       entryKind: MEMORY_ENGAGE_KIND,
     });
@@ -1500,21 +1293,10 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
   // 已读去重（决策 20）：剔除已进过模型的部分（重启后标记为空＝全未读，不会饿死注入）
   const fresh = backlog.filter((m) => m.arrivalSeq === undefined || m.arrivalSeq > seenSeqOf(conv.id));
   if (fresh.length === 0) return;
-  // 弹药栏（T13）：剖面承诺 + 记忆委托机械拼装；未兑现数喂给 nudge_2 的 {{n}}
-  const ammo = renderAmmoSection(await ammoOf(chatKey, conv));
-  const nudgeText = renderTemplate(nudgeTemplate ?? "", { n: String(ammo.count) });
-  const content = [
-    renderTemplate(fish.prompts.messages["ctx_engage_header"] ?? "", { count: String(fresh.length) }),
-    ...renderEngageLines(chatKey, fresh),
-    // footer 宵禁二态（T13 追加）：夜间纯搭话，白天自由发挥
-    engageFooterOf(),
-    // 每次注入都携带（决策 20，不限于发生截减时）：引导结合历史理解这批背景
-    fish.prompts.messages["ctx_seen_note"] ?? "",
-    // 弹药段（T13）：空则退化，整段不占位
-    ...ammo.lines,
-    // 沉默递进（T8）：连续零出口达阈值，尾部追加 nudge（2×阈值换更重的 nudge_2）
-    nudge > 0 ? nudgeText : "",
-  ].filter((line) => line.length > 0).join("\n");
+  const content = renderOpenMessageList(fresh, fish.prompts.messages,
+    (userId) => Boolean(config.master && String(userId) === config.master),
+    (userId) => watchedByChat.get(baseChatKey(chatKey))?.has(String(userId)) === true,
+  );
   await submitRound({
     chatKey,
     conv,
@@ -1530,10 +1312,11 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
 }
 
 /**
- * open 窗 shard 轮（ambient）：每 10 秒一拍，把这一拍收集的全部发送者消息合成一轮
- * （多发送者逐行渲染，最新在前，[m:id] 锚点照旧）；头部用 ctx_engage_shard_header。非必答：零出口合法、无 salvage、无强制
- * 引用；已读去重后注入、注入后推进标记；quoteIds = 本轮 shard 消息集；尾部 footer
- * 随宵禁二态（engageFooterOf，T13 追加，与 injection 轮同一套窗口收尾文案）。
+ * open 窗 shard 轮（ambient）：每 engage.shardSeconds 一拍，把这一拍收集的全部发送者
+ * 消息合成一轮。输入与 injection 轮是同一份标准群消息列表（decisions §5.5：不在 user
+ * input 区分 injection/shard，也不重复窗口规则），按真实接收顺序渲染。非必答：零出口
+ * 合法、无 salvage、无强制引用；已读去重后注入、注入后推进标记；quoteIds = 本轮 shard
+ * 消息集。shard 轮不携带 browseWindow/browseTopic——ambient 无浏览授权（T3）。
  * 提交前会话又忙（状态机检查后的竞态）就放回收集器并入下一拍（绝不丢、绝不并发提交）。
  */
 async function submitShardRound(chatKey: string, items: readonly EngageShardItem[]): Promise<void> {
@@ -1547,13 +1330,10 @@ async function submitShardRound(chatKey: string, items: readonly EngageShardItem
   }
   const fresh = items.filter((m) => m.arrivalSeq === undefined || m.arrivalSeq > seenSeqOf(conv.id));
   if (fresh.length === 0) return;
-  const content = [
-    renderTemplate(fish.prompts.messages["ctx_engage_shard_header"] ?? "", { count: String(fresh.length) }),
-    ...renderEngageLines(chatKey, fresh),
-    fish.prompts.messages["ctx_seen_note"] ?? "",
-    // 宵禁二态 footer（T13 追加）：与 injection 轮同一套窗口收尾，夜间纯搭话
-    engageFooterOf(),
-  ].filter((line) => line.length > 0).join("\n");
+  const content = renderOpenMessageList(fresh, fish.prompts.messages,
+    (userId) => Boolean(config.master && String(userId) === config.master),
+    (userId) => watchedByChat.get(baseChatKey(chatKey))?.has(String(userId)) === true,
+  );
   // 整拍里最近一条非空 bypass 段（整组语义：指令后面跟闲聊不丢指令）
   let payload: string | undefined;
   for (let index = fresh.length - 1; index >= 0; index--) {
@@ -1575,37 +1355,6 @@ async function submitShardRound(chatKey: string, items: readonly EngageShardItem
   });
   advanceSeenSeq(conv.id, maxArrivalSeq(fresh));
 }
-
-/** inline 附图上限（普通轮；导入轮例外属于 look 路径，与这里无关）。 */
-const INLINE_IMAGE_MAX = 2;
-
-/** 文本里的图片标记：[图片 inbound/xxx]（onebot 下载回填后的形状）。 */
-const IMAGE_REF_PATTERN = /\[图片 (inbound\/[^\]\s]+)\]/g;
-
-/**
- * inline 附图选取：锚点图优先，burst 内按文本标记顺序补足；GIF 不附；
- * ref 为空（下载失败）与文件缺失的跳过且不占额度。返回绝对路径列表与未附张数。
- * 只在 inline 模式（主/视觉同模型且通道在白名单）被消费；并图开关在 submitRound 上游。
- */
-function pickInlineImages(
-  anchor: { images: readonly { ref: string }[] },
-  messages: readonly { text: string }[],
-  mediaRoot: string,
-): { attach: string[]; more: number } {
-  const distinct: string[] = [];
-  const seen = new Set<string>();
-  const push = (ref: string) => {
-    if (ref && !seen.has(ref)) {
-      seen.add(ref);
-      distinct.push(ref);
-    }
-  };
-  for (const image of anchor.images) push(image.ref);
-  for (const line of messages) for (const match of line.text.matchAll(IMAGE_REF_PATTERN)) push(match[1] ?? "");
-  const eligible = distinct.filter((ref) => !ref.toLowerCase().endsWith(".gif") && existsSync(join(mediaRoot, ref)));
-  return { attach: eligible.slice(0, INLINE_IMAGE_MAX).map((ref) => join(mediaRoot, ref)), more: distinct.length - Math.min(eligible.length, INLINE_IMAGE_MAX) };
-}
-
 /**
  * 公共批准的前置步（AI 脱敏）：私聊 `/记忆 同意 <id> 公共` 在 applyPatch 之前，把待审
  * patch 的文本字段（facts/lore/cards 的 text；subject/keys/结构不动）交给便宜模型按
@@ -2031,199 +1780,43 @@ const engageNext = createEngageNext({
   onShard: (chatKey, items) => submitShardRound(chatKey, items),
   config: () => {
     const c = fishConfig().config;
+    // video.dailyBudget 的每 tick 热读点（T3）：弹药 scheduler 停用后仍在的 active 热加载路径
+    syncBiliBudget();
     return {
       closedMinutes: c.engage.closedMinutes,
       openMinutes: c.engage.openMinutes,
       // shard 节拍（T14）：engage.shardSeconds，缺省 20 秒，每拍现读热生效
       shardSeconds: c.engage.shardSeconds,
-      // 随机门（E5）：ammo.shareChance，开窗进入时一次挷落相位（热读：下一窗生效）
+      // 旧分享门（E5，兼容保留）：弹药管线已停用，宿主不再消费 shareGateOf
       ammoShareChance: c.ammo.shareChance,
+      // 视频浏览门（T3）：video.browseChance，开窗进入时一次挷落相位并选定 topic（热读：下一窗生效）
+      videoBrowseChance: c.video.browseChance,
     };
   },
   log: (message) => console.log(`[鱼缸] ${message}`),
   onError: (error) => console.error("[鱼缸] 搭话开窗回调失败", error instanceof Error ? error.message : error),
 });
 
-// 分享门接线（E5）：出口层（say_words 的 ammoId 链）经这个单例读当前 open 窗的
-// windowId 与门结果；未开窗/closed 的 chatKey 拿到 undefined，claim 一律拒（fail closed）
-wireAmmoShareHost({ gateOf: (chatKey) => engageNext.shareGateOf(chatKey) });
+// 视频浏览门接线（T3）：空窗零新增主动轮与 T4 的浏览/分享工具经这个单例读当前 open 窗的
+// windowId/topic/门结果；未开窗/closed 的 chatKey 拿到 undefined，授权一律拒（fail closed）。
+// 旧 ammo 分享门接线（wireAmmoShareHost）已随管线停用摘除：出口 ammoId claim 链恒 fail closed。
+wireVideoBrowseHost({ gateOf: (chatKey) => engageNext.videoBrowseGateOf(chatKey) });
 
-// ── worker 逛轮（外部计划 Task E4）：scheduler 四时点起独立后台会话刷 B 站 ──────────
-
-/** worker 会话的 chatKey：不是 QQ 会话，不进 gate / 群白名单 / 记忆映射；独立 conversation + 独立 cwd。 */
-const WORKER_CHAT_KEY = "worker:bili";
+// ── B 站每日预算热加载（2026-11-04 模型输入计划 T3）──────────────────────────
+// worker 逛轮 / 空库补货 / 手动逛轮 / 弹药分享挂点已随弹药管线停用整体摘除；
+// 旧实现见 git 历史与保留的兼容源码（external/scheduler、external/ammo-store、ammo_* 工具包）。
 
 /**
- * ammo.dailyBudget 热生效（终验 #8 修复）：共享 bili 客户端长驻进程，配置读取/变更都把
- * 当前值灌进去——启动一次、scheduler 每 tick 的 slots 热读点一次、每次逛轮作业开工一次，
- * config 工具 set ammo 时也同步灌入。未配置时保留客户端内建缺省 60。
+ * video.dailyBudget 热生效：共享 bili 客户端长驻进程（仍 active 的 video 工具用它），
+ * 配置读取/变更都把当前值灌进去——启动一次、engage-next 每 tick 的配置热读点一次
+ * （弹药 scheduler 停用后的唯一 active 热加载路径，不依赖已停用的 scheduler tick），
+ * config 工具 set ammo 的旧变更路径照旧保留在工具内。旧 ammo.dailyBudget 只在
+ * video.dailyBudget 缺省时作回退（见 fish-config.ts 的 loadFishConfig）。
  */
 function syncBiliBudget(): void {
-  getBiliClient().setDailyBudget(fishConfig().config.ammo.dailyBudget);
+  getBiliClient().setDailyBudget(fishConfig().config.video.dailyBudget);
 }
-
-/**
- * 主人私聊手动逛轮的窄口上下文（主人私聊专用，不是群内能力）：仅普通 answer 轮由宿主
- * 调用，身份与 chatKey 双重机械核对（发送者 = config.master 且会话 = qq:private:<master>），
- * 两者任一不满足、或未配主人时返回 undefined（群聊/陌生私聊/机械命令轮都不创建——
- * 机械命令在 handleCommand 就拦截，根本不经 submitRound）。runKey 用该条私聊 messageId
- * 稳定派生（缺失时宿主时间戳），同一条消息的轮内重试共用一键 → 每轮上限按消息计；
- * maxPicks/ttlHours 每轮从 ammo 配置现读（config 工具热改下一轮即生效）。工具侧放行前
- * 还会二次机械核对（ammo_submit 的 deps.master + chatKeyOf 闸），这里只是入口的钉上下文。
- */
-function manualAmmoRunOf(
-  chatKey: string,
-  messageId: number | string | undefined,
-  userId: number | undefined,
-): { runKey: string; maxPicks: number; ttlHours: number } | undefined {
-  if (!config.master) return undefined;
-  if (String(userId) !== config.master) return undefined;
-  if (chatKey !== `qq:private:${config.master}`) return undefined;
-  const ammo = fishConfig().config.ammo;
-  return { runKey: `manual:${messageId ?? Date.now()}`, maxPicks: ammo.maxPicksPerRun, ttlHours: ammo.ttlHours };
-}
-
-/** 逛轮在途标记：scheduler 的 watchdog 已收束但上一轮还在收尾时，新作业直接跳过（宁少勿答）。 */
-let browseInFlight = false;
-
-/**
- * 一次逛轮作业（scheduler 的 onJob）：
- *   1. 独立 worker 会话（fish.group(WORKER_CHAT_KEY)，默认人格、人格中立）直接 conv.submit
- *      （GIF 收图轮同款先例）：触发语 = messages 的 worker_browse_task（时点参数现算），
- *      entry kind = fish.worker_round（不进摘要/记忆抽取，但计入换页阈值）；
- *   2. triggerOf 钉上 kind=worker + workerRun（runKey/maxPicks/ttlHours，作业起时定格）——
- *      say_* 据此机械拒绝，ammo_submit 据此放行；
- *   3. 硬截止：browseMinutes 到点 submission.abort() 取消在途轮（已入库保留，未提交候选丢弃），
- *      抛错让 scheduler 落 failed；scheduler 自己的 watchdog（jobTimeout）是最后兑底；
- *   4. 收尾：用量记账（与 submitRound 同口径）+ 换页检查（阈值满足时机械降级换页）。
- * 作业键 runKey = date + slot（jobKeyOf），幂等与单轮入库上限都认它。
- */
-async function runBrowseJob(slot: string, date: string, opts?: { maxPicks?: number }): Promise<void> {
-  if (browseInFlight) {
-    console.log(`[鱼缸] 逛轮跳过 ${date} ${slot}：上一轮未完`);
-    return;
-  }
-  browseInFlight = true;
-  try {
-    const ammo = fishConfig().config.ammo;
-    syncBiliBudget(); // 作业开工即灌一次当前预算上限（热配置生效点之一）
-    const runKey = jobKeyOf(date, slot);
-    const conv = await fish.group(WORKER_CHAT_KEY);
-    const content = renderTemplate(fish.prompts.messages["worker_browse_task"] ?? "", {
-      minutes: String(ammo.browseMinutes),
-      max: String(opts?.maxPicks ?? ammo.maxPicksPerRun),
-      topics: AMMO_TOPICS.join("、"),
-    });
-    const submission = await conv.submit({ type: "input", content, entry: { kind: MEMORY_WORKER_KIND } }, ctx);
-    const roundId = String(submission.id);
-    triggerOf.set(roundId, {
-      mentionsBot: false,
-      kind: "worker",
-      workerRun: { runKey, maxPicks: opts?.maxPicks ?? ammo.maxPicksPerRun, ttlHours: ammo.ttlHours },
-    });
-    const timeoutMs = Math.max(60_000, ammo.browseMinutes * 60_000);
-    let watchdog: NodeJS.Timeout | undefined;
-    try {
-      console.log(`[鱼缸] 逛轮开始 ${runKey}`);
-      const outcome = await Promise.race([
-        submission.wait(ctx).then((settled) => ({ kind: "settled" as const, status: settled.status })),
-        new Promise<{ kind: "timeout" }>((resolve) => {
-          watchdog = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
-          watchdog.unref?.();
-        }),
-      ]);
-      if (outcome.kind === "timeout") {
-        // 硬截止收束：取消在途轮。Submission.abort 只能撤回未入册的排队输入（已放置的返回
-        // already_placed 不停轮），真正收束在途作业用 Conversation.abort——标记并唤醒全部活任务、
-        // 等会话闲置后返回，未提交候选自然丢弃（已入库保留）；随后换页检查也安全。取消不了只记日志不重试
-        await conv.abort(ctx);
-        console.log(`[鱼缸] 逛轮硬截止 ${runKey}（已收束）`);
-        throw new Error("worker_browse_timeout");
-      }
-      if (outcome.status !== "done") {
-        console.log(`[鱼缸] 逛轮结束 ${runKey} ${outcome.status}`);
-      } else {
-        console.log(`[鱼缸] 逛轮完成 ${runKey}`);
-      }
-    } finally {
-      if (watchdog !== undefined) clearTimeout(watchdog);
-      triggerOf.delete(roundId);
-      // 用量记账（与 submitRound 同口径）+ 换页检查；worker 会话没有记忆映射，压缩只做换页
-      try {
-        const spent = await fish.harness.snapshot(UsageDoc, conv.id, ctx);
-        const delta = usage.append(WORKER_CHAT_KEY, sumUsage(spent), Date.now(), String(conv.id));
-        if (delta) console.log(`[鱼缸] ${WORKER_CHAT_KEY} +${delta.total} tokens / ${delta.cost}`);
-      } catch (error) {
-        console.error("[鱼缸] 逛轮用量记账失败", error instanceof Error ? error.message : error);
-      }
-      try {
-        const compacted = await compactWithGuard(conv, false, WORKER_CHAT_KEY);
-        if (compacted.compacted) console.log(`[鱼缸] ${WORKER_CHAT_KEY} 换页 ${compacted.entries}条/${compacted.chars}字`);
-      } catch (error) {
-        console.error("[鱼缸] 逛轮换页失败", error instanceof Error ? error.message : error);
-      }
-    }
-  } finally {
-    browseInFlight = false;
-  }
-}
-
-// ── 空库自动补货（2026-11-04 计划 T1）：库空即起 refill 逛轮，事件驱动缺省取代时刻表 ──
-
-/** 上次补货起轮时刻（含失败/空手而归）：30 分钟冷却的唯一判据；失败空转重试节奏靠它限速。 */
-let lastRefillAttempt = 0;
-/** 补货冷却：两次起轮的最小间隔——失败/空手时最多每 30 分钟重试一次。 */
-const REFILL_COOLDOWN_MS = 30 * 60_000;
-
-/**
- * 空库自动补货触发器（fire-and-forget 友好）：refillTarget<=0、逛轮在途、30 分钟冷却
- * 任一命中即静默返回；否则 snapshot 数 available（state==available 且 ttlAt>now），
- * >0 库里有货直接返回，=0 置 lastRefillAttempt 后以 runKey refill-<HHmm> + 当天 localDay
- * 起 runBrowseJob（maxPicks 定格为 ammo.refillTarget）。整体不抛错：两个挂点（emit 发送
- * 链、5 分钟巡检定时器）都不许被它拖崩。
- */
-async function maybeRefillAmmo(reason: string): Promise<void> {
-  try {
-    const ammo = fishConfig().config.ammo;
-    if (ammo.refillTarget <= 0) return;
-    if (browseInFlight) return;
-    const now = Date.now();
-    if (now - lastRefillAttempt < REFILL_COOLDOWN_MS) return;
-    const doc = await fish.harness.snapshot(ExternalAmmoDoc, ctx);
-    const available = (doc?.items ?? []).filter((item) => item.state === "available" && item.ttlAt > now).length;
-    if (available > 0) return;
-    lastRefillAttempt = now;
-    const at = new Date(now);
-    const hhmm = `${String(at.getHours()).padStart(2, "0")}${String(at.getMinutes()).padStart(2, "0")}`;
-    console.log(`[鱼缸] 弹药库空，补货起轮 ${reason} → ${ammo.refillTarget} 条`);
-    await runBrowseJob(`refill-${hhmm}`, localDay(now), { maxPicks: ammo.refillTarget });
-  } catch (error) {
-    console.error(`[鱼缸] 弹药补货失败（${reason}）`, error instanceof Error ? error.message : error);
-  }
-}
-
-// 四时点（ammo.slots 热读，缺省空表 = 不按时刻起轮，逛轮由空库补货触发）触发逛轮；错过 ≤2h 补跑一次
-//（幂等 date+slot，fish.external_jobs）；硬截止双层：runBrowseJob 内的 abort + scheduler watchdog
-externalScheduler = createScheduler({
-  // slots 是 scheduler 每 tick 的热读点：顺带把 ammo.dailyBudget 灌进共享客户端
-  //（终验 #8：配置读取即生效；变更路径在 config 工具 set ammo）
-  slots: () => {
-    syncBiliBudget();
-    return fishConfig().config.ammo.slots;
-  },
-  onJob: (slot, date) => runBrowseJob(slot, date),
-  now: () => new Date(),
-  ...nodeTimers,
-  jobTimeoutMs: () => Math.max(60_000, fishConfig().config.ammo.browseMinutes * 60_000),
-  jobs: jobsHandleOf(fish.harness),
-  log: (message) => console.log(`[鱼缸] ${message}`),
-});
 syncBiliBudget(); // 启动即灌一次：共享客户端在首次请求前就持有当前预算上限（缺省 60）
-externalScheduler.start();
-
-// 补货挂点 b（2026-11-04 计划 T1）：每 5 分钟巡检一次空库；unref 不挡进程退出，SIGTERM 时一并清掉
-const ammoRefillTimer = setInterval(() => void maybeRefillAmmo("定时巡检"), 5 * 60_000);
-ammoRefillTimer.unref?.();
 
 // ── 新闻播报 job（外部计划 Task E7，决策 10–12）：scheduler 第二实例 news.at 起播 ──────
 
@@ -2231,22 +1824,7 @@ const NEWS_JOB_TIMEOUT_MS = 45 * 60_000; // 硬截止：30 分钟推迟窗口 + 
 const NEWS_ABORT_MARGIN_MS = 60_000; // 抢跑余量：比 scheduler watchdog 早 60s abort 在途会话，保证 failed_timeout 落账前已收束
 const NEWS_DEFER_MAX_MS = 30 * 60_000; // T15：末条自言最多推迟 30 分钟（决策 10，宁少勿扰）
 const NEWS_DEFER_STEP_MS = 5 * 60_000; // 推迟重查步长（每 5 分钟重查）
-const NEWS_BROADCAST_MAX_CHARS = 500; // 成品播报预算（超限按 topic 顺序裁剪）
 const NEWS_RUNS_TTL_DAYS = 30; // fish.news_runs 只服务幂等与近期审计，写入时顺手清老账
-
-/** 单次归纳结果（NewsDigest 严格 schema 的宿主侧形态；sourceRef = 宿主持有的来源索引）。 */
-interface NewsDigestItem {
-  summary: string;
-  sourceRef: string;
-}
-interface NewsDigestSection {
-  topic: string;
-  items: NewsDigestItem[];
-}
-interface NewsDigest {
-  sections: NewsDigestSection[];
-  closing: string;
-}
 
 /** fish.news_runs 账本（决策 4）：localDay+targetGroup 幂等，state + digest。 */
 interface NewsRunRecord {
@@ -2438,58 +2016,6 @@ async function digestNewsWithRetry(
  * 返回值附 links：实际进了播报的条目的 canonical URL（按 sourceRef 索引现查，顺序同播报），
  * 宿主登记进新闻轮闸，出口重建 payload 时只认这份列表——模型文本里的 URL 一律剥掉。
  */
-function renderNewsBroadcast(
-  day: string,
-  digest: NewsDigest,
-  index: ReadonlyMap<string, NewsItem>,
-  budgetChars = NEWS_BROADCAST_MAX_CHARS,
-): { text: string; links: string[] } {
-  const headerTpl = fish.prompts.messages["news_header"] ?? "";
-  const topicTpl = fish.prompts.messages["news_topic"] ?? "";
-  const itemTpl = fish.prompts.messages["news_item"] ?? "";
-  const closingTpl = fish.prompts.messages["news_closing"] ?? "";
-  if (headerTpl.length === 0 || topicTpl.length === 0 || itemTpl.length === 0) return { text: "", links: [] };
-  const closingLine = digest.closing.length > 0 && closingTpl.length > 0 ? renderTemplate(closingTpl, { closing: digest.closing }) : "";
-  const lines: string[] = [];
-  const links: string[] = [];
-  let used = 0;
-  const add = (line: string, limit: number): boolean => {
-    if (line.length === 0) return false;
-    const sep = lines.length > 0 ? 1 : 0;
-    if (used + sep + line.length > limit) return false;
-    lines.push(line);
-    used += sep + line.length;
-    return true;
-  };
-  if (!add(renderTemplate(headerTpl, { date: day }), budgetChars)) return { text: "", links: [] };
-  // 收尾预留：头行之后放得下收尾就把它的长度从条目预算里扣掉，保证整份播报带收尾
-  const reserved = closingLine.length > 0 && used + 1 + closingLine.length <= budgetChars ? closingLine.length + 1 : 0;
-  const itemBudget = budgetChars - reserved;
-  for (const section of digest.sections) {
-    const entries = section.items.flatMap((item) => {
-      const news = index.get(item.sourceRef);
-      return news ? [{ line: renderTemplate(itemTpl, { summary: item.summary, source: news.source, url: news.url }), url: news.url }] : [];
-    });
-    const block = [renderTemplate(topicTpl, { topic: section.topic }), ...entries.map((entry) => entry.line)];
-    // 整段能进多少行先探后放：只放得下分节头就整段放弃（不留空节）
-    let fits = 0;
-    let size = used;
-    for (const line of block) {
-      const sep = size > 0 ? 1 : 0;
-      if (size + sep + line.length > itemBudget) break;
-      size += sep + line.length;
-      fits += 1;
-    }
-    if (fits <= 1) break;
-    for (let i = 0; i < fits; i++) add(block[i]!, itemBudget);
-    // 实际进播报的条目（block[0] 是分节头，条目数 = fits - 1）链接按宿主索引收集
-    for (const entry of entries.slice(0, fits - 1)) links.push(entry.url);
-    if (fits < block.length) break; // 有条目被裁：后面的 topic 不再尝试（按 topic 顺序裁剪）
-  }
-  add(closingLine, budgetChars);
-  return { text: lines.join("\n"), links };
-}
-
 const sleepUnref = (ms: number): Promise<void> => new Promise((resolve) => {
   const timer = setTimeout(resolve, ms);
   timer.unref?.();
@@ -2571,20 +2097,19 @@ async function runNewsJob(slot: string, date: string): Promise<void> {
     const digestPrompt = renderTemplate(fish.prompts.newsDigest, { topics: prompt, max: String(news.perTopicOutput) });
     const digest = await digestNewsWithRetry(digestPrompt, feeds, index, news.perTopicOutput);
     if (timedOut) throw new Error("news_timeout");
-    const broadcast = renderNewsBroadcast(date, digest, index);
+    const broadcast = renderNewsBroadcast(date, digest, index, fish.prompts.messages);
     if (broadcast.text.length === 0) throw new Error("render_empty");
     const chatKey = `qq:group:${group}`;
     conv = await conversationFor(chatKey);
     if (!(await awaitNewsSlot(conv, chatKey, () => timedOut))) throw new Error(timedOut ? "news_timeout" : "defer_giveup");
     if (timedOut) throw new Error("news_timeout");
-    const task = fish.prompts.messages["news_broadcast_task"] ?? "";
     // 新闻轮闸：登记本轮 + canonical 链接表，say_words 出口由宿主重建 payload、单次封顶
     beginNewsBroadcastRound(String(conv.id), broadcast.links);
     try {
       const outcome = await submitRound({
         chatKey,
         conv,
-        content: task.length > 0 ? task + "\n" + broadcast.text : broadcast.text,
+        content: renderNewsTask(fish.prompts.messages, broadcast.text),
         trigger: { mentionsBot: false, kind: "answer" },
         reply: false,
         mustAnswer: false,
@@ -2715,7 +2240,12 @@ onebot.onMessage((raw) => {
           desc: card.desc ?? "",
           url: card.url ?? "",
         }).trim();
-        if (rendered) msg.text = msg.text.replace(`[卡片#${index}]`, rendered);
+        if (rendered) {
+          msg.text = msg.text.replace(`[卡片#${index}]`, rendered);
+          // 引用原文里的卡片占位与正文共享同一个 cards 下标空间（onebot 水合时追加），
+          // 同样换成可读文本；否则模型只能看到裸占位
+          if (msg.quoted) msg.quoted.text = msg.quoted.text.replace(`[卡片#${index}]`, rendered);
+        }
       }
     }
 
@@ -2724,7 +2254,7 @@ onebot.onMessage((raw) => {
       {
         userId: msg.userId,
         nickname: msg.nickname,
-        text: collapseForward(msg.text),
+        text: backgroundTextOf(msg, fish.prompts.messages),
         at: Date.now(),
         ...(msg.messageId !== undefined ? { messageId: msg.messageId } : {}),
         ...(msg.arrivalSeq !== undefined ? { arrivalSeq: msg.arrivalSeq } : {}),
@@ -2763,9 +2293,10 @@ onebot.onMessage((raw) => {
     const verdict = (decision.enter ? "enter:" : "skip:") + decision.reason;
     console.log("[fish] gate " + msg.chatKey + " " + msg.nickname.slice(0, 12) + " -> " + verdict);
 
-    // 连续发言窗口的输入：这条消息给模型看的文本（合集已折叠、bypass 已换成占位），
-    // bypass 段作为 opaque 载荷跟着走。
-    const burstText = collapseForward(msg.text);
+    // 连续发言窗口的输入：这条消息给模型看的文本——带结构化合集的用自身正文
+    //（[转发合集] 标签与内容占位由渲染器负责），其余（旧形态文本 / 未展开合集
+    // 记录）仍折叠成短标记；bypass 段作为 opaque 载荷跟着走。
+    const burstText = msg.forward !== undefined ? msg.text : backgroundTextOf(msg, fish.prompts.messages);
     const push = (conv?: Conversation) => debouncer.push({
       msg,
       text: burstText,
@@ -2834,9 +2365,8 @@ onebot.onMessage((raw) => {
       if (qq && !speakers.some((s) => s.subject === `qq:${qq}`)) speakers.push({ subject: `qq:${qq}`, name });
     }
 
-    // 主人私聊手动逛轮窄口：仅普通 answer 轮、发送者与会话双重机械核对主人才创建
-    //（群聊/陌生私聊/机械命令轮都是 undefined，ammo_submit 在这些轮照旧拒绝）
-    const manualAmmo = manualAmmoRunOf(msg.chatKey, msg.messageId, msg.userId);
+    // 主人私聊手动逛轮窄口已随弹药管线停用摘除（T3）：ammo_submit 已进 disabled 包，
+    // 不再有任何轮钉 manualAmmoRun 上下文
     await submitRound({
       chatKey: msg.chatKey,
       conv,
@@ -2846,7 +2376,6 @@ onebot.onMessage((raw) => {
         mentionsBot: msg.mentionsBot,
         userId: msg.userId,
         kind: "answer",
-        ...(manualAmmo !== undefined ? { manualAmmoRun: manualAmmo } : {}),
       },
       // 回复链：本轮触发本身是在回复某条消息，鱼的回应应引用触发那条
       reply: (msg.replyIds?.length ?? 0) > 0,
@@ -2931,8 +2460,6 @@ process.on("SIGTERM", () => {
   closing = true;
   console.log("[鱼缸] SIGTERM，冲刷后退出");
   engageNext.stop(); // 先停开窗循环：退出后不再触发相位迁移回调
-  externalScheduler?.stop(); // 停作业调度：不再触发新逛轮，在途轮由各自的 watchdog 收束
-  clearInterval(ammoRefillTimer); // 停空库补货巡检：退出后不再起 refill 轮
   newsScheduler.stop(); // 停新闻调度：在途播报由 scheduler watchdog 收束，news_runs 幂等挡重启重发
   void (async () => {
     try { const n = await fish.drain(); if (n > 0) console.log(`[鱼缸] 退出前补发 ${n} 条`); } catch { /* 尽力而为 */ }

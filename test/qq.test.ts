@@ -16,7 +16,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
 import { OutboxDoc } from "../src/store.ts";
-import { renderForModel } from "../src/qq/gate.ts";
+import { withContext } from "../src/qq/debounce.ts";
 import type { IncomingMessage } from "../src/qq/onebot.ts";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -202,14 +202,17 @@ test("发送失败后队首保持 sending：不重试、不重复、不跳过它
 });
 
 test("入站渲染：私聊不写「@了你」，群里只 @全体时不补「不是在叫你」", () => {
+  // 文案表用 prompt/messages.md 的真实值（decisions §2–§5 的共享消息模板 key）
   const messages: Record<string, string> = {
-    mention_bot: "@了你",
-    mention_all: "@了全体成员",
-    mention_other: "@了{{who}}",
-    mention_not_you: "（这些都不是在叫你）",
-    speaker_master: "你主人",
+    message_group_header: "群里有新消息啦。",
+    message_private_header: "私聊有新消息啦。",
+    message_list_start: "> 消息起始",
+    message_list_end: "> 消息结束",
+    message_mention_bot: "[这条消息@了你]",
+    message_master: "[主人]",
   };
   const base = {
+    messageId: 1425302217,
     userId: 2000,
     nickname: "张三",
     text: "在吗",
@@ -218,42 +221,78 @@ test("入站渲染：私聊不写「@了你」，群里只 @全体时不补「�
     replyIds: [],
   } as const;
 
-  // 私聊：入站把 mentionsBot 恒置 true 只是内部标记，别让模型以为被 @ 了
-  const priv = renderForModel(
-    { ...base, chatKey: "qq:private:2000", mentionsBot: true } as IncomingMessage,
-    "1",
-    messages,
-  );
-  assert.ok(!priv.includes("@了你"), "私聊渲染成了「@了你」");
-  assert.match(priv, /私聊/);
+  // 群轮的真实形状（src/index.ts flushBurst）：anchor + 整组 burst（当前消息就在组里），
+  // 背景流水为空。
+  const groupRound = (anchor: IncomingMessage): string =>
+    withContext(anchor, [], [{ ...anchor, arrivalSeq: 1, at: 0, replyIds: [] }], {
+      master: "1000",
+      messages,
+    }).content;
 
-  // 群里只 @全体成员：它就是叫所有人，再补「不是在叫你」自相矛盾
-  const all = renderForModel(
-    {
-      ...base,
-      chatKey: "qq:group:42",
-      groupId: 42,
-      mentionsBot: false,
-      mentions: [{ qq: "all", name: "全体成员", kind: "all" }],
-    } as IncomingMessage,
-    "1",
-    messages,
+  // 私聊（decisions §5.3）：真实输入组装入口是 withContext——独立开场 + 消息列表边界，
+  // 只注入当前消息、不展示背景；入站把 mentionsBot 恒置 true 只是内部标记，
+  // 私聊没有「@谁」这回事，不许渲染成 @ 标签。
+  const priv = withContext(
+    { ...base, chatKey: "qq:private:2000", mentionsBot: true } as IncomingMessage,
+    [],
+    [],
+    { master: "2000", messages },
+  ).content;
+  assert.equal(
+    priv,
+    [
+      "私聊有新消息啦。",
+      "> 消息起始",
+      "[m:1425302217][主人] 张三(2000): 在吗",
+      "> 消息结束",
+    ].join("\n"),
   );
-  assert.match(all, /@了全体成员/);
+  assert.ok(!priv.includes("[这条消息@了你]"), "私聊渲染成了「@了你」");
+
+  // 群里只 @全体成员：@ 标记由入站解析层留在正文里（onebot applyMention），
+  // 消息行不再另加「@了全体成员」行内标注，也不许再补「（这些都不是在叫你）」自相矛盾；
+  // 它不是点名鱼，所以没有 [这条消息@了你] 标签。
+  const all = groupRound({
+    ...base,
+    chatKey: "qq:group:42",
+    groupId: 42,
+    text: "@全体成员 在吗",
+    mentionsBot: false,
+    mentions: [{ qq: "all", name: "全体成员", kind: "all" }],
+  } as IncomingMessage);
+  assert.equal(
+    all,
+    [
+      "群里有新消息啦。",
+      "> 消息起始",
+      "[m:1425302217] 张三(2000): @全体成员 在吗",
+      "> 消息结束",
+    ].join("\n"),
+  );
+  assert.match(all, /@全体成员/, "@全体 的事实没进正文");
+  assert.ok(!all.includes("[这条消息@了你]"), "只 @全体 不该被当成点名鱼");
   assert.ok(!all.includes("都不是在叫你"), "只 @全体 时不该再否定一次");
 
-  // 只 @别人：仍然要明确「不是在叫你」（旧行为不能丢）
-  const other = renderForModel(
-    {
-      ...base,
-      chatKey: "qq:group:42",
-      groupId: 42,
-      mentionsBot: false,
-      mentions: [{ qq: "2001", name: "李四", kind: "other" }],
-    } as IncomingMessage,
-    "1",
-    messages,
+  // 只 @别人：新合同下同样不写行内 @ 标注、不写「不是在叫你」，但 @ 目标仍留在正文里，
+  // 模型要能看出这句是 @ 别人的（旧行为不能丢）。
+  const other = groupRound({
+    ...base,
+    chatKey: "qq:group:42",
+    groupId: 42,
+    text: "@李四 在吗",
+    mentionsBot: false,
+    mentions: [{ qq: "2001", name: "李四", kind: "other" }],
+  } as IncomingMessage);
+  assert.equal(
+    other,
+    [
+      "群里有新消息啦。",
+      "> 消息起始",
+      "[m:1425302217] 张三(2000): @李四 在吗",
+      "> 消息结束",
+    ].join("\n"),
   );
-  assert.match(other, /@了李四\(2001\)/);
-  assert.match(other, /都不是在叫你/);
+  assert.match(other, /@李四/, "@别人 的目标没留在正文里");
+  assert.ok(!other.includes("[这条消息@了你]"), "@别人 不该被当成点名鱼");
+  assert.ok(!other.includes("都不是在叫你"), "否定文案已随新标签合同下线");
 });

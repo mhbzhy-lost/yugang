@@ -7,5 +7,7 @@
   "video_truncated": "（视频超过 {{minutes}} 分钟，只看了前 {{minutes}} 分钟）",
   "video_danmaku_header": "弹幕摘录：",
   "video_frames_header": "画面（按时间点）：",
-  "video_comments_header": "热评："
+  "video_comments_header": "热评：",
+  "video_browse_closed": "逛 B 站的窗口已经关了",
+  "video_browse_limit": "这一轮看的视频够多了"
 }

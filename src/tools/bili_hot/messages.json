@@ -1,7 +1,8 @@
 {
   "bili_hot_header": "候选（标题|UP|分区|时长|播放/赞/币|发布|简介|BV）：",
   "bili_hot_stats": "（候选 {{candidates}} → 入库剔除 {{in_library}} → 硬筛否决 {{hard_veto}} → 软筛淘汰 {{soft_out}} → 返回 {{returned}}）",
-  "bili_hot_empty": "这轮榜单筛完是空的，换 source 或 rid 再试",
-  "bili_hot_bad_rid": "这个分区号不在列表里，用描述里列的那几个",
+  "bili_hot_empty": "这轮榜单筛完是空的，等下次再逛",
+  "bili_hot_not_browse": "这一轮不能逛 B 站，等下一个主动交流机会",
+  "bili_hot_bad_topic": "这个话题不认识",
   "bili_hot_failed": "榜单没拿到：{{reason}}"
 }
