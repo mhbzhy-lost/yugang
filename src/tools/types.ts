@@ -58,7 +58,7 @@ export interface RoundTrigger {
    * （「主动交流机会」模板）由宿主钉上——browseWindow = 本窗稳定 windowId（engage-next
    * 派生，同窗恒定、关窗作废），browseTopic = 本窗随机选定的 topic（VIDEO_TOPICS 枚举）。
    * ambient shard、injection 有消息轮、answer 轮与私聊轮一律不携带 = 无浏览授权；
-   * T4 的 bili_hot（按 topic 取候选）/ video（登记实际观看）/ say_words（videoBvid 分享）
+   * T4 的 bili_hot（按 topic 取候选）/ video（登记实际观看）/ say_words（链接白名单）
    * 只认这两个字段，不得按群 open 相位自行推断授权。
    */
   browseWindow?: string;

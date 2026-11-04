@@ -18,12 +18,10 @@
  * 外部不可信文本边界（终验 #9 修复）：标题/简介/UP 名/弹幕/热评/opus 作者与正文
  * 一律先过 sanitizeExternalText 才返回给模型，与 bili_hot 同一清洗边界。
  *
- * 自主浏览模式（2026-11-04 模型输入计划 T4）：trigger 带有效 browseWindow/browseTopic
- * 的 open injection browse 轮才进入——与宿主当前门（videoBrowseGateOf）现窗核对
- * （门已关 / window / topic 不匹配一律 tool error，不静默降级）；浏览轮允许连续
- * 查看候选，上限 video.browseMaxViewsPerRound（缺省 5，每轮热读）；只有实际成功
- * 观看的视频才 recordViewedVideo 绑定当前轮（宿主 settle 清理），say_words(videoBvid)
- * 分享前机械核对。普通轮（群友发链接 / opus）保持原一轮一次限制且不登记 viewed。
+ * 轮类型授权不在这里（2026-11-05 去工具内授权）：能不能逛、要不要看视频由宿主与
+ * prompt 的 `[本轮要求]` 决定。工具只保留两个机械闸——每轮成功观看数上限
+ * video.browseMaxViewsPerRound（缺省 5，每轮热读），以及「只有实际成功观看才
+ * recordViewedVideo 绑定当前轮」（宿主 settle 清理），作为「这轮真的看过」的机械记录。
  *
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest（factory 只消费它，不再有第二份运行时定义）。
  */
@@ -34,7 +32,7 @@ import { join } from "node:path";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { getBiliClient, type BiliClient } from "../../external/bili-client.ts";
 import { sanitizeExternalText } from "../../external/sanitize.ts";
-import { recordViewedVideo, viewedVideoOf, videoBrowseGateOf } from "../../external/video-browse.ts";
+import { recordViewedVideo, viewedVideoOf } from "../../external/video-browse.ts";
 import { rememberViewedVideoTitle } from "../../external/video-pool.ts";
 import { loadFishConfig } from "../../fish-config.ts";
 import { renderTemplate } from "../../prompts.ts";
@@ -47,7 +45,6 @@ interface VideoArgs {
   url: string;
 }
 
-const USED = new Map<string, unknown>(); // conversationId → 本轮已用的轮标识（普通轮的一轮一次限制；browse 轮走 viewed 上限）
 const HEADERS = { "user-agent": "Mozilla/5.0", referer: "https://www.bilibili.com/" };
 
 /**
@@ -191,44 +188,17 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
       const round = live?.run?.inputs?.[0];
       deps.onLongWork?.("video", round);
 
-      // 自主浏览授权（T4，fail closed）：trigger 带 browseWindow/browseTopic 即 browse 轮，
-      // 必须与宿主当前门现窗核对；门已关 / window / topic 不匹配直接拒，不静默降级成
-      // 普通模式（否则看了也登记不了 viewed，分享时才发现不对，白烧预算）。
-      // 普通轮（无这两个字段）不进这个分支，既有行为零变化。
-      const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
-      let browse: { windowId: string; topic: string } | undefined;
-      if (trigger?.browseWindow !== undefined || trigger?.browseTopic !== undefined) {
-        const chatKey = deps.chatKeyOf?.(String(api.conversationId));
-        const gate = trigger?.kind === "injection" && chatKey !== undefined ? videoBrowseGateOf(chatKey) : undefined;
-        if (
-          gate === undefined ||
-          !gate.open ||
-          gate.windowId !== trigger?.browseWindow ||
-          gate.topic !== trigger?.browseTopic
-        ) {
-          throw new Error(deps.prompts.messages["video_browse_closed"] ?? "video_browse_closed");
-        }
-        browse = { windowId: gate.windowId, topic: gate.topic };
-        // 浏览轮机械上限（video.browseMaxViewsPerRound，缺省 5，每轮热读）：计数口径 =
-        // 本轮已登记的实际成功观看 BV 数（viewed registry 轮末宿主清理，跨轮不残留）
-        const maxViews = Math.max(1, loadFishConfig().config.video.browseMaxViewsPerRound);
-        if (round !== undefined && viewedVideoOf(round).size >= maxViews) {
-          throw new Error(deps.prompts.messages["video_browse_limit"] ?? "video_browse_limit");
-        }
+      // 策略在调用侧，工具不做轮类型授权：能不能看由 prompt 的 `[本轮要求]` 与宿主给的
+      // 工具面决定。这里只留纯资源闸——每轮成功观看数上限（video.browseMaxViewsPerRound，
+      // 缺省 5，每轮热读），计数口径 = 本轮已登记的 viewed BV（轮末宿主清理，跨轮不残留）。
+      const maxViews = Math.max(1, loadFishConfig().config.video.browseMaxViewsPerRound);
+      if (round !== undefined && viewedVideoOf(round).size >= maxViews) {
+        throw new Error(deps.prompts.messages["video_browse_limit"] ?? "video_browse_limit");
       }
 
       const raw = args.url.trim();
       if (!raw || raw.length > 512) {
         throw new Error(deps.prompts.messages["video_invalid"] ?? "链接不对");
-      }
-
-      // 每轮限一次（普通轮）：轮标识与出口工具/search 同源；browse 轮允许连续查看，
-      // 受上面的 maxViews 上限约束，不吃这个一轮一次限制
-      if (round !== undefined && browse === undefined) {
-        if (USED.get(api.conversationId) === round) {
-          throw new Error(deps.prompts.messages["video_used"] ?? "这一轮看过了");
-        }
-        USED.set(api.conversationId, round);
       }
 
       const startedAt = Date.now();
@@ -389,10 +359,10 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         }
 
         const text = [head.join("\n"), danmakuText, framesText, comments].filter((s) => s.length > 0).join("\n");
-        // 实际成功观看后才登记（T4）：viewed 绑定当前 browse 轮（宿主 settle 时整份清掉），
+        // 实际成功观看后才登记：viewed 绑定当前轮（宿主 settle 时整份清掉），
         // 清洗后的标题进轮内缓存供 say_words 分享事务写池；失败路径（上面 catch）不登记，
         // opus 图文动态没有 BV 同样不登记
-        if (browse !== undefined && round !== undefined) {
+        if (round !== undefined) {
           recordViewedVideo(round, bv);
           rememberViewedVideoTitle(round, bv, sanitizeExternalText(d.title, { maxLen: 60 }));
         }

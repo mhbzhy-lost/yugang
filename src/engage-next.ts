@@ -313,7 +313,7 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     // 空窗零新增轮与 T4 的浏览工具都只认这一份结果，不重掷。
     // 宵禁（本地 02:00–09:00，src/curfew.ts）：门恒关——夜间纯搭话，不起主动轮、
     // 不逛 B 站、不分享视频素材；关闸落在门上，没有 browse 授权时 bili_hot /
-    // say_words(videoBvid) 自然全拒（fail closed，不靠模型自觉）。先掷再判，
+    // 分享视频的链接也自然拿不到（没有浏览结果就没有可发的 URL）。先掷再判，
     // 保证同一随机序列不因宵禁而串位（窗内 topic 可重现）。
     const browseRoll = random();
     state.videoTopic = VIDEO_TOPICS[Math.floor(random() * VIDEO_TOPICS.length)] ?? VIDEO_TOPICS[0]!;

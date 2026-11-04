@@ -4,7 +4,7 @@
     "properties": {
       "text": {
         "type": "string",
-        "description": "要说的话，一条消息，群里说出口的样子：短、口语、最多两行、不带 markdown"
+        "description": "要说的话，一条消息，群里说出口的样子：短、口语、最多两行、不带 markdown。可以带链接，但链接必须是这一轮工具结果里真的出现过的（比如 video 返回的那条），编造的会被拒"
       },
       "quoteMsgId": {
         "type": "string",
@@ -12,11 +12,7 @@
       },
       "share": {
         "type": "boolean",
-        "description": "可选：声明这条发言是素材分享（兑现承诺/交付委托结果）。群里最后一条消息是你自己发的时，只有带 share: true 或 videoBvid 的发言会被放行"
-      },
-      "videoBvid": {
-        "type": "string",
-        "description": "可选：要分享的视频 BV 号，必须是你在本轮主动交流机会里用 video 工具实际成功看过的那条（如 BV1ab4cd4ef）。填了就代表这条是视频分享：链接由系统自动附在消息开头，text 只写推荐语、不要自己写链接；没实际看过或不在浏览轮里会被拒且不占这轮开口额度"
+        "description": "可选：声明这条发言是素材分享（兑现承诺/交付委托结果/分享看过的视频）。群里最后一条消息是你自己发的时，只有带 share: true 的发言会被放行"
       },
       "mentions": {
         "type": "array",

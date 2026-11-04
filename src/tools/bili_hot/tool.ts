@@ -1,14 +1,16 @@
 /**
- * bili_hot —— 逛 B 站的候选榜单（2026-11-04 模型输入计划 T4：自主浏览专用）。
+ * bili_hot —— 逛 B 站的候选榜单（2026-11-04 模型输入计划 T4；2026-11-05 去工具内授权）。
  *
- * 授权闸（fail closed）：只在带有效 browseWindow/browseTopic 的 open injection browse 轮
- * （「主动交流机会」零新增主动轮）可用——轮上下文经 LiveDoc → triggerOf 解析，还要与
- * 宿主当前 browse 门（videoBrowseGateOf）现窗核对：门已关 / windowId / topic 不匹配
- * 一律 tool error。ambient shard、injection 有消息轮、answer 轮与私聊轮都没有授权。
+ * 工具只管取数，不做轮类型授权：能不能逛、什么时候逛是调用侧策略——宿主用 engage 的
+ * open 门决定要不要起「主动交流机会」轮，prompt 用 `[本轮要求]` 约束 @ 轮里「没被要求
+ * 就别去看视频」。这样主人明确要求看视频的轮也能逛、能分享，不必在工具里区分轮种类。
  *
- * 候选来源是宿主 topic 固定映射（TOPIC_ZONE：本窗 browseTopic → ranking 分区号），
- * 模型不选 source/rid（Schema 无参数）；已分享过滤改用当前 conversation 的私有视频池
- * （fish.video_pool），不再读全局弹药库（ammo 管线已停用，源码保留在 ammo-store.ts）。
+ * 保留的机械闸只有资源与防伪造两类：B 站客户端每日预算/熔断（bili-client）与
+ * 每轮观看上限（video 工具）、分享只认本轮真看过（viewed registry）。
+ *
+ * 候选来源是 TOPIC_ZONE 的固定映射（topic → ranking 分区号）；topic 可由模型传，
+ * 缺省随机。已分享过滤用当前 conversation 的私有视频池（fish.video_pool），
+ * 不再读全局弹药库（ammo 管线已停用，源码保留在 ammo-store.ts）。
  *
  * 机械漏斗：榜单取数 → 池内已分享剔除 → 硬筛一票否决 → 软筛评分排序 → 紧凑行式返回。
  * 要点：
@@ -27,7 +29,7 @@
  * 漏斗本体 runBiliHotFunnel 是纯函数（注入假榜单即可内联验证，不必起会话）；
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest。
  */
-import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
+import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import {
   compileFilterPatterns,
   createBiliFiltersLoader,
@@ -38,7 +40,7 @@ import {
   isValidBvid,
 } from "../../external/bili-client.ts";
 import { sanitizeExternalText } from "../../external/sanitize.ts";
-import { videoBrowseGateOf } from "../../external/video-browse.ts";
+import { VIDEO_TOPICS } from "../../external/video-browse.ts";
 import { VideoPoolDoc, type VideoPoolState } from "../../external/video-pool.ts";
 import { renderTemplate } from "../../prompts.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
@@ -92,10 +94,10 @@ export const TOPIC_ZONE: Readonly<Record<string, number>> = {
 // 参数与常量
 // =====================================================================================
 
-/** args 静态类型：Schema 无参数（候选源由宿主 topic 映射决定，模型不选）。 */
-type BiliHotArgs = Record<string, never>;
+/** args 静态类型：可选 topic（Schema 枚举），缺省随机挑一个分区。 */
+type BiliHotArgs = { topic?: string };
 
-/** browse 轮固定取的候选条数（旧 limit 参数已随 source/rid 一并从 Schema 移除）。 */
+/** 每次取候选的条数（旧 limit/source/rid 参数已从 Schema 移除）。 */
 const BROWSE_LIMIT = 10;
 
 /** 文本字段各自的清洗上限（字）：行式返回要紧凑。 */
@@ -354,27 +356,15 @@ export function createBiliHotTool(manifest: ToolManifest, deps: ToolPackageDeps,
     description: toolFullDescription(manifest),
     callers: ["model"],
     parameters: manifestParameters<BiliHotArgs>(manifest),
-    execute: async (_args, api, context) => {
-      // 授权闸（T4，fail closed）：只有带有效 browseWindow/browseTopic 的 open injection
-      // browse 轮可用，且与宿主当前门现窗核对（门已关 / windowId / topic 不匹配都拒）
-      const live = (await api.snapshot(LiveDoc, api.conversationId, context)) as
-        | { run?: { inputs?: unknown[] } }
-        | undefined;
-      const round = live?.run?.inputs?.[0];
-      const trigger = round !== undefined ? deps.triggerOf?.(round) : undefined;
-      const browseWindow = typeof trigger?.browseWindow === "string" && trigger.browseWindow.length > 0 ? trigger.browseWindow : undefined;
-      const browseTopic = typeof trigger?.browseTopic === "string" && trigger.browseTopic.length > 0 ? trigger.browseTopic : undefined;
-      if (trigger?.kind !== "injection" || browseWindow === undefined || browseTopic === undefined) {
-        throw new Error(messages["bili_hot_not_browse"] ?? "bili_hot_not_browse");
-      }
-      const chatKey = deps.chatKeyOf?.(String(api.conversationId));
-      const gate = chatKey === undefined ? undefined : videoBrowseGateOf(chatKey);
-      if (!gate?.open || gate.windowId !== browseWindow || gate.topic !== browseTopic) {
-        throw new Error(messages["bili_hot_not_browse"] ?? "bili_hot_not_browse");
-      }
+    execute: async (args, api, context) => {
+      // 策略在调用侧，这里只做取数：能给模型看见这个工具、以及要不要在主动轮邀请它去逛，
+      // 都由宿主决定（engage 的 open 门 / prompt 的 [本轮要求]），工具自己不区分钟类型。
+      // topic 缺省随机——主动轮宿主会经 prompt 提示本窗话题，@ 轮由模型自己决定看什么。
+      const requested = typeof args.topic === "string" && args.topic.length > 0 ? args.topic : undefined;
+      const browseTopic = requested ?? VIDEO_TOPICS[Math.floor(Math.random() * VIDEO_TOPICS.length)] ?? VIDEO_TOPICS[0]!;
       const rid = TOPIC_ZONE[browseTopic];
       if (rid === undefined) {
-        // 话题是宿主机器的枚举值，走到这里说明宿主与工具的字表脱节（配置事故，不是模型参数错）
+        // 话题来自 schema 枚举；走到这里说明 schema 与字表脱节（实现事故，不是模型参数错）
         throw new Error(messages["bili_hot_bad_topic"] ?? "bili_hot_bad_topic");
       }
       const zone = BILI_RANK_ZONES.find((z) => z.rid === rid);

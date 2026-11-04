@@ -3,12 +3,12 @@
  *
  * 一次调用 = 一条消息（text 单条字符串）。mentions 校验、出口校验、每轮开口计数与
  * 入队全部走 say-shared.ts 的共享实现，这里只做参数面的窄适配。
- * 自主浏览视频分享（2026-11-04 模型输入计划 T4）：videoBvid 参数触发双重白名单——
- * ① 本轮必须是带有效 browseWindow/browseTopic 的 open injection browse 轮且宿主门
- * 现窗匹配；② BV 必须在本轮被 video 工具实际成功观看过（viewedVideoOf）。放行后
- * 在同一 transaction 里完成：会话私有池（fish.video_pool）BV 去重写入 + 宿主拼
- * canonical 链接前缀进 payload + fish.outbox 入队 + outbound entry；发送仍由既有
- * drain 负责。任何失败整体回滚且不消耗开口额度（peek 先行、charge 在事务成功后）。
+ * 视频分享（2026-11-05 定稿）：分享视频就是「一句推荐语 + 一个链接」，没有专用字段。
+ * 唯一的机械约束是链接白名单——文本里的每个 URL 都必须是本轮工具结果里真的出现过的
+ * 那一条（src/egress/seen-links.ts，宿主在工具包装层机械登记），所以模型编不出 URL，
+ * 也不能把群友贴的链接原样播出去。文本里出现 B 站 BV 链接时顺手记进会话私有池
+ * （fish.video_pool，bili_hot 用它过滤重复推荐），与 outbound/outbox 同一次提交。
+ * 什么时候该看、该不该分享由 prompt 的 `[本轮要求]` 约束，工具不区分钟类型。
  * 旧外部弹药分享（ammoId，外部计划 E5）内核源码保留但模型 Schema 已不再暴露：
  * 分享门接线（wireAmmoShareHost）已随弹药管线停用摘除，这条链恒 fail closed。
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest。
@@ -16,10 +16,9 @@
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { validateOutbound } from "../../egress/policy.ts";
 import { ledgerOf, recordSent } from "../../egress/ledger.ts";
+import { extractLinks, seenLinksOf } from "../../egress/seen-links.ts";
 import { ExternalAmmoDoc, ammoVideoUrlOf, applyAmmoClaim } from "../../external/ammo-store.ts";
-import { isValidBvid } from "../../external/bili-client.ts";
-import { viewedVideoOf, videoBrowseGateOf } from "../../external/video-browse.ts";
-import { VideoPoolDoc, applyVideoPoolAdd, videoUrlOf, viewedVideoTitleOf } from "../../external/video-pool.ts";
+import { VideoPoolDoc, applyVideoPoolAdd, viewedVideoTitleOf } from "../../external/video-pool.ts";
 import { renderTemplate } from "../../prompts.ts";
 import { OutboxDoc } from "../../store.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
@@ -35,12 +34,6 @@ interface SayWordsArgs {
   quote?: boolean;
   /** 素材分享声明（决策 24）：ambient/injection 轮末条自言时必须为 true 才放行。 */
   share?: boolean;
-  /**
-   * 自主浏览视频分享（T4）：本轮用 video 工具实际成功观看过的 BV 号。双重白名单
-   * （browse 轮授权 + viewed 登记）都过才放行；同一事务写会话私有池并入队，
-   * canonical 链接由宿主拼进 payload，text 只作推荐语。
-   */
-  videoBvid?: string;
   /**
    * 旧外部弹药编号（外部计划 E5，已停用）：Schema 不再暴露，内核源码兼容保留——
    * 分享门接线已摘除，这条链恒 fail closed（ammo_gate_closed）。
@@ -64,9 +57,10 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
       const { round, trigger } = await resolveSayContext(api, deps, context);
 
       // 末条自言禁言（决策 24）：群里最后一条是自己发的时，ambient/injection 轮只放行
-      // 素材分享——share: true（承诺/委托）、videoBvid（自主浏览看过的视频，T4）或旧
-      // ammoId（已停用内核）都算分享意图；必须在开口计数前（被拒不占额度），answer 轮天然豁免
-      assertShareAllowed(deps, api, trigger, args.share, args.ammoId, args.videoBvid);
+      // 素材分享——share: true（承诺/委托）这一种声明；必须在开口计数前（被拒不占额度），
+      // answer 轮天然豁免。2026-11-05 起不再有 videoBvid：分享视频就是「推荐语 + 链接」，
+      // 声不声明是素材分享由 share 决定。
+      assertShareAllowed(deps, api, trigger, args.share, args.ammoId);
 
       const text = normalizeTextInput(args.text);
       if (!text) throw new Error(deps.prompts.messages["empty"] ?? "empty");
@@ -99,65 +93,28 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
         key: `${api.conversationId}:${api.callId}`,
       };
 
-      // 自主浏览视频分享（T4）：与旧 ammo 链同位——全链在出口校验之后、开口计数之前，
-      // 任何失败路径都不占额度。双重白名单：① 本轮是带有效 browseWindow/browseTopic 的
-      // open injection browse 轮，且宿主门现窗匹配（门已关 / window / topic 不符都拒）；
-      // ② BV 在本轮被 video 工具实际成功观看过（viewedVideoOf，宿主 settle 时整份清掉）。
-      // 放行后同一 transaction：会话私有池 BV 去重写入 + canonical 链接前缀 + outbound
-      // entry + outbox 入队；任一环失败整体回滚（不会出现池写了而消息没入队的裂缝）。
-      const videoBvid = String(args.videoBvid ?? "").trim();
-      if (videoBvid.length > 0) {
-        peekSayRound(String(api.conversationId), round, deps.prompts.messages["say_once"] ?? "already said this round");
-        if (!isValidBvid(videoBvid)) {
-          throw new Error(deps.prompts.messages["video_bvid_invalid"] ?? "video_bvid_invalid");
+      // 链接白名单（2026-11-05）：文本里出现的每个 http(s) 链接都必须是**本轮工具结果
+      // 里真的出现过**的那一条（video 卡片、bili_video 卡片、search 摘要、新闻成品…由
+      // 宿主在工具包装层机械登记）。这样「分享一个视频」就只是「推荐语 + 链接」两个普通
+      // 东西，不再需要 videoBvid 这种专用字段；同时模型编不出 URL，也无法把群友贴的链接
+      // 原样播出去——想转发别人的链接，得先用工具打开一遍拿回 canonical 链接。
+      const links = extractLinks(text);
+      const sharedBvids: string[] = [];
+      if (links.length > 0) {
+        const allowed = seenLinksOf(round);
+        const denied = links.filter((url) => !allowed.has(url));
+        if (denied.length > 0) {
+          throw new Error(renderTemplate(
+            deps.prompts.messages["say_link_not_allowed"] ?? "say_link_not_allowed",
+            { url: denied[0]! },
+          ));
         }
-        const browseWindow = typeof trigger?.browseWindow === "string" && trigger.browseWindow.length > 0 ? trigger.browseWindow : undefined;
-        const browseTopic = typeof trigger?.browseTopic === "string" && trigger.browseTopic.length > 0 ? trigger.browseTopic : undefined;
-        const chatKey = deps.chatKeyOf?.(String(api.conversationId));
-        const gate = trigger?.kind === "injection" && browseWindow !== undefined && browseTopic !== undefined && chatKey !== undefined
-          ? videoBrowseGateOf(chatKey)
-          : undefined;
-        if (
-          browseWindow === undefined ||
-          browseTopic === undefined ||
-          gate === undefined ||
-          !gate.open ||
-          gate.windowId !== browseWindow ||
-          gate.topic !== browseTopic
-        ) {
-          throw new Error(deps.prompts.messages["video_share_denied"] ?? "video_share_denied");
-        }
-        // 实际看过才放行：未观看 / 跨轮 / 轮已 settle（viewed 已清）一律拒
-        if (round === undefined || !viewedVideoOf(round).has(videoBvid)) {
-          throw new Error(deps.prompts.messages["video_share_not_viewed"] ?? "video_share_not_viewed");
-        }
-        // canonical 链接宿主拼（模型文本剥 URL 只作推荐语，prefixAmmoLink 同款渲染）；
-        // 池条目标题从 video 工具观看时登记的轮内缓存取（拿不到 = 空串，不阻塞分享）
-        const finalText = prefixAmmoLink(videoUrlOf(videoBvid), stripOutboundLinks(text));
-        const payload: OutboundPayload = { items: [finalText], ...payloadBase };
-        await api.commit(async (tx) => {
-          const pool = await tx.doc(VideoPoolDoc, api.conversationId);
-          // 去重写入：同会话同 BV 已入池 = dup，不改状态不报错（跨会话不互斥，
-          // 另一个会话的池是另一份 doc）；链接照发，池不产生重复条目
-          applyVideoPoolAdd(
-            pool,
-            {
-              bvid: videoBvid,
-              title: viewedVideoTitleOf(round, videoBvid),
-              note: stripOutboundLinks(text),
-              topic: browseTopic,
-            },
-            ts,
-          );
-          await tx.appendEntry(OutboundEntry, api.conversationId, { data: payload });
-          const box = await tx.doc(OutboxDoc, api.conversationId);
-          box.queue.push({ ...payload, status: "queued", attempts: 0 });
-        }, context);
-        // 事务成功后才计数（peek 已保证这里不会再抛 say_once）；失败路径在上面 throw，不消耗额度
-        chargeSayRound(String(api.conversationId), round, deps.prompts.messages["say_once"] ?? "already said this round");
-        recordSent(api.conversationId, [finalText], ts);
-        console.log(`[鱼缸] 视频分享 ${videoBvid} 窗 ${browseWindow}`);
-        return { output: [{ type: "text", text: deps.prompts.messages["say_sent"] ?? "ok" }] };
+      }
+      // 已分享的视频记进会话私有池（bili_hot 用它过滤重复推荐）：纯机械——本条消息里
+      // 出现的 B 站链接里带 BV 就记一笔，不需要模型声明任何字段
+      for (const url of links) {
+        const bvid = url.match(/BV[0-9A-Za-z]{10}/)?.[0];
+        if (bvid !== undefined) sharedBvids.push(bvid);
       }
 
       // 旧外部弹药分享（E5，已停用兼容保留）：Schema 不再暴露 ammoId，分享门接线已摘除，
@@ -208,9 +165,31 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
       chargeSayRound(String(api.conversationId), round, deps.prompts.messages["say_once"] ?? "already said this round");
 
       if (ammoId.length === 0) {
-        // 非 ammo 路径走共享入队（ ammo 路径已在上方事务里入队）
         const payload: OutboundPayload = { items: [outboundText], ...payloadBase };
-        await enqueueOutbound(api, payload, context);
+        if (sharedBvids.length === 0) {
+          // 普通路径走共享入队（ammo 路径已在上方事务里入队）
+          await enqueueOutbound(api, payload, context);
+        } else {
+          // 分享过视频：池记账与 outbound entry / outbox 同一次提交，任一环失败整体回滚
+          await api.commit(async (tx) => {
+            const pool = await tx.doc(VideoPoolDoc, api.conversationId);
+            for (const bvid of sharedBvids) {
+              applyVideoPoolAdd(
+                pool,
+                {
+                  bvid,
+                  title: viewedVideoTitleOf(round, bvid),
+                  note: stripOutboundLinks(text),
+                  topic: "自选",
+                },
+                ts,
+              );
+            }
+            await tx.appendEntry(OutboundEntry, api.conversationId, { data: payload });
+            const box = await tx.doc(OutboxDoc, api.conversationId);
+            box.queue.push({ ...payload, status: "queued", attempts: 0 });
+          }, context);
+        }
       }
 
       recordSent(api.conversationId, [outboundText], ts);

@@ -4,7 +4,7 @@
  * 每个 conversation（群 × 当前人格）一份：conversation scope doc，id = conversationId
  * （OutboxDoc / WatchDoc 同款先例），跨会话天然隔离——同一个 BV 在两个会话的池里
  * 互不相干，不建立全局库存、不做 claim 竞争。池是「已实际看过且模型选择分享」的
- * 视频历史 + 去重表：say_words(videoBvid) 的原子事务里写入（pool 写入、canonical
+ * 视频历史 + 去重表：say_words 发出含 B 站链接的文本时机械记账（pool 写入与
  * 链接、fish.outbox 入队、outbound entry 同一 transaction），bili_hot 用它过滤本
  * 会话已分享过的候选。换页（compact/reset）不动 conversation doc，池跨页存续。
  *
