@@ -763,6 +763,8 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: RecentChatMessage[])
       master: String(line.userId) === config.master,
       watched: watchedByChat.get(baseChatKey(msg.chatKey))?.has(String(line.userId)) === true,
       ...(line.mentionTargets !== undefined ? { mentionTargets: line.mentionTargets } : {}),
+      ...(line.quotedAuthor !== undefined ? { quotedAuthor: line.quotedAuthor } : {}),
+      ...(line.quotedAuthorIsSelf !== undefined ? { quotedAuthorIsSelf: line.quotedAuthorIsSelf } : {}),
     }));
     const target: ModelMessage = {
       messageId: msg.messageId,
@@ -2355,6 +2357,10 @@ export const normalizeInbound: Middleware<MessageCtx> = async (ctx, next) => {
       ...(msg.arrivalSeq !== undefined ? { arrivalSeq: msg.arrivalSeq } : {}),
       ...(msg.mediaOnly ? { mediaOnly: msg.mediaOnly } : {}),
       ...(mentionTargetsOf(msg.mentions) !== undefined ? { mentionTargets: mentionTargetsOf(msg.mentions) } : {}),
+      // 背景/收图历史的指向性判断需要引用作者（只存作者与是否自己，不存完整 quoted：
+      // 完整引用原文只给锚点后置，背景里不该跟着膨胀）
+      ...(msg.quoted !== undefined ? { quotedAuthor: msg.quoted.nickname } : {}),
+      ...(msg.quoted?.fromSelf === true ? { quotedAuthorIsSelf: true } : {}),
     },
   ]);
   const cap = recentCap();

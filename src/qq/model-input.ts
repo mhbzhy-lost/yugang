@@ -65,22 +65,29 @@ export interface ModelMessage {
   watched: boolean;
   quoted?: QuotedMessage;
   forward?: ForwardAttachment;
-  /** 这条消息 @ 的**其他人**昵称（不含 @鱼 / @全体）；只在整条消息没有 @鱼、@全体时有值。
-   *  渲染成 `[此消息的接收对象是 X，不是你]`，避免把「A 回 B」读成在叫自己。 */
+  /** 这条消息 @ 的**其他人**昵称（不含 @鱼 / @全体）。`undefined` = 没有 @；
+   *  `[]` = 有 @ 但含 @鱼/@全体（不得回退到引用判断）。渲染成
+   *  `[此消息的接收对象是 X，不是你]`，避免把「A 回 B」读成在叫自己。 */
   mentionTargets?: readonly string[];
+  /** 指向性标签专用的「引用作者昵称」：背景/历史行不携带完整 quoted（避免引用原文
+   *  附加段膨胀），只带这一个字段供 `[此消息的接收对象是…]` 使用。 */
+  quotedAuthor?: string;
+  /** 被引的是不是鱼自己（与 QuotedMessage.fromSelf 同义，供 quotedAuthor 分支使用）。 */
+  quotedAuthorIsSelf?: boolean;
 }
 
 /**
- * 入站 mentions → 接收对象名单：@鱼 或 @全体 在场时返回 undefined（这两种都包含鱼，
- * 不能说「不是你」）；只有纯 @别人 才返回名单。值由解析层给出，渲染层只做格式。
+ * 入站 mentions → 接收对象名单。三种返回值含义不同，渲染层靠它区分「没 @」与「@ 了但包含鱼」：
+ *   - `undefined`：这条消息没有 @ 任何人 → 允许回退到引用判断；
+ *   - `[]`：有 @，但含 @鱼 / @全体成员（都包含鱼，不能说「不是你」）→ 不得回退到引用；
+ *   - 非空数组：纯 @别人 → 这些就是接收对象。
  */
 export function mentionTargetsOf(
   mentions: readonly { name: string; kind: "bot" | "other" | "all" }[] | undefined,
 ): readonly string[] | undefined {
   if (!mentions || mentions.length === 0) return undefined;
-  if (mentions.some((m) => m.kind !== "other")) return undefined;
-  const names = mentions.map((m) => m.name.trim()).filter((name) => name.length > 0);
-  return names.length > 0 ? names : undefined;
+  if (mentions.some((m) => m.kind !== "other")) return [];
+  return mentions.map((m) => m.name.trim()).filter((name) => name.length > 0);
 }
 
 /** 一行正文：空白折叠成单空格（decisions §2：每条消息占一行）。 */
@@ -128,12 +135,16 @@ export function renderMessageLine(message: ModelMessage, messages: MessageTable)
   else {
     // 指向性标签（2026-11-05）：@ 优先于引用；@鱼/@全体 不算「不是你」（名单由解析层滤过）。
     // 目的：A 回复 B 时鱼不要把别人的对话当成在叫自己。
-    const atTargets = message.mentionTargets ?? [];
-    const who = atTargets.length > 0
-      ? atTargets.slice(0, 3).join("、")
-      : message.quoted !== undefined && message.quoted.fromSelf !== true
-        ? message.quoted.nickname.trim()
-        : "";
+    // 有 @ 时（哪怕 @ 的是鱼/全体）一律以 @ 为准，不再回退到引用——否则
+    // 「@全体 + 引用别人」会被错标成「接收对象是别人」（2026-11-05 验收 A4）
+    const atTargets = message.mentionTargets;
+    const quoteWho =
+      message.quoted !== undefined
+        ? message.quoted.fromSelf === true ? "" : message.quoted.nickname.trim()
+        : message.quotedAuthorIsSelf !== true
+          ? (message.quotedAuthor ?? "").trim()
+          : "";
+    const who = atTargets !== undefined ? atTargets.slice(0, 3).join("、") : quoteWho;
     const targetTpl = messages["message_target_other"];
     if (who.length > 0 && targetTpl !== undefined) tags.push(renderTemplate(targetTpl, { who }));
   }

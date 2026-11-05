@@ -39,6 +39,9 @@ export interface RecentChatMessage {
   forward?: ForwardAttachment;
   /** 这条消息 @ 的其他人（不含 @鱼/@全体）：渲染「接收对象是…，不是你」。 */
   mentionTargets?: readonly string[];
+  /** 指向性标签专用：引用作者昵称与「是不是鱼自己」（不携带完整 quoted）。 */
+  quotedAuthor?: string;
+  quotedAuthorIsSelf?: boolean;
   at: number;
   /** 纯媒体消息形态（onebot 解析层透传，开窗积压/shard 过滤消费）：
  *  gif = 纯 GIF 消息，image = 纯图片无文字。undefined = 普通消息。 */
@@ -426,6 +429,11 @@ export function withContext(
         replyIds: [],
         master: masterOf(line.userId),
         watched: watchedOf(line.userId),
+        // 背景行同样要能看出「这条在 @ 谁 / 在回谁」：只喂指向性标签，
+        // 不带完整 quoted（否则引用原文附加段会跟着膨胀，5.9 的附加段只给锚点）
+        ...(line.mentionTargets !== undefined ? { mentionTargets: line.mentionTargets } : {}),
+        ...(line.quotedAuthor !== undefined ? { quotedAuthor: line.quotedAuthor } : {}),
+        ...(line.quotedAuthorIsSelf !== undefined ? { quotedAuthorIsSelf: line.quotedAuthorIsSelf } : {}),
       },
       seen: seenOf(line),
     });
