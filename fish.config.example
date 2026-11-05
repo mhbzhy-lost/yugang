@@ -75,8 +75,8 @@
     }
   },
   "toolTimeoutSeconds": 30,
-  "_engagement": "注释：搭话总开关。legacy = 现行全部搭话判定；next = 定时开窗两态——closed 态非 @ 群消息 skip:next_pending 不进模型，open 态（每 closedMinutes 分钟开 openMinutes 分钟）非 @ 群消息 free_pass 按 shardSeconds 分片、全部发送者合并一轮（@ 恒必答；私聊、/ 指令、GIF 收图轮与记账不受影响）；next 还要过 engage.groups 群白名单：开关 & 白名单双闸，缺省空名单 = 任何群都不进 next（fail-safe）。热生效，只认 legacy/next，非法值保留缺省并告警",
-  "_engage": "注释：next 搭话开窗参数，仅 engagement=next 时消费。closedMinutes=关窗时长（分钟）、openMinutes=开窗时长、windowSize=开窗积压注入上限（条）、mentionContextSize=@ 轮背景条数、windowRelaxCap=recent 流水上限兜底、shardSeconds=open 态分片节拍（秒，缺省 20）——每拍把窗内全部发送者的新消息合成一轮提交，在途时累积不并发。开窗群表直取 .env GROUPS，不再有独立安全域；silenceThreshold/groups 仅兼容保留，不再驱动 nudge 或群白名单。逐字段校验，非法值告警保留缺省，热生效",
+  "_engagement": "注释：历史开关已下线（2026-11 起 legacy 搭话判定删除）。当前行为：GROUPS 白名单群按定时开窗两态——closed 态非 @ 群消息 skip:next_pending 不进模型，open 态（每 closedMinutes 分钟开 openMinutes 分钟）非 @ 群消息 free_pass 按 shardSeconds 分片、全部发送者合并一轮（@ 恒必答；私聊、/ 指令、GIF 收图轮与记账不受影响）；engage.freeGroups 里的群改走自由活动模式（恒可搭话、freeSeconds 一拍合并、空拍不提交、空拍才掷 freeBrowseChance）。本键不再受控，留着会被忽略",
+  "_engage": "注释：搭话参数（开窗两态 + 自由活动模式）。closedMinutes=关窗时长（分钟）、openMinutes=开窗时长、windowSize=开窗积压注入上限（条）、mentionContextSize=@ 轮背景条数、windowRelaxCap=recent 流水上限兜底、shardSeconds=open 态分片节拍（秒，缺省 20）——每拍把窗内全部发送者的新消息合成一轮提交，在途时累积不并发。自由活动模式：freeGroups=专用白名单群号数组（必须都在 .env GROUPS 内，域外整次拒绝；空数组=关闭）、freeSeconds=自由拍长（秒，15–300，缺省 60，一拍把这段时间全部发送者的非 @ 消息合成一轮）、freeBrowseChance=空拍自主开口概率（0–1，缺省 0.03，宵禁内恒关）、freeBatchMax=单拍收集上限（条，缺省 50，超出丢最旧并计数进日志）——自由群没有 closed/open，空拍不提交，有在攒的 @ 组时本拍让行。开窗群表直取 .env GROUPS，不再有独立安全域；silenceThreshold/groups 仅兼容保留，不再驱动 nudge 或群白名单。逐字段校验，非法值告警保留缺省，热生效",
   "_sendPacingSeconds": "注释：出站配速（秒）——发送队列同会话相邻两次实际发送至少隔这么多秒，防连珠炮；0 = 关闭。对全部消息生效（@ 轮/环境轮/机械回执一样配速），改完下一拍生效。合法 0–60，非法告警保留缺省",
   "_video": "注释：当前会话自主浏览参数。browseChance=每个 open 窗进入时一次自主浏览门概率（0–1，同窗稳定）、browseMaxViewsPerRound=每个 browse 轮最多实际观看视频数（缺省 5）、dailyBudget=B 站每日请求总预算（缺省 60，跨重启持久计数）。逐字段校验，非法值告警保留缺省，未知键告警，热生效",
   "_ammo": "注释：旧弹药管线已停用，源码仅作兼容保留。只有 dailyBudget 在 video.dailyBudget 缺失时回退使用；slots/browseMinutes/shareChance/ttlHours/maxPicksPerRun 等旧字段不再驱动 active 调度、工具或分享",

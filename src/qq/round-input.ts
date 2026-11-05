@@ -1,13 +1,32 @@
 /** 可导入的轮级输入拼装入口：index.ts 与权威模板机械测试共用，无副作用。 */
 import type { IncomingMessage } from "./onebot.ts";
 import { renderTemplate } from "../prompt/index.ts";
-import { renderForwardAttachment, renderMessageList, type ForwardAttachment, type MessageTable, type ModelMessage } from "./model-input.ts";
+import { renderForwardAttachment, renderMessageList, renderQuotedOriginal, type ForwardAttachment, type MessageTable, type ModelMessage, type QuotedMessage } from "./model-input.ts";
 
 export interface OpenMessage {
   messageId?: number | string;
   userId: number;
   nickname: string;
   text: string;
+  /** 这一条在回复谁（渲染 [回复了m:id]）；批内与 injection 共用，缺省空。 */
+  replyIds?: readonly string[];
+  /** 被引消息的结构化原文（列表后附 [引用原文]）；批内与 injection 共用，缺省无。 */
+  quoted?: QuotedMessage;
+}
+
+/** 批内引用原文附加段：把各条 quoted 用 @ 轮同款渲染器渲染成 `[引用原文]` 行，按 id 去重；
+ *  批内不做 inline 图定级（不传编号表），被引图保持 `[图片 inbound/…]` 交给 look。 */
+export function renderOpenQuotedText(items: readonly OpenMessage[], messages: MessageTable): string {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const item of items) {
+    if (!item.quoted) continue;
+    const id = String(item.quoted.id);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    lines.push(renderQuotedOriginal(item.quoted, messages));
+  }
+  return lines.join("\n");
 }
 
 /** 背景记账只留合集短标记，展开内容不进入背景。 */
@@ -31,7 +50,7 @@ export function renderOpenMessageList(
     nickname: item.nickname,
     text: item.text,
     mentionsBot: false,
-    replyIds: [],
+    replyIds: item.replyIds ?? [],
     master: masterOf(item.userId),
     watched: watchedOf(item.userId),
   }));

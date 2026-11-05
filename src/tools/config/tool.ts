@@ -49,6 +49,13 @@ function show(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
+/** 自由活动白名单的安全域硬闸（自检脚本也调它）：返回不在 .env GROUPS 内的群号。
+ *  config set 走整次拒绝（不部分写入）；运行侧的交集在 fish-config 的 freeGroupsSafe 里再做一次。 */
+export function freeGroupsOutsideEnv(freeGroups: unknown, env: NodeJS.ProcessEnv = process.env): string[] {
+  const allowed = new Set((env["GROUPS"] ?? "").split(",").map((s) => s.trim()).filter(Boolean));
+  return (Array.isArray(freeGroups) ? freeGroups : []).map(String).filter((group) => !allowed.has(group));
+}
+
 /** 主人闸是硬前提：无主人配置时 factory 返回 undefined，由注册方跳过（不进工具面）。 */
 export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration | undefined {
   if (!deps.master) return undefined;
@@ -119,15 +126,15 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
   function writeFishConfigField(spec: FishConfigFieldSpec, raw: unknown): FieldCheck {
     const result = spec.check(raw);
     if (!result.ok) return result;
-    // 安全域硬闸（终验 #1/P0 修复）：engage.groups 只能与 .env GROUPS 的交集生效。
-    // 含域外群号的整次设置直接以 tool error 拒绝（不部分写入）——先扩 GROUPS 再设置；
-    // 状态机与 gate 侧另有交集机械兑底（src/index.ts 的 engageGroupsSafe）。
+    // 安全域硬闸（终验 #1/P0 修复的延续，2026-11-05 自由活动模式）：engage.freeGroups 只能
+    // 落在 .env GROUPS 内。含域外群号的整次设置直接以 tool error 拒绝（不部分写入）——先扩
+    // GROUPS 再设置；运行侧另有 freeGroupsSafe 交集机械兜底。
     if (spec.name === "engage") {
-      const groups = (result.value as { groups?: unknown }).groups;
-      const allowed = new Set((process.env.GROUPS ?? "").split(",").map((s) => s.trim()).filter(Boolean));
-      const outside = (Array.isArray(groups) ? groups : []).map(String).filter((g) => !allowed.has(g));
+      const outside = freeGroupsOutsideEnv((result.value as { freeGroups?: unknown }).freeGroups);
       if (outside.length > 0) {
-        throw new Error(`engage.groups 含 GROUPS 域外群号（${outside.join("、")}），先扩 GROUPS 再设置`);
+        throw new Error(renderTemplate(p.messages["config_free_groups_outside"] ?? "config_free_groups_outside", {
+          groups: outside.join("、"),
+        }));
       }
     }
     let current: Record<string, unknown>;

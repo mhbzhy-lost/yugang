@@ -44,6 +44,16 @@
  * 宿主经 videoBrowseGateOf(chatKey) 查询：门开时空窗零新增轮才提交「主动交流机会」模板
  * 并把 windowId/topic 钉上 RoundTrigger（browseWindow/browseTopic）；ambient shard 与其它
  * 轮不携带，即无浏览授权。
+ * 自由活动模式（2026-11-05，freeGroups 专用白名单）：命中的群不走 closed/open 节拍，
+ * 由宿主经 deps.freeOf 声明后**恒为 open**：`isOpen` 恒 true（相位还没建也认），
+ * `collectShard` 懒建相位并总是收，拍长取 engage.freeSeconds（缺省 60 秒，每 tick 现读，
+ * 由既有的 1 秒 tick 驱动而不是自续定时器——热改才能在下一拍生效）。非 @ 消息按期合并成
+ * 一轮 ambient；空拍不提交，只在空拍且会话不忙时掷一次自主门
+ * （engage.freeBrowseChance，宵禁恒关），门开才回调 onFreeIdle（宿主提交「主动交流机会」）。
+ * 单拍超限（engage.freeBatchMax）在收集时丢最旧并计数，flush 时留一行日志——这是本模式
+ * 唯一的有损点。有 pending @ 组时 yieldTo 返回 true，本拍让行、不掷门。自由群不结算 T8
+ * 沉默簿记（不进入 open/closed 迁移，spokeInWindow/silentWindows 恒为初值）。
+ *
  * 相位、lastCloseSeq 与 shard 收集器都只活在内存里：重启回到 closed 从零计时，与
  * debounce 的 pending 同一个取舍——宁可少说一句，不补陈年旧话。沉默计数同生命周期，
  * stop 清相位时一并归零。
@@ -51,6 +61,7 @@
 import { createHash } from "node:crypto";
 import { isCurfewAt } from "./curfew.ts";
 import { VIDEO_TOPICS } from "../external/video-browse.ts";
+import type { QuotedMessage } from "./onebot.ts";
 
 /** 群白名单判定：chatKey 形如 qq:group:NNN（含人格后缀也认前缀），群号在名单内才算命中。 */
 export function engageGroupsIncludes(groups: readonly string[], chatKey: string): boolean {
@@ -72,9 +83,12 @@ export interface EngageBacklogItem {
   mediaOnly?: "gif" | "image";
 }
 
-/** shard 收集器里的一条：多带 bypass 段（沿用整组语义，取整拍里最近一条非空的）。 */
+/** shard 收集器里的一条：多带 bypass 段（沿用整组语义，取整拍里最近一条非空的），
+ *  以及批内回复关系（replyIds 渲染 [回复了m:id]，quoted 在列表后渲染 [引用原文]）。 */
 export interface EngageShardItem extends EngageBacklogItem {
   payload?: string;
+  replyIds?: readonly string[];
+  quoted?: QuotedMessage;
 }
 
 /** 每 tick 现读的窗口参数（宿主从 fishConfig().config 现取）。 */
@@ -89,6 +103,13 @@ export interface EngageTickConfig {
   /** open 窗视频浏览门概率（video.browseChance）：开窗挷一次并选定 topic，窗内不变；
    *  缺省 0 = 门恒关（fail closed，零新增主动轮不提交）。 */
   videoBrowseChance?: number;
+  /** 自由活动模式的拍长（秒，engage.freeSeconds）：缺省 60，每 tick 现读热生效。
+   *  可选是为了兼容旧调用形状（不传即按缺省走）。 */
+  freeSeconds?: number;
+  /** 自由群空拍的自主开口概率（engage.freeBrowseChance）：缺省 0.03，宵禁内恒关。 */
+  freeBrowseChance?: number;
+  /** 自由群单拍收集上限（条，engage.freeBatchMax）：缺省 50，超出丢最旧并计数。 */
+  freeBatchMax?: number;
 }
 
 export type EngageTimer = ReturnType<typeof setTimeout>;
@@ -105,8 +126,15 @@ export interface EngageNextDeps {
   /** 相位迁移回调：closed 进入积压恒空；open 进入带积压（injection 注入由宿主完成）。 */
   onPhase(chatKey: string, phase: EngagePhase, backlog: readonly EngageBacklogItem[]): void | Promise<void>;
   /** shard 到期回调：把这拍收集的全部 free_pass 消息合成一轮 ambient 提交（宿主实现）。
- *  提供了 shard 机制才生效；不提供时 collectShard 恒 false（宿主丢弃并留日志）。 */
+   *  提供了 shard 机制才生效；不提供时 collectShard 恒 false（宿主丢弃并留日志）。 */
   onShard?(chatKey: string, messages: readonly EngageShardItem[]): void | Promise<void>;
+  /** 该群是否处于自由活动模式（engage.freeGroups ∩ GROUPS）；缺省 = 否（走开窗节拍）。 */
+  freeOf?(chatKey: string): boolean;
+  /** 自由群空拍且自主门开时的回调：宿主提交「主动交流机会」轮（browseWindow/browseTopic 用
+   *  传进来的 gate）。门没开不回调；忙 / 让行时不掷门也不回调。 */
+  onFreeIdle?(chatKey: string, gate: { windowId: string; topic: string }): void | Promise<void>;
+  /** 自由群本拍是否让行（有正在攒的 @ 组）：true 时本拍不提交、不掷门，消息顺延到下一拍。 */
+  yieldTo?(chatKey: string): boolean;
   /** 每 tick 现读：窗口时长都从这里来（无消息也生效）。 */
   config(): EngageTickConfig;
   now?: () => number;
@@ -116,6 +144,8 @@ export interface EngageNextDeps {
   tickMs?: number;
   /** shard 时长覆盖（毫秒）；缺省每拍现读 config().shardSeconds（缺省 20 秒）。留参数只为验证时注入。 */
   shardMs?: number;
+  /** 自由拍时长覆盖（毫秒）；缺省每拍现读 config().freeSeconds（缺省 60 秒）。留参数只为验证时注入。 */
+  freeMs?: number;
   /** 随机门 RNG 注入（内联验证用）；缺省 Math.random。 */
   random?: () => number;
   /** 启动/停止等状态机自身事件的日志出口；缺省静默。 */
@@ -129,13 +159,14 @@ export interface EngageNext {
   start(): void;
   /** 停止 tick 并清掉全部群相位与 shard 收集器：下次 start 从 closed 零计时重来。 */
   stop(): void;
-  /** 该群是否处于 open 窗；未跟踪（未 start / 白名单外）= closed。 */
+  /** 该群是否处于 open 窗；自由活动模式的群恒 true（相位还没建也认）。
+   *  未跟踪（未 start / 白名单外）= closed。 */
   isOpen(chatKey: string): boolean;
-  /** 该群当前相位；未跟踪返回 undefined（观测用）。 */
+  /** 该群当前相位；自由活动模式恒 open；未跟踪返回 undefined（观测用）。 */
   phaseOf(chatKey: string): EngagePhase | undefined;
   /**
    * 往当前 open 窗的 shard 收集器里塞一条 free_pass 消息（宿主路由）；
-   * closed / 未跟踪 / 未接 onShard 时返回 false（宿主丢弃并留日志，宁少勿答）。
+   * 自由群的相位懒建并总是收；closed / 未跟踪 / 未接 onShard 时返回 false（宿主丢弃并留日志）。
    */
   collectShard(chatKey: string, message: EngageShardItem): boolean;
   /**
@@ -177,6 +208,12 @@ interface GroupPhase {
   videoBrowseOpen?: boolean;
   /** 本窗视频浏览 topic（T3）：开窗进入时从 VIDEO_TOPICS 随机选定，窗内稳定，关窗作废。 */
   videoTopic?: string;
+  /** 自由活动模式的上一次拍时刻（毫秒）：拍长由 1 秒 tick 现读配置比对，热改下一拍生效。 */
+  lastBeatAt?: number;
+  /** 该相位当前是否由自由活动模式接管（热移出白名单时据此做窗口节拍交还）。 */
+  free?: boolean;
+  /** 本拍因超限被丢弃的最旧消息条数（flush 时打一行日志后归零）。 */
+  droppedSinceBeat?: number;
 }
 
 export function createEngageNext(deps: EngageNextDeps): EngageNext {
@@ -190,9 +227,73 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
   /** shard 一拍的时长（毫秒）：验证注入优先；否则现读配置（engage.shardSeconds，缺省 20，热加载每拍现读）。 */
   const shardMsOf = (): number => deps.shardMs ?? deps.config().shardSeconds * 1000;
 
+  /** 该群是否走自由活动模式（宿主按 freeGroups ∩ GROUPS 判定；缺省 = 否）。 */
+  const isFree = (chatKey: string): boolean => deps.freeOf?.(chatKey) === true;
+  /** 自由拍时长（毫秒）：验证注入优先；否则每拍现读 engage.freeSeconds（缺省 60，热改下一拍生效）。 */
+  const freeMsOf = (): number => deps.freeMs ?? (deps.config().freeSeconds ?? 60) * 1000;
+  /** 自由拍收集上限（条）：缺省 50，超出丢最旧并计数。 */
+  const freeCapOf = (): number => Math.max(1, Math.floor(deps.config().freeBatchMax ?? 50));
+
   const phases = new Map<string, GroupPhase>();
   let running = false;
   let timer: EngageTimer | undefined;
+
+  /** 浏览门作废：自由群每拍开头清一次，窗口模式仍只在关窗时清。 */
+  const clearBrowseGate = (state: GroupPhase): void => {
+    state.windowId = undefined;
+    state.videoBrowseOpen = undefined;
+    state.videoTopic = undefined;
+  };
+
+  /** 自由群的相位：懒建并恒为 open（不进入 open/closed 迁移，也不结算 T8 沉默簿记）。
+   *  热加入白名单时接管：摘掉窗口模式残留的 shard 自续定时器（消息保留，改由自由拍提交），
+   *  相位重置为本刻起的 open，浏览门作废。 */
+  const ensureFreeState = (chatKey: string, at: number): GroupPhase => {
+    let state = phases.get(chatKey);
+    if (!state) {
+      state = { phase: "open", phaseSince: at, lastBeatAt: at, free: true, silentWindows: 0, spokeInWindow: false };
+      phases.set(chatKey, state);
+      deps.log?.(`自由活动模式启动 ${chatKey}`);
+      return state;
+    }
+    if (state.free !== true || state.phase !== "open") {
+      // 窗口模式的 20 秒自续定时器必须摘掉：它只看 phase，接管后仍会按 20 秒冲刷
+      if (state.shard?.timer !== undefined) {
+        clearTimer(state.shard.timer);
+        state.shard.timer = undefined;
+      }
+      const carried = state.shard?.messages.length ?? 0;
+      state.free = true;
+      state.phase = "open";
+      state.phaseSince = at;
+      state.lastBeatAt = at;
+      // 上次关窗基线在这里重钉：移出自由模式后第一个真正的 open 窗才不会拿陈年流水当积压
+      state.lastCloseSeq = lastSeqOf(deps.recentOf(chatKey));
+      clearBrowseGate(state);
+      state.shareOpen = undefined;
+      deps.log?.(`自由活动模式接管 ${chatKey}（承接 ${carried} 条）`);
+    }
+    state.lastBeatAt ??= at;
+    return state;
+  };
+
+  /** 从自由模式移回窗口模式（热移出白名单）：改走 open 态的 20 秒 shard，不补开窗注入轮
+   *  （收集器里的消息就是本窗的待提交批次，由 shard 定时器接手）。 */
+  const handOffToWindow = (chatKey: string, state: GroupPhase, at: number): void => {
+    state.free = false;
+    state.phase = "open";
+    state.phaseSince = at;
+    state.lastBeatAt = undefined;
+    state.lastCloseSeq = lastSeqOf(deps.recentOf(chatKey));
+    clearBrowseGate(state);
+    state.shareOpen = undefined;
+    deps.log?.(`自由活动模式移出 ${chatKey}：回到 20 秒 shard`);
+    if (state.shard?.timer !== undefined) {
+      clearTimer(state.shard.timer);
+      state.shard.timer = undefined;
+    }
+    scheduleShard(chatKey, state);
+  };
 
   const fire = (chatKey: string, phase: EngagePhase, backlog: readonly EngageBacklogItem[]): void => {
     try {
@@ -233,18 +334,64 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     }
     const messages = shard.messages;
     shard.messages = [];
-    /** 提交失败的原子回收：整拍消息放回收集器队首，下一拍先提交它们（新到的照旧排在后面）。 */
+    /** 提交失败的原子回收：整拍消息放回收集器队首，下一拍先提交它们（新到的照旧排在后面）。
+     *  先恢复再上报：上报出口抛错时也不能把这一拍弄丢。 */
     const recycle = (error: unknown): void => {
-      deps.onError?.(error);
       const target = state.shard ?? { messages: [] as EngageShardItem[] };
       state.shard = target;
       target.messages = [...messages, ...target.messages];
+      deps.onError?.(error);
     };
     try {
       const result = deps.onShard?.(chatKey, messages);
       if (result instanceof Promise) result.then(() => {}, recycle);
     } catch (error) {
       recycle(error);
+    }
+  };
+
+  /** 自由群的自主门：只在空拍且不忙时掷一次（严格小于：概率 0 永不开放）。
+   *  windowId 用 free- 前缀，语义只是「本拍的浏览授权」；宵禁由调用方提前拦掉。 */
+  const rollFreeBrowse = (chatKey: string, state: GroupPhase, at: number): { windowId: string; topic: string; open: boolean } => {
+    const topic = VIDEO_TOPICS[Math.floor(random() * VIDEO_TOPICS.length)] ?? VIDEO_TOPICS[0]!;
+    const windowId = "free-" + createHash("sha256").update(chatKey + "@" + String(at)).digest("hex").slice(0, 16);
+    const open = random() < (deps.config().freeBrowseChance ?? 0.03);
+    state.windowId = windowId;
+    state.videoTopic = topic;
+    state.videoBrowseOpen = open;
+    return { windowId, topic, open };
+  };
+
+  /** 自由群一拍（由 1 秒 tick 比对 lastBeatAt 驱动，热改下一拍生效）：
+   *  - 在途（轮 / 换页 / 收图）→ 本拍作废，消息留到下一拍，不掷门；
+   *  - 有正在攒的 @ 组 → 让行，不提交不掷门；
+   *  - 有消息 → 提交一拍 ambient（背压与失败回收沿用 flushShard），超限丢弃条数留日志；
+   *  - 空拍 → 宵禁外掷一次自主门，门开才回调 onFreeIdle。 */
+  const freeBeat = (chatKey: string, state: GroupPhase, at: number): void => {
+    state.lastBeatAt = at;
+    if (deps.busy(chatKey)) return;
+    if (deps.yieldTo?.(chatKey) === true) return;
+    clearBrowseGate(state);
+    state.shareOpen = undefined;
+    if ((state.shard?.messages.length ?? 0) > 0) {
+      const dropped = state.droppedSinceBeat ?? 0;
+      const size = state.shard?.messages.length ?? 0;
+      deps.log?.(`自由拍 ${chatKey} 提交 ${size} 条`);
+      if (dropped > 0) deps.log?.(`自由拍 ${chatKey} 超限丢弃 ${dropped} 条`);
+      state.droppedSinceBeat = 0;
+      flushShard(chatKey, state, false);
+      return;
+    }
+    // 宵禁（本地 02:00–09:00）：不掷门、不回调——夜里回复照常，只是不自己起话题
+    if (isCurfewAt(at)) return;
+    const gate = rollFreeBrowse(chatKey, state, at);
+    if (!gate.open) return;
+    deps.log?.(`自由拍 ${chatKey} 自主门开`);
+    try {
+      const result = deps.onFreeIdle?.(chatKey, gate);
+      if (result instanceof Promise) result.catch((error: unknown) => deps.onError?.(error));
+    } catch (error) {
+      deps.onError?.(error);
     }
   };
 
@@ -331,7 +478,18 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     const { closedMinutes, openMinutes } = deps.config();
     const at = now();
     for (const chatKey of deps.groups()) {
+      // 自由活动模式：恒 open，只有拍长（1 秒 tick 现读配置比对）；不进 closed/open 迁移
+      if (isFree(chatKey)) {
+        const free = ensureFreeState(chatKey, at);
+        if (free.lastBeatAt !== undefined && at - free.lastBeatAt >= freeMsOf()) freeBeat(chatKey, free, at);
+        continue;
+      }
       let state = phases.get(chatKey);
+      // 热移出自由白名单：把拍子交还给窗口模式（20 秒 shard），不补开窗注入轮
+      if (state?.free === true) {
+        handOffToWindow(chatKey, state, at);
+        continue;
+      }
       if (!state) {
         // 初次进入（start / stop 后重来）：closed 从零计时，基线懒定 recent 末条
         state = { phase: "closed", phaseSince: at, lastCloseSeq: lastSeqOf(deps.recentOf(chatKey)), silentWindows: 0, spokeInWindow: false };
@@ -377,16 +535,32 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
       phases.clear();
     },
     isOpen(chatKey) {
-      return phases.get(chatKey)?.phase === "open";
+      // 自由活动模式恒可搭话：相位还没建（启动首秒）也认，否则那 1 秒的非 @ 消息会被闸丢掉
+      return isFree(chatKey) || phases.get(chatKey)?.phase === "open";
     },
     phaseOf(chatKey) {
+      if (isFree(chatKey)) return "open";
       return phases.get(chatKey)?.phase;
     },
     collectShard(chatKey, message) {
       if (!shardEnabled) return false;
-      const state = phases.get(chatKey);
-      if (!state || state.phase !== "open") return false;
-      (state.shard ??= { messages: [] }).messages.push(message);
+      let state = phases.get(chatKey);
+      if (!state || state.phase !== "open") {
+        // 自由群懒建相位（启动首秒 / 相位被 stop 清掉后的第一条）：窗口模式仍是「窗口关了就不收」
+        if (!isFree(chatKey)) return false;
+        state = ensureFreeState(chatKey, now());
+      }
+      const shard = (state.shard ??= { messages: [] });
+      shard.messages.push(message);
+      // 自由拍有界：超出上限丢最旧并计数（flush 时留一行日志）——本模式唯一的有损点
+      if (isFree(chatKey)) {
+        const cap = freeCapOf();
+        const over = shard.messages.length - cap;
+        if (over > 0) {
+          shard.messages.splice(0, over);
+          state.droppedSinceBeat = (state.droppedSinceBeat ?? 0) + over;
+        }
+      }
       return true;
     },
     noteExit(chatKey) {
