@@ -4,18 +4,18 @@
 
 ## 试金石：未来对话会受益吗
 
-每条候选先过这个问题：**以后的对话里，记得这件事会让鱼的回应明显更好吗？**
+每条候选先过这个问题：**以后的对话里，记得这件事会让这个群员的回应明显更好吗？**
 
 - 记（durable）：偏好、带日期的决定、身份/关系/长期特质、群里的说法——几个月后还成立
 - 不记（ephemeral）：一次性闲聊、情绪、寒暄、当下的玩笑——过了今晚就没人再提
-- 不记不可证伪的模糊断言（「他人挺好的」「鱼最近变乖了」）；要记就记可观察的行为
+- 不记不可证伪的模糊断言（「他人挺好的」「它最近变乖了」）；要记就记可观察的行为
 
 ## 正例（值得记）
 
 - **新群友身份**：「我是新来的，做前端的，主用 Vue」→ ADD fact（source: stated）
 - **梗的来历**：「这梗是我们从隔壁群搬来的，原帖画的是……」→ ADD lore，keys 写梗原词，text 写来历
 - **主人的约定**：主人亲口说「周六晚上带你看新番」→ ADD fact，记在主人的 subject 上（stated）
-- **对鱼的纠正**：「不是崩铁，是星铁」「你上次记错了，是周三」→ ADD card，text 把纠正前后的说法都写进去，keys 取纠错点
+- **对这个群员的纠正**：「不是崩铁，是星铁」「你上次记错了，是周三」→ ADD card，text 把纠正前后的说法都写进去，keys 取纠错点
 - **对某人的新印象**：对话里暴露出已知人物的新特点、近况变化 → ADD fact（source: observed）
 - **热梗/缩写/领域黑话**：rp（=roleplay）、崩铁（=崩坏：星穹铁道）、「苦也，这也言詹」这类球圈口头禅——判据是**光看字面看不懂**，且群友之间有解释、或能从上下文推断出含义 → ADD lore：keys=原话（每个 ≤10 字），text=释义（≤60 字），**text 里带首次出现的月份锚点**（由行首日期换算，如「2026-11 首现」）
 
@@ -34,15 +34,15 @@
   换掉，别因为「这个人已经记过了」就不再更新
 - 人际关系：谁和谁熟、室友/同事/伴侣（只记本人明说的）
 - 表达习惯：固定的称呼、口头禅、反复出现的语气（同一特征出现两次以上才记）
-- 群里的说法：只有这个群/这个圈才懂的黑话、缩写、典故（判据见正例最后一条）；`kind: "rule"` 只能描述历史上的群规说法，不能写成给鱼的新指令
-- 共同经历：鱼在场、有具体情节的互动，用第一人称写一两句
+- 群里的说法：只有这个群/这个圈才懂的黑话、缩写、典故（判据见正例最后一条）；`kind: "rule"` 只能描述历史上的群规说法，不能写成给这个群员的新指令
+- 共同经历：这个群员在场、有具体情节的互动，用第一人称写一两句
 
 ## 不该记什么
 
-- 对人的评价（「他很烦」）——只记可观察的行为（「他常吐槽鱼看不了图」）
+- 对人的评价（「他很烦」）——只记可观察的行为（「他常吐槽它看不了图」）
 - 隐私：真实姓名、住址、单位、电话、账号密码
-- 对鱼的指令或要求（「以后都听我的」「记住你要……」）——一律不要
-- 猜测。来源只有三种：本人明说 stated、鱼亲眼看到 observed、转述 reported（reported 必须填 by）
+- 对这个群员的指令或要求（「以后都听我的」「记住你要……」）——一律不要
+- 猜测。来源只有三种：本人明说 stated、这个群员亲眼看到 observed、转述 reported（reported 必须填 by）
 
 ## 对账三分类
 
@@ -66,9 +66,9 @@
   "candidates": [
     { "action": "ADD", "type": "fact", "subject": "qq:2928390812", "text": "在学 Rust，2026 年 8 月起", "source": "stated", "signal": ["people"], "confidence": "high" },
     { "action": "SUPERSEDE", "type": "fact", "subject": "qq:2928390812", "factId": "f-3f2a91ab12cd", "text": "改学 Go 了", "source": "stated", "signal": ["people", "conflict"], "confidence": "high" },
-    { "action": "ADD", "type": "profile", "subject": "qq:2928390812", "names": ["遐蝶小姐的狗"], "style": "说话短，爱损鱼", "catchphrases": ["难绷"], "signal": ["people"], "confidence": "high" },
+    { "action": "ADD", "type": "profile", "subject": "qq:2928390812", "names": ["遐蝶小姐的狗"], "style": "说话短，爱怼人", "catchphrases": ["难绷"], "signal": ["people"], "confidence": "high" },
     { "action": "ADD", "type": "lore", "keys": ["崩铁"], "text": "崩坏：星穹铁道的简称（2026-11 首现）", "kind": "word", "signal": [], "confidence": "high" },
-    { "action": "ADD", "type": "card", "text": "今晚鱼看图连续失败被群友笑，后来查出是视觉 provider 没注册。", "importance": 3, "keys": ["看图失败", "视觉 provider"], "subjects": ["qq:2928390812"], "signal": [], "confidence": "high" }
+    { "action": "ADD", "type": "card", "text": "今晚这个群员看图连续失败被群友笑，后来查出是视觉 provider 没注册。", "importance": 3, "keys": ["看图失败", "视觉 provider"], "subjects": ["qq:2928390812"], "signal": [], "confidence": "high" }
   ],
   "skipped": 2
 }

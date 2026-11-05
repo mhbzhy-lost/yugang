@@ -53,7 +53,7 @@ quote_msg_invalid: quoteMsgId 对不上这一轮里的任何消息（要用 [m:�
 say_silent: 这一轮是收图用的，不用说话
 say_self_mute: 群里最后一条消息是你自己发的：现在只能做素材分享（兑现承诺、交付结果、分享你看过的视频等合法素材），继续闲聊先停一停；真有要分享的就重新调用并在参数里带上 share: true，等别人开了新话头就恢复正常
 say_link_not_allowed: 这个链接不是你这轮工具结果里出现过的（{{url}}），不要自己编链接；要看某个视频就先用 video 打开，链接会由它返回
-busy_reply: 缸里正在归档记忆，稍等一下再叫我
+busy_reply: 正在整理记忆，稍等一下再叫我
 
 # fs 工具共用（read / grep / tree / write）的拒绝文案
 fs_locked: 这些工具只在主人让你动手改自己时可用
@@ -136,9 +136,9 @@ cmd_compact_skip: 这个会话没什么可压的
 cmd_personas: 可用人格：{{list}}（用 /切换人格 <名> 切换）
 cmd_switched: 切换完成，当前人格：{{persona}}
 cmd_bad_persona: 没有这个人格：{{persona}}。{{list}}
-cmd_unknown: 不认识的指令：{{cmd}}。可用：/查询可用人格、/切换人格 <名>、/评 好|差 <文字>（回复鱼的话可指向具体某条）
+cmd_unknown: 不认识的指令：{{cmd}}。可用：/查询可用人格、/切换人格 <名>、/评 好|差 <文字>（回复它的话可指向具体某条）
 
-# /评 指令（主人给鱼的表现打分，评价经审批闸进长期记忆）的回执文案：
+# /评 指令（主人给这个群员的表现打分，评价经审批闸进长期记忆）的回执文案：
 # eval_rejected 是群内非主人的闸前拒绝（私聊非主人静默，不用文案）；
 # eval_receipt 是回执主体（{{direction}} 好评/差评、{{type}} 指向型/范围型、{{target}} 定位结果或当日统计摘要）；
 # eval_unknown_target 是引用定位降级（sentmap 查不到、按最近一条 outbound 评价）时在回执里注明的一句
@@ -172,7 +172,7 @@ cmd_memory_rejected_all: 已拒绝全部 {{count}} 条待审
 cmd_memory_deleted: 已删除记忆 {{id}}（{{doc}}）
 cmd_memory_delete_missing: 没有这条记忆：{{id}}
 
-# 零出口兜底（salvagePlainReply，仅必答轮）的宿主日志文案：只进鱼缸日志，不给模型也不发群。
+# 零出口兜底（salvagePlainReply，仅必答轮）的宿主日志文案：只进宿主日志，不给模型也不发群。
 # reason 是机器原因（找不到本轮 entry / 末条 assistant 没有正文 / 出口校验拒绝码），error 是错误摘要
 salvage_skip: 兜底放弃：{{reason}}
 salvage_error: 兜底出错：{{error}}
@@ -184,7 +184,7 @@ salvage_error: 兜底出错：{{error}}
 compact_time_header: （前情 {{count}} 条 · {{start}} ~ {{end}}）
 compact_profile_members: 活跃成员：{{members}}
 compact_profile_threads_header: 进行中的话头/梗：
-compact_profile_promises_header: 鱼的未完话头与承诺：
+compact_profile_promises_header: 你的未完话头与承诺：
 compact_profile_line: - 「{{quote}}」{{anchor}}（{{status}}）
 compact_profile_mood: 氛围：{{mood}}
 

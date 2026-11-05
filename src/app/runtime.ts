@@ -1637,7 +1637,7 @@ async function runEvalCommand(
 
   // ⑥ 当日统计（口径写进回执）：本会话（当前人格）今日发言条数 + chatlog 当日总条数
   const fishToday = history.filter((turn) => turn.role === "fish" && turn.at !== undefined && localDay(turn.at) === day).length;
-  const statsLine = ["今日鱼发言 " + fishToday + " 条（本会话）", "会话流水 " + chatlogCountToday(evalChatKey) + " 条（chatlog 含鱼）"].join(" · ");
+  const statsLine = ["今日发言 " + fishToday + " 条（本会话）", "会话流水 " + chatlogCountToday(evalChatKey) + " 条（含自己）"].join(" · ");
 
   // ⑦ 摘要与事件装配（好差同构，方向只是字段；截断在 buildFeedbackPending 里机械执行）
   const targetSummary = target

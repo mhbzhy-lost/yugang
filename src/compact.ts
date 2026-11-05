@@ -743,7 +743,7 @@ async function renderCountedEntries(conversation: Conversation, self: { nickname
         });
       } else if (entry.kind === "fish.outbound") {
         const data = entry.data as { items?: string[]; at?: unknown; messageId?: number | string } | undefined;
-        const lines = (data?.items ?? []).map((text) => `鱼: ${text}`);
+        const lines = (data?.items ?? []).map((text) => `我: ${text}`);
         const tailMessages: ModelMessage[] = (data?.items ?? []).map((text, index) => ({
           ...(index === 0 && data?.messageId !== undefined ? { messageId: data.messageId } : {}),
           userId: self.userId,
@@ -842,7 +842,7 @@ export async function renderMemoryTranscript(conversation: Conversation): Promis
         const data = entry.data as { items?: string[]; at?: unknown } | undefined;
         const stamp = typeof data?.at === "number" ? dayStamp(data.at) : "";
         for (const text of data?.items ?? []) {
-          if (text.trim()) lines.push(`${stamp ? `[${stamp}] ` : ""}鱼: ${text}`);
+          if (text.trim()) lines.push(`${stamp ? `[${stamp}] ` : ""}我: ${text}`);
         }
       }
     }
