@@ -24,7 +24,7 @@
  * usageMetadata 换算、calculateCost）逐段对照镜像
  * node_modules/@earendil-works/pi-ai/dist/api/google-generative-ai.js。
  *
- * project 字段来自凭据里的 projectId：src/oauth-google.ts 的 toAuth 把它放进私有头
+ * project 字段来自凭据里的 projectId：src/auth/google.ts 的 toAuth 把它放进私有头
  * x-yugang-ca-project，本适配器在出站前把头摘掉、转进信封；Google 后端对未知头敏感，
  * 出站只留 Content-Type 与 Authorization（antigravity flavor 另加它识别客户端的那三个头）。
  */

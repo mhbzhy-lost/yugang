@@ -177,7 +177,7 @@ const modelSelection = loadFishModels();
 const config = {
   onebotUrl: process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001",
   onebotToken: process.env.ONEBOT_TOKEN,
-  // 模型与凭据：只认 config/models.json 的 models 角色表 + 同目录 auth.json，见 src/model-config.ts
+  // 模型与凭据：只认 config/models.json 的 models 角色表 + 同目录 auth.json，见 src/model/config.ts
   modelConfig: modelSelection.main,
   mediaRoot: resolve(process.env.MEDIA_ROOT ?? join(HOME, "media")),
   promptRoot: resolve(process.env.PROMPT_ROOT ?? join(process.cwd(), "prompt")),

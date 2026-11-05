@@ -803,7 +803,7 @@ export interface MemoryTranscript {
  * 记忆抽取专用的原始转录：只读结构化原始 entry（fish.inbound 的 data 与
  * fish.outbound 的 items），带结构化说话人元数据；不读 pi.user / pi.system /
  * fish.gif_ingest / fish.engage_tick / 工具结果 / thinking，也不复用上面宿主拼装
- * 文案的 renderTranscript。改动这个白名单前必读 src/memory.ts 的安全边界注释：
+ * 文案的 renderTranscript。改动这个白名单前必读 src/memory/model.ts 的安全边界注释：
  * 混入任何宿主文案都会让「记忆 → 抽取 → 记忆」的自我污染闭环复活。
  * fish.eval（主人评价事件，T6）是唯一的有意新增：从结构化 data 渲染一行评价事实，
  * 决策 11b——评价进抽取白名单、排除摘要。抽取器看到评价行后产出的任何候选照旧
