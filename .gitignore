@@ -10,3 +10,8 @@ config/models.json
 .opencode/
 # 模型配置与运行时行为配置都是每台机器一份；模板分别是 config/models.example.json 与 fish.config.example
 fish.config.json
+
+# 本机备份文件（含 .env / 配置副本，绝不入库）
+*.bak
+*.bak-*
+.env.bak*
