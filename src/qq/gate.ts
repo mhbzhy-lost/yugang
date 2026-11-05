@@ -22,6 +22,9 @@ export interface GateOptions {
   groups: readonly string[];
   /** 该群是否处于 open 窗（src/engage-next.ts 状态机的相位）；缺省 / 未跟踪 = closed。 */
   isOpen?: (chatKey: string) => boolean;
+  /** 自由活动群是否处于「非 @ 一律不接」的时段（宵禁）：true 时 free_pass 改判 skip:curfew。
+   *  只影响自由群的非 @ 消息；@ 必答、私聊、指令、收图轮都不受它影响。 */
+  freeCurfew?: (chatKey: string) => boolean;
 }
 
 export interface GateInput {
@@ -30,7 +33,7 @@ export interface GateInput {
 
 export type GateDecision =
   | { enter: true; reason: "private" | "mentioned" | "free_pass" }
-  | { enter: false; reason: "stranger_private" | "group_not_allowed" | "next_pending" };
+  | { enter: false; reason: "stranger_private" | "group_not_allowed" | "next_pending" | "curfew" };
 
 export interface Gate {
   decide(input: GateInput): Promise<GateDecision>;
@@ -63,7 +66,12 @@ export function createGate(options: GateOptions): Gate {
       // closed / 未跟踪——非 @ 统一 skip:next_pending 不进模型。`/` 指令与 GIF 收图轮
       // 走闸前自己的通道；recent 流水与合集 id 缓存（onebot 解析层，闸前照记）等旁路
       // 记账不受影响。普通回复不必答：回复鱼的内容只是引用动作，决定回复的是 @。
-      if (options.isOpen?.(msg.chatKey) === true) return { enter: true, reason: "free_pass" };
+      if (options.isOpen?.(msg.chatKey) === true) {
+        // 自由活动群的宵禁（2026-11-05 主人定案）：这段时间非 @ 消息不接——
+        // 门后还有 0.1 的自主门，不挡的话夜里照样会自己起来聊。@ 已在上方必答。
+        if (options.freeCurfew?.(msg.chatKey) === true) return { enter: false, reason: "curfew" };
+        return { enter: true, reason: "free_pass" };
+      }
       return { enter: false, reason: "next_pending" };
     },
   };

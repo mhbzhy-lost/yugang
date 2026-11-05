@@ -227,6 +227,8 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
   @ 组时本拍让行**（`yieldTo`）。空拍才掷一次自主门 `engage.freeBrowseChance`（缺省 0.03，清醒时段
   ≈31 次/天上限，宵禁恒关），门开才提交 `[主动交流机会]`；掷门与提交同拍、忙则不掷。
   相位懒建且恒 `open`（`isOpen` 对自由群恒 true，启动首秒的非 @ 消息不会被闸丢掉）；
+  **宵禁（00:00–08:00）内自由群的非 @ 消息也不接**（闸里 `freeCurfew` 判成 `skip:curfew`，
+  @ 必答不受影响）——否则门后那 0.1 的自主概率照样会在夜里起话题；
   自由拍不结算 T8 沉默簿记；窗口模式的群行为一字不变。批内消息带 `replyIds`/`quoted`，
   一拍里能看到 `[回复了m:id]` 与列表后的 `[引用原文]`（与 @ 轮同款渲染，批内图仍不做 inline 定级）
 - **开窗输入统一为标准消息列表**：injection / shard 有消息时不再附加窗口说明、旧账或弹药栏；没有 `[这条消息@了你]` 就不构成必答。零新增空窗不再由沉默、nudge、旧账或弹药触发，只在每个 open 窗进入时一次 `video.browseChance`（缺省 0.3）门开时提交 `[主动交流机会]`，当前会话可自行 `bili_hot` 找候选、`video` 实际观看后把「推荐语 + 链接」用 `say_words` 发出去；ambient shard 不携带 browse 授权。末条自言禁言的机械边界仍生效（分享素材要带 `share: true`）；**宵禁（本地 00:00–08:00）落在 browse 门上**：`src/qq/curfew.ts` 的 `isCurfewAt` 是唯一实现，开窗时 `videoBrowseOpen = !isCurfewAt(at) && roll < video.browseChance`，所以宵禁内根本不起 `[主动交流机会]` 轮，也就没有可发的 B 站链接；与 `ctx_engage_footer_night` 夜间文案同阈同向。旧 `ammoCurfewAt` 保留为已停用弹药链的同源别名。
