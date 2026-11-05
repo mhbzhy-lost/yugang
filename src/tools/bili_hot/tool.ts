@@ -370,7 +370,7 @@ export function createBiliHotTool(manifest: ToolManifest, deps: ToolPackageDeps,
       const zone = BILI_RANK_ZONES.find((z) => z.rid === rid);
       const limit = BROWSE_LIMIT;
 
-      // 本会话私有池过滤（T4）：fish.video_pool 里已分享过的 BV 不再重复推荐——
+      // 去重表过滤（T4）：fish.video_pool（chatKey 绑定，2026-11-05 起）里已分享过的 BV 不再重复推荐——
       // conversation scope doc 按 conversationId 隔离，跨会话同 BV 不互斥；
       // 不再读全局 fish.external_ammo（弹药管线已停用）
       const pool = (await api.snapshot(

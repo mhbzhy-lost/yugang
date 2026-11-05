@@ -390,8 +390,9 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
   无法从字面理解且群友有解释或可推断，keys=原话≤10 字、text=释义≤60 字含首次出现
   月份锚点；反例含「在吗」「哈哈哈」、纯情绪宣泄、一次性闲聊），confidence low
   不报（计入 skipped，正常轮代码层也机械丢弃；复查轮放宽保留）。模型输出是
-  candidates 三分类对账：ADD / SUPERSEDE（factId 必填，subject 由 known 附带的
-  id→subject 映射机械解析、不采信模型写的 subject，未命中即弃）/ SKIP（仅计数不产出）。
+  candidates 四分类对账：ADD / SUPERSEDE（factId 必填，subject 由 known 附带的
+  id→subject 映射机械解析、不采信模型写的 subject，未命中即弃）/ EXPIRE（时效性淘汰，
+  见下条）/ SKIP（仅计数不产出）。
   `ExtractOutcome` 三态 ok/empty/parse_failed：解析失败单独上报、不计零提取也不推进
   lastExtractAt（修正旧版把未知形状归一成空 patch 的误判）。known = 公共 doc +
   当前会话私有 doc 的合并渲染（事实行带 YYYY-MM 锚点；SUPERSEDE 可能指向私有层事实，
@@ -400,6 +401,16 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
   打「近 N 页压缩零提取」+ 压缩链路用宽松提示词重跑本页一次（只一次不循环；失败不清
   计数、不阻塞换页）。待审列表（/记忆 与 `npm run memory --pending`）展示 signal 标签
   （已知人物/事实冲突，代码机械重算、不采信模型标注）；不自动 DELETE
+- **时效性核对（2026-11-05）**：抽取先核对「已知事实」还有没有成立，再挑新东西。
+  判失效只认三类证据：本人说变了、群友明确更正/反驳（含反驳鱼说过的过时话）、旧事已收尾；
+  「事实很旧」不是依据。`EXPIRE` 候选必须带**逐字 quote（≤60 字）**，机械校验要求它是
+  本页**入站原文**（`fish.inbound.data.text`）的 substring——证据域刻意不含鱼自己的
+  outbound 与主人评价，否则等于允许「自己的推测」自证。防误杀：`EXPIRE` 恒 `high`-only
+  （复查轮也不放宽）、每页 ≤ `MEMORY_EXPIRE_PER_PAGE`（5）、同 factId 去重、一条 quote
+  只支持一条失效；有替代品的仍走 SUPERSEDE（整批解析完用最终 supersededIds 过滤掉
+  EXPIRE，不看候选顺序）。批准前还要做**双轨预检**：目标 doc 必须包含该有效 fact 且
+  subject 相符，否则报错并保留待审（不然 applyPatch 静默不命中、待审却被删）。失效只置
+  `invalidAt` + `expiredReason`，**不写** `supersededBy`，条目保留可追溯（没有一键恢复）。
 - **上限写死在 `src/memory/model.ts` 的 `MEMORY_CAPS`**：人 ≤12、每人事实 ≤8 且总字数 ≤320、
   names ≤5、style ≤120 字、口头禅 ≤8 条且每条 ≤24 字、lore ≤40（key ≤5 个且每个 ≤10 字、
   text ≤60 字）、cards ≤60（text ≤80 字、keys ≤5、subjects ≤8）、单次 section 渲染 ≤900 字、
@@ -464,6 +475,8 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
   **抄写检查豁免链接**：出口白名单要求原样抄工具结果里的 canonical 链接，所以
   `findProvenanceLeak` 比对前先把两侧 http(s) 链接抹掉（`src/egress/policy.ts` 的 `maskUrls`）——
   否则「必须带链接」与「不许抄工具结果」直接冲突，模型只能退回只发 BV 号（2026-11-05 事故）。
+  代价：secret 本身就是一条 URL（或敏感内容全在 URL 内）时，溯源比对会被整条跳过；
+  密钥/token/绝对路径仍由独立的 `findSecret` 机械规则兜底。
 - **新闻播报管线**：`news.at`（缺省 10:30）触发第二 scheduler 实例（幂等账独立在 `fish.news_runs`，
   不写 `fish.external_jobs`）。取料 `src/external/news-client.ts`：自建 60s 服务（loopback 4399 的
   `/v2/60s`、`/v2/weibo`、`/v2/baidu/hot`）+ 界面/虎嗅/IT之家/人民网 RSS（fast-xml-parser 受限解析：

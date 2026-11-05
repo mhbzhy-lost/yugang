@@ -108,7 +108,7 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
 - **会话自主浏览**：每个 open 窗进入时按 `video.browseChance`（缺省 0.3）掷一次门，门开才给当前
   （群 × 人格）会话一个零新增主动交流机会。会话用 `bili_hot` 按本窗 topic 取候选，用 `video` 实际观看
   （每轮最多 `video.browseMaxViewsPerRound`，缺省 5），再通过 `say_words(videoBvid)` 把推荐语和宿主
-  canonical 链接发到群里。`fish.video_pool` 按 conversationId 隔离去重，跨会话同 BV 不互斥；写入与
+  canonical 链接发到群里。`fish.video_pool` 按 chatKey（群/私聊）绑定去重，跨会话同 BV 不互斥；写入与
   outbox 入队同事务。旧弹药库、后台逛轮和 `ammo_*` 工具只保留兼容源码，不进入 active 工具面或调度。
   B 站请求全走 `bili-client` 频控内核（白名单端点、串行 + 同端点 ≥2s、`video.dailyBudget` 缺省
   60/天 + 风控当日熔断），普通 `video` 工具共用。
