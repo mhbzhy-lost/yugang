@@ -110,6 +110,10 @@ tool_catalog_line: - {{name}}：{{summary}}
 # 图片输入的 fallback 提示（decisions §5.4 fallback-image）：inline 直读关闭或本轮仍有
 # 没附上压缩图的图时，消息列表与附加段之后追加这一行，引导模型用 look 读压缩图。
 # inline 路径的 [图片#N] / [图片#N 压缩图] 是短机械标签，由 src/index.ts 按编号拼装。
+# 引用原文里的图走同一套：inline 时渲染 [图片#N]，否则保留 [图片 inbound/…] 供 look。
+image_tag: [图片#{{n}}]
+image_compressed_tag: [图片#{{n}} 压缩图]
+quoted_image: [图片 {{ref}}]
 image_look_hint: [本轮要求] 使用 look 工具读取消息中的图片。
 
 # 搭话（开窗）的零新增主动轮文案（2026-11-04 模型输入决策 §5.6，src/index.ts 消费）：

@@ -70,6 +70,16 @@ function lineText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+/** inline 模式的图片编号标签（[图片#N]）：与末尾压缩图标签共用同一个 n。 */
+export function imageTagOf(n: number, messages: MessageTable): string {
+  return renderTemplate(messages["image_tag"] ?? "[图片#{{n}}]", { n: String(n) });
+}
+
+/** inline 模式的压缩图标签（[图片#N 压缩图]），按编号跟在 image block 之后。 */
+export function imageCompressedTagOf(n: number, messages: MessageTable): string {
+  return renderTemplate(messages["image_compressed_tag"] ?? "[图片#{{n}} 压缩图]", { n: String(n) });
+}
+
 /** `[m:id]` 锚点：没有真实 id 就不渲染，不伪造。 */
 function idTag(id: number | string | undefined): string {
   return id === undefined || String(id).length === 0 ? "" : `[m:${id}]`;
@@ -137,8 +147,17 @@ export function renderMessageList(
  * - 被引的是合集父消息：半角冒号 + [转发合集] 占位，不重复展开（附件另行渲染）；
  * - 普通文字引用：全角冒号 + 「原文」；
  * - 水合失败（昵称/QQ/正文/合集全缺）：显式读取失败标记，不伪造内容。
+ *
+ * 被引消息带图时，图必须跟原文一起出现（2026-11-05 主人反馈：回复一张图说「收图」，
+ * 引用原文渲染成「」——模型拿不到 inbound 引用，既没法 look 也没法 meme_add）。
+ * `imageNumbers` 是 inline 模式的编号表：命中就渲染成 [图片#N]（压缩图在消息末尾），
+ * 没命中就保留 [图片 inbound/…] 让模型用 look 读（两种读图模式各走各的）。
  */
-export function renderQuotedOriginal(quoted: QuotedMessage, messages: MessageTable): string {
+export function renderQuotedOriginal(
+  quoted: QuotedMessage,
+  messages: MessageTable,
+  imageNumbers?: ReadonlyMap<string, number>,
+): string {
   const who = person(quoted.nickname, quoted.userId);
   if (quoted.forward) {
     return renderTemplate(messages["quoted_original_forward"] ?? "[引用原文][m:{{id}}] {{who}}: [转发合集]", {
@@ -146,7 +165,15 @@ export function renderQuotedOriginal(quoted: QuotedMessage, messages: MessageTab
       who,
     });
   }
-  const text = lineText(quoted.text);
+  const images = quoted.images
+    .map((ref) => {
+      const n = imageNumbers?.get(ref);
+      return n === undefined
+        ? renderTemplate(messages["quoted_image"] ?? "[图片 {{ref}}]", { ref })
+        : imageTagOf(n, messages);
+    })
+    .join(" ");
+  const text = [lineText(quoted.text), images].filter((part) => part.length > 0).join(" ");
   if (!who && !text) {
     return renderTemplate(messages["quoted_read_failed"] ?? "[引用原文][m:{{id}}]（读取失败）", { id: quoted.id });
   }
