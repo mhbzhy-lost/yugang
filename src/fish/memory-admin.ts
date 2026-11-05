@@ -22,6 +22,7 @@ import {
   type PendingMemoryEntry,
 } from "../memory/index.ts";
 import { privateMemoryKeyOf } from "../memory/scope.ts";
+import { missingExpireTargets } from "../memory/index.ts";
 import { renderTemplate } from "../prompt/index.ts";
 import { ChatsDoc, MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc } from "../store.ts";
 import type { FishBase } from "./base.ts";
@@ -31,7 +32,7 @@ export interface MemoryAdminParts {
   pendingMemories(): Promise<{ persona: string; entries: PendingMemoryEntry[] }[]>;
   approveMemory(id: string, track: "公共" | "私有"): Promise<
     { status: "ok"; track: "公共" | "私有"; persona: string; originChatKey: string; digest: string }
-      | { status: "missing" | "no_origin" }
+      | { status: "missing" | "no_origin" | "expire_mismatch" }
   >;
   rejectMemory(id: string | "all"): Promise<number>;
   memoryCommandReply(chatKey: string, command: MemoryCommand): Promise<string>;
@@ -58,6 +59,15 @@ export function installMemoryAdmin(state: FishBase & { harness: Harness }): Memo
       if (!entry) continue;
       if (track === "私有" && !entry.originChatKey) return { status: "no_origin" as const };
       const targetKey = track === "私有" ? privateMemoryKeyOf(persona, entry.originChatKey) : persona;
+      // EXPIRE 双轨预检（D9）：known 是公共+当前私有的合并视图，但这次批准只写一个 doc。
+      // 目标 doc 里找不到（或已失效 / subject 不符）就先失败并保留待审——否则 applyPatch
+      // 静默 no-op，待审却被删掉，主人会以为「已并入」。
+      if ((entry.patch.expire?.length ?? 0) > 0) {
+        const targetSnapshot = await harness.snapshot(track === "私有" ? MemoryPrivateDoc : MemoryDoc, targetKey, ctx);
+        if (missingExpireTargets(targetSnapshot, entry.patch).length > 0) {
+          return { status: "expire_mismatch" as const };
+        }
+      }
       const digest = summarizePatch(entry.patch);
       const originChatKey = entry.originChatKey;
       try {
@@ -149,6 +159,9 @@ export function installMemoryAdmin(state: FishBase & { harness: Harness }): Memo
       const result = await approveMemoryLocal(command.id, command.track);
       if (result.status === "missing") return renderTemplate(messages["cmd_memory_missing"] ?? "", { id: command.id });
       if (result.status === "no_origin") return renderTemplate(messages["cmd_memory_no_origin"] ?? "", { id: command.id });
+      if (result.status === "expire_mismatch") {
+        return renderTemplate(messages["cmd_memory_expire_mismatch"] ?? "", { id: command.id, track: command.track });
+      }
       return renderTemplate(messages["cmd_memory_ok"] ?? "", { track: result.track, digest: result.digest });
     }
     if (command.kind === "reject") {
@@ -232,6 +245,11 @@ export function installMemoryAdmin(state: FishBase & { harness: Harness }): Memo
           const text = await factTextOf(persona, id);
           lines.push(renderTemplate(messages["cmd_memory_supersede_note"] ?? "", { id, text: text || "-" }));
         }
+      }
+      // EXPIRE 的审计展示：原事实 + 依据原话（主人靠这两样判断语义相关性）
+      for (const note of entry.patch.expire ?? []) {
+        const text = await factTextOf(persona, note.id);
+        lines.push(renderTemplate(messages["cmd_memory_expire_note"] ?? "", { id: note.id, text: text || "-", quote: note.quote }));
       }
     }
     const rest = entries.length - shown.length;

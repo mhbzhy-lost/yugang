@@ -373,6 +373,14 @@ if (rawDeleteId !== undefined) {
     return { persona: doc.key.slice(0, at), chatKey: doc.key.slice(at + 1), key: doc.key, state: doc.value as MemoryState };
   });
 
+  // EXPIRE 待审展示用的 factId → 原文表（公共层 + 全部私有层，只读）
+  const factTextById = new Map<string, string>();
+  for (const memory of [...publicMemories, ...privateMemories]) {
+    for (const person of Object.values(memory.state.people)) {
+      for (const fact of person.facts) if (!factTextById.has(fact.id)) factTextById.set(fact.id, fact.text);
+    }
+  }
+
   // 旧版按 chatKey 隔离的 fish.memory（session family 的 key 是 chatKey 形状）与更早的
   // 会话级（conversation scope）fish.memory：明确报迁移/冲突，本脚本不静默选择任何一份
   const legacyKeys = publicMemories.filter((m) => CHAT_KEY_RE.test(m.persona));
@@ -416,6 +424,10 @@ if (rawDeleteId !== undefined) {
           // signal 标签（T11）是机械重算的计数：已知人物/事实冲突
           const suggest = entry.originChatKey.startsWith("qq:private:") ? "私有" : "公共或私有";
           console.log(`  [${entry.id}] ${entry.originChatKey || "（无来源）"} · ${formatAgeShort(Date.now() - entry.at)}前 · ${summarizePatch(entry.patch)}${signalsSuffix(entry.signals)} · 建议 ${suggest}`);
+          // 淘汰条目必须带原事实与依据原话：主人靠这两样判断语义相关性
+          for (const note of entry.patch.expire ?? []) {
+            console.log(`     淘汰：${note.id} ${factTextById.get(note.id) ?? "-"}（依据「${note.quote}」）`);
+          }
         }
       }
     }
