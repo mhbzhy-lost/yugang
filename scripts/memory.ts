@@ -11,6 +11,7 @@
  *                                                    # AI 脱敏（prompt/memory-publicize.md）
  *   npm run memory -- --reject <id|全部>             # 拒绝（写库）
  *   npm run memory -- --delete <fact-id>              # 真删除一条已入库 fact（写库）
+ *   # 以上三个写操作在有活鱼时会被拒绝，必须加 --force 且写完重启鱼（见下）
  *
  * 记忆双层 + 审批闸：公共层 fish.memory（key=人格名，跨会话共享）、私有层
  * fish.memory.private（key=人格名@chatKey，仅来源会话）、待审库 fish.memory.pending
@@ -20,9 +21,11 @@
  * id 定位，从数组真删除（区别于 supersede 的 invalidAt 失效），日志只带 id 与所在 doc。
  *
  * 查看走 node:sqlite 只读连接（不实例化鱼）；--approve/--reject/--delete 经 pi-durable 的
- * createSession 打开同一 fish.db 写 doc（与线上进程同库并发时建议低峰执行，或直接
- * 私聊 /记忆 让线上进程自己写）。数据目录与 scripts/ops.ts 一致：YUGANG_HOME 可覆盖，
- * 缺省仓库内 var/。
+ * createSession 打开同一 fish.db 写 doc。**与线上鱼同库写入是危险操作**：pi-durable 的 id
+ * 计数器是进程内存值，外部写完不回灌，线上进程下一次提交会撞号、会话被判损坏而整群静默
+ * （2026-11-05 事故）。所以检测到活鱼时写操作直接拒绝，必须确认风险加 --force，且**写完后
+ * 必须重启鱼**；更推荐主人在私聊用 /记忆 让线上进程自己写。数据目录与 scripts/ops.ts 一致：
+ * YUGANG_HOME 可覆盖，缺省仓库内 var/。
  *
  * 公共批准与私聊 /记忆 同语义：apply 前先把 patch 文本字段交给便宜模型按
  * prompt/memory-publicize.md 做 AI 脱敏（模型与压缩抽取同源，脚本同用主模型，参照
@@ -31,6 +34,7 @@
  * 日志只带 id 与结果状态，不打印内容。私有批准不经脱敏。
  */
 import { DATA_HOME as HOME, PROMPT_ROOT } from "../src/paths.ts";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -75,8 +79,7 @@ const approveTrack: "公共" | "私有" = (() => {
   return track === "公共" ? "公共" : "私有";
 })();
 
-const writeMode = rawApproveId !== undefined || rawRejectId !== undefined || rawDeleteId !== undefined;
-if (writeMode && (rawPersona !== undefined || rawChat !== undefined || pending)) {
+const writeMode = rawApproveId !== undefined || rawRejectId !== undefined || rawDeleteId !== undefined;if (writeMode && (rawPersona !== undefined || rawChat !== undefined || pending)) {
   console.error("--approve / --reject / --delete 是独立的写操作，不与 --persona / --chat / --pending 组合");
   process.exit(1);
 }
@@ -92,6 +95,42 @@ if (!writeMode && rawPersona === undefined && rawChat === undefined && !pending)
 if (!existsSync(DB_PATH)) {
   console.error(`找不到 ${DB_PATH}（数据目录可用 YUGANG_HOME 覆盖；压缩发生过才会有记忆）`);
   process.exit(1);
+}
+
+/**
+ * 同库并发写入的硬护栏（2026-11-05 线上事故）：pi-durable 的 id 计数器是**进程内存值**，
+ * 只在启动时从库读一次。外部脚本一写库，线上进程的计数器就过期，它下一次提交会撞号
+ * （`ID xxx already belongs to document`），会话随即被判损坏、整群静默直到重启。
+ * 所以：有活鱼时写操作必须显式 --force，且写完必须重启鱼；更推荐让线上进程自己写
+ * （主人私聊的 /记忆 是同一套审批语义，不进模型）。
+ */
+function liveFishProcesses(): string[] {
+  try {
+    const out = execFileSync("pgrep", ["-fl", "yugang/src/index.ts"], { encoding: "utf8" });
+    return out.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+  } catch {
+    return []; // pgrep 无匹配时退出码 1
+  }
+}
+
+if (writeMode) {
+  const live = liveFishProcesses();
+  if (live.length > 0 && !args.includes("--force")) {
+    console.error(
+      [
+        `检测到 ${live.length} 个正在运行的鱼进程：`,
+        ...live.map((line) => `  ${line}`),
+        "",
+        "外部写库会让它的 id 计数器过期，下一次提交撞号后该会话会被判定损坏、整群静默。",
+        "推荐：主人在私聊发 /记忆 让线上进程自己写（同一套审批语义）。",
+        "确实要用脚本：写完必须重启鱼，并加 --force 表示已知风险。",
+      ].join("\n"),
+    );
+    process.exit(2);
+  }
+  if (live.length > 0) {
+    console.error("⚠ 已按 --force 写库：写完必须重启鱼（fish.sh deploy），否则它下一次提交会撞号。");
+  }
 }
 
 /** 只读查看：审批写操作之外的一切都走这条通道。 */
