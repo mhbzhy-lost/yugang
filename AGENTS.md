@@ -347,6 +347,12 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
   公共=AI 脱敏后并入人格公共 doc，见下条）；
   `/记忆 拒绝 <id|全部>`；id 不存在回错误。**群内 `/记忆` 只回引导语，无任何副作用**
   （不按群预选/过滤）。批准时两层 doc 各自独立执行上限与淘汰（`applyPatch`，两个 doc 分别 apply）
+- **外部写库必须重启鱼**（2026-11-05 搬史群事故）：pi-durable 的 id 计数器是**进程内存值**，
+  只在启动时从库读一次。脚本/CLI 写完同一个 `var/fish.db` 后，线上进程的计数器就过期，
+  它下一次提交必然撞号（`ID xxx already belongs to document`），pi-durable 随即判会话损坏
+  ——该群从此刻起**提交全失败、静默到重启**（事故里还叠加了 outbox 队首卡死，见 drain 一条）。
+  因此 `npm run memory` 的 `--approve/--reject/--delete` 在检测到活鱼时**直接拒绝**（要 `--force`
+  明确认风险），且用完**必须重启鱼**；首选让线上进程自己写——主人私聊的 `/记忆` 是同一套审批语义
 - **公共批准先过 AI 脱敏（私有不脱敏）**：`同意 <id> 公共`（私聊指令与脚本 `--approve <id> 公共`
   同语义）在 `applyPatch` 前把 patch 文本字段（facts/lore/cards 的 text；subject/keys/结构不动）
   交给便宜模型按 `prompt/memory-publicize.md` 改写——去掉指向来源群的身份信息，让表述在该
