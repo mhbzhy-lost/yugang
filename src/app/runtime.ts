@@ -763,8 +763,10 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: RecentChatMessage[])
       master: String(line.userId) === config.master,
       watched: watchedByChat.get(baseChatKey(msg.chatKey))?.has(String(line.userId)) === true,
       ...(line.mentionTargets !== undefined ? { mentionTargets: line.mentionTargets } : {}),
-      ...(line.quotedAuthor !== undefined ? { quotedAuthor: line.quotedAuthor } : {}),
-      ...(line.quotedAuthorIsSelf !== undefined ? { quotedAuthorIsSelf: line.quotedAuthorIsSelf } : {}),
+      ...((line.quotedAuthor ?? line.quoted?.nickname) !== undefined
+        ? { quotedAuthor: line.quotedAuthor ?? line.quoted!.nickname }
+        : {}),
+      ...(line.quotedAuthorIsSelf === true || line.quoted?.fromSelf === true ? { quotedAuthorIsSelf: true } : {}),
     }));
     const target: ModelMessage = {
       messageId: msg.messageId,

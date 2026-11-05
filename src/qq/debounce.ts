@@ -416,6 +416,10 @@ export function withContext(
 
   const slots: ListSlot[] = [];
   for (const line of background) {
+    // 引用作者两种来源都认：流水里可能只有轻量 quotedAuthor，也可能带完整 quoted
+    //（旧数据/测试 fixture）；完整 quoted 不往下传，避免引用原文附加段跟着膨胀
+    const quoteAuthor = line.quotedAuthor ?? line.quoted?.nickname;
+    const quoteSelf = line.quotedAuthorIsSelf === true || line.quoted?.fromSelf === true;
     // 背景行只陈述事实：不带 @/回复标签（流水没存这些字段），合集在入站记账时
     // 已折叠成短标记（forward_collapsed），不渲染附加段。
     slots.push({
@@ -432,8 +436,8 @@ export function withContext(
         // 背景行同样要能看出「这条在 @ 谁 / 在回谁」：只喂指向性标签，
         // 不带完整 quoted（否则引用原文附加段会跟着膨胀，5.9 的附加段只给锚点）
         ...(line.mentionTargets !== undefined ? { mentionTargets: line.mentionTargets } : {}),
-        ...(line.quotedAuthor !== undefined ? { quotedAuthor: line.quotedAuthor } : {}),
-        ...(line.quotedAuthorIsSelf !== undefined ? { quotedAuthorIsSelf: line.quotedAuthorIsSelf } : {}),
+        ...(quoteAuthor !== undefined ? { quotedAuthor: quoteAuthor } : {}),
+        ...(quoteSelf ? { quotedAuthorIsSelf: true } : {}),
       },
       seen: seenOf(line),
     });
