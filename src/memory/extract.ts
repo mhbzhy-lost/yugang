@@ -1,8 +1,9 @@
 /**
  * 压缩期的记忆抽取器：用便宜模型从「结构化原始群聊转录」抽候选，机械对账成 patch。
  *
- * 对账三分类（T11，决策 17）：模型输出 candidates 数组，每条 {action: ADD|SUPERSEDE,
- * type: fact|profile|lore|card, subject, factId?(SUPERSEDE 必填), text, signal[], confidence}；
+ * 对账四分类（T11 + 2026-11-05 时效性核对）：模型输出 candidates 数组，每条
+ * {action: ADD|SUPERSEDE|EXPIRE, type: fact|profile|lore|card, subject, factId?
+ * (SUPERSEDE/EXPIRE 必填), text?, quote?(EXPIRE 必填，逐字入站原文), signal[], confidence}；
  * SKIP 由模型报进 skipped 计数，不产出。SUPERSEDE 的 subject 不采信模型——由 known
  * 附带的 factId→subject 映射机械解析（解析不到就弃）。signal 两类（命中 people 名单 /
  * 与现有 fact 冲突）由代码机械重算，模型标注只作教学不作数据。confidence 只认
@@ -21,7 +22,15 @@
 import type { Models } from "@earendil-works/pi-ai/models";
 import { localDay } from "../records/usage.ts";
 import { renderTemplate, type PromptSet } from "../prompt/index.ts";
-import { FACT_TEXT_CHARS, MEMORY_CAPS, type ExtractSignals, type FactSource, type MemoryPatch } from "./index.ts";
+import {
+  FACT_TEXT_CHARS,
+  MEMORY_CAPS,
+  MEMORY_EXPIRE_PER_PAGE,
+  MEMORY_EXPIRE_QUOTE_CHARS,
+  type ExtractSignals,
+  type FactSource,
+  type MemoryPatch,
+} from "./index.ts";
 
 export interface ExtractOptions {
   models: Models;
@@ -34,7 +43,7 @@ const SUBJECT_RE = /^(qq:\d{4,12}|name:[^\s:]{1,20})$/;
 const FACT_ID_RE = /^f-[a-z0-9]{12,}$/;
 const FACT_SOURCES: readonly FactSource[] = ["stated", "observed", "reported"];
 const LORE_KINDS = ["word", "meme", "rule"] as const;
-const CANDIDATE_ACTIONS = ["ADD", "SUPERSEDE"] as const;
+const CANDIDATE_ACTIONS = ["ADD", "SUPERSEDE", "EXPIRE"] as const;
 const CANDIDATE_TYPES = ["fact", "profile", "lore", "card"] as const;
 /** confidence 枚举（终审 #3 加严）：缺失或不认识的值整条丢弃，不再默认放行。 */
 const CONFIDENCE_LEVELS = ["high", "medium", "low"] as const;
@@ -69,7 +78,12 @@ export type ExtractSaved = Exclude<ExtractOutcome, { status: "parse_failed" }>;
 
 export async function extractMemories(
   options: ExtractOptions,
-  input: { transcript: string; known: string; subjects: readonly { subject: string; name: string }[] },
+  input: {
+    transcript: string;
+    known: string;
+    subjects: readonly { subject: string; name: string }[];
+    inboundTexts: readonly string[];
+  },
   mode: { review: boolean } = { review: false },
 ): Promise<ExtractOutcome> {
   const model = options.models.getModel(options.model.provider, options.model.modelId);
@@ -107,10 +121,16 @@ export async function extractMemories(
   const result = reconcileCandidates(parsed, input, mode);
   if (result === undefined) return { status: "parse_failed", reason: "bad_shape" };
   const { patch, skipped, signals } = result;
-  const people = patch.people?.length ?? 0;
-  const lore = patch.lore?.length ?? 0;
-  const cards = patch.cards?.length ?? 0;
-  if (people + lore + cards === 0) return { status: "empty", skipped };
+  // 非空判定必须覆盖全部通道：只数 people/lore/cards 会把「纯 supersede」和「纯 expire」
+  // 的产出误判成 zero-extract（旧 bug 的同类，2026-11-05 审阅 A1）
+  const total =
+    (patch.people?.length ?? 0) +
+    (patch.lore?.length ?? 0) +
+    (patch.cards?.length ?? 0) +
+    (patch.supersede?.length ?? 0) +
+    (patch.expire?.length ?? 0) +
+    (patch.feedback?.length ?? 0);
+  if (total === 0) return { status: "empty", skipped };
   return { status: "ok", patch, signals, skipped };
 }
 
@@ -161,9 +181,15 @@ interface Reconciled {
  *   - signal 机械重算：people = 候选主体命中已知人物名单（card 看任一 subject），
  *     conflict = SUPERSEDE 有效解析；模型标注的 signal 不采信。
  */
-function reconcileCandidates(
+export function reconcileCandidates(
   raw: unknown,
-  input: { known: string; subjects: readonly { subject: string; name: string }[] },
+  input: {
+    known: string;
+    subjects: readonly { subject: string; name: string }[];
+    /** EXPIRE 的证据域：本页**入站原文**（fish.inbound.data.text）。刻意不含鱼自己的
+     *  outbound 与主人评价——否则鱼可以拿自己的推测自证「这条事实过期了」。 */
+    inboundTexts: readonly string[];
+  },
   mode: { review: boolean },
 ): Reconciled | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
@@ -179,8 +205,12 @@ function reconcileCandidates(
   const lore: NonNullable<MemoryPatch["lore"]> = [];
   const cards: NonNullable<MemoryPatch["cards"]> = [];
   const supersede: NonNullable<MemoryPatch["supersede"]> = [];
-  const signals: ExtractSignals = { people: 0, conflict: 0 };
+  const expire: NonNullable<MemoryPatch["expire"]> = [];
+  const signals: ExtractSignals = { people: 0, conflict: 0, expired: 0 };
   const supersededIds = new Set<string>();
+  // EXPIRE 去重（D3）：同一 factId 同页只收一次；一条 quote 只支持一个 factId。
+  const expiredIds = new Set<string>();
+  const usedQuotes = new Set<string>();
 
   for (const item of rawCandidates) {
     if (typeof item !== "object" || item === null) continue;
@@ -194,9 +224,23 @@ function reconcileCandidates(
     // low 正常轮机械丢弃（试金石的机械兜底）；复查轮放宽：low 也收，交主人筛
     if (typeof confidence !== "string" || !CONFIDENCE_LEVELS.includes(confidence as (typeof CONFIDENCE_LEVELS)[number])) continue;
     if (confidence === "low" && !mode.review) continue;
-    // SUPERSEDE 只允许 type=fact（终审 #3）：profile/lore/card 没有可被取代的 id，
-    // 越权标注一律丢弃、不降级成 ADD（prompt/memory-extract.md 也只对 fact 定义 SUPERSEDE）
-    if (action === "SUPERSEDE" && type !== "fact") continue;
+    // SUPERSEDE / EXPIRE 只允许 type=fact：profile/lore/card 没有可被取代/失效的 id，
+    // 越权标注一律丢弃、不降级成 ADD
+    if ((action === "SUPERSEDE" || action === "EXPIRE") && type !== "fact") continue;
+
+    // EXPIRE（时效性淘汰）：只认 factId + 逐字 quote，不造事实、不进 people 累加器
+    if (action === "EXPIRE") {
+      // 防误杀（D3）：过时判定比「记新的」危险得多，复查轮也不放宽 confidence
+      if (confidence !== "high") continue;
+      const entry = readExpire(candidate, known, input.inboundTexts ?? []);
+      if (!entry) continue;
+      if (expiredIds.has(entry.id) || usedQuotes.has(entry.quote)) continue;
+      expiredIds.add(entry.id);
+      usedQuotes.add(entry.quote);
+      if (entry.signalPeople) signals.people += 1;
+      expire.push(entry.patchEntry);
+      continue;
+    }
 
     if (type === "fact") {
       const fact = readFact(candidate, action, known);
@@ -245,7 +289,10 @@ function reconcileCandidates(
       ...(person.style !== undefined ? { style: person.style } : {}),
       ...(person.catchphrases.length > 0 ? { catchphrases: person.catchphrases } : {}),
     }));
-  const patch = restrictSubjects({ people, lore, cards, supersede }, allowed);
+  // 「有替代优先」（D6）：整批解析完再过滤，不依赖候选在 JSON 里的先后顺序
+  const expireFinal = expire.filter((entry) => !supersededIds.has(entry.id)).slice(0, MEMORY_EXPIRE_PER_PAGE);
+  signals.expired = expireFinal.length;
+  const patch = restrictSubjects({ people, lore, cards, supersede, expire: expireFinal }, allowed);
   return { patch, skipped, signals };
 }
 
@@ -266,6 +313,27 @@ function personOf(map: Map<string, AccPerson>, subject: string): AccPerson {
     map.set(subject, person);
   }
   return person;
+}
+
+/**
+ * EXPIRE 候选：只要 factId + 逐字 quote + 机械解析出的 subject。
+ * 证据闸（D2）：quote 先过与 safeShort 同款的过滤（限长/控制字符/隐私/注入），再要求它是
+ * **本页入站原文集合**里某一条的 substring——扁平 transcript 里含鱼自己的发言，不能当证据域。
+ */
+function readExpire(
+  candidate: Record<string, unknown>,
+  known: KnownIndex,
+  inboundTexts: readonly string[],
+): { id: string; quote: string; signalPeople: boolean; patchEntry: { subject: string; id: string; quote: string } } | undefined {
+  const rawId = candidate["factId"];
+  if (typeof rawId !== "string" || !FACT_ID_RE.test(rawId.trim())) return undefined;
+  const id = rawId.trim();
+  const subject = known.idToSubject.get(id);
+  if (subject === undefined) return undefined;
+  const quote = safeShort(candidate["quote"], MEMORY_EXPIRE_QUOTE_CHARS);
+  if (quote === undefined) return undefined;
+  if (!inboundTexts.some((text) => text.includes(quote))) return undefined;
+  return { id, quote, signalPeople: known.people.has(subject), patchEntry: { subject, id, quote } };
 }
 
 /** fact 候选：ADD 看模型给的 subject（仍要过格式），SUPERSEDE 只信 factId→subject 机械解析。 */
@@ -402,5 +470,7 @@ function restrictSubjects(patch: MemoryPatch, allowed: ReadonlySet<string>): Mem
   const lore = patch.lore ?? [];
   const cards = (patch.cards ?? []).map((card) => ({ ...card, subjects: card.subjects.filter((subject) => allowed.has(subject)) }));
   const supersede = (patch.supersede ?? []).filter((entry) => allowed.has(entry.subject));
-  return { people, lore, cards, supersede };
+  // 新字段必须显式带上：这个函数是「重建 patch」，漏一个字段就等于整条通道失效
+  const expire = (patch.expire ?? []).filter((entry) => allowed.has(entry.subject));
+  return { people, lore, cards, supersede, expire };
 }
