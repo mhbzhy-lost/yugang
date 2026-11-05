@@ -33,6 +33,7 @@ import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-d
 import { getBiliClient, type BiliClient } from "../../external/bili-client.ts";
 import { sanitizeExternalText } from "../../external/sanitize.ts";
 import { recordViewedVideo, viewedVideoOf } from "../../external/video-browse.ts";
+import { biliOpusUrl, biliVideoUrl } from "../../external/video-links.ts";
 import { rememberViewedVideoTitle } from "../../external/video-pool.ts";
 import { loadFishConfig } from "../../fish-config.ts";
 import { renderTemplate } from "../../prompts.ts";
@@ -239,6 +240,10 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
               `${author}${published ? ` · ${published}` : ""} 的图文动态`,
               sanitizeExternalText(body, { maxLen: 600 }),
             ].filter((s) => s.length > 0);
+            // canonical 链接由宿主渲染（模型不写 URL）：模型分享这条动态时直接抄它
+            head.push(
+              renderTemplate(deps.prompts.messages["video_canonical_url"] ?? "", { url: biliOpusUrl(opusId) }),
+            );
 
             let picText = "";
             if (deps.models && deps.visionModel && pics.length > 0) {
@@ -278,6 +283,10 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         const head = [
           `《${sanitizeExternalText(d.title, { maxLen: 60 })}》`,
           `UP主 ${sanitizeExternalText(d.owner.name, { maxLen: 60 }) || "?"} · ${Math.round(duration / 60)} 分钟 · 播放 ${d.stat.view.toLocaleString()}`,
+          // canonical 链接由宿主渲染（模型不写 URL）：分享这条视频时直接抄它，
+          // say_words 的出口白名单也会按它登记（2026-11-05：以前这里没链接，
+          // 模型拼的 URL 一律被白名单拒，看过的视频发不出去）
+          renderTemplate(deps.prompts.messages["video_canonical_url"] ?? "", { url: biliVideoUrl(bv) }),
         ];
         if (truncated) {
           head.push(

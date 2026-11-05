@@ -1,4 +1,5 @@
 {
+  "video_canonical_url": "链接：{{url}}",
   "video_invalid": "那不是 B 站视频链接",
   "video_failed": "视频没打开：{{url}}",
   "card_bilibili": "[B站视频卡片] {{desc}} {{url}}",

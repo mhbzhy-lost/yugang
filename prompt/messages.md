@@ -93,6 +93,8 @@ video_answer_rule: [本轮要求] 只有 @ 你的这条消息明确要求你看/
 tool_timeout: 这个工具卡住超过半分钟了，先别重试，换个办法或者说句话
 
 # 重耗时工具执行中的宿主机械提示（工具 execute 入口经 outbox 发出，不是模型发言）：
+# 只在 answer 轮发（有人正在等）；ambient / injection / 自己逛的破窗轮不发——没人问，
+# 冒一句「稍等」像和空气说话（src/working-receipt.ts 是唯一判定）。
 # meme_import 在登记时发（立即确认收到），meme_add 在本轮首次打标时发
 working_video: 我去把这个视频翻出来看看，稍等
 working_draw: 在画了，稍等一下下
