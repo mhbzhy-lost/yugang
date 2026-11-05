@@ -50,7 +50,7 @@
  */
 import { createHash } from "node:crypto";
 import { isCurfewAt } from "./curfew.ts";
-import { VIDEO_TOPICS } from "./external/video-browse.ts";
+import { VIDEO_TOPICS } from "../external/video-browse.ts";
 
 /** 群白名单判定：chatKey 形如 qq:group:NNN（含人格后缀也认前缀），群号在名单内才算命中。 */
 export function engageGroupsIncludes(groups: readonly string[], chatKey: string): boolean {

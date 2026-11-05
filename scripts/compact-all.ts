@@ -11,8 +11,8 @@
  * 里的每个会话调 fish.compact（含摘要模型调用），然后关闭。
  */
 import { join } from "node:path";
-import { loadFishModels } from "../src/model-config.ts";
-import { createFishModels } from "../src/models.ts";
+import { loadFishModels } from "../src/model/config.ts";
+import { createFishModels } from "../src/model/models.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openFish } from "../src/harness.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";

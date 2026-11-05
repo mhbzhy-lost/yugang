@@ -11,7 +11,7 @@
  */
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { ExternalAmmoDoc } from "../../external/ammo-store.ts";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import { ammoCurfewAt, ammoShareGateOf } from "../say-shared.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";

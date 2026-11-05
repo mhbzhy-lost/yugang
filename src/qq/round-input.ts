@@ -1,6 +1,6 @@
 /** 可导入的轮级输入拼装入口：index.ts 与权威模板机械测试共用，无副作用。 */
 import type { IncomingMessage } from "./onebot.ts";
-import { renderTemplate } from "../prompts.ts";
+import { renderTemplate } from "../prompt/index.ts";
 import { renderForwardAttachment, renderMessageList, type ForwardAttachment, type MessageTable, type ModelMessage } from "./model-input.ts";
 
 export interface OpenMessage {

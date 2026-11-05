@@ -13,8 +13,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { LiveDoc, defineEntry } from "@earendil-works/pi-durable";
-import { renderTemplate } from "../prompts.ts";
-import { isCurfewAt } from "../curfew.ts";
+import { renderTemplate } from "../prompt/index.ts";
+import { isCurfewAt } from "../qq/curfew.ts";
 import { OutboxDoc } from "../store.ts";
 import type { Rejection } from "../egress/policy.ts";
 import type { RoundKind, RoundTrigger, ToolPackageDeps } from "./types.ts";

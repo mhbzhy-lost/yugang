@@ -18,7 +18,7 @@
  */
 import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
 import { defineDoc, type Harness } from "@earendil-works/pi-durable";
-import { localDay } from "../usage.ts";
+import { localDay } from "../records/usage.ts";
 
 /** 错过时点的补跑窗口（决策 3：≤2h 补跑一次）。 */
 export const CATCHUP_WINDOW_MS = 2 * 60 * 60_000;

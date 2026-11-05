@@ -21,9 +21,9 @@
  */
 import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { loadProviderConfig } from "../src/model-config.ts";
-import { createFishModels } from "../src/models.ts";
-import { finishBrowserLogin as finishOpenAIBrowserLogin, startBrowserLogin as startOpenAIBrowserLogin } from "../src/oauth-openai.ts";
+import { loadProviderConfig } from "../src/model/config.ts";
+import { createFishModels } from "../src/model/models.ts";
+import { finishBrowserLogin as finishOpenAIBrowserLogin, startBrowserLogin as startOpenAIBrowserLogin } from "../src/auth/openai.ts";
 import {
   finishBrowserLogin as finishGoogleBrowserLogin,
   startBrowserLogin as startGoogleBrowserLogin,
@@ -31,9 +31,9 @@ import {
   GEMINI_SCOPES,
   ANTIGRAVITY_REDIRECT_URI,
   ANTIGRAVITY_SCOPES,
-} from "../src/oauth-google.ts";
-import { discoverProject, fetchAvailableModels, type CodeAssistFlavor } from "../src/api-google-code-assist.ts";
-import { fileCredentialStore } from "../src/credential-store.ts";
+} from "../src/auth/google.ts";
+import { discoverProject, fetchAvailableModels, type CodeAssistFlavor } from "../src/model/google-code-assist.ts";
+import { fileCredentialStore } from "../src/auth/credentials.ts";
 import { createProxyFetch } from "../src/media/proxy-fetch.ts";
 
 const args = process.argv.slice(2);
@@ -197,7 +197,7 @@ if (mode === "finish") {
   }
   const saved = readState(target);
   const credential = await finishOpenAIBrowserLogin(saved, finishInput);
-  await import("../src/credential-store.ts").then(async ({ fileCredentialStore }) => {
+  await import("../src/auth/credentials.ts").then(async ({ fileCredentialStore }) => {
     const store = fileCredentialStore(config.credentialsPath);
     await store.modify(target, async () => credential);
   });

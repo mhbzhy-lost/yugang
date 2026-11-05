@@ -9,7 +9,7 @@ import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { validateOutbound } from "../../egress/policy.ts";
 import { ledgerOf, recordMedia } from "../../egress/ledger.ts";
 import { synthesizeToMedia } from "../../tts.ts";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { chargeSayRound, enqueueOutbound, normalizeTextInput, resolveSayContext, throwSayRejection, type OutboundPayload } from "../say-shared.ts";

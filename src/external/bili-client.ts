@@ -17,7 +17,7 @@
  */
 import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { localDay } from "../usage.ts";
+import { localDay } from "../records/usage.ts";
 
 export type BiliEndpoint = "popular" | "ranking" | "view" | "dm" | "reply" | "card" | "spi";
 

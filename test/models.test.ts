@@ -12,8 +12,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describeModel, loadFishModels, loadProviderConfig } from "../src/model-config.ts";
-import { assertModelExists, createFishModels } from "../src/models.ts";
+import { describeModel, loadFishModels, loadProviderConfig } from "../src/model/config.ts";
+import { assertModelExists, createFishModels } from "../src/model/models.ts";
 
 const EXAMPLE_MODELS = fileURLToPath(new URL("../config/models.example.json", import.meta.url));
 const FAKE_KEY = "test-key-0123456789abcdef";

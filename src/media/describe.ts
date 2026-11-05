@@ -16,7 +16,7 @@
  * 兜底沿用同一套分类与退避，自身不再套兜底。
  */
 import type { Models } from "@earendil-works/pi-ai";
-import type { PromptSet } from "../prompts.ts";
+import type { PromptSet } from "../prompt/index.ts";
 
 export interface DescribeDeps {
   models?: Models;

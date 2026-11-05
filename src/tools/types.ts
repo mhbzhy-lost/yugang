@@ -8,7 +8,7 @@
  */
 import type { Models } from "@earendil-works/pi-ai";
 import type { ConversationId, ToolRegistration } from "@earendil-works/pi-durable";
-import type { PromptSet } from "../prompts.ts";
+import type { PromptSet } from "../prompt/index.ts";
 
 /** TOOL.md Schema 里受控的动态枚举扩展键；x-yugang-* 是保留命名空间，其它键一律拒绝。 */
 export const ENUM_FROM_KEY = "x-yugang-enum-from";

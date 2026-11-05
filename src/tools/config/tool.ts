@@ -20,10 +20,10 @@
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { loadFishConfig, FISH_CONFIG_FIELDS, type FieldCheck, type FishConfigFieldSpec } from "../../fish-config.ts";
 import { getBiliClient } from "../../external/bili-client.ts";
-import type { ModelsFile, ModelRole } from "../../model-config.ts";
+import type { ModelsFile, ModelRole } from "../../model/config.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { assertTriggeredByMaster, type SnapshotApi } from "../fs-shared.ts";

@@ -37,11 +37,11 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createSession, type Session } from "@earendil-works/pi-durable";
 import type { Models } from "@earendil-works/pi-ai/models";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { loadFishModels } from "../src/model-config.ts";
-import { createFishModels } from "../src/models.ts";
-import { loadPrompts } from "../src/prompts.ts";
-import { DEFAULT_PERSONA_KEY, memoryKeyOf, privateMemoryKeyOf } from "../src/memory-scope.ts";
-import { approvePending, rejectPending, deleteFactById, hasFact, summarizePatch, formatAgeShort, signalsSuffix, MEMORY_ZERO_EXTRACT_PAGES, publicizePatch, type MemoryPatch, type MemoryState, type PendingMemoryEntry, type PendingMemoryState } from "../src/memory.ts";
+import { loadFishModels } from "../src/model/config.ts";
+import { createFishModels } from "../src/model/models.ts";
+import { loadPrompts } from "../src/prompt/index.ts";
+import { DEFAULT_PERSONA_KEY, memoryKeyOf, privateMemoryKeyOf } from "../src/memory/scope.ts";
+import { approvePending, rejectPending, deleteFactById, hasFact, summarizePatch, formatAgeShort, signalsSuffix, MEMORY_ZERO_EXTRACT_PAGES, publicizePatch, type MemoryPatch, type MemoryState, type PendingMemoryEntry, type PendingMemoryState } from "../src/memory/index.ts";
 import { MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc } from "../src/store.ts";
 
 const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");

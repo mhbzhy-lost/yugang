@@ -6,7 +6,7 @@
  * 这里不内嵌提示词。顺序固定按工具名排序（loader 已排好），输入只来自启动期
  * manifest（trusted），不读用户消息。header/行格式来自 prompt/messages.md。
  */
-import { renderTemplate } from "../prompts.ts";
+import { renderTemplate } from "../prompt/index.ts";
 import type { ToolManifest } from "./types.ts";
 
 /**

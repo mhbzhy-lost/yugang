@@ -42,7 +42,7 @@ import {
 import { sanitizeExternalText } from "../../external/sanitize.ts";
 import { VIDEO_TOPICS } from "../../external/video-browse.ts";
 import { VideoPoolDoc, type VideoPoolState } from "../../external/video-pool.ts";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 

@@ -22,7 +22,7 @@ import { LiveDoc } from "@earendil-works/pi-durable";
 import { addMeme } from "../../media/meme-store.ts";
 import { DEFAULT_LIMITS } from "../../egress/policy.ts";
 import { memeImportHas, memeImportLooked } from "../meme_import/shared.ts";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 

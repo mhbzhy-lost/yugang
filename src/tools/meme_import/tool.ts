@@ -17,7 +17,7 @@ import { join, resolve } from "node:path";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { DEFAULT_LIMITS } from "../../egress/policy.ts";
 import { checkMemeSource, type MemeSourceCode } from "../../media/meme-store.ts";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { MEME_IMPORT_MAX, registerMemeImportRound } from "./shared.ts";
