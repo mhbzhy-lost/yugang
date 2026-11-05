@@ -113,9 +113,12 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
 }
 
 /** 落盘后缀按真实字节判断，不看请求里的 output_format（后端可能不认）。 */
-function extensionOf(bytes: Buffer): "png" | "jpg" | "webp" {
+export function extensionOf(bytes: Buffer): "png" | "jpg" | "webp" | "gif" {
   if (bytes.subarray(0, 8).toString("hex") === "89504e470d0a1a0a") return "png";
   if (bytes.subarray(0, 3).toString("hex") === "ffd8ff") return "jpg";
   if (bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return "webp";
+  // 动图（GPT Image 2.6 的 output_format=gif）：按 GIF87a/GIF89a 魔数认，否则会存成 .png
+  // 导致 say_media 用 image/png 发出去、QQ 侧显示成破图
+  if (bytes.subarray(0, 4).toString("ascii") === "GIF8") return "gif";
   return "png";
 }
