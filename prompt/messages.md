@@ -163,6 +163,8 @@ cmd_memory_list_header: 待审 {{count}} 条 / 最早 {{age}}前（同意缺省�
 cmd_memory_zero_extract: 近 {{pages}} 页压缩零提取（{{persona}}），值得看看是不是漏记了
 cmd_memory_entry: [{{id}}] {{persona}} · {{origin}} · {{age}}前 · {{digest}}
 cmd_memory_supersede_note:   将失效：{{id}} {{text}}
+cmd_memory_expire_note:   淘汰：{{id}} {{text}}（依据「{{quote}}」）
+cmd_memory_expire_mismatch: 这条淘汰的目标事实不在{{track}}层（或已失效），没有做任何改动：{{id}}；换另一个轨道再批
 # 评价类待审的引用链缺失标注（终审 #6）：/记忆 列表行尾追加，紧跟 summarizeFeedback 的摘要
 memory_feedback_missing_quote: （被引消息不可回溯）
 cmd_memory_more: 还有 {{count}} 条更新的没显示，先处理完这些再列
