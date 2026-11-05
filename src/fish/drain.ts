@@ -59,15 +59,30 @@ export function installDrain(state: FishBase & { harness: Harness }): DrainParts
     }
   }
 
+  /** 队首停在 sending 多久算「发送已中断」：超过就丢弃，避免整个会话永久哑火。 */
+  const STUCK_SENDING_MS = 600_000;
+
   async function drainConversation(conversationId: ConversationId): Promise<number> {
     let sent = 0;
     for (;;) {
-      // 只看队首：sending 在队首意味着上一次发送中断（发出多少不确定），整个会话停在这里——
-      // 不翻回 queued、不重试，也绝不跳过它去发后面的 queued（宁可少发不重复）
       const box = await harness.snapshot(OutboxDoc, conversationId, ctx);
       const head = box?.queue[0];
       if (!head) return sent;
-      if (head.status === "sending") return sent;
+      // 中断的发送自愈（2026-11-05 线上事故）：标 sending 之后进程被杀（部署重启）会把这条
+      // 永远留在队首——原语义「不重发、也绝不跳过」等于把这个会话永久静音（搬史群从 17:12
+      // 起再没发出任何消息，连 /压缩 的回执都卡在队里 40 分钟）。超过 STUCK_SENDING_MS 就
+      // 当作已失效丢弃：仍不重发（不赌重复），只是不再堵住后面的消息。
+      if (head.status === "sending") {
+        const age = now() - head.at;
+        if (age <= STUCK_SENDING_MS) return sent;
+        await harness.commit(async (tx) => {
+          const doc = await tx.doc(OutboxDoc, conversationId);
+          const index = doc.queue.findIndex((item) => item.key === head.key);
+          if (index >= 0) doc.queue.splice(index, 1);
+        }, ctx);
+        console.log(`[鱼缸] 丢弃中断的发送 ${Math.round(age / 1000)}s`);
+        continue;
+      }
 
       // 陈年消息不补：超过 10 分钟的排队消息直接丢弃。原先设 2 分钟，
       // 但模型慢时（比如走订阅的 codex 一轮 30–90 秒）消息会在队列里等到过期，
