@@ -10,7 +10,7 @@
  * （先引用原文、再合集附件，最近合集补展开最后）。文案唯一来源是 prompt/messages.md
  * 的模板 key；这里的 ?? 兜底只服务于拿不到文案表的调用（值与 messages.md 一致）。
  */
-import { renderTemplate } from "../prompts.ts";
+import { renderTemplate } from "../prompt/index.ts";
 
 export const MESSAGE_LIST_START = "> 消息起始";
 export const MESSAGE_LIST_END = "> 消息结束";

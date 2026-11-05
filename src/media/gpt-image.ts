@@ -20,8 +20,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { fileCredentialStore, type OAuthCredential } from "../credential-store.ts";
-import { refreshTokens } from "../oauth-openai.ts";
+import { fileCredentialStore, type OAuthCredential } from "../auth/credentials.ts";
+import { refreshTokens } from "../auth/openai.ts";
 import { createProxyFetch } from "./proxy-fetch.ts";
 
 const GEN_ENDPOINT = "https://chatgpt.com/backend-api/codex/images/generations";

@@ -8,7 +8,7 @@
  *  - access 就是请求用的 bearer token，accountId 只是给人看，请求头由 API 层从 JWT 里取
  *  - refresh 换新 token，pi-ai 在请求路径上按 expires 判断并回写 config/auth.json
  */
-import type { OAuthCredential } from "../credential-store.ts";
+import type { OAuthCredential } from "./credentials.ts";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTH_BASE = "https://auth.openai.com";

@@ -18,7 +18,7 @@
  */
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { MemeEntry } from "../../media/meme-store.ts";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { countMoods, loadMemeIndex } from "./shared.ts";

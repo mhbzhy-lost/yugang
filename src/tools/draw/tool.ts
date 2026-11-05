@@ -17,7 +17,7 @@ import { extname, join, relative, resolve, sep } from "node:path";
 import { tmpdir, userInfo } from "node:os";
 import { connect } from "node:net";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 

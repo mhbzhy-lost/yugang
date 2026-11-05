@@ -19,7 +19,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { defineDoc } from "@earendil-works/pi-durable";
-import { renderTemplate } from "../prompts.ts";
+import { renderTemplate } from "../prompt/index.ts";
 
 /** 弹药 topic 枚举（计划 Task E4）：与 ammo_submit 的 TOOL.md Schema 一一对应，改动两处同步。 */
 export const AMMO_TOPICS: readonly string[] = ["二次元", "游戏", "军事", "数码"];

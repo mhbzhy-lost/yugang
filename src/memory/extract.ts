@@ -19,9 +19,9 @@
  *     conversation、pi.user 或 handoff，不能被主模型当作用户原话。
  */
 import type { Models } from "@earendil-works/pi-ai/models";
-import { localDay } from "./usage.ts";
-import { renderTemplate, type PromptSet } from "./prompts.ts";
-import { FACT_TEXT_CHARS, MEMORY_CAPS, type ExtractSignals, type FactSource, type MemoryPatch } from "./memory.ts";
+import { localDay } from "../records/usage.ts";
+import { renderTemplate, type PromptSet } from "../prompt/index.ts";
+import { FACT_TEXT_CHARS, MEMORY_CAPS, type ExtractSignals, type FactSource, type MemoryPatch } from "./index.ts";
 
 export interface ExtractOptions {
   models: Models;

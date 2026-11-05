@@ -44,7 +44,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { MemoryStorage } from "@earendil-works/pi-durable";
-import { loadPrompts } from "../src/prompts.ts";
+import { loadPrompts } from "../src/prompt/index.ts";
 import { loadToolManifests } from "../src/tools/manifest.ts";
 import { DISABLED_TOOL_PACKAGES, mergeToolMessages } from "../src/tools/loader.ts";
 import { withContext, type BurstMessage, type RecentChatMessage } from "../src/qq/debounce.ts";
@@ -61,7 +61,7 @@ import {
   type RoundContentBlock,
 } from "../src/qq/round-input.ts";
 import { renderNewsBroadcast, renderNewsTask } from "../src/external/news-broadcast.ts";
-import { createEngageNext, type EngageBacklogItem, type EngageShardItem } from "../src/engage-next.ts";
+import { createEngageNext, type EngageBacklogItem, type EngageShardItem } from "../src/qq/engage-next.ts";
 import { videoBrowseGateOf, wireVideoBrowseHost, type VideoBrowseGate } from "../src/external/video-browse.ts";
 import type { ShrinkResult } from "../src/media/shrink-image.ts";
 import { openFish } from "../src/harness.ts";

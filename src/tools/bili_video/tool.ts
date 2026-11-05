@@ -21,7 +21,7 @@
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { getBiliClient, isValidBvid, type BiliClient } from "../../external/bili-client.ts";
 import { sanitizeExternalText } from "../../external/sanitize.ts";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 

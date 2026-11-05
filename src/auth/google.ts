@@ -22,7 +22,7 @@
  *    所以 refreshTokens 必须把 projectId / tier / email 这些额外字段原样带回去，否则一次
  *    刷新就把项目信息冲掉了
  */
-import type { OAuthCredential } from "./credential-store.ts";
+import type { OAuthCredential } from "./credentials.ts";
 
 /** OAuth client（公开 installed-app id/secret），由登录脚本从本机 config/models.json 读出传入。
  * redirectUri / scopes 按 provider flavor 缺省：gemini-cli 用 codeassist 回调页，

@@ -17,7 +17,7 @@ import {
   emptyPendingMemory,
   type MemoryState,
   type PendingMemoryState,
-} from "./memory.ts";
+} from "./memory/index.ts";
 
 export interface ChatsState {
   /** chatKey（qq:group:123）→ conversationId；人格会话的键是 `chatKey#人格名` */

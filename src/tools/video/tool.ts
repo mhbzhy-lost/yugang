@@ -36,7 +36,7 @@ import { recordViewedVideo, viewedVideoOf } from "../../external/video-browse.ts
 import { biliOpusUrl, biliVideoUrl } from "../../external/video-links.ts";
 import { rememberViewedVideoTitle } from "../../external/video-pool.ts";
 import { loadFishConfig } from "../../fish-config.ts";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { describeImage } from "../../media/describe.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";

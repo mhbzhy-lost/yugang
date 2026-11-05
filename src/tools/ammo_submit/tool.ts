@@ -21,7 +21,7 @@ import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-d
 import { getBiliClient, isValidBvid, type BiliClient, type BiliVideoCard } from "../../external/bili-client.ts";
 import { sanitizeExternalText } from "../../external/sanitize.ts";
 import { AMMO_TOPICS, ExternalAmmoDoc, applyAmmoSubmit, isAmmoTopic } from "../../external/ammo-store.ts";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 

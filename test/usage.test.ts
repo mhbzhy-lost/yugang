@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createUsageLedger, diffUsage, sumUsage, type UsageSnapshot } from "../src/usage.ts";
+import { createUsageLedger, diffUsage, sumUsage, type UsageSnapshot } from "../src/records/usage.ts";
 
 function state(models: Record<string, unknown>, tools: Record<string, unknown> = {}) {
   return { models, tools } as never;

@@ -22,7 +22,7 @@ import { ExternalAmmoDoc, ammoVideoUrlOf, applyAmmoClaim } from "../../external/
 import { bvidOfUrl } from "../../external/video-links.ts";
 import { viewedVideoOf } from "../../external/video-browse.ts";
 import { VideoPoolDoc, applyVideoPoolAdd, viewedVideoTitleOf } from "../../external/video-pool.ts";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { OutboxDoc } from "../../store.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";

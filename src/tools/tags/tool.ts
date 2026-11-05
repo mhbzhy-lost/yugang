@@ -8,7 +8,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 

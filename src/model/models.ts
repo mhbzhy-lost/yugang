@@ -7,12 +7,12 @@
 import { createModels, createProvider, type Models } from "@earendil-works/pi-ai/models";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAICodexResponsesApi } from "@earendil-works/pi-ai/api/openai-codex-responses.lazy";
-import { googleCodeAssistApi } from "./api-google-code-assist.ts";
-import { openaiCodexOAuth } from "./oauth-openai.ts";
-import { googleGeminiOAuth } from "./oauth-google.ts";
-import { fileCredentialStore } from "./credential-store.ts";
-import { createProxyFetch, registerScopedProxy } from "./media/proxy-fetch.ts";
-import type { FishModelConfig } from "./model-config.ts";
+import { googleCodeAssistApi } from "./google-code-assist.ts";
+import { openaiCodexOAuth } from "../auth/openai.ts";
+import { googleGeminiOAuth } from "../auth/google.ts";
+import { fileCredentialStore } from "../auth/credentials.ts";
+import { createProxyFetch, registerScopedProxy } from "../media/proxy-fetch.ts";
+import type { FishModelConfig } from "./config.ts";
 
 /** 把一份 provider 配置挂到已有的 Models 上（主模型与视觉模型可能是不同 provider）。 */
 export function addFishProvider(models: Models, config: FishModelConfig): Models {

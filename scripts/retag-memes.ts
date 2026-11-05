@@ -16,7 +16,7 @@
  */
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { loadFishModels } from "../src/model-config.ts";
+import { loadFishModels } from "../src/model/config.ts";
 
 interface Entry {
   file: string;

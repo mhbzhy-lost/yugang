@@ -25,8 +25,8 @@ import { loadToolManifests } from "../src/tools/manifest.ts";
 import { mergeToolMessages } from "../src/tools/loader.ts";
 import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
 import { recordMedia } from "../src/egress/ledger.ts";
-import { loadPrompts } from "../src/prompts.ts";
-import { personaOf, pickVoice } from "../src/voice-route.ts";
+import { loadPrompts } from "../src/prompt/index.ts";
+import { personaOf, pickVoice } from "../src/qq/voice-route.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));

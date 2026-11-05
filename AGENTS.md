@@ -23,6 +23,22 @@
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
 
+**入口只注册**（2026-11-05）：`src/index.ts` 不写任何业务逻辑，只有 `app.use(...)`
+（消息链顺序）、`app.onFlush(...)`（debounce 整组提交）、`app.onStart/onStop(...)`
+（启动/退出）和最后的 `bootRuntime()` / `app.start()`。实现都在 `src/app/runtime.ts`；
+壳子 `src/app/app.ts` 零业务依赖。`test/index-registration.test.ts` 会挡住函数定义、
+控制流和消息链顺序变更——想加入口逻辑，先把它放进对应的中间件或生命周期钩子。
+
+**装配器也是注册表**（2026-11-05）：`src/harness.ts` 只有一排 `.install(...)`（工具面 →
+扩展 → Harness → 启动迁移 → 压缩器 → drain → 记忆审批 → group → compact/enqueue/close），
+每个 installer 一个文件在 `src/fish/`，链式执行器在 `src/fish/assembly.ts`。
+`test/harness-assembly.test.ts` 锁住 install 顺序与“入口不再长逻辑”。新增能力 = 新 installer +
+`openFish` 里加一行，不要把逻辑塞回 `harness.ts`。
+
+**长期记忆按关注点拆在 `src/memory/`**（model / patch / pending / publicize / query / merge /
+render），`src/memory/index.ts` 只是 barrel；安全边界注释在 `src/memory/model.ts` 顶部，外部
+importer 继续从 `./memory/index.ts` 取，导入面不变。
+
 ## 硬约束
 
 ### 1. 模型能看到的文字只有两个来源：`prompt/` 下的 markdown 与 `src/tools/<name>/TOOL.md`
@@ -36,7 +52,7 @@
 - 模板用 `{{name}}` 严格替换，缺变量直接抛错
 - 想加宿主/共享层文案，加进 `prompt/messages.md`；想加某个工具的专属回执，加进它目录下的
   `messages.json`（key 不许与中心文件或其它工具重复，loader 合并时撞车直接启动失败）；
-  想加新 prompt，加新文件并接到 `src/prompts.ts`
+  想加新 prompt，加新文件并接到 `src/prompt/index.ts`
 
 ### 2. 工具 = `src/tools/<name>/TOOL.md + tool.ts` 工具包
 
@@ -146,7 +162,7 @@
 - 协议端配置由 `scripts/protocol.ts` 生成，**路径随平台**：macOS 在 QQ 容器目录，其它在 `var/protocol/napcat`
 - 不要在 `config/models.json` / `config/models.example.json` 里写 key，`npm test` 会扫模板
 - **key 只在内存里**：不进 prompt、不进 transcript、不进日志。`describeModel()` 只报"已加载 / N 字符"和来源路径
-- 网关兼容值（`maxTokensField: max_tokens`）由 `src/model-config.ts` 的 `withCompat()` 兜底，模型自带 compat 可覆盖
+- 网关兼容值（`maxTokensField: max_tokens`）由 `src/model/config.ts` 的 `withCompat()` 兜底，模型自带 compat 可覆盖
 - 换模型：编辑 `config/models.json` 的 `models.main` / `models.vision` / `models.image`（`vision` 省略 = main，
   `image` 省略 = `gpt_image` 不可用，`vision_fallback` 省略 = 无兜底），改完让鱼 `restart` 生效；没有 `MODEL_PROVIDER` / `MODEL_ID` / `GATE_*` / `VISION_*` / `YUGANG_MODELS` 这类入口
 - 验证：`npm run creds show` / `npm run ping`（都只报长度，不打印 key）
@@ -178,7 +194,7 @@
   其余非 @ 群消息一律按开窗两态——closed（默认 10 分钟，`engage.closedMinutes`）`skip:next_pending`
   不进模型，open（默认 3 分钟，`engage.openMinutes`）`enter:free_pass`；回复合集不构成例外
   （回复鱼或回复合集都只是引用动作，决定回复与展开的都是 @），限流/随机门判定已随 legacy 删除
-- **定时开窗两态是唯一的搭话行为**（`src/engage-next.ts` 状态机按群循环，每 tick 现读配置）：
+- **定时开窗两态是唯一的搭话行为**（`src/qq/engage-next.ts` 状态机按群循环，每 tick 现读配置）：
   closed 态 @ 必答不变，非 @ 群消息统一 `skip:next_pending` 不进模型；open 态非 @ 群消息
   `enter:free_pass` 按 `engage.shardSeconds`（缺省 20 秒）分片——每拍把窗内**全部发送者**的新消息
   合并成一轮 ambient 提交（在途时并入下一拍，不并发；非必答：不触发正文兜底，零出口合法）。
@@ -187,7 +203,7 @@
   （上限 max(30, `engage.windowRelaxCap`)，缺省仍 30）、chatlog、昵称映射、`#recentForward`
   合集 id 缓存等旁路记账也照常。`@全体成员` / `@别人` 不置 mentionsBot，天然按非 @ 处理。
   非法值保留缺省并告警
-- **开窗输入统一为标准消息列表**：injection / shard 有消息时不再附加窗口说明、旧账或弹药栏；没有 `[这条消息@了你]` 就不构成必答。零新增空窗不再由沉默、nudge、旧账或弹药触发，只在每个 open 窗进入时一次 `video.browseChance`（缺省 0.3）门开时提交 `[主动交流机会]`，当前会话可自行 `bili_hot` 找候选、`video` 实际观看后把「推荐语 + 链接」用 `say_words` 发出去；ambient shard 不携带 browse 授权。末条自言禁言的机械边界仍生效（分享素材要带 `share: true`）；**宵禁（本地 02:00–09:00）落在 browse 门上**：`src/curfew.ts` 的 `isCurfewAt` 是唯一实现，开窗时 `videoBrowseOpen = !isCurfewAt(at) && roll < video.browseChance`，所以宵禁内根本不起 `[主动交流机会]` 轮，也就没有可发的 B 站链接；与 `ctx_engage_footer_night` 夜间文案同阈同向。旧 `ammoCurfewAt` 保留为已停用弹药链的同源别名。
+- **开窗输入统一为标准消息列表**：injection / shard 有消息时不再附加窗口说明、旧账或弹药栏；没有 `[这条消息@了你]` 就不构成必答。零新增空窗不再由沉默、nudge、旧账或弹药触发，只在每个 open 窗进入时一次 `video.browseChance`（缺省 0.3）门开时提交 `[主动交流机会]`，当前会话可自行 `bili_hot` 找候选、`video` 实际观看后把「推荐语 + 链接」用 `say_words` 发出去；ambient shard 不携带 browse 授权。末条自言禁言的机械边界仍生效（分享素材要带 `share: true`）；**宵禁（本地 02:00–09:00）落在 browse 门上**：`src/qq/curfew.ts` 的 `isCurfewAt` 是唯一实现，开窗时 `videoBrowseOpen = !isCurfewAt(at) && roll < video.browseChance`，所以宵禁内根本不起 `[主动交流机会]` 轮，也就没有可发的 B 站链接；与 `ctx_engage_footer_night` 夜间文案同阈同向。旧 `ammoCurfewAt` 保留为已停用弹药链的同源别名。
 - **闸放行 ≠ 立刻提交**：放行的群消息按「群 + 发送者」攒 **10 秒静默**（窗口固定，没有环境变量、没有最长等待），
   同一发送者的新消息取消旧计时并继续加长，不同发送者互不干扰；静默满 10 秒才把整组提交一次
   （这套按发送者的合并只管 @ 必答轮；open 态的非 @ free_pass 消息不进这里，改投 shard
@@ -234,7 +250,7 @@
 
 ### 12. 表情包：一级情绪词表是检索入口
 
-- `prompt/meme-tags.md` 是**受控词表**（13 个情绪词），`src/prompts.ts` 读成 `memeTags`，代码里不写死
+- `prompt/meme-tags.md` 是**受控词表**（13 个情绪词），`src/prompt/index.ts` 读成 `memeTags`，代码里不写死
 - `meme_add` 打标**必须**含至少一个一级词（机械校验）；自由词随便加，但不参与一级检索
 - `meme` 工具参数是 `mood`（字面量联合：一级情绪词，或特殊分支「按标签」）+ 可选 `tags`（二级筛选，能力给到、不引导使用）；
   「按标签」不属于一级词表，只用于目标不是情绪时按 tags/caption 全库检索，且必须至少一个 tags（缺失按 tool error 拒）；
@@ -339,7 +355,7 @@
   梗」类动态内容由记忆链路维护；抽取提示词（`prompt/memory-extract.md`）要求在与
   某人的交流中持续提炼对其的新印象，照旧只进待审、不直接落库
 - **抽取评价机制（2026-11，T11）**：抽取提示词是唯一源（`prompt/memory-extract.md`，
-  复查宽松版在 `prompt/memory-extract-review.md`，均接 `src/prompts.ts`）——试金石
+  复查宽松版在 `prompt/memory-extract-review.md`，均接 `src/prompt/index.ts`）——试金石
   「未来对话会受益吗」（durable ✅ / 不可证伪模糊断言 ❌）+ few-shot 正反例（正例含
   新群友身份/梗的来历/主人的约定/对鱼的纠正/对某人的新印象/热梗缩写黑话 lore：
   无法从字面理解且群友有解释或可推断，keys=原话≤10 字、text=释义≤60 字含首次出现
@@ -355,7 +371,7 @@
   打「近 N 页压缩零提取」+ 压缩链路用宽松提示词重跑本页一次（只一次不循环；失败不清
   计数、不阻塞换页）。待审列表（/记忆 与 `npm run memory --pending`）展示 signal 标签
   （已知人物/事实冲突，代码机械重算、不采信模型标注）；不自动 DELETE
-- **上限写死在 `src/memory.ts` 的 `MEMORY_CAPS`**：人 ≤12、每人事实 ≤8 且总字数 ≤320、
+- **上限写死在 `src/memory/model.ts` 的 `MEMORY_CAPS`**：人 ≤12、每人事实 ≤8 且总字数 ≤320、
   names ≤5、style ≤120 字、口头禅 ≤8 条且每条 ≤24 字、lore ≤40（key ≤5 个且每个 ≤10 字、
   text ≤60 字）、cards ≤60（text ≤80 字、keys ≤5、subjects ≤8）、单次 section 渲染 ≤900 字、
   已知记忆输入 ≤8000 字。冲突不删除：`supersede` 置 `invalidAt` 并同时回填

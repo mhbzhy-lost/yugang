@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LiveDoc } from "@earendil-works/pi-durable";
-import { loadPrompts } from "../src/prompts.ts";
+import { loadPrompts } from "../src/prompt/index.ts";
 import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
 import { createSayMediaTool } from "../src/tools/say_media/tool.ts";
 import { loadToolManifests } from "../src/tools/manifest.ts";

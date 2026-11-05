@@ -22,7 +22,7 @@ import { existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve, sep, extname, relative } from "node:path";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
-import { renderTemplate } from "../../prompts.ts";
+import { renderTemplate } from "../../prompt/index.ts";
 import { ledgerOf, recordLook } from "../../egress/ledger.ts";
 import { describeImage, isDescribeFiltered } from "../../media/describe.ts";
 import { checkMemeSource } from "../../media/meme-store.ts";

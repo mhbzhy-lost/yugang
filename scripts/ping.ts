@@ -6,8 +6,8 @@
  * 模型选择只认 config/models.json 的 models.main / models.vision / models.image，
  * 没有环境变量、没有启动参数。凭据只在进程内存里，输出里只有"已加载 / N 字符"和来源路径。
  */
-import { createFishModels, assertModelExists } from "../src/models.ts";
-import { describeModel, loadFishModels } from "../src/model-config.ts";
+import { createFishModels, assertModelExists } from "../src/model/models.ts";
+import { describeModel, loadFishModels } from "../src/model/config.ts";
 
 const selection = loadFishModels();
 const main = selection.main;
