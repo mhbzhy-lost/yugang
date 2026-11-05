@@ -384,7 +384,7 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
       flushShard(chatKey, state, false);
       return;
     }
-    // 宵禁（本地 02:00–09:00）：不掷门、不回调——夜里回复照常，只是不自己起话题
+    // 宵禁（本地 00:00–08:00）：不掷门、不回调——夜里回复照常，只是不自己起话题
     if (isCurfewAt(at)) return;
     const gate = rollFreeBrowse(chatKey, state, at);
     if (!gate.open) return;
@@ -460,7 +460,7 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     // 视频浏览门（T3）：复用同一枚稳定 windowId 与 random 注入点，每窗只掷一次
     // video.browseChance（严格小于：0 永不开放），并随机选定本窗 topic——同窗稳定，
     // 空窗零新增轮与 T4 的浏览工具都只认这一份结果，不重掷。
-    // 宵禁（本地 02:00–09:00，src/qq/curfew.ts）：门恒关——夜间纯搭话，不起主动轮、
+    // 宵禁（本地 00:00–08:00，src/qq/curfew.ts）：门恒关——夜间纯搭话，不起主动轮、
     // 不逛 B 站、不分享视频素材；关闸落在门上，没有 browse 授权时 bili_hot /
     // 分享视频的链接也自然拿不到（没有浏览结果就没有可发的 URL）。先掷再判，
     // 保证同一随机序列不因宵禁而串位（窗内 topic 可重现）。

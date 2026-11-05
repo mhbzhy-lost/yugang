@@ -283,7 +283,7 @@ export function ammoShareGateOf(chatKey: string): AmmoShareGate | undefined {
   return ammoShareHost?.gateOf(chatKey);
 }
 
-/** claim 时刻的宵禁（与 engage footer 二态同阈）：本地 02:00–09:00 门恒关，同窗白天门开着也不发。
+/** claim 时刻的宵禁（与 engage footer 二态同阈）：本地 00:00–08:00 门恒关，同窗白天门开着也不发。
  *  实现已收到 `src/qq/curfew.ts` 的 `isCurfewAt`（browse 门同源），这里保留旧名给已停用的弹药链。 */
 export function ammoCurfewAt(nowMs: number): boolean {
   return isCurfewAt(nowMs);

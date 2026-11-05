@@ -299,7 +299,7 @@ function triggerOpenShard(): Triggered & { collected: boolean; gate: VideoBrowse
 
 /** 零新增主动轮：空积压 + 本窗 video.browseChance 门开（index.ts L1268-1277）。 */
 function triggerBrowseEmpty(): Triggered & { gate: VideoBrowseGate | undefined } {
-  // 白天开窗（2026-11-04 10:00）：宵禁（本地 02:00–09:00）内 videoBrowseGateOf 门恒关，
+  // 白天开窗（2026-11-04 10:00）：宵禁（本地 00:00–08:00）内 videoBrowseGateOf 门恒关，
   // 空窗主动轮本就不该起——这里只能拿白天时钟验门开路径
   const clock = fakeClock(stamp(10, 0));
   let text = "";
