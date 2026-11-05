@@ -50,6 +50,8 @@ export interface QuotedMessage {
   text: string;
   images: readonly string[];
   forward?: ForwardAttachment;
+  /** 被引的这条是不是鱼自己发的（由入站解析按 self_id 机械判定）：用于「接收对象」标签。 */
+  fromSelf?: boolean;
 }
 
 export interface ModelMessage {
@@ -63,6 +65,22 @@ export interface ModelMessage {
   watched: boolean;
   quoted?: QuotedMessage;
   forward?: ForwardAttachment;
+  /** 这条消息 @ 的**其他人**昵称（不含 @鱼 / @全体）；只在整条消息没有 @鱼、@全体时有值。
+   *  渲染成 `[此消息的接收对象是 X，不是你]`，避免把「A 回 B」读成在叫自己。 */
+  mentionTargets?: readonly string[];
+}
+
+/**
+ * 入站 mentions → 接收对象名单：@鱼 或 @全体 在场时返回 undefined（这两种都包含鱼，
+ * 不能说「不是你」）；只有纯 @别人 才返回名单。值由解析层给出，渲染层只做格式。
+ */
+export function mentionTargetsOf(
+  mentions: readonly { name: string; kind: "bot" | "other" | "all" }[] | undefined,
+): readonly string[] | undefined {
+  if (!mentions || mentions.length === 0) return undefined;
+  if (mentions.some((m) => m.kind !== "other")) return undefined;
+  const names = mentions.map((m) => m.name.trim()).filter((name) => name.length > 0);
+  return names.length > 0 ? names : undefined;
 }
 
 /** 一行正文：空白折叠成单空格（decisions §2：每条消息占一行）。 */
@@ -107,6 +125,18 @@ export function renderMessageLine(message: ModelMessage, messages: MessageTable)
   }
   if (message.forward) tags.push(messages["message_forward"] ?? "[转发合集]");
   if (message.mentionsBot) tags.push(messages["message_mention_bot"] ?? "[这条消息@了你]");
+  else {
+    // 指向性标签（2026-11-05）：@ 优先于引用；@鱼/@全体 不算「不是你」（名单由解析层滤过）。
+    // 目的：A 回复 B 时鱼不要把别人的对话当成在叫自己。
+    const atTargets = message.mentionTargets ?? [];
+    const who = atTargets.length > 0
+      ? atTargets.slice(0, 3).join("、")
+      : message.quoted !== undefined && message.quoted.fromSelf !== true
+        ? message.quoted.nickname.trim()
+        : "";
+    const targetTpl = messages["message_target_other"];
+    if (who.length > 0 && targetTpl !== undefined) tags.push(renderTemplate(targetTpl, { who }));
+  }
   // [主人] 与 [特别关注] 互斥，master 优先
   if (message.master) tags.push(messages["message_master"] ?? "[主人]");
   else if (message.watched) tags.push(messages["message_watched"] ?? "[特别关注]");

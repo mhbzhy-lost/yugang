@@ -17,6 +17,7 @@
  */
 import type { MessageTable } from "./gate.ts";
 import {
+  mentionTargetsOf,
   renderForwardAttachment,
   renderMessageList,
   renderQuotedOriginal,
@@ -36,6 +37,8 @@ export interface RecentChatMessage {
   text: string;
   quoted?: QuotedMessage;
   forward?: ForwardAttachment;
+  /** 这条消息 @ 的其他人（不含 @鱼/@全体）：渲染「接收对象是…，不是你」。 */
+  mentionTargets?: readonly string[];
   at: number;
   /** 纯媒体消息形态（onebot 解析层透传，开窗积压/shard 过滤消费）：
  *  gif = 纯 GIF 消息，image = 纯图片无文字。undefined = 普通消息。 */
@@ -162,6 +165,7 @@ export function createDebouncer(options: DebouncerOptions): Debouncer {
         replyIds: [...(msg.replyIds ?? [])],
         ...(msg.messageId !== undefined ? { messageId: msg.messageId } : {}),
         ...(msg.arrivalSeq !== undefined ? { arrivalSeq: msg.arrivalSeq } : {}),
+        mentionTargets: mentionTargetsOf(msg.mentions),
         ...((quoted ?? msg.quoted) !== undefined ? { quoted: quoted ?? msg.quoted } : {}),
         ...((forward ?? msg.forward) !== undefined ? { forward: forward ?? msg.forward } : {}),
         ...(payload !== undefined ? { payload } : {}),
@@ -388,6 +392,7 @@ export function withContext(
       replyIds: [],
       master: masterOf(anchor.userId),
       watched: false,
+      ...(anchor.mentionTargets !== undefined ? { mentionTargets: anchor.mentionTargets } : {}),
       ...(anchor.quoted ? { quoted: anchor.quoted } : {}),
       ...(anchor.forward ? { forward: anchor.forward } : {}),
     };
@@ -437,6 +442,7 @@ export function withContext(
         replyIds: [...line.replyIds],
         master: masterOf(line.userId),
         watched: watchedOf(line.userId),
+        ...(line.mentionTargets !== undefined ? { mentionTargets: line.mentionTargets } : {}),
         ...(line.quoted ? { quoted: line.quoted } : {}),
         ...(line.forward ? { forward: line.forward } : {}),
       },

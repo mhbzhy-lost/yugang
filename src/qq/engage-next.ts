@@ -89,6 +89,8 @@ export interface EngageShardItem extends EngageBacklogItem {
   payload?: string;
   replyIds?: readonly string[];
   quoted?: QuotedMessage;
+  /** 这条 @ 的其他人（不含 @鱼/@全体）：批内渲染「接收对象是…，不是你」。 */
+  mentionTargets?: readonly string[];
 }
 
 /** 每 tick 现读的窗口参数（宿主从 fishConfig().config 现取）。 */
