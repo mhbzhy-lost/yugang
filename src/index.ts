@@ -68,6 +68,7 @@ import { sanitizeExternalText } from "./external/sanitize.ts";
 import { getBiliClient } from "./external/bili-client.ts";
 import { clearViewedVideos, videoBrowseGateOf, wireVideoBrowseHost } from "./external/video-browse.ts";
 import { clearSeenLinks, recordSeenLinks } from "./egress/seen-links.ts";
+import { shouldSendWorkingReceipt } from "./working-receipt.ts";
 import { planRoundImages, rewriteRoundForwardImages } from "./qq/round-images.ts";
 import { appendAnswerRules, appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderGifIngestInput, renderOpenMessageList, submitContentOf } from "./qq/round-input.ts";
 import { NEWS_BROADCAST_MAX_CHARS, renderNewsBroadcast, renderNewsTask, type NewsDigest, type NewsDigestItem, type NewsDigestSection } from "./external/news-broadcast.ts";
@@ -470,6 +471,8 @@ const fish = await openFish({
     const conv = round === "" ? undefined : roundConv.get(round);
     const text = workingTextOf(tool);
     if (!round || conv === undefined || !text) return;
+    // 回执只给正在等的人：自由交流 / 开窗注入 / 自己逛的轮里没人问，冒一句「稍等」像自言自语
+    if (!shouldSendWorkingReceipt(triggerOf.get(round)?.kind, tool)) return;
     const sentTools = workingSent.get(round);
     if (sentTools?.has(tool)) return; // 同轮同工具只发一次
     if (sentTools) sentTools.add(tool);

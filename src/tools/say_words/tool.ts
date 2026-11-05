@@ -5,8 +5,9 @@
  * 入队全部走 say-shared.ts 的共享实现，这里只做参数面的窄适配。
  * 视频分享（2026-11-05 定稿）：分享视频就是「一句推荐语 + 一个链接」，没有专用字段。
  * 唯一的机械约束是链接白名单——文本里的每个 URL 都必须是本轮工具结果里真的出现过的
- * 那一条（src/egress/seen-links.ts，宿主在工具包装层机械登记），所以模型编不出 URL，
- * 也不能把群友贴的链接原样播出去。文本里出现 B 站 BV 链接时顺手记进会话私有池
+ * 那一条（src/egress/seen-links.ts，宿主在工具包装层机械登记），**或者**是本轮 video
+ * 实际看过的那条视频的链接（按 BV 认，见 src/external/video-links.ts）；所以模型编不出
+ * URL，也不能把群友贴的链接原样播出去。文本里出现 B 站 BV 链接时顺手记进会话私有池
  * （fish.video_pool，bili_hot 用它过滤重复推荐），与 outbound/outbox 同一次提交。
  * 什么时候该看、该不该分享由 prompt 的 `[本轮要求]` 约束，工具不区分钟类型。
  * 旧外部弹药分享（ammoId，外部计划 E5）内核源码保留但模型 Schema 已不再暴露：
@@ -18,6 +19,8 @@ import { validateOutbound } from "../../egress/policy.ts";
 import { ledgerOf, recordSent } from "../../egress/ledger.ts";
 import { extractLinks, seenLinksOf } from "../../egress/seen-links.ts";
 import { ExternalAmmoDoc, ammoVideoUrlOf, applyAmmoClaim } from "../../external/ammo-store.ts";
+import { bvidOfUrl } from "../../external/video-links.ts";
+import { viewedVideoOf } from "../../external/video-browse.ts";
 import { VideoPoolDoc, applyVideoPoolAdd, viewedVideoTitleOf } from "../../external/video-pool.ts";
 import { renderTemplate } from "../../prompts.ts";
 import { OutboxDoc } from "../../store.ts";
@@ -102,7 +105,15 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
       const sharedBvids: string[] = [];
       if (links.length > 0) {
         const allowed = seenLinksOf(round);
-        const denied = links.filter((url) => !allowed.has(url));
+        const viewed = viewedVideoOf(round);
+        const denied = links.filter((url) => {
+          if (allowed.has(url)) return false;
+          // 本轮实际看过的视频：链接写法（query / 尾斜杠 / m.bilibili.com）可能和工具结果
+          // 的 canonical 形不完全一致，按 BV 认——「看过的视频就能分享」是 video 的承诺，
+          // 不能被字符串比对漏掉（2026-11-05 主人反馈：看了却发不出来）。
+          const bvid = bvidOfUrl(url);
+          return bvid === undefined || !viewed.has(bvid);
+        });
         if (denied.length > 0) {
           throw new Error(renderTemplate(
             deps.prompts.messages["say_link_not_allowed"] ?? "say_link_not_allowed",
