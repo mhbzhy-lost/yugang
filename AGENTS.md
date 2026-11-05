@@ -157,6 +157,10 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
 - **配置是本机文件**：`config/models.json`（gitignore，每台机器一份）写 models 角色表、provider 地址、模型清单、
   网关兼容值；模板是 `config/models.example.json`（进仓库），首次使用 `cp config/models.example.json config/models.json`
 - **凭据也是本机文件**：`config/auth.json`（gitignore，权限 600），只由 `npm run creds import` 写入；运行时**不读** `~/pi-config`
+- **动图需要另一条通道的 key**（2026-11-05）：`gpt_image` 的 `output_format: "gif"` 走 `api.openai.com`
+  （官方 Images API，按张计费），key 放 `config/auth.json` 的 `openai` 条目（`api_key`）；
+  Codex 订阅后端对任何 2.6 型号的 GIF 请求都返回 `400 GIF output is not enabled for this request`，
+  没有 key 时工具回执会明确说「只能出静态图」。`OPENAI_BASE_URL` 只作 API 根地址覆盖（可选）
 - **所有路径只有一个基准：仓库根**（`src/paths.ts` 的 `REPO_ROOT`，可用 `YUGANG_ROOT` 显式覆盖，
   不填按源码位置推导）。数据目录 `DATA_HOME`、媒体 `MEDIA_ROOT`、工作区 `WORKSPACE_ROOT`、
   prompt `PROMPT_ROOT`、`fish.config.json`、`config/models.json` 全部从它派生；

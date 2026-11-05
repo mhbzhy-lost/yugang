@@ -453,6 +453,17 @@ export async function bootRuntime(): Promise<void> {
         provider: modelSelection.image.provider,
         model: modelSelection.image.modelId,
         ...(modelSelection.image.proxy ? { proxy: modelSelection.image.proxy } : {}),
+        // 官方 API key 只服务动图通道（Codex 订阅后端不开 GIF）：从 auth.json 的 openai 条目读，
+        // 缺了不报错——GIF 请求会得到「未配置 API key」的可读回执
+        ...(() => {
+          try {
+            const key = (JSON.parse(readFileSync("config/auth.json", "utf8") as { openai?: { key?: string } }).openai?.key) ?? undefined;
+            return key ? { apiKey: key } : {};
+          } catch {
+            return {};
+          }
+        })(),
+        ...(process.env.OPENAI_BASE_URL ? { apiBaseUrl: process.env.OPENAI_BASE_URL } : {}),
       }
     : undefined,
   // config 工具写回 models 角色表用同一份文件

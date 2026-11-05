@@ -13,6 +13,7 @@ import { extname, resolve, sep } from "node:path";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { renderTemplate } from "../../prompt/index.ts";
 import { generateGptImages } from "../../media/gpt-image.ts";
+import { generateOpenAIImages } from "../../media/openai-image.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { fenceReadablePath } from "../fs-shared.ts";
@@ -105,6 +106,45 @@ export function createGptImageTool(manifest: ToolManifest, deps: ToolPackageDeps
         delete params["frame_duration_ms"];
       }
       const started = Date.now();
+      // 动图走官方 API 平台（Codex 订阅后端对任何 2.6 型号都拒绝 GIF）；
+      // 没有 API key 就明确拒绝，别让它落到订阅通道再吃一个 400
+      if (params["output_format"] === "gif") {
+        // 官方 API 平台的模型名与订阅通道不同：没显式指定就用 2.6 的 API 型号，
+        // 否则会把 codex 的模型 id 发到 api.openai.com
+        if (args.model === undefined) params["model"] = "gpt-image-2.6-sunburst";
+        if (deps.gptImage.apiKey === undefined || deps.gptImage.apiKey.length === 0) {
+          throw new Error(deps.prompts.messages["gpt_image_gif_no_key"] ?? "gpt_image_gif_no_key");
+        }
+        const gifFiles = await generateOpenAIImages({
+          apiKey: deps.gptImage.apiKey,
+          prompt: positive,
+          params,
+          ...(references.length > 0 ? { images: references } : {}),
+          mediaRoot: deps.mediaRoot,
+          ...(deps.gptImage.proxy === undefined ? {} : { proxy: deps.gptImage.proxy }),
+          ...(deps.gptImage.apiBaseUrl === undefined ? {} : { baseUrl: deps.gptImage.apiBaseUrl }),
+        }).catch((error: unknown) => {
+          if (error instanceof Error && error.message === "gpt_image_gif_off") {
+            throw new Error(deps.prompts.messages["gpt_image_gif_off"] ?? "gpt_image_gif_off");
+          }
+          if (error instanceof Error && error.message === "gpt_image_no_api_key") {
+            throw new Error(deps.prompts.messages["gpt_image_gif_no_key"] ?? "gpt_image_gif_no_key");
+          }
+          throw error;
+        });
+        const { prompt: _omitGif, ...effectiveGif } = params;
+        console.log(
+          `[fish] gpt_image ok(gif/api): ${gifFiles.length} 个 / ${Date.now() - started}ms / ${JSON.stringify(effectiveGif)} / 参考图${references.length}张 / ${positive.slice(0, 40)}`,
+        );
+        return {
+          output: [
+            {
+              type: "text",
+              text: renderTemplate(deps.prompts.messages["gpt_image_done"] ?? "{{files}}", { files: gifFiles.join("、") }),
+            },
+          ],
+        };
+      }
       const files = await generateGptImages({
         authPath: deps.gptImage.authPath,
         provider: deps.gptImage.provider,

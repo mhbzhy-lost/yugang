@@ -52,7 +52,16 @@ export interface FishOptions {
   /** DeepSeek Search API 的 key；给了才有联网搜索能力。 */
   searchKey?: string;
   /** ChatGPT/Codex 图片通道（models.image）：authPath + provider 决定登录凭据，model 是默认模型名；proxy 只给这条通道用。 */
-  gptImage?: { authPath: string; provider: string; model: string; proxy?: string };
+  gptImage?: {
+    authPath: string;
+    provider: string;
+    model: string;
+    proxy?: string;
+    /** 官方 API key（config/auth.json 的 openai.key 或 OPENAI_API_KEY）：只给动图通道用。 */
+    apiKey?: string;
+    /** 官方 API 根地址覆盖（测试/代理用）。 */
+    apiBaseUrl?: string;
+  };
   /** config/models.json 路径；config 工具写回 models 角色表时用。 */
   modelsPath?: string;
   /** SD WebUI（Windows 宿主机）的 baseUrl；给了才有本地画图。 */
