@@ -21,7 +21,7 @@ import { extractLinks, seenLinksOf } from "../../egress/seen-links.ts";
 import { ExternalAmmoDoc, ammoVideoUrlOf, applyAmmoClaim } from "../../external/ammo-store.ts";
 import { bvidOfUrl } from "../../external/video-links.ts";
 import { viewedVideoOf } from "../../external/video-browse.ts";
-import { VideoPoolDoc, applyVideoPoolAdd, viewedVideoTitleOf } from "../../external/video-pool.ts";
+import { VideoPoolDoc, applyVideoPoolAdd, videoPoolKeyOf, viewedVideoTitleOf } from "../../external/video-pool.ts";
 import { renderTemplate } from "../../prompt/index.ts";
 import { OutboxDoc } from "../../store.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
@@ -121,11 +121,11 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
           ));
         }
       }
-      // 已分享的视频记进会话私有池（bili_hot 用它过滤重复推荐）：纯机械——本条消息里
-      // 出现的 B 站链接里带 BV 就记一笔，不需要模型声明任何字段
-      for (const url of links) {
-        const bvid = url.match(/BV[0-9A-Za-z]{10}/)?.[0];
-        if (bvid !== undefined) sharedBvids.push(bvid);
+      // 已分享的视频记进去重表（bili_hot 用它过滤重复推荐）：纯机械——本条消息里出现的
+      // BV 号就记一笔，**不要求带链接**。2026-11-05 修：此前只认 URL，模型退化成「只发
+      // BV 号」（见 findProvenanceLeak 的链接豁免）时就不进表，于是同一条视频会被发第二遍。
+      for (const bvid of text.match(/BV[0-9A-Za-z]{10}/g) ?? []) {
+        if (!sharedBvids.includes(bvid)) sharedBvids.push(bvid);
       }
 
       // 旧外部弹药分享（E5，已停用兼容保留）：Schema 不再暴露 ammoId，分享门接线已摘除，
@@ -183,7 +183,8 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
         } else {
           // 分享过视频：池记账与 outbound entry / outbox 同一次提交，任一环失败整体回滚
           await api.commit(async (tx) => {
-            const pool = await tx.doc(VideoPoolDoc, api.conversationId);
+            // 去重表按 chatKey 绑定（同群换人格也共享历史）
+            const pool = await tx.doc(VideoPoolDoc, videoPoolKeyOf(deps.chatKeyOf?.(String(api.conversationId)), api.conversationId));
             for (const bvid of sharedBvids) {
               applyVideoPoolAdd(
                 pool,
