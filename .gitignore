@@ -1,5 +1,5 @@
 node_modules/
-var/
+/var/
 *.log
 .DS_Store
 config/auth.json

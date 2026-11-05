@@ -229,7 +229,7 @@ npm run memory -- --delete <fact-id>               # 真删除一条已入库 fa
 
 ## 改东西的规矩
 
-- 改 prompt：人格与共享文案只动 `prompt/` 下的 md；工具说明动 `src/tools/<name>/TOOL.md`；改完 `npm run prompts` 确认清单（含 19 个工具包与 eager/deferred），再 `npm test`。
+- 改 prompt：人格与共享文案只动 `prompt/` 下的 md；工具说明动 `src/tools/<name>/TOOL.md`；改完 `npm run prompts` 确认清单（含 24 个工具包与 eager/deferred），再 `npm test`。
 - 加能力：`src/tools/<name>/` 放 `TOOL.md` + `tool.ts`，并在 `src/tools/loader.ts` 的 factory 名单加一行，缺一个都起不来；除 `say` / `react` / `tool_search` 外的新工具默认 deferred，模型先 `tool_search` 搜到才能用。
 - 改行为前先想清楚：**prompt（含 TOOL.md）就是这条鱼的全部行为定义**，代码只是它的边界。
 

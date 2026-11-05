@@ -57,7 +57,7 @@ export function makeFishExtension(
       // family（不 commit、不写 lastUsedAt）；当前会话可见 = 公共 doc + 本会话私有 doc
       // 合并渲染（mergeMemoryStates，总预算 ≤900 字不变）；私有层绝不注入非来源会话。
       // 没有可渲染内容时不占位。改动这里或 renderMemoryTranscript 的白名单前必读
-      // src/memory.ts 的安全边界注释：记忆抽取只读结构化原始 entry，必须继续排除
+      // src/memory/model.ts 的安全边界注释：记忆抽取只读结构化原始 entry，必须继续排除
       // pi.system、宿主任务文案和工具结果，否则「记忆 → 抽取 → 记忆」的自我污染闭环会复活。
       section("memory", async (input, context) => {
         const memoryKey = parts.memoryKeyOf(String(input.conversationId));

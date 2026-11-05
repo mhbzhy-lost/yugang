@@ -1,7 +1,7 @@
 /**
  * 开窗视频浏览门与当前轮 viewed 登记（2026-11-04 模型输入计划 T3）。
  *
- * 门（VideoBrowseGate）由宿主（src/index.ts）在 engage-next 状态机每个 open 窗进入时
+ * 门（VideoBrowseGate）由宿主（src/app/runtime.ts）在 engage-next 状态机每个 open 窗进入时
  * 一次性掷出（video.browseChance，同窗稳定、关窗作废），经 wireVideoBrowseHost 接线；
  * 自由活动模式的群没有窗：改在**空拍**时掷一次（engage.freeBrowseChance，windowId 是
  * `free-` 前缀的拍 id）。有消息的拍不掷；忙 / 让行的那一拍在清门之前就返回，旧门因此
@@ -30,14 +30,14 @@ export interface VideoBrowseGate {
   open: boolean;
 }
 
-/** 宿主接线口：gateOf 由 src/index.ts 落到 engage-next 的相位内存（单例，启动时 wire 一次）。 */
+/** 宿主接线口：gateOf 由 src/app/runtime.ts 落到 engage-next 的相位内存（单例，启动时 wire 一次）。 */
 export interface VideoBrowseHost {
   gateOf(chatKey: string): VideoBrowseGate | undefined;
 }
 
 let host: VideoBrowseHost | undefined;
 
-/** 宿主接线（src/index.ts 启动时一次）；未接线时 videoBrowseGateOf 恒 undefined（fail closed）。 */
+/** 宿主接线（src/app/runtime.ts 启动时一次）；未接线时 videoBrowseGateOf 恒 undefined（fail closed）。 */
 export function wireVideoBrowseHost(wired: VideoBrowseHost): void {
   host = wired;
 }

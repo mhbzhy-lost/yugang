@@ -762,7 +762,7 @@ try {
           case "s14": {
             const r = await round("s14-meme", hostLine("小明", "100001", "从表情包库里挑一张贴「开心」情绪的图发出来。", { messageId: 5014 }), member(100001, 5014));
             const memeRes = r.toolResults.find((x) => x.name === "meme");
-            // OutboundPayload.media 是单个可选 string（src/tools/say/tool.ts），非数组。
+            // OutboundPayload.media 是单个可选 string（src/tools/say_words/tool.ts），非数组。
             const mediaRef = r.newOutbox.flatMap((o) => (typeof o.media === "string" && o.media.length > 0 ? [o.media] : []))[0];
             const hasMedia = mediaRef !== undefined;
             const ok = hasCall(r, "meme") && memeRes?.ok === true && hasMedia;

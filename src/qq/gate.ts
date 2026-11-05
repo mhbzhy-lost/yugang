@@ -58,7 +58,7 @@ export function createGate(options: GateOptions): Gate {
       if (msg.repliedForward === true) return { enter: false, reason: "next_pending" };
       if ((msg.forwardIds?.length ?? 0) > 0) return { enter: false, reason: "next_pending" };
 
-      // 开窗两态（src/engage-next.ts 状态机的相位）：open——非 @ 也放行 free_pass
+      // 开窗两态（src/qq/engage-next.ts 状态机的相位）：open——非 @ 也放行 free_pass
       // （非必答：不触发正文兜底，open 态走 ambient 轮语义，零出口合法）；
       // closed / 未跟踪——非 @ 统一 skip:next_pending 不进模型。`/` 指令与 GIF 收图轮
       // 走闸前自己的通道；recent 流水与合集 id 缓存（onebot 解析层，闸前照记）等旁路

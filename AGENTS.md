@@ -458,8 +458,8 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
 ## 命令
 
 ```bash
-npm test           # 113 项，含上面每条约束的兜底
-npm run prompts    # 列出 prompt 文件 + sha256 + 25 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属 + 内嵌扫描结果
+npm test           # 145 项，含上面每条约束的兜底
+npm run prompts    # 列出 prompt 文件 + sha256 + 24 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属 + 内嵌扫描结果
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
 npm run memory     # 长期记忆查看与审批（--persona / --chat / --json / --pending / --approve / --reject，见第 16 节）
