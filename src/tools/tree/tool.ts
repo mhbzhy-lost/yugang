@@ -14,6 +14,7 @@ import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { assertTriggeredByMaster, fenceReadablePath, resolveReadable, SAND_ROOT } from "../fs-shared.ts";
+import { REPO_ROOT } from "../../paths.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface TreeArgs {
@@ -27,7 +28,7 @@ const MAX_LINES = 200;
 /** 主人闸是硬前提：无主人配置时 factory 返回 undefined，由注册方跳过（不进工具面）。 */
 export function createTreeTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration | undefined {
   if (!deps.master) return undefined;
-  const root = resolve(process.cwd());
+  const root = REPO_ROOT;
 
   return defineTool({
     name: manifest.name,

@@ -25,6 +25,7 @@ import { loadFishConfig, FISH_CONFIG_FIELDS, type FieldCheck, type FishConfigFie
 import { getBiliClient } from "../../external/bili-client.ts";
 import type { ModelsFile, ModelRole } from "../../model/config.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
+import { FISH_CONFIG_PATH, MODELS_CONFIG_PATH } from "../../paths.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { assertTriggeredByMaster, type SnapshotApi } from "../fs-shared.ts";
 
@@ -60,8 +61,8 @@ export function freeGroupsOutsideEnv(freeGroups: unknown, env: NodeJS.ProcessEnv
 export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration | undefined {
   if (!deps.master) return undefined;
   const p = deps.prompts;
-  const fishConfigPath = join(process.cwd(), "fish.config.json");
-  const modelsPath = resolve(deps.modelsPath ?? join(process.cwd(), "config", "models.json"));
+  const fishConfigPath = FISH_CONFIG_PATH;
+  const modelsPath = resolve(deps.modelsPath ?? MODELS_CONFIG_PATH);
   const lockedMessage = p.messages["config_locked"] ?? "config_locked";
 
   /** 双重身份闸：触发者 = 主人，且当前会话 = 主人私聊；群内轮与无法判定的轮一律拒绝。 */

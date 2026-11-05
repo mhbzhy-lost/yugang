@@ -49,6 +49,7 @@
  *
  * 前提：config/models.json 与 config/auth.json 已就绪；本机可直连 provider。
  */
+import { DATA_HOME, REPO_ROOT } from "../src/paths.ts";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -223,7 +224,7 @@ try {
   try { ffmpegOk = spawnSync("ffmpeg", ["-version"], { timeout: 5000 }).status === 0; } catch {}
   const videoFramesReady = existsSync(videoPython) && existsSync(join(ROOT, "scripts", "video-frames.py")) && ffmpegOk;
   const sdConfigured = Boolean(process.env.SD_WEBUI_URL);
-  const tagsCsvPath = process.env.TAGS_CSV ?? join(import.meta.dirname, "..", "var", "danbooru.csv");
+  const tagsCsvPath = process.env.TAGS_CSV ?? join(DATA_HOME, "danbooru.csv");
   const tagsReady = existsSync(tagsCsvPath);
   ev({
     stage: "setup",
@@ -896,9 +897,9 @@ try {
   async function selfChecks(): Promise<{ name: string; ok: boolean; detail: string }[]> {
     const sc: { name: string; ok: boolean; detail: string }[] = [];
     const cwdIsRoot = (() => {
-      try { return realpathSync(process.cwd()) === realpathSync(ROOT); } catch { return false; }
+      try { return realpathSync(REPO_ROOT) === realpathSync(ROOT); } catch { return false; }
     })();
-    sc.push({ name: "cwd-is-root", ok: cwdIsRoot, detail: `cwd=${process.cwd()}` });
+    sc.push({ name: "cwd-is-root", ok: cwdIsRoot, detail: `repo=${REPO_ROOT}` });
     const fixtureOk = existsSync(join(ROOT, "README.md")) && existsSync(join(ROOT, "config", "models.json")) && readdirSync(join(ROOT, "src", "tools")).length >= 3;
     // auth.json 只存在本次副本（ROOT/config/auth.json）；fixture 刻意不含 package.json / .env / 真实 auth.json
     const noRealRepoFiles = !existsSync(join(ROOT, "package.json")) && !existsSync(join(ROOT, ".env"));

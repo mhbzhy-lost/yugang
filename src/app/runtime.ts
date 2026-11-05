@@ -16,6 +16,7 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { DATA_HOME, MEDIA_ROOT, PROMPT_ROOT, REPO_ROOT, WORKSPACE_ROOT } from "../paths.ts";
 import { addFishProvider, createFishModels } from "../model/models.ts";
 import { describeModel, loadFishModels } from "../model/config.ts";
 import { cleanupStaleVideoTemps } from "../tools/video/tool.ts";
@@ -162,13 +163,11 @@ function applyWatched(chatKey: string, people: { userId: string; name?: string; 
   replaceWatched(watchedByChat, baseChatKey(chatKey), kept);
 }
 
-// 运行时数据目录：默认仓库 var/（按本文件位置解析，不依赖 cwd）；YUGANG_HOME 设置时完全胜出。
-// 注意本文件在 src/app/，仓库根是「../..」：移动文件时必须同步改这里，否则数据目录会
-// 静默漂到 src/var（2026-11-05 踩过：人格映射与历史全丢，ops 脚本却仍在读仓库 var/）。
-const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "..", "var");
+// 运行时数据目录：唯一解析点在 src/paths.ts（YUGANG_ROOT / YUGANG_HOME 优先，否则按文件位置推）。
+// 这里只做落盘与一行启动日志：路径一漂，这行就是最先对不上的地方。
+const HOME = DATA_HOME;
 mkdirSync(HOME, { recursive: true });
-// 数据目录只在这里落一行：路径解析错位（如 2026-11-05 漂到 src/var）时，这行是唯一一眼可见的信号
-console.log(`[鱼缸] 数据目录 ${HOME}`);
+console.log(`[鱼缸] 数据目录 ${HOME}（仓库根 ${REPO_ROOT}）`);
 
 cleanupStaleVideoTemps(); // 清掉上次被打断的抽帧临时目录（正常路径在 finally 里删）
 
@@ -179,9 +178,9 @@ const config = {
   onebotToken: process.env.ONEBOT_TOKEN,
   // 模型与凭据：只认 config/models.json 的 models 角色表 + 同目录 auth.json，见 src/model/config.ts
   modelConfig: modelSelection.main,
-  mediaRoot: resolve(process.env.MEDIA_ROOT ?? join(HOME, "media")),
-  promptRoot: resolve(process.env.PROMPT_ROOT ?? join(process.cwd(), "prompt")),
-  workspaceRoot: resolve(process.env.WORKSPACE_ROOT ?? join(HOME, "workspace")),
+  mediaRoot: MEDIA_ROOT,
+  promptRoot: PROMPT_ROOT,
+  workspaceRoot: WORKSPACE_ROOT,
   master: process.env.MASTER_QQ ?? "",
   groups: (process.env.GROUPS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
   bypassGroups: (process.env.BYPASS_GROUPS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
@@ -2566,7 +2565,7 @@ export async function restoreSessions(): Promise<void> {
   // 历史遗留的重启文件只清理不消费：sending 不再翻回 queued（发出多少不确定，宁可少发不重复），
   // 遗言（模型文本）不再补发
   for (const legacy of ["restart.marker", "restart.pending.json"]) {
-    const legacyPath = join(process.cwd(), "var", legacy);
+    const legacyPath = join(DATA_HOME, legacy);
     if (existsSync(legacyPath)) {
       try { rmSync(legacyPath); } catch {}
       console.log(`[鱼缸] 已清理历史重启文件 ${legacy}`);
@@ -2575,7 +2574,7 @@ export async function restoreSessions(): Promise<void> {
   // restart 工具留下的通知：定位触发重启的会话，启动成功后向它发一条固定机械确认
   // （restart_done，在 src/tools/restart/TOOL.md 的 tool-messages 块，经 outbox 唯一出口）。先入队再删文件：启动中途
   // 崩掉也不会重复确认——outbox 键由通知里的稳定 key 派生，幂等表会挡掉已发出的那一次
-  const noticePath = join(process.cwd(), "var", "restart.notice.json");
+  const noticePath = join(DATA_HOME, "restart.notice.json");
   if (existsSync(noticePath)) {
     try {
       const notice = JSON.parse(readFileSync(noticePath, "utf8")) as { conversationId: string; key: string };

@@ -30,6 +30,7 @@ import { DEFAULT_LIMITS } from "../../egress/policy.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { fenceReadablePath } from "../fs-shared.ts";
+import { DATA_HOME } from "../../paths.ts";
 import { MEME_IMPORT_MAX, memeImportHas, memeImportLookLimit, memeImportLooked, memeImportLookedCount, memeImportMarkLooked } from "../meme_import/shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
@@ -38,7 +39,7 @@ interface LookArgs {
 }
 
 /** 看图快捷开关：主人 /关看图 后置位（var/look-off.marker），重启保持；网关视觉管线不稳时止损用。 */
-const LOOK_OFF_MARKER = join(process.cwd(), "var", "look-off.marker");
+const LOOK_OFF_MARKER = join(DATA_HOME, "look-off.marker");
 let lookDisabled = existsSync(LOOK_OFF_MARKER);
 export function isLookDisabled(): boolean {
   return lookDisabled;

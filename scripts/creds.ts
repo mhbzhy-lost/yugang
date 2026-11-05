@@ -3,7 +3,8 @@
  *
  * 凭据落在 config/auth.json（和 models.json 同目录，已被 gitignore，权限 600）。
  *
- *   npm run creds import            # 从 ~/pi-config/pi/auth.json 导一次（之后不再依赖它）
+ *   npm run creds import { MODELS_CONFIG_PATH } from "../src/paths.ts";
+import            # 从 ~/pi-config/pi/auth.json 导一次（之后不再依赖它）
  *   npm run creds import -- --from /path/to/auth.json --force
  *   npm run creds show              # 看看每个 provider 有没有 key
  *   npm run creds clear             # 删掉本地凭据文件
@@ -12,7 +13,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, w
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-const MODELS = join(process.cwd(), "config", "models.json");
+const MODELS = MODELS_CONFIG_PATH;
 const TARGET = join(dirname(MODELS), "auth.json");
 
 const [command = "show", ...rest] = process.argv.slice(2);

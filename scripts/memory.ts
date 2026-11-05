@@ -30,6 +30,7 @@
  * 强制结构同构，失败 fail closed——该次批准以错误退出终止，不降级、不原样入库；
  * 日志只带 id 与结果状态，不打印内容。私有批准不经脱敏。
  */
+import { DATA_HOME as HOME, PROMPT_ROOT } from "../src/paths.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -44,7 +45,7 @@ import { DEFAULT_PERSONA_KEY, memoryKeyOf, privateMemoryKeyOf } from "../src/mem
 import { approvePending, rejectPending, deleteFactById, hasFact, summarizePatch, formatAgeShort, signalsSuffix, MEMORY_ZERO_EXTRACT_PAGES, publicizePatch, type MemoryPatch, type MemoryState, type PendingMemoryEntry, type PendingMemoryState } from "../src/memory/index.ts";
 import { MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc } from "../src/store.ts";
 
-const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
+
 const DB_PATH = join(HOME, "fish.db");
 
 const args = process.argv.slice(2);
@@ -159,7 +160,7 @@ async function runApproval(): Promise<void> {
   // 日志只带 id 与结果状态。放在开写会话之前：失败时不碰 fish.db。
   let publicized: MemoryPatch | undefined;
   if (rawApproveId !== undefined && approveTrack === "公共" && pendingEntry) {
-    const prompts = loadPrompts(process.env.PROMPT_ROOT ?? join(import.meta.dirname, "..", "prompt"));
+    const prompts = loadPrompts(PROMPT_ROOT);
     const mainConfig = loadFishModels().main;
     let modelInstance: Models | undefined; // lazy：patch 没有可改写文本时不去碰 models.json
     const result = await publicizePatch(pendingEntry.patch, {

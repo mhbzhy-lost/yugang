@@ -15,6 +15,7 @@ import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-d
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { assertTriggeredByMaster } from "../fs-shared.ts";
+import { DATA_HOME, REPO_ROOT } from "../../paths.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应（无参数）；运行时 Schema 只有 manifest 这一份。 */
 interface RestartArgs {}
@@ -22,7 +23,7 @@ interface RestartArgs {}
 /** 主人闸是硬前提：无主人配置时 factory 返回 undefined，由注册方跳过（不进工具面）。 */
 export function createRestartTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration | undefined {
   if (!deps.master) return undefined;
-  const root = resolve(process.cwd());
+  const root = REPO_ROOT;
   const doExit = (code: number): never => process.exit(code);
 
   return defineTool({
@@ -41,9 +42,9 @@ export function createRestartTool(manifest: ToolManifest, deps: ToolPackageDeps)
       // 重启通知：只记会话定位信息（宿主启动成功后发固定确认），不保存模型文本。
       // key 是调度那一刻的时间戳：稳定（启动中途崩掉重放也派生同一个 outbox 幂等键），不跨重启复用
       try {
-        mkdirSync(join(root, "var"), { recursive: true });
+        mkdirSync(DATA_HOME, { recursive: true });
         writeFileSync(
-          join(root, "var", "restart.notice.json"),
+          join(DATA_HOME, "restart.notice.json"),
           JSON.stringify({ conversationId: String(api.conversationId), key: String(deps.now?.() ?? Date.now()) }),
         );
       } catch {}

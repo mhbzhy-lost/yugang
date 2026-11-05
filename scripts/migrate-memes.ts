@@ -12,6 +12,7 @@
  * 用法：node scripts/migrate-memes.ts [--dry]
  * 索引路径默认仓库 var/media/memes/index.json，可用 MEME_INDEX 覆盖。
  */
+import { DATA_HOME, PROMPT_ROOT } from "../src/paths.ts";
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -57,13 +58,13 @@ function infer(entry: Entry, moods: string[]): { mood?: string; how: string } {
 }
 
 const dry = process.argv.includes("--dry");
-const promptTags = readFileSync(join(import.meta.dirname, "..", "prompt", "meme-tags.md"), "utf8");
+const promptTags = readFileSync(join(PROMPT_ROOT, "meme-tags.md"), "utf8");
 const moods = promptTags
   .split("\n")
   .map((l) => l.trim())
   .filter((l) => l.length > 0 && !l.startsWith("#"));
 
-const indexUrl = process.env["MEME_INDEX"] ?? join(import.meta.dirname, "..", "var", "media", "memes", "index.json");
+const indexUrl = process.env["MEME_INDEX"] ?? join(DATA_HOME, "media", "memes", "index.json");
 if (!existsSync(indexUrl)) {
   console.error(`找不到索引：${indexUrl}`);
   process.exit(1);

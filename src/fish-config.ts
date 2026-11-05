@@ -11,6 +11,7 @@
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { FISH_CONFIG_PATH } from "./paths.ts";
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -719,7 +720,7 @@ const DEFAULTS: FishConfig = {
 /** 读一次（不缓存），供热加载与启动各取所需。 */
 export function loadFishConfig(options: { path?: string; env?: NodeJS.ProcessEnv } = {}): ConfigLoadResult {
   const env = options.env ?? process.env;
-  const path = options.path ?? join(process.cwd(), "fish.config.json");
+  const path = options.path ?? FISH_CONFIG_PATH;
   const problems: string[] = [];
 
   const fromEnv = parseEnv(env, problems);
@@ -765,7 +766,7 @@ export function loadFishConfig(options: { path?: string; env?: NodeJS.ProcessEnv
  * 每次调用都有一次 statSync（µs 级），换取「改完立刻生效」。
  */
 export function createConfigLoader(options: { path?: string; env?: NodeJS.ProcessEnv } = {}): () => ConfigLoadResult {
-  const path = options.path ?? join(process.cwd(), "fish.config.json");
+  const path = options.path ?? FISH_CONFIG_PATH;
   let current = loadFishConfig({ ...options, path });
   let mtime = existsSync(path) ? statSync(path).mtimeMs : 0;
 

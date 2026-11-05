@@ -15,6 +15,7 @@
  * 文件尾是 var/bili-filters.json 的类型定义、缺省值（JSON 不支持注释，字段说明以这里的
  * TS 注释为准）与 mtime 热加载器，供工具层（bili_hot 等）共用。
  */
+import { DATA_HOME } from "../paths.ts";
 import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { localDay } from "../records/usage.ts";
@@ -526,7 +527,7 @@ export function createBiliClient(options: BiliClientOptions = {}): BiliClient {
 
 /** 运行时数据目录缺省值（与 index.ts 的 HOME 同源：仓库 var/，YUGANG_HOME 接线时显式传）。 */
 export function defaultVarDir(): string {
-  return join(import.meta.dirname, "..", "..", "var");
+  return DATA_HOME;
 }
 
 // —— 共享实例口 ——

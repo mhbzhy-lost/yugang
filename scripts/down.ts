@@ -8,12 +8,13 @@
  * 只认「node --env-file-if-exists=.env src/index.ts 且 cwd 在本仓库」的进程，别的 node 一律不碰。
  * 每一步都打日志。
  */
+import { REPO_ROOT } from "../src/paths.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { pidFilePath } from "./lib/pidfile.ts";
 
-const REPO = resolve(import.meta.dirname, "..");
+const REPO = REPO_ROOT;
 const PID_FILE = pidFilePath();
 /** TERM 后给它多久优雅退（与 deploy 收旧鱼的 16s 一致），超时才 KILL */
 const GRACE_MS = 16_000;

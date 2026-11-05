@@ -13,8 +13,9 @@ import { spawn, spawnSync } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { recordFishPid } from "./lib/pidfile.ts";
+import { DATA_HOME, REPO_ROOT } from "../src/paths.ts";
 
-const LOG = join(process.cwd(), "var", "fish-console.log");
+const LOG = join(DATA_HOME, "fish-console.log");
 
 // 1. 拉代码；失败就停手，线上继续跑旧代码
 console.log("[deploy] git pull origin main");
@@ -50,7 +51,8 @@ await new Promise((r) => setTimeout(r, 3000));
 
 // 4. 起新鱼：日志追加到 var/fish-console.log，脱离本进程生命周期
 const log = openSync(LOG, "a");
-const fish = spawn(process.execPath, ["--env-file-if-exists=.env", "src/index.ts"], {
+const fish = spawn(process.execPath, ["--env-file-if-exists=.env", join(REPO_ROOT, "src", "index.ts")], {
+  cwd: REPO_ROOT,
   detached: true,
   stdio: ["ignore", log, log],
 });

@@ -9,13 +9,14 @@
  * macOS 的现实：NapCat 的 Mac 包只有框架（native 模块齐全），没有启动脚本，
  * 需要挂进已安装的 QQ。这一步是 GUI 操作 + 扫码，脚本只能把包准备好。
  */
+import { DATA_HOME as HOME } from "../src/paths.ts";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { discoverUin, napcatConfigDir, writeOneBotConfig as writeConfig } from "./lib/onebot-config.ts";
 import { withAccessToken } from "../src/qq/onebot.ts";
 import { join } from "node:path";
 
-const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
+
 const QQ_BIN = "/Applications/QQ.app/Contents/MacOS/QQ";
 
 /**

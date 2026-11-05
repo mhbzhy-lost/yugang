@@ -15,13 +15,14 @@
  *
  * 本地开发机没有 fish.config.json：status/up 提示一句后 exit 0，down 拒绝 exit 1。
  */
+import { FISH_CONFIG_PATH } from "../src/paths.ts";
 import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { Socket } from "node:net";
 
 const AGENT_DIR = join(process.env.HOME ?? "", "Library", "LaunchAgents");
-const CONFIG_PATH = join(import.meta.dirname, "..", "fish.config.json");
+const CONFIG_PATH = FISH_CONFIG_PATH;
 const HOST = "127.0.0.1";
 const PROBE_TIMEOUT_MS = 500;
 const LOAD_TIMEOUT_MS = 90_000;

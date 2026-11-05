@@ -19,6 +19,7 @@
  * google-antigravity 的回调地址是 http://localhost:51121/oauth-callback，无头机不监听、页面打不开
  * 是正常的，把地址栏整条 URL 复制回来即可（与 codex 浏览器流同款 UX）。
  */
+import { MODELS_CONFIG_PATH } from "../src/paths.ts";
 import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { loadProviderConfig } from "../src/model/config.ts";
@@ -54,7 +55,7 @@ if (!OAUTH_TARGETS.has(target)) {
   process.exit(1);
 }
 
-const config = loadProviderConfig(target, { modelsPath: resolve(join(process.cwd(), "config", "models.json")) });
+const config = loadProviderConfig(target, { modelsPath: MODELS_CONFIG_PATH });
 const models = createFishModels(config);
 const statePath = join(dirname(config.credentialsPath), ".login-state.json");
 
