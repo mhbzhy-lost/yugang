@@ -122,7 +122,16 @@ export interface ToolPackageDeps {
   /** watch 名单变更回调。 */
   onWatchChanged?: (conversationId: string, people: import("../store.ts").WatchedPerson[]) => void;
   /** ChatGPT/Codex 图片通道（models.image）；authPath 决定用哪份登录凭据，proxy 只给这条通道。 */
-  gptImage?: { authPath: string; provider: string; model: string; proxy?: string };
+  gptImage?: {
+    authPath: string;
+    provider: string;
+    model: string;
+    proxy?: string;
+    /** 官方 API key（config/auth.json 的 openai.key 或 OPENAI_API_KEY）：只给动图通道用。 */
+    apiKey?: string;
+    /** 官方 API 根地址覆盖（测试/代理用）。 */
+    apiBaseUrl?: string;
+  };
   /** SD WebUI 的 baseUrl；给了才有本地画图。 */
   sdUrl?: string;
   /** danbooru.csv 路径；给了才能查 tag 词表。 */
