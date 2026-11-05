@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { pidFilePath, recordFishPid } from "./lib/pidfile.ts";
+import { ensureSixtyService, newsTargetGroup } from "./lib/deps.ts";
 
 const wsUrl = process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001";
 const PID_FILE = pidFilePath(); // 与 deploy 写同一个 var/up.pid；Ctrl-C / 鱼退出时清掉
@@ -45,13 +46,19 @@ if (!(await reachable(wsUrl))) {
   console.log("[up] 协议端已经在线");
 }
 
-// 3. 起鱼
+// 3. 新闻依赖：60s 只在配置了 news.targetGroup 时 ensure；失败告警不阻塞
+if (newsTargetGroup().length > 0) {
+  const sixty = await ensureSixtyService();
+  if (!sixty) console.warn("[up] ⚠ 60s 新闻服务未就绪，新闻会按单源降级");
+}
+
+// 4. 起鱼
 console.log("[up] 启动鱼缸");
 const fish = spawn(process.execPath, ["--env-file-if-exists=.env", "src/index.ts"], { stdio: "inherit" });
 children.push(fish);
 recordFishPid(fish.pid); // 与 deploy 写同一个 var/up.pid（单一事实源，down 读它收鱼）
 
-// 4. 语音跟随：与起鱼并行拉起 TTS 实例（模型加载要 30-60s）；失败只告警，不阻塞鱼
+// 5. 语音跟随：与起鱼并行拉起 TTS 实例（模型加载要 30-60s）；失败只告警，不阻塞鱼
 const tts = spawn(process.execPath, [join(import.meta.dirname, "tts.ts"), "up"], { stdio: "inherit" });
 tts.on("exit", (code) => {
   if (code !== 0) console.warn(`[up] ⚠ 语音拉起未完全成功（tts up 退出码 ${code}），鱼不受影响`);

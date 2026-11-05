@@ -474,9 +474,15 @@ mini 上并没有 `home-mac-connect` 这个 skill（今天有子代理在 mini �
 
 `scripts/deploy.ts` 用 `process.execPath` 拿全路径 node：非交互 shell（ssh/nohup）的 PATH 里没有 brew 的 node，直接 `spawn("node")` 会报 No such file or directory。pull 失败时不动线上；新鱼 8 秒内没打出「已连接」横幅则报错退出。
 
+**部署前置依赖检查**（`scripts/lib/deps.ts`）在收旧鱼之前跑：
+- `package-lock.json` 变了或 `node_modules` 缺失时执行 `npm install --omit=dev`；失败则中止部署，旧鱼继续跑。
+- 新闻配置了 `news.targetGroup` 时 ensure 60s：健康检查 → 容器在就 start/restart → 容器不在就（缺镜像先 pull）按
+  `--restart always` + `127.0.0.1:4399:4399` 起容器。60s 起不来只告警、不阻塞鱼启停（新闻按单源降级）。
+- `npm run up` 也会在新闻启用时 ensure 60s；`npm run doctor` 会报 Node 依赖 / 60s / ffmpeg / video python 的体检结果。
+
 新闻/B 站两管线依赖 macmini 上的自建 60s 服务（`vikiboss/60s` Docker，loopback 绑定 4399，`--restart always`）：
-镜像现状是浮动 tag `vikiboss/60s:latest`，升级/回滚应在 digest 粒度固定；健康检查端点是 `GET /health`
-（返回 `ok`，60s 源码实际端点，没有 `/healthz`）。完整 runbook（起容器命令、探活、升级与回滚步骤）
+镜像默认浮动 tag `vikiboss/60s`，生产建议用 `SIXTY_IMAGE=vikiboss/60s@sha256:<digest>` 固定；健康检查端点是
+`GET /health`（返回 `ok`，60s 源码实际端点，没有 `/healthz`）。完整 runbook（起容器命令、探活、升级与回滚步骤）
 在 `docs/plans/2026-11-02-external-ammo.md` 的部署 runbook 附录；RSS/知乎日报走公网直连，无自建依赖。
 
 ## 人格与指令

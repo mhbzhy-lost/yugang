@@ -2124,11 +2124,16 @@ async function runNewsJob(slot: string, date: string): Promise<void> {
   try {
     const feeds = await newsClient.collectForTopics(news.topics, { perTopicInput: news.perTopicInput });
     if (timedOut) throw new Error("news_timeout");
-    const { prompt, index } = buildNewsDigestInput(feeds);
+    // 空 topic 不进归纳：某个源全挂时（如 60s/微博同时不可用），军事/趣闻可能一条候选都没有。
+    // 把空的 `## topic` 段喂给模型会诱发畸形 JSON（模型会试图补空 section，甚至输出两段
+    // JSON 自我修正），严格解析必然 digest_invalid。空 topic 本来就会被丢弃，这里提前过滤，
+    // 语义不变，只是不再让它污染模型输入。
+    const present = feeds.filter((feed) => feed.items.length > 0);
+    const { prompt, index } = buildNewsDigestInput(present);
     if (index.size === 0) throw new Error("no_items");
     // 归纳提示词（prompt/news-digest.md）：指令 + {{topics}} 标题块 + {{max}} 每 topic 上限
     const digestPrompt = renderTemplate(fish.prompts.newsDigest, { topics: prompt, max: String(news.perTopicOutput) });
-    const digest = await digestNewsWithRetry(digestPrompt, feeds, index, news.perTopicOutput);
+    const digest = await digestNewsWithRetry(digestPrompt, present, index, news.perTopicOutput);
     if (timedOut) throw new Error("news_timeout");
     const broadcast = renderNewsBroadcast(date, digest, index, fish.prompts.messages);
     if (broadcast.text.length === 0) throw new Error("render_empty");
