@@ -20,7 +20,7 @@ import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { localDay } from "../records/usage.ts";
 
-export type BiliEndpoint = "popular" | "ranking" | "view" | "dm" | "reply" | "card" | "spi";
+export type BiliEndpoint = "popular" | "ranking" | "related" | "view" | "dm" | "reply" | "card" | "spi";
 
 /** 生产 B 站 API 根地址；无覆盖时 endpointUrl 全部端点都从这里拼出，行为不变。 */
 const DEFAULT_BILI_API_ROOT = "https://api.bilibili.com";
@@ -56,6 +56,9 @@ export function endpointUrl(endpoint: BiliEndpoint, params: BiliEndpointParams =
       return `${API_ROOT}/x/web-interface/popular?ps=20&pn=${Math.max(1, Math.floor(params.page ?? 1))}`;
     case "ranking":
       return `${API_ROOT}/x/web-interface/ranking/v2?rid=${Math.max(0, Math.floor(params.rid ?? 0))}&type=all`;
+    case "related":
+      // 算法相关推荐（社区文档：无需 Cookie / WBI，最多 40 条）——社区里成本最低的「平台算法」入口
+      return `${API_ROOT}/x/web-interface/archive/related?bvid=${encodeURIComponent(String(params.bvid ?? ""))}`;
     case "view":
       return `${API_ROOT}/x/web-interface/view?bvid=${encodeURIComponent(params.bvid ?? "")}`;
     case "dm":
@@ -169,6 +172,8 @@ export interface BiliClient {
   popular(page?: number): Promise<BiliVideoCard[]>;
   /** 排行榜 v2（rid=0 为全站）。 */
   ranking(rid?: number): Promise<BiliVideoCard[]>;
+  /** 单视频的相关推荐（算法序，最多 40 条）：不需要 Cookie/WBI，用 BV 当种子。 */
+  related(bvid: string): Promise<BiliVideoCard[]>;
   /** 单视频详情（含 cid）。 */
   view(bvid: string): Promise<BiliVideoCard>;
   /** 弹幕原始 XML（dm/list.so 是 XML 不是 JSON，解析归调用方）。 */
@@ -489,6 +494,12 @@ export function createBiliClient(options: BiliClientOptions = {}): BiliClient {
     },
     ranking(rid?: number): Promise<BiliVideoCard[]> {
       return list("ranking", { rid });
+    },
+    async related(bvid: string): Promise<BiliVideoCard[]> {
+      if (!isValidBvid(bvid)) throw new Error("BV 号格式不对");
+      // 该端点的 data 直接是数组，不是 { list } 信封
+      const data = await send("related", { bvid });
+      return arrOf(data).map(mapCard);
     },
     async view(bvid: string): Promise<BiliVideoCard> {
       if (!isValidBvid(bvid)) throw new Error("BV 号格式不对");

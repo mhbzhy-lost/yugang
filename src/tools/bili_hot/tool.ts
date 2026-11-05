@@ -41,7 +41,13 @@ import {
 } from "../../external/bili-client.ts";
 import { sanitizeExternalText } from "../../external/sanitize.ts";
 import { VIDEO_TOPICS } from "../../external/video-browse.ts";
-import { VideoPoolDoc, videoPoolKeyOf, type VideoPoolState } from "../../external/video-pool.ts";
+import {
+  VideoPoolDoc,
+  activeSeenOf,
+  applyVideoPoolSeen,
+  videoPoolKeyOf,
+  type VideoPoolState,
+} from "../../external/video-pool.ts";
 import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
@@ -103,10 +109,10 @@ const BROWSE_LIMIT = 10;
 /** 文本字段各自的清洗上限（字）：行式返回要紧凑。 */
 const LIMITS = { title: 60, name: 30, tname: 20, desc: 60 };
 
-/** 多抓倍数与上限：防筛空（合同：4 倍、上限 50）。 */
-const FETCH_MULTIPLIER = 4;
+/** 单次取候选的上限（rank 截断）；实际选择池是它的两倍再随机抽。 */
 const FETCH_CAP = 50;
-const POPULAR_PAGE_SIZE = 20;
+/** 选择池倍数：前 2×limit 名里随机取，避免固定前 10。 */
+const PICK_POOL_MULTIPLIER = 2;
 
 /** 注入口（内联验证用）；缺省走全仓单例 + var/bili-filters.json 热加载 + console 审计。 */
 export interface BiliHotToolOptions {
@@ -200,6 +206,8 @@ export function softScoreOf(card: BiliVideoCard, soft: BiliFilters["soft"]): num
 export interface BiliHotFunnelResult {
   rows: string[];
   stats: BiliHotFunnelStats;
+  /** 与 rows 一一对应的原始卡片（bili_hot 用它记录「已展示」BV）。 */
+  picked: BiliVideoCard[];
 }
 
 /**
@@ -272,7 +280,7 @@ export function runBiliHotFunnel(
     returned: rows.length,
   };
   audit(`funnel candidates=${stats.candidates} in_library=${stats.inLibrary} hard_veto=${stats.hardVeto} soft_out=${stats.softOut} returned=${stats.returned}`);
-  return { rows, stats };
+  return { rows, stats, picked: picked.map(({ card }) => card) };
 }
 
 // =====================================================================================
@@ -315,25 +323,49 @@ function renderRow(card: BiliVideoCard, nowMs: number, zoneFallback?: string): s
   return [title, up, zone, fmtDuration(card.durationSeconds), stats, age, desc, card.bvid].join("|");
 }
 
-/** 榜单取数：popular 翻 ceil(min(50, 4×limit)/20) 页（4 倍防筛空）；rank 一次拉全榜截前 50。 */
-async function fetchCandidates(
+/**
+ * 候选来源（2026-11-05 改造）：分区排行（公共榜，固定快照）+ 以排行里**没展示过**的视频
+ * 作种子，再取一次**算法相关推荐**（related，无需 Cookie/WBI，最多 40 条）。
+ *
+ * 为什么：只读 rank 时每次候选完全一样，鱼会反复刷到同一批。related 让平台按种子扩散，
+ * 天然比固定榜单多样；失败不阻塞（回落纯排行）。代价是每次多 1 个请求。
+ */
+async function gatherCandidates(
   client: BiliClient,
-  source: "popular" | "rank",
   rid: number,
-  limit: number,
+  seenBvids: ReadonlySet<string>,
 ): Promise<BiliVideoCard[]> {
-  if (source === "rank") {
-    return (await client.ranking(rid)).slice(0, FETCH_CAP);
+  const ranked = (await client.ranking(rid)).slice(0, FETCH_CAP);
+  const seeds = ranked.slice(0, 10).filter((card) => !seenBvids.has(card.bvid));
+  const seed = seeds.length > 0 ? seeds[Math.floor(Math.random() * seeds.length)] : undefined;
+  let related: BiliVideoCard[] = [];
+  if (seed !== undefined) {
+    try {
+      related = await client.related(seed.bvid);
+    } catch {
+      // 相关推荐失败不阻塞：排行仍然可用（预算/风控都可能让它失败）
+      related = [];
+    }
   }
-  const pages = Math.min(3, Math.max(1, Math.ceil(Math.min(FETCH_CAP, limit * FETCH_MULTIPLIER) / POPULAR_PAGE_SIZE)));
-  const out: BiliVideoCard[] = [];
-  for (let page = 1; page <= pages; page += 1) {
-    const cards = await client.popular(page);
-    if (cards.length === 0) break;
-    out.push(...cards);
-    if (out.length >= FETCH_CAP) break;
+  const unique = new Set<string>();
+  return [...ranked, ...related].filter((card) => {
+    if (unique.has(card.bvid)) return false;
+    unique.add(card.bvid);
+    return true;
+  });
+}
+
+/** 从前 size 个里均匀随机取 limit 个下标（升序返回，保持分数次序的稳定性）。 */
+function sampleIndices(size: number, limit: number): number[] {
+  if (size <= limit) return Array.from({ length: size }, (_, index) => index);
+  const pool = Array.from({ length: size }, (_, index) => index);
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = pool[i]!;
+    pool[i] = pool[j]!;
+    pool[j] = tmp;
   }
-  return out.slice(0, FETCH_CAP);
+  return pool.slice(0, limit).sort((a, b) => a - b);
 }
 
 // =====================================================================================
@@ -373,38 +405,55 @@ export function createBiliHotTool(manifest: ToolManifest, deps: ToolPackageDeps,
       // 去重表过滤（T4）：fish.video_pool（chatKey 绑定，2026-11-05 起）里已分享过的 BV 不再重复推荐——
       // conversation scope doc 按 conversationId 隔离，跨会话同 BV 不互斥；
       // 不再读全局 fish.external_ammo（弹药管线已停用）
-      const pool = (await api.snapshot(
-        VideoPoolDoc,
-        videoPoolKeyOf(deps.chatKeyOf?.(String(api.conversationId)), api.conversationId),
-        context,
-      )) as VideoPoolState | undefined;
+      const nowMs = deps.now?.() ?? Date.now();
+      const poolKey = videoPoolKeyOf(deps.chatKeyOf?.(String(api.conversationId)), api.conversationId);
+      const pool = (await api.snapshot(VideoPoolDoc, poolKey, context)) as VideoPoolState | undefined;
+      // 去重来源：已分享（永久）+ 已展示（7 天 TTL，过期不再挡）
+      const seenBvids = activeSeenOf(pool, nowMs);
       const inLibrary = new Map<string, string>();
       for (const item of pool?.items ?? []) {
+        if (item.state === "seen" && !seenBvids.has(item.bvid)) continue;
         inLibrary.set(item.bvid, item.state);
       }
 
       let cards: BiliVideoCard[];
       try {
-        cards = await fetchCandidates(options.client ?? getBiliClient(), "rank", rid, limit);
+        cards = await gatherCandidates(options.client ?? getBiliClient(), rid, seenBvids);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         throw new Error(renderTemplate(messages["bili_hot_failed"] ?? "榜单没拿到", { reason }));
       }
 
-      const nowMs = deps.now?.() ?? Date.now();
-      const { rows, stats } = runBiliHotFunnel(cards, limit, {
+      // 漏斗多留一倍做选择池，再随机取 limit 个：同样候选不再固定返回前 10
+      const { rows, stats, picked } = runBiliHotFunnel(cards, limit * PICK_POOL_MULTIPLIER, {
         filters: getFilters(),
         inLibrary,
         zoneName: zone?.name,
         audit,
         nowMs,
       });
-      if (rows.length === 0) {
+      const chosen = sampleIndices(rows.length, limit);
+      const chosenRows = chosen.map((index) => rows[index]!);
+      const chosenBvids = chosen.map((index) => picked[index]!.bvid);
+      stats.returned = chosenRows.length;
+      if (chosenBvids.length > 0) {
+        // 记录「已展示」：失败不影响本次返回（宁可这次不去重，也不能让小动作弄丢候选）
+        try {
+          await api.commit(async (tx) => {
+            const doc = await tx.doc(VideoPoolDoc, poolKey);
+            applyVideoPoolSeen(doc, chosenBvids, nowMs);
+          }, context);
+        } catch (error) {
+          console.warn("[鱼缸] bili_hot 展示记账失败", error instanceof Error ? error.message : error);
+        }
+      }
+      const rows2 = chosenRows;
+      if (rows2.length === 0) {
         return { output: [{ type: "text", text: messages["bili_hot_empty"] ?? "bili_hot_empty" }] };
       }
       const text = [
         messages["bili_hot_header"] ?? "",
-        ...rows,
+        ...rows2,
         renderTemplate(messages["bili_hot_stats"] ?? "", {
           candidates: String(stats.candidates),
           in_library: String(stats.inLibrary),
