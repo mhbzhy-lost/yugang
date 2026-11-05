@@ -22,14 +22,19 @@ interface GptImageArgs {
   prompt: string;
   model?: string;
   background?: "auto" | "transparent" | "opaque";
+  output_format?: "png" | "jpeg" | "webp" | "gif";
+  frame_count?: number;
+  frame_duration_ms?: number;
   images?: string[];
 }
 
 /**
  * 不传 model 就用 models.image.model。只保留这条通道真正认的字段：
- *   model / background / prompt（+ images 走 edits）
- * 实测被后端忽略或拒绝的都已从工具面移除：n、size、quality、moderation、
- * output_format、output_compression、seed、aspect_ratio、mask。
+ *   model / background / output_format / frame_count / frame_duration_ms / prompt
+ *   （+ images 走 edits）。
+ * 2026-11 变更：GPT Image 2.6 起支持动图（output_format=gif + 帧数与每帧毫秒）；
+ * 此前实测被忽略的 n / size / quality / moderation / seed / aspect_ratio / mask 仍然不开放。
+ * 注意：GIF 需要 2.6 模型（gpt-image-2.6-flare / -sunburst），否则后端可能忽略这些参数。
  */
 const DEFAULTS = {
   background: "auto",
@@ -89,11 +94,16 @@ export function createGptImageTool(manifest: ToolManifest, deps: ToolPackageDeps
 
       // 先铺默认值，再用显式传进来的覆盖；model 默认取 models.image
       const params: Record<string, unknown> = { prompt: positive, model: deps.gptImage.model, ...DEFAULTS };
-      for (const key of ["model", "background"] as const) {
+      for (const key of ["model", "background", "output_format", "frame_count", "frame_duration_ms"] as const) {
         const value = args[key];
         if (value !== undefined) params[key] = value;
       }
 
+      // 帧参数只对 GIF 有意义：非 gif 请求里带着它们会让部分后端 400
+      if (params["output_format"] !== "gif") {
+        delete params["frame_count"];
+        delete params["frame_duration_ms"];
+      }
       const started = Date.now();
       const files = await generateGptImages({
         authPath: deps.gptImage.authPath,

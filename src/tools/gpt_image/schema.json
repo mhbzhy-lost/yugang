@@ -26,6 +26,28 @@
         },
         "maxItems": 5,
         "description": "参考图列表，写媒体目录下的路径（如 inbound/xxx.jpg、gen/xxx.png），最多 5 张；传了就是改图，不传是纯文生图"
+      },
+      "output_format": {
+        "type": "string",
+        "enum": [
+          "png",
+          "jpeg",
+          "webp",
+          "gif"
+        ],
+        "description": "输出格式；默认 png。要动图就传 gif（需要 2.6 模型），并在 prompt 里写清动作与循环"
+      },
+      "frame_count": {
+        "type": "integer",
+        "minimum": 2,
+        "maximum": 16,
+        "description": "仅 output_format=gif 时有效：帧数，2–16；不填由服务端决定"
+      },
+      "frame_duration_ms": {
+        "type": "integer",
+        "minimum": 20,
+        "maximum": 2000,
+        "description": "仅 output_format=gif 时有效：每帧毫秒数（20–2000）；不填由服务端决定"
       }
     },
     "required": [
