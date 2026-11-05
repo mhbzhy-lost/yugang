@@ -3,5 +3,6 @@
   "gpt_image_off": "在线生图没登录，先用 npm run login 登录",
   "gpt_image_unconfigured": "没配图片模型，去 config/models.json 的 models.image 里加一条",
   "gpt_image_bad_ref": "参考图 {{ref}} 用不了（要媒体目录里的图片）",
-  "gpt_image_done": "画好了：{{files}} —— 用 say_media 发出去"
+  "gpt_image_done": "画好了：{{files}} —— 用 say_media 发出去",
+  "gpt_image_gif_off": "这条生图通道暂时不支持动图（只能出静态图）：GIF 需要另接 OpenAI 官方 API"
 }

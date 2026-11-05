@@ -117,6 +117,10 @@ export function createGptImageTool(manifest: ToolManifest, deps: ToolPackageDeps
         if (error instanceof Error && error.message === "gpt_image_no_auth") {
           throw new Error(deps.prompts.messages["gpt_image_off"] ?? "gpt_image_off");
         }
+        // 通道不支持动图：给模型一句能转述给用户的话，别让它换参数重试
+        if (error instanceof Error && error.message === "gpt_image_gif_off") {
+          throw new Error(deps.prompts.messages["gpt_image_gif_off"] ?? "gpt_image_gif_off");
+        }
         throw error;
       });
       const { prompt: _omit, ...effective } = params;

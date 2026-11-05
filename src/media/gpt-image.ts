@@ -94,7 +94,15 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
     signal: AbortSignal.timeout(request.timeoutMs ?? 180_000),
   });
 
-  if (!response.ok) throw new Error(`gpt_image_http_${response.status}`);
+  if (!response.ok) {
+    // 400 + 这句 = 通道级开关没开（Codex 订阅后端 2026-11 实测：换任何 2.6 型号都一样），
+    // 不是参数写错。单独抛一个码，让工具层回一句人话，别让模型反复重试。
+    const detail = await response.text().catch(() => "");
+    if (response.status === 400 && detail.includes("GIF output is not enabled")) {
+      throw new Error("gpt_image_gif_off");
+    }
+    throw new Error(`gpt_image_http_${response.status}`);
+  }
   const parsed = (await response.json()) as { data?: { b64_json?: string }[] };
   const entries = (parsed.data ?? []).filter((item) => typeof item.b64_json === "string");
   if (entries.length === 0) throw new Error("gpt_image_empty");

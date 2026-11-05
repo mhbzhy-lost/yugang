@@ -17,6 +17,9 @@ description: GPT Image 在线生图/改图/做动图；只有用户点名要用 
 - `output_format` 传 `"gif"`；可选 `frame_count`（2–16）与 `frame_duration_ms`（每帧毫秒，20–2000）
 - `prompt` 里必须写清**怎么动、怎么循环**（例如「头发随风摆动，裙摆左右摇晃，首尾相接循环」），只写静态画面会得到一张不动的图
 - 帧参数只对 `output_format: "gif"` 生效，其它格式会被忽略
+- **当前这条通道（Codex 订阅后端）实测不开放 GIF**：即使换 2.6 型号也会被服务端拒绝
+  （`GIF output is not enabled for this request`）。真被要求做动图时，如实说这条通道只能出静态图，
+  不要换参数反复重试
 
 三条硬规矩：
 
