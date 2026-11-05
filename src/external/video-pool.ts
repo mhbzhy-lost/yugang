@@ -1,12 +1,11 @@
 /**
  * fish.video_pool —— 会话私有视频池（2026-11-04 模型输入计划 T4）。
  *
- * 每个 conversation（群 × 当前人格）一份：conversation scope doc，id = conversationId
- * （OutboxDoc / WatchDoc 同款先例），跨会话天然隔离——同一个 BV 在两个会话的池里
- * 互不相干，不建立全局库存、不做 claim 竞争。池是「已实际看过且模型选择分享」的
- * 视频历史 + 去重表：say_words 发出含 B 站链接的文本时机械记账（pool 写入与
- * 链接、fish.outbox 入队、outbound entry 同一 transaction），bili_hot 用它过滤本
- * 会话已分享过的候选。换页（compact/reset）不动 conversation doc，池跨页存续。
+ * 每个 **chatKey（群 / 私聊）** 一份：session scope doc，key = chatKey（2026-11-05 改绑，
+ * 原来按 conversationId 隔离，导致同群换人格后又能把同一条视频发一遍）。池是「已分享过」
+ * 的视频历史 + 去重表：say_words 发出含 B 站链接**或裸 BV 号**的文本时机械记账
+ * （pool 写入与 outbound entry / fish.outbox 同一次提交），bili_hot 用它过滤本群
+ * 已分享过的候选。换页不动 session doc，池跨页存续。
  *
  * 池不设 TTL、不淘汰：条目只在实际分享成功时追加（每窗至多一条），量级极小；
  * 淘汰会破坏「同会话 BV 去重」的历史完整性，得不偿失。
@@ -43,13 +42,14 @@ export interface VideoPoolState {
 }
 
 /**
- * 会话私有视频池 doc：conversation scope（id = conversationId），按会话隔离去重；
- * history/fork 语义与 WatchDoc 一致——换页不动它，人格切换后是另一会话另一份池。
+ * 视频去重表 doc：session scope，key = **chatKey（群号/私聊号）**，2026-11-05 起由
+ * conversation scope 改绑（主人要求：同一个群里换人格也不该把同一条视频发两遍）。
+ * 换页不动它，人格切换不另开表——同群共享一份去重历史。
  */
 export const VideoPoolDoc = defineDoc<VideoPoolState>({
   kind: "fish.video_pool",
   version: 1,
-  scope: "conversation",
+  scope: "session",
   history: "latest",
   fork: "current",
   initial: () => ({ items: [] }),
@@ -58,6 +58,14 @@ export const VideoPoolDoc = defineDoc<VideoPoolState>({
 
 /** 推荐语写池的截断上限（码点）：出口校验管发送文本，池内记账再收一道。 */
 export const VIDEO_POOL_NOTE_MAX = 120;
+
+/**
+ * 去重表 key（唯一派生点）：优先 chatKey（群号/私聊号），拿不到才退回 conversationId。
+ * 读写两侧必须都走这里，否则会写出「同一群两份表」的分叉。
+ */
+export function videoPoolKeyOf(chatKey: string | undefined, conversationId: string | number): string {
+  return chatKey !== undefined && chatKey.length > 0 ? chatKey : String(conversationId);
+}
 
 /** canonical B 站链接（宿主拼进 payload 的唯一来源，模型不写 URL；ammoVideoUrlOf 同款）。 */
 export function videoUrlOf(bvid: string): string {

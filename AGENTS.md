@@ -456,12 +456,14 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
   白名单，宿主在工具包装层机械登记），文本里出现的 B 站 **BV 号（带不带链接都算）**顺手记进
   去重表，写入与 outbox 同一次提交、失败回滚不占出口额度。分享视频因此就是「推荐语 + 链接」，
   没有 `videoBvid` 这类专用字段。
+  频控内核 `src/external/bili-client.ts` 的白名单端点、串行锁、同端点 ≥2s、-412/-352 熔断与
+  buvid3 复用不变，每日预算改读 `video.dailyBudget`（缺省 60，旧 `ammo.dailyBudget` 只作回退）。
+  **`fish.video_pool` 是 chatKey 绑定的去重表**（2026-11-05 改绑，session scope，key = 群号/私聊号）：
+  同一个群里换人格看同一份历史，不同群互不干扰；不做全局库存或跨会话 claim。只记「已分享过」
+  的视频（不发只看），所以 bili_hot 的候选过滤能挡住重复分享。
   **抄写检查豁免链接**：出口白名单要求原样抄工具结果里的 canonical 链接，所以
   `findProvenanceLeak` 比对前先把两侧 http(s) 链接抹掉（`src/egress/policy.ts` 的 `maskUrls`）——
   否则「必须带链接」与「不许抄工具结果」直接冲突，模型只能退回只发 BV 号（2026-11-05 事故）。
-  频控内核 `src/external/bili-client.ts` 的白名单端点、串行锁、同端点 ≥2s、-412/-352 熔断与
-  buvid3 复用不变，每日预算改读 `video.dailyBudget`（缺省 60，旧 `ammo.dailyBudget` 只作回退）。
-  `fish.video_pool` 按 conversationId 隔离，不做全局库存或跨会话 claim。
 - **新闻播报管线**：`news.at`（缺省 10:30）触发第二 scheduler 实例（幂等账独立在 `fish.news_runs`，
   不写 `fish.external_jobs`）。取料 `src/external/news-client.ts`：自建 60s 服务（loopback 4399 的
   `/v2/60s`、`/v2/weibo`、`/v2/baidu/hot`）+ 界面/虎嗅/IT之家/人民网 RSS（fast-xml-parser 受限解析：

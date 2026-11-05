@@ -41,7 +41,7 @@ import {
 } from "../../external/bili-client.ts";
 import { sanitizeExternalText } from "../../external/sanitize.ts";
 import { VIDEO_TOPICS } from "../../external/video-browse.ts";
-import { VideoPoolDoc, type VideoPoolState } from "../../external/video-pool.ts";
+import { VideoPoolDoc, videoPoolKeyOf, type VideoPoolState } from "../../external/video-pool.ts";
 import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
@@ -373,7 +373,11 @@ export function createBiliHotTool(manifest: ToolManifest, deps: ToolPackageDeps,
       // 本会话私有池过滤（T4）：fish.video_pool 里已分享过的 BV 不再重复推荐——
       // conversation scope doc 按 conversationId 隔离，跨会话同 BV 不互斥；
       // 不再读全局 fish.external_ammo（弹药管线已停用）
-      const pool = (await api.snapshot(VideoPoolDoc, api.conversationId, context)) as VideoPoolState | undefined;
+      const pool = (await api.snapshot(
+        VideoPoolDoc,
+        videoPoolKeyOf(deps.chatKeyOf?.(String(api.conversationId)), api.conversationId),
+        context,
+      )) as VideoPoolState | undefined;
       const inLibrary = new Map<string, string>();
       for (const item of pool?.items ?? []) {
         inLibrary.set(item.bvid, item.state);
