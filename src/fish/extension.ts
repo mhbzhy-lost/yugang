@@ -8,6 +8,7 @@ import { defineExtension, section, type Extension, type ToolRegistration } from 
 import type { PromptSet } from "../prompt/index.ts";
 import type { ToolManifest } from "../tools/types.ts";
 import type { EngagementMode } from "../fish-config.ts";
+import { runtimeTextOf } from "../qq/runtime-text.ts";
 import { renderToolCatalog } from "../tools/catalog.ts";
 import { MemoryDoc, MemoryPrivateDoc, WatchDoc } from "../store.ts";
 import { mergeMemoryStates, renderMemorySection } from "../memory/index.ts";
@@ -33,7 +34,7 @@ export function makeFishExtension(
     tools: parts.tools,
     sections: [
       // 运行时协议：能力边界、输入信任、出口、错误处理、渐进加载；人格无关，不随人格换页。
-      // 「自由交流窗口」小节是 next 专属的窗口协议，legacy 下动态裁掉（见 runtimeTextOf）
+      // 两段搭话协议（自由交流窗口 / 自由活动群）按会话模式动态裁剪（见 qq/runtime-text.ts）
       section("runtime", (input) => runtimeTextOf(parts.prompts.runtime, parts.engagementOf(parts.chatKeyOf?.(String(input.conversationId)) ?? "")), { tag: false }),
       section("persona", () => persona, { tag: false }),
       // 工具目录：每次请求由 trusted manifest 现渲染，只列已启用工具的 name + 顶部摘要；
@@ -73,30 +74,4 @@ export function makeFishExtension(
       }, { tag: true }),
     ],
   });
-}
-
-
-/** runtime.md 里 next 专属小节的段首前缀（T1 契约：稳定段首，动态裁剪的定位锚）。 */
-const ENGAGE_RUNTIME_PREFIX = "自由交流窗口：";
-
-/**
- * runtime 的模型可见动态裁剪（决策 18）：engagement≠next 时把「自由交流窗口」整段
- * 裁掉——那是 next 的窗口协议，legacy 下看到只会误导。按段首前缀定位、按空行分段
- * 裁剪，不引入新文案；找不到该段（prompt 被改坏）时原样返回，缺省（未接回调）= legacy。
- */
-export function runtimeTextOf(base: string, engagement: EngagementMode): string {
-  if (engagement === "next") return base;
-  const lines = base.split("\n");
-  const start = lines.findIndex((line) => line.startsWith(ENGAGE_RUNTIME_PREFIX));
-  if (start < 0) return base;
-  let end = lines.length;
-  for (let index = start + 1; index < lines.length; index++) {
-    if (lines[index].trim() === "") {
-      end = index;
-      break;
-    }
-  }
-  const kept = [...lines.slice(0, start), ...lines.slice(end)];
-  const text = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-  return text.length > 0 ? text : base;
 }

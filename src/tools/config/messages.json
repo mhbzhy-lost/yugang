@@ -9,6 +9,7 @@
   "config_bad_value": "{{field}} 的值不合法：{{reason}}",
   "config_read_failed": "现在的 fish.config.json 读不了，先让主人修复再改：{{error}}",
   "config_write_failed": "写 fish.config.json 失败：{{error}}",
+  "config_free_groups_outside": "engage.freeGroups 含 .env GROUPS 域外群号（{{groups}}），先扩 GROUPS 再设置",
   "config_set_done": "已把 {{field}} 改成 {{value}}（{{effect}}）",
   "config_restart_reminder": "这项要重启进程才生效，记得提醒主人用 restart",
   "config_news_targetgroup_domain": "news.targetGroup 已记录（{{group}}）；必须是 .env GROUPS 白名单内的群号，域校验在运行时播报编排处执行，不在白名单的群不会播报",

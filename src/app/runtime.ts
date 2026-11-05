@@ -28,6 +28,7 @@ import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "../qq/voice-route.ts
 import { createGate, type GateDecision } from "../qq/gate.ts";
 import type { ForwardAttachment, ModelMessage } from "../qq/model-input.ts";
 import { engageGroupsIncludes, createEngageNext, type EngageBacklogItem, type EngageShardItem } from "../qq/engage-next.ts";
+import { engageModeOf } from "../qq/engage-mode.ts";
 import {
   createDebouncer,
   withContext,
@@ -76,7 +77,7 @@ import { clearSeenLinks, recordSeenLinks } from "../egress/seen-links.ts";
 import { shouldSendWorkingReceipt } from "../working-receipt.ts";
 import type { Middleware } from "./app.ts";
 import { planRoundImages, rewriteRoundForwardImages } from "../qq/round-images.ts";
-import { appendAnswerRules, appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderGifIngestInput, renderOpenMessageList, submitContentOf } from "../qq/round-input.ts";
+import { appendAnswerRules, appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderGifIngestInput, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
 import { NEWS_BROADCAST_MAX_CHARS, renderNewsBroadcast, renderNewsTask, type NewsDigest, type NewsDigestItem, type NewsDigestSection } from "../external/news-broadcast.ts";
 
 // 每条入站消息的原始文本（卡片渲染 / bypass 剥离之前取）：记忆 entry 只存群友原话，
@@ -210,6 +211,12 @@ const visionFallbackModel = modelSelection.visionFallback
  *  私聊与 worker 会话恒 false（不登记在途，runtime 的窗口协议小节照旧裁掉）。 */
 function engageNextOf(chatKey: string): boolean {
   return engageGroupsIncludes(config.groups, chatKey);
+}
+
+/** 该群是否走自由活动模式（engage.freeGroups ∩ .env GROUPS，运行侧再滤一次域外群号）。
+ *  只影响节拍与 prompt 裁剪，不收窄 engageNextOf（在途登记仍按 GROUPS 全量，否则 busy 恒 false）。 */
+function freeModeOf(chatKey: string): boolean {
+  return engageModeOf(chatKey, fishConfig().config.engage.freeGroups, config.groups) === "free";
 }
 
 // inline 直读开关（docs/plans/2026-11-01-inline-vision.md）：主/视觉同模型且通道在白名单。
@@ -463,8 +470,9 @@ export async function bootRuntime(): Promise<void> {
   master: config.master,
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
   silentOf: (roundId) => silentRounds.has(String(roundId)),
-  // runtime 的「自由交流窗口」小节只对 GROUPS 群会话注入（决策 18；私聊/worker 恒裁掉）
-  engagementOf: (chatKey: string) => (engageNextOf(chatKey) ? "next" : "legacy"),
+  // 搭话模式（决策 18 + 自由活动模式）：next 保留「自由交流窗口」段、free 保留「自由活动群」段、
+  // legacy（私聊 / worker / 群外会话）两段都裁掉；判定与自检脚本共用 engageModeOf
+  engagementOf: (chatKey: string) => engageModeOf(chatKey, fishConfig().config.engage.freeGroups, config.groups),
   // 出口计数：say_* 的 execute 进入即回调；未登记的轮（收图轮）直接忽略，不留孤儿计数
   onSayCall: (roundId) => {
     const key = String(roundId);
@@ -1278,6 +1286,31 @@ function engageBacklogOf(chatKey: string, afterSeq: number | undefined): readonl
 }
 
 /**
+ * 零新增主动轮的提交（两条路径共用：开窗空窗 + 自由群空拍）。
+ * decisions §5.6 固定模板四段逐字拼装，不预选具体视频、不注入编号、不附加元说明；
+ * 走 injection 管线（fish.engage_tick、非必答、无 salvage、无 quoteIds），
+ * browseWindow/browseTopic 钉上 trigger（浏览与分享授权的唯一来源）。
+ * 遇忙放弃（宁少勿答，不重试不补发）。
+ */
+async function submitBrowseOpportunity(chatKey: string, gate: { windowId: string; topic: string }): Promise<void> {
+  const conv = await conversationFor(chatKey);
+  if (conversationBusy(conv.id)) {
+    console.log(`[鱼缸] ${chatKey} 主动轮放弃（忙）`);
+    return;
+  }
+  const content = renderBrowseOpportunity(fish.prompts.messages);
+  console.log(`[鱼缸] ${chatKey} 主动轮提交（browse 门开）`);
+  await submitRound({
+    chatKey,
+    conv,
+    content,
+    trigger: { mentionsBot: false, kind: "injection", browseWindow: gate.windowId, browseTopic: gate.topic },
+    reply: false,
+    entryKind: MEMORY_ENGAGE_KIND,
+  });
+}
+
+/**
  * 开窗注入轮（injection，背景板语义）：open 进入瞬间把积压一轮注入。这些消息只是
  * 背景板——无必答、无 salvage、模型不必逐条回应也不必补回复任何人；遇忙放弃
  * （宁少勿答，积压不重放）；注入后已读标记只推进到本轮实际注入集合（fresh）的
@@ -1289,6 +1322,7 @@ function engageBacklogOf(chatKey: string, afterSeq: number | undefined): readonl
  * 空窗（零新增）不再由沉默/nudge/debt/ammo 触发：只在本窗 video.browseChance 门开时
  * 提交「主动交流机会」固定模板（decisions §5.6），并把 browseWindow/browseTopic 钉上
  * trigger（T4 浏览与分享授权的唯一来源）；ambient shard 与其它轮一律不携带。
+ * 自由活动模式没有开窗事件：空拍门开走同一条 submitBrowseOpportunity。
  */
 async function submitInjectionRound(chatKey: string, backlog: readonly EngageBacklogItem[]): Promise<void> {
   console.log(`[鱼缸] ${chatKey} 携话窗口 → open（积压 ${backlog.length} 条）`);
@@ -1298,23 +1332,7 @@ async function submitInjectionRound(chatKey: string, backlog: readonly EngageBac
     // 遇忙放弃（宁少勿答，不重试不补发，下窗自然重掷）
     const gate = videoBrowseGateOf(chatKey);
     if (!gate?.open) return;
-    const conv0 = await conversationFor(chatKey);
-    if (conversationBusy(conv0.id)) {
-      console.log(`[鱼缸] ${chatKey} 主动轮放弃（忙）`);
-      return;
-    }
-    // decisions §5.6 固定模板：四段逐字拼装（两段之间空一行），不预选具体视频、
-    // 不注入编号、不附加元说明
-    const content = renderBrowseOpportunity(fish.prompts.messages);
-    console.log(`[鱼缸] ${chatKey} 主动轮提交（browse 门开）`);
-    await submitRound({
-      chatKey,
-      conv: conv0,
-      content,
-      trigger: { mentionsBot: false, kind: "injection", browseWindow: gate.windowId, browseTopic: gate.topic },
-      reply: false,
-      entryKind: MEMORY_ENGAGE_KIND,
-    });
+    await submitBrowseOpportunity(chatKey, { windowId: gate.windowId, topic: gate.topic });
     return;
   }
   const conv = await conversationFor(chatKey);
@@ -1363,10 +1381,13 @@ async function submitShardRound(chatKey: string, items: readonly EngageShardItem
   }
   const fresh = items.filter((m) => m.arrivalSeq === undefined || m.arrivalSeq > seenSeqOf(conv.id));
   if (fresh.length === 0) return;
-  const content = renderOpenMessageList(fresh, fish.prompts.messages,
+  const list = renderOpenMessageList(fresh, fish.prompts.messages,
     (userId) => Boolean(config.master && String(userId) === config.master),
     (userId) => watchedByChat.get(baseChatKey(chatKey))?.has(String(userId)) === true,
   );
+  // 批内回复关系（2026-11-05）：列表里渲染 [回复了m:id]，被引原文按 @ 轮同款附在列表后
+  const quoted = renderOpenQuotedText(fresh, fish.prompts.messages);
+  const content = quoted.length > 0 ? `${list}\n\n${quoted}` : list;
   // 整拍里最近一条非空 bypass 段（整组语义：指令后面跟闲聊不丢指令）
   let payload: string | undefined;
   for (let index = fresh.length - 1; index >= 0; index--) {
@@ -1811,6 +1832,12 @@ const engageNext = createEngageNext({
     console.log(`[鱼缸] ${chatKey} 搭话窗口 → ${phase}`);
   },
   onShard: (chatKey, items) => submitShardRound(chatKey, items),
+  // 自由活动模式（2026-11-05）：专用白名单 ∩ GROUPS 恒 open，60 秒一拍由状态机 tick 驱动；
+  // 空拍时状态机掷自主门，门开才回调这里（同一拍内提交「主动交流机会」，忙则放弃，宁少勿答）
+  freeOf: (chatKey) => freeModeOf(chatKey),
+  onFreeIdle: (chatKey, gate) => submitBrowseOpportunity(chatKey, gate),
+  // 让行：这一分钟有人在攒 @ 组时先让必答轮走，本拍顺延（消息不丢，最多多等一拍）
+  yieldTo: (chatKey) => debouncer.pendingOf(chatKey).length > 0,
   config: () => {
     const c = fishConfig().config;
     // video.dailyBudget 的每 tick 热读点（T3）：弹药 scheduler 停用后仍在的 active 热加载路径
@@ -1820,6 +1847,10 @@ const engageNext = createEngageNext({
       openMinutes: c.engage.openMinutes,
       // shard 节拍（T14）：engage.shardSeconds，缺省 20 秒，每拍现读热生效
       shardSeconds: c.engage.shardSeconds,
+      // 自由活动模式三键：拍长（秒）/ 空拍自主门概率 / 单拍收集上限，每拍现读热生效
+      freeSeconds: c.engage.freeSeconds,
+      freeBrowseChance: c.engage.freeBrowseChance,
+      freeBatchMax: c.engage.freeBatchMax,
       // 旧分享门（E5，兼容保留）：弹药管线已停用，宿主不再消费 shareGateOf
       ammoShareChance: c.ammo.shareChance,
       // 视频浏览门（T3）：video.browseChance，开窗进入时一次挷落相位并选定 topic（热读：下一窗生效）
@@ -2413,6 +2444,9 @@ export const groupWindowStage: Middleware<MessageCtx> = async (ctx, next) => {
         ...(msg.messageId !== undefined ? { messageId: msg.messageId } : {}),
         ...(msg.arrivalSeq !== undefined ? { arrivalSeq: msg.arrivalSeq } : {}),
         ...(ctx.bypass ? { payload: ctx.bypass.stash } : {}),
+        // 批内回复关系（2026-11-05）：让一拍里的「谁在回谁」可见，被引原文随批附上
+        replyIds: msg.replyIds,
+        ...(msg.quoted !== undefined ? { quoted: msg.quoted } : {}),
       });
       if (!collected) {
         console.log("[fish] gate " + msg.chatKey + " " + msg.nickname.slice(0, 12) + " -> shard:closed_drop");

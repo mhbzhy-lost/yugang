@@ -7,7 +7,7 @@
 一条活在 QQ 群里的鱼，跑在 pi-durable 上。一个 Conversation = 一个群。
 
 ```
-群消息 → 闸（规则：@ 必答 / 开窗两态（open 放行、closed 拒））
+群消息 → 闸（规则：@ 必答 / 自由活动群恒放行 / 其余开窗两态（open 放行、closed 拒））
        → 按发送者静默 10 秒合并（同一发送者整组提交，最后一条是引用锚点）
        → conversation.submit() → agent loop
                                  ├── thinking / 正文 / tool 调用  ✗ 不出境
@@ -192,9 +192,10 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
   只 @ 别人时会明确写「这些都不是在叫你」，免得把别人的对话当成点名
 - 名单内判定一行版（next-only，2026-11 起 legacy 判定已下线）：任何人 @（含裸 @）必答；
   其余非 @ 群消息一律按开窗两态——closed（默认 10 分钟，`engage.closedMinutes`）`skip:next_pending`
-  不进模型，open（默认 3 分钟，`engage.openMinutes`）`enter:free_pass`；回复合集不构成例外
+  不进模型，open（默认 3 分钟，`engage.openMinutes`）`enter:free_pass`；自由活动白名单群
+  （`engage.freeGroups`）没有两态，非 @ 一律 `enter:free_pass`。回复合集不构成例外
   （回复鱼或回复合集都只是引用动作，决定回复与展开的都是 @），限流/随机门判定已随 legacy 删除
-- **定时开窗两态是唯一的搭话行为**（`src/qq/engage-next.ts` 状态机按群循环，每 tick 现读配置）：
+- **定时开窗两态是默认搭话行为**（`src/qq/engage-next.ts` 状态机按群循环，每 tick 现读配置）：
   closed 态 @ 必答不变，非 @ 群消息统一 `skip:next_pending` 不进模型；open 态非 @ 群消息
   `enter:free_pass` 按 `engage.shardSeconds`（缺省 20 秒）分片——每拍把窗内**全部发送者**的新消息
   合并成一轮 ambient 提交（在途时并入下一拍，不并发；非必答：不触发正文兜底，零出口合法）。
@@ -203,11 +204,21 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
   （上限 max(30, `engage.windowRelaxCap`)，缺省仍 30）、chatlog、昵称映射、`#recentForward`
   合集 id 缓存等旁路记账也照常。`@全体成员` / `@别人` 不置 mentionsBot，天然按非 @ 处理。
   非法值保留缺省并告警
+- **自由活动模式是并存的第二条轨道**（2026-11-05，`engage.freeGroups` 专用白名单 ∩ `GROUPS`）：
+  命中的群不走 closed/open，恒可搭话，非 @ 消息按 `engage.freeSeconds`（缺省 60 秒）一拍合并成
+  一轮 ambient——**空拍不提交**（拍子继续走），单拍超过 `engage.freeBatchMax`（缺省 50）时丢最旧、
+  计数进日志（本模式唯一的有损点）。@ 仍走 10 秒必答通道；会话在途时整拍并入下一拍，**有正在攒的
+  @ 组时本拍让行**（`yieldTo`）。空拍才掷一次自主门 `engage.freeBrowseChance`（缺省 0.03，清醒时段
+  ≈31 次/天上限，宵禁恒关），门开才提交 `[主动交流机会]`；掷门与提交同拍、忙则不掷。
+  相位懒建且恒 `open`（`isOpen` 对自由群恒 true，启动首秒的非 @ 消息不会被闸丢掉）；
+  自由拍不结算 T8 沉默簿记；窗口模式的群行为一字不变。批内消息带 `replyIds`/`quoted`，
+  一拍里能看到 `[回复了m:id]` 与列表后的 `[引用原文]`（与 @ 轮同款渲染，批内图仍不做 inline 定级）
 - **开窗输入统一为标准消息列表**：injection / shard 有消息时不再附加窗口说明、旧账或弹药栏；没有 `[这条消息@了你]` 就不构成必答。零新增空窗不再由沉默、nudge、旧账或弹药触发，只在每个 open 窗进入时一次 `video.browseChance`（缺省 0.3）门开时提交 `[主动交流机会]`，当前会话可自行 `bili_hot` 找候选、`video` 实际观看后把「推荐语 + 链接」用 `say_words` 发出去；ambient shard 不携带 browse 授权。末条自言禁言的机械边界仍生效（分享素材要带 `share: true`）；**宵禁（本地 02:00–09:00）落在 browse 门上**：`src/qq/curfew.ts` 的 `isCurfewAt` 是唯一实现，开窗时 `videoBrowseOpen = !isCurfewAt(at) && roll < video.browseChance`，所以宵禁内根本不起 `[主动交流机会]` 轮，也就没有可发的 B 站链接；与 `ctx_engage_footer_night` 夜间文案同阈同向。旧 `ammoCurfewAt` 保留为已停用弹药链的同源别名。
 - **闸放行 ≠ 立刻提交**：放行的群消息按「群 + 发送者」攒 **10 秒静默**（窗口固定，没有环境变量、没有最长等待），
   同一发送者的新消息取消旧计时并继续加长，不同发送者互不干扰；静默满 10 秒才把整组提交一次
-  （这套按发送者的合并只管 @ 必答轮；open 态的非 @ free_pass 消息不进这里，改投 shard
-  收集器，按 `engage.shardSeconds`（缺省 20 秒）分片、全部发送者合并成一轮）
+  （这套按发送者的合并只管 @ 必答轮；非 @ free_pass 消息不进这里，改投 shard 收集器——
+  开窗群按 `engage.shardSeconds`（缺省 20 秒）分片，自由活动群按 `engage.freeSeconds`
+  （缺省 60 秒）一拍，两者都是全部发送者合并成一轮）
 - 整组语义：**最后一条是引用锚点**（A-B-A 里 B 只能进背景，不可能顶掉 A 的位置）；整组里任意一条 @鱼 → 整组必答；
   整组里任意一条是回复 → 这一轮仍然引用。@（answer）轮背景缩为 `engage.mentionContextSize`（默认 5，热加载），
   且先取 N 条再**剔除已进过模型的**（每会话 lastSeenByModel 标记：5 条里 3 条读过则只注入后 2 条），
@@ -416,6 +427,8 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
   入口与 `ammo_*` 工具已停用，源码仅作兼容保留，不进 active 工具面、调度或模型文案。
   每个 open 窗进入时只掷一次 `video.browseChance`（缺省 0.3）并选定 topic；门开且零新增时给
   当前（群 × 人格）会话提交 `[主动交流机会]`，ambient shard 不携带 browse 授权。
+  自由活动模式没有窗：改在**空拍**时掷一次 `engage.freeBrowseChance`（缺省 0.03），门开才提交
+  同一模板，`browseWindow` 是 `free-` 前缀的拍 id，下一拍作废；宵禁同为恒关。
   **授权不再写在工具里**：`bili_hot` / `video` / `say_words` 都不检查轮类型，能不能逛什么时候逛
   由调用侧策略定——engage 的 0.3 门决定主动轮起不起，prompt 的 `video_answer_rule`
   （`[本轮要求]`，@ 轮确定性追加）要求「没被要求看视频就别去看」。工具只保留资源闸与防伪造：

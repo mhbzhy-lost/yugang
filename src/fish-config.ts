@@ -16,12 +16,14 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 
 const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-/** 搭话模式标记（兼容 harness 的 runtime 裁剪）：next = 开窗两态；非群会话（私聊 / worker）
- *  标 legacy 以裁掉 runtime 的窗口协议小节（行为与历史一致），不再有开关语义。 */
-export type EngagementMode = "legacy" | "next";
+/** 搭话模式标记（兼容 harness 的 runtime 裁剪）：next = 开窗两态；free = 自由活动模式
+ *  （专用白名单群恒可搭话、60 秒一拍合并）；非群会话（私聊 / worker）标 legacy 以裁掉
+ *  runtime 的窗口协议小节（行为与历史一致），不再有开关语义。 */
+export type EngagementMode = "legacy" | "next" | "free";
 
 /** next 搭话（开窗两态）的开窗参数；逐字段校验，非法告警保留缺省，热生效。
- *  群表白名单不在这里：开窗群表 = .env GROUPS（安全域即行为域，2026-11 起）。 */
+ *  窗口模式的群表 = .env GROUPS（安全域即行为域，2026-11 起）；
+ *  自由活动模式的专用白名单在下面的 freeGroups，两者取交集。 */
 export interface EngageConfig {
   /** closed 相位时长（分钟）：非 @ 群消息 skip:next_pending，@ 恒必答。 */
   closedMinutes: number;
@@ -37,6 +39,15 @@ export interface EngageConfig {
   windowRelaxCap: number;
   /** open 态分片节拍（秒）：每拍把窗内全部发送者的新消息合成一轮 ambient 提交（T14 消费）。 */
   shardSeconds: number;
+  /** 自由活动模式的专用白名单（群号）：命中的群不走开窗节拍，恒可搭话、按 freeSeconds 一拍合并。
+   *  与 .env GROUPS 取交集（安全域硬闸），域外群号在写配置时整次拒绝、运行侧再滤一次。 */
+  freeGroups: string[];
+  /** 自由活动模式的拍长（秒，15–300，缺省 60）：一拍把这段时间内全部发送者的非 @ 消息合成一轮。 */
+  freeSeconds: number;
+  /** 自由群**空拍**时的自主开口概率（0–1，缺省 0.03）：门开才提交「主动交流机会」；0 = 恒关。 */
+  freeBrowseChance: number;
+  /** 自由群单拍提交上限（条，1–200，缺省 50）：超出留最近 N 条、丢弃最旧并计数留日志。 */
+  freeBatchMax: number;
 }
 
 export const ENGAGE_DEFAULTS: EngageConfig = {
@@ -47,7 +58,17 @@ export const ENGAGE_DEFAULTS: EngageConfig = {
   silenceThreshold: 3,
   windowRelaxCap: 30,
   shardSeconds: 20,
+  freeGroups: [],
+  freeSeconds: 60,
+  freeBrowseChance: 0.03,
+  freeBatchMax: 50,
 };
+
+/** 运行侧安全域交集：自由活动白名单只认 .env GROUPS 之内的群号（域外静默失效，宿主另打日志）。 */
+export function freeGroupsSafe(groups: readonly string[], free: readonly string[]): string[] {
+  const allowed = new Set(groups.map((group) => String(group)));
+  return [...new Set(free.map((group) => String(group)).filter((group) => allowed.has(group)))];
+}
 
 /**
  * B 站弹药管线（外部计划 E1–E5）的行为参数：逛轮时点、硬截止、随机门、TTL、预算与空库补货目标。
@@ -309,6 +330,9 @@ function checkEngageBlock(raw: unknown): FieldCheck {
     ["silenceThreshold", "engage.silenceThreshold 必须在 1–50"],
     ["windowRelaxCap", "engage.windowRelaxCap 必须在 10–100"],
     ["shardSeconds", "engage.shardSeconds 必须在 5–120"],
+    ["freeSeconds", "engage.freeSeconds 必须在 15–300"],
+    ["freeBrowseChance", "engage.freeBrowseChance 必须是 0–1"],
+    ["freeBatchMax", "engage.freeBatchMax 必须在 1–200"],
   ];
   const ranges: Record<string, [number, number]> = {
     closedMinutes: [1, 240],
@@ -318,20 +342,45 @@ function checkEngageBlock(raw: unknown): FieldCheck {
     silenceThreshold: [1, 50],
     windowRelaxCap: [10, 100],
     shardSeconds: [5, 120],
+    freeSeconds: [15, 300],
+    freeBrowseChance: [0, 1],
+    freeBatchMax: [1, 200],
   };
   const parsed: Partial<EngageConfig> = {};
   const problems: string[] = [];
   let any = false;
-  const known = new Set<string>(specs.map(([key]) => key));
+  const known = new Set<string>([...specs.map(([key]) => key), "freeGroups"]);
   for (const [key, reason] of specs) {
     if (e[key] === undefined) continue;
     const [lo, hi] = ranges[key];
-    const r = numberIn(reason, lo, hi, true)(e[key]);
+    // freeBrowseChance 是概率（允许小数），其余是条数/秒数/分钟数（向下取整）
+    const r = numberIn(reason, lo, hi, key !== "freeBrowseChance")(e[key]);
     if (r.ok) {
       (parsed as Record<string, number>)[key] = r.value as number;
       any = true;
     } else {
       problems.push(`${reason}，已回默认`);
+    }
+  }
+  // freeGroups：群号数组（只认字符串，数字/布尔/对象等坏项剔除），去重保序并留一条告警；
+  // [] 合法（= 本模式关闭）
+  let parsedFree: string[] | undefined;
+  const rawFree = e["freeGroups"];
+  if (rawFree !== undefined) {
+    if (!Array.isArray(rawFree)) {
+      problems.push("engage.freeGroups 必须是群号数组，已回默认");
+    } else {
+      const kept = [
+        ...new Set(
+          rawFree
+            .filter((group): group is string => typeof group === "string")
+            .map((group) => group.trim())
+            .filter((group) => /^\d+$/.test(group)),
+        ),
+      ];
+      if (kept.length !== rawFree.length) problems.push("engage.freeGroups 含非群号项，已剔除");
+      parsedFree = kept;
+      any = true;
     }
   }
   // 未知嵌套键显式告警（终验 #8）：拼错的键名不再静默——保留忽略语义，但 problems 必须可见
@@ -342,7 +391,9 @@ function checkEngageBlock(raw: unknown): FieldCheck {
   if (!any) {
     return { ok: false, reason: problems.length > 0 ? `engage 至少要有一个合法参数（${problems.join("；")}）` : "engage 至少要有一个合法参数" };
   }
-  return { ok: true, value: { ...ENGAGE_DEFAULTS, ...parsed }, ...(problems.length > 0 ? { problems } : {}) };
+  // freeGroups 每次都给一份新数组：默认值只读，不做共享可变引用
+  const value: EngageConfig = { ...ENGAGE_DEFAULTS, ...parsed, freeGroups: [...(parsedFree ?? ENGAGE_DEFAULTS.freeGroups)] };
+  return { ok: true, value, ...(problems.length > 0 ? { problems } : {}) };
 }
 
 /** HH:MM 时点校验：00:00–23:59，另认 24:00（当天末尾）；合法时返回 trim 后的原样字符串。 */
@@ -688,7 +739,11 @@ export function loadFishConfig(options: { path?: string; env?: NodeJS.ProcessEnv
     ...fromEnv,
     ...fromFile,
     compact: { ...DEFAULTS.compact, ...(fromEnv.compact ?? {}), ...(fromFile.compact ?? {}) },
-    engage: { ...DEFAULTS.engage, ...(fromEnv.engage ?? {}), ...(fromFile.engage ?? {}) },
+    // freeGroups 每次都克隆一份：默认值里的空数组是共享常量，一次调用改动它会污染下一份配置
+    engage: (() => {
+      const merged = { ...DEFAULTS.engage, ...(fromEnv.engage ?? {}), ...(fromFile.engage ?? {}) };
+      return { ...merged, freeGroups: [...merged.freeGroups] };
+    })(),
     ammo: { ...DEFAULTS.ammo, ...(fromEnv.ammo ?? {}), ...(fromFile.ammo ?? {}) },
     video: { ...DEFAULTS.video, ...(fromEnv.video ?? {}), ...(fromFile.video ?? {}) },
     news: { ...DEFAULTS.news, ...(fromEnv.news ?? {}), ...(fromFile.news ?? {}) },

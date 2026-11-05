@@ -3,6 +3,9 @@
  *
  * 门（VideoBrowseGate）由宿主（src/index.ts）在 engage-next 状态机每个 open 窗进入时
  * 一次性掷出（video.browseChance，同窗稳定、关窗作废），经 wireVideoBrowseHost 接线；
+ * 自由活动模式的群没有窗：改在**空拍**时掷一次（engage.freeBrowseChance，windowId 是
+ * `free-` 前缀的拍 id）。有消息的拍不掷；忙 / 让行的那一拍在清门之前就返回，旧门因此
+ * 会多留一拍，但没有任何提交路径会消费它（只有空拍才提交机会轮），下一拍开拍即作废。
  * 工具侧只通过 videoBrowseGateOf(chatKey) 只读查询——closed / 未跟踪 / 白名单外
  * 一律 undefined（fail closed）。零新增主动轮（decisions §5.6）只在门开时提交，
  * browseWindow / browseTopic 随 RoundTrigger 钉在轮上；ambient shard 与其它轮不携带。
