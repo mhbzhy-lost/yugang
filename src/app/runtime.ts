@@ -27,6 +27,7 @@ import { openFish, SentmapDoc, type Fish, type GroupProfile } from "../harness.t
 import { OneBot, orderByArrival, type IncomingMessage, type OneBotSendFailure } from "../qq/onebot.ts";
 import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "../qq/voice-route.ts";
 import { createGate, type GateDecision } from "../qq/gate.ts";
+import { isCurfewAt } from "../qq/curfew.ts";
 import { mentionTargetsOf, type ForwardAttachment, type ModelMessage } from "../qq/model-input.ts";
 import { engageGroupsIncludes, createEngageNext, type EngageBacklogItem, type EngageShardItem } from "../qq/engage-next.ts";
 import { engageModeOf } from "../qq/engage-mode.ts";
@@ -2238,6 +2239,8 @@ const gate = createGate({
   groups: config.groups,
   // 开窗两态判定：接状态机相位；未跟踪 = closed（非 @ 恒 skip:next_pending）
   isOpen: (chatKey) => engageNext.isOpen(chatKey),
+  // 自由活动群的宵禁：非 @ 一律不接（浏览门本来也关着，这里把「接话」也关掉）
+  freeCurfew: (chatKey) => freeModeOf(chatKey) && isCurfewAt(Date.now()),
 });
 
 /** 群周报：周日 21 点整点档私聊发给主人一次，var/weekly.json 记住发过的周防止重发。 */
