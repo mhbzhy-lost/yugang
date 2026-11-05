@@ -56,6 +56,9 @@ export function renderOpenMessageList(
     master: masterOf(item.userId),
     watched: watchedOf(item.userId),
     ...(item.mentionTargets !== undefined ? { mentionTargets: item.mentionTargets } : {}),
+    // quoted 只用于「接收对象」标签（引用原文由 renderOpenQuotedText 在列表后另渲染）：
+    // 行内不重复输出被引内容，只借 nickname / fromSelf 判断这句话是不是在回鱼
+    ...(item.quoted !== undefined ? { quoted: item.quoted } : {}),
   }));
   return renderMessageList(models, messages, "group");
 }
