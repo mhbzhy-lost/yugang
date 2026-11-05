@@ -56,7 +56,7 @@ test("摘要只收群友的话和鱼发出去的话", async () => {
 
     const rendered = await renderTranscript(root);
     assert.match(rendered.transcript, /群友: 画个鱼/);
-    assert.match(rendered.transcript, /鱼: 画好了/);
+    assert.match(rendered.transcript, /我: 画好了/);
     assert.ok(!rendered.transcript.includes("内部独白"), "模型正文进了摘要");
     assert.ok(!rendered.transcript.includes("react"), "tool 调用进了摘要");
     assert.ok(!rendered.transcript.includes("贴上了"), "tool 结果进了摘要");
