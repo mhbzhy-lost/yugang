@@ -12,6 +12,8 @@ export interface OpenMessage {
   replyIds?: readonly string[];
   /** 被引消息的结构化原文（列表后附 [引用原文]）；批内与 injection 共用，缺省无。 */
   quoted?: QuotedMessage;
+  /** 这条 @ 的其他人（不含 @鱼/@全体）：渲染「接收对象是…，不是你」。 */
+  mentionTargets?: readonly string[];
 }
 
 /** 批内引用原文附加段：把各条 quoted 用 @ 轮同款渲染器渲染成 `[引用原文]` 行，按 id 去重；
@@ -53,6 +55,7 @@ export function renderOpenMessageList(
     replyIds: item.replyIds ?? [],
     master: masterOf(item.userId),
     watched: watchedOf(item.userId),
+    ...(item.mentionTargets !== undefined ? { mentionTargets: item.mentionTargets } : {}),
   }));
   return renderMessageList(models, messages, "group");
 }

@@ -16,6 +16,9 @@ message_list_end: > 消息结束
 message_reply: [回复了m:{{id}}]
 message_forward: [转发合集]
 message_mention_bot: [这条消息@了你]
+# 指向性标签：这条消息@了别人（单/多个）或引用了别人（且没有@鱼），提醒不是在叫自己。
+# @ 与引用同时出现时以 @ 为准；@鱼、@全体成员都不加这个标签。
+message_target_other: [此消息的接收对象是{{who}}，不是你]
 message_master: [主人]
 message_watched: [特别关注]
 # 合集父消息没有附带文字时的内容占位（消息列表内）；背景栏里的合集短标记仍是 forward_collapsed

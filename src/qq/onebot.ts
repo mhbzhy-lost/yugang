@@ -255,6 +255,9 @@ export class OneBot {
               userId: senderId(quoted),
               text: "",
               images: [],
+              // 被引的是不是鱼自己：决定要不要加「接收对象不是你」（2026-11-05 指向性标签）。
+              // 只在为真时落字段：存量 quoted 的形状不变，缺省即「不是自己」。
+              ...(senderId(quoted) === String(this.#selfId) ? { fromSelf: true } : {}),
               // 回复合集的来源消息就是被引的那条父消息（decisions §5.9 forward-reply）。
               forward: { ...expanded, sourceMessageId: replyId },
             };
@@ -296,6 +299,7 @@ export class OneBot {
             userId: senderId(quoted),
             text: [cardToken, quotedText].filter(Boolean).join(" "),
             images: savedList,
+            ...(senderId(quoted) === String(this.#selfId) ? { fromSelf: true } : {}),
           };
         }
       } catch {

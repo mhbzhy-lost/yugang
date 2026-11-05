@@ -27,7 +27,7 @@ import { openFish, SentmapDoc, type Fish, type GroupProfile } from "../harness.t
 import { OneBot, orderByArrival, type IncomingMessage, type OneBotSendFailure } from "../qq/onebot.ts";
 import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "../qq/voice-route.ts";
 import { createGate, type GateDecision } from "../qq/gate.ts";
-import type { ForwardAttachment, ModelMessage } from "../qq/model-input.ts";
+import { mentionTargetsOf, type ForwardAttachment, type ModelMessage } from "../qq/model-input.ts";
 import { engageGroupsIncludes, createEngageNext, type EngageBacklogItem, type EngageShardItem } from "../qq/engage-next.ts";
 import { engageModeOf } from "../qq/engage-mode.ts";
 import {
@@ -762,6 +762,7 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: RecentChatMessage[])
       replyIds: [],
       master: String(line.userId) === config.master,
       watched: watchedByChat.get(baseChatKey(msg.chatKey))?.has(String(line.userId)) === true,
+      ...(line.mentionTargets !== undefined ? { mentionTargets: line.mentionTargets } : {}),
     }));
     const target: ModelMessage = {
       messageId: msg.messageId,
@@ -772,6 +773,7 @@ async function maybeIngestGif(msg: IncomingMessage, bucket: RecentChatMessage[])
       replyIds: [...msg.replyIds],
       master: String(msg.userId) === config.master,
       watched: watchedByChat.get(baseChatKey(msg.chatKey))?.has(String(msg.userId)) === true,
+      ...(mentionTargetsOf(msg.mentions) !== undefined ? { mentionTargets: mentionTargetsOf(msg.mentions) } : {}),
       ...(msg.quoted ? { quoted: msg.quoted } : {}),
       ...(msg.forward ? { forward: msg.forward } : {}),
     };
@@ -2352,6 +2354,7 @@ export const normalizeInbound: Middleware<MessageCtx> = async (ctx, next) => {
       ...(msg.messageId !== undefined ? { messageId: msg.messageId } : {}),
       ...(msg.arrivalSeq !== undefined ? { arrivalSeq: msg.arrivalSeq } : {}),
       ...(msg.mediaOnly ? { mediaOnly: msg.mediaOnly } : {}),
+      ...(mentionTargetsOf(msg.mentions) !== undefined ? { mentionTargets: mentionTargetsOf(msg.mentions) } : {}),
     },
   ]);
   const cap = recentCap();
@@ -2450,6 +2453,7 @@ export const groupWindowStage: Middleware<MessageCtx> = async (ctx, next) => {
         // 批内回复关系（2026-11-05）：让一拍里的「谁在回谁」可见，被引原文随批附上
         replyIds: msg.replyIds,
         ...(msg.quoted !== undefined ? { quoted: msg.quoted } : {}),
+        ...(mentionTargetsOf(msg.mentions) !== undefined ? { mentionTargets: mentionTargetsOf(msg.mentions) } : {}),
       });
       if (!collected) {
         console.log("[fish] gate " + msg.chatKey + " " + msg.nickname.slice(0, 12) + " -> shard:closed_drop");
