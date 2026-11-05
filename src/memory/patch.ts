@@ -11,6 +11,8 @@ import {
   type MemoryFact,
   type MemoryLore,
   type MemoryPatch,
+  MEMORY_EXPIRE_PER_PAGE,
+  MEMORY_EXPIRE_QUOTE_CHARS,
   type MemoryPerson,
   type MemoryState,
 } from "./model.ts";
@@ -45,6 +47,21 @@ export function applyPatch(state: MemoryState, patch: MemoryPatch, now: number, 
         superseded.push(fact);
       }
     }
+  }
+
+  // EXPIRE（时效性淘汰，2026-11-05）：只置失效、不新增事实、不回填 supersededBy。
+  // 顺序在 supersede 之后：同一 fact 被 supersede 命中时 invalidAt 已置位，这里自动跳过
+  // （「有替代优先」在 apply 层也成立，不依赖上层过滤）。上限与抽取侧同源。
+  let expiredCount = 0;
+  for (const entry of patch.expire ?? []) {
+    if (expiredCount >= MEMORY_EXPIRE_PER_PAGE) break;
+    const person = people[entry.subject];
+    if (!person) continue;
+    const fact = person.facts.find((item) => item.id === entry.id && item.invalidAt === undefined);
+    if (!fact) continue;
+    fact.invalidAt = now;
+    fact.expiredReason = entry.quote.slice(0, MEMORY_EXPIRE_QUOTE_CHARS);
+    expiredCount += 1;
   }
 
   const newFactIds = new Map<string, string>();

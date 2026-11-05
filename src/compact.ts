@@ -157,6 +157,7 @@ export function createCompactor(options: CompactorOptions): Compactor {
               transcript: memoryTranscript.transcript,
               known: known.text,
               subjects: [...known.subjects, ...memoryTranscript.subjects],
+              inboundTexts: memoryTranscript.inboundTexts,
             };
             const outcome = await extractMemories(options.extract, extractInput);
             if (outcome.status === "parse_failed") {
@@ -168,7 +169,7 @@ export function createCompactor(options: CompactorOptions): Compactor {
             const saved = await options.savePendingMemories(memoryKey, outcome, conversation.id);
             if (outcome.status === "ok") {
               console.log(
-                `[鱼缸] 记忆抽取 人${outcome.patch.people?.length ?? 0} 说法${outcome.patch.lore?.length ?? 0} 卡${outcome.patch.cards?.length ?? 0} skip${outcome.skipped}`,
+                `[鱼缸] 抽取 人${outcome.patch.people?.length ?? 0} 说法${outcome.patch.lore?.length ?? 0} 卡${outcome.patch.cards?.length ?? 0} 淘汰${outcome.patch.expire?.length ?? 0} skip${outcome.skipped}`,
               );
             } else if (saved.zeroStreak >= MEMORY_ZERO_EXTRACT_PAGES) {
               // 复查模式：连续零提取达阈值，宽松提示词重跑本页一次；失败不清计数、不阻塞换页
@@ -178,7 +179,7 @@ export function createCompactor(options: CompactorOptions): Compactor {
                 if (review.status === "ok") {
                   await options.savePendingMemories(memoryKey, review, conversation.id);
                   console.log(
-                    `[鱼缸] 复查命中 人${review.patch.people?.length ?? 0} 说法${review.patch.lore?.length ?? 0} 卡${review.patch.cards?.length ?? 0}`,
+                    `[鱼缸] 复查 人${review.patch.people?.length ?? 0} 说法${review.patch.lore?.length ?? 0} 卡${review.patch.cards?.length ?? 0} 淘汰${review.patch.expire?.length ?? 0}`,
                   );
                 } else if (review.status === "parse_failed") {
                   console.error(`[鱼缸] 记忆复查失败 ${review.reason}`);
@@ -797,6 +798,8 @@ function isEmptyErrorAssistant(entry: { kind: string; model?: unknown }): boolea
 export interface MemoryTranscript {
   transcript: string;
   subjects: { subject: string; name: string }[];
+  /** 只含群友入站原文：EXPIRE 的逐字证据域（不含鱼自己的发言与主人评价）。 */
+  inboundTexts: string[];
 }
 
 /**
@@ -814,6 +817,7 @@ export async function renderMemoryTranscript(conversation: Conversation): Promis
   const view = await conversation.viewState(ctx);
   const lines: string[] = [];
   const subjects = new Map<string, string>();
+  const inboundTexts: string[] = [];
 
   try {
     for (const entry of view.value.entries) {
@@ -828,6 +832,7 @@ export async function renderMemoryTranscript(conversation: Conversation): Promis
         if (text) {
           const stamp = dayStamp(entryTimestamp(entry));
           lines.push(`${stamp ? `[${stamp}] ` : ""}${nickname}(${subject}): ${text}`);
+          inboundTexts.push(text);
         }
       } else if (entry.kind === MEMORY_EVAL_KIND) {
         const data = entry.data as Partial<EvalEventData> | undefined;
@@ -853,6 +858,7 @@ export async function renderMemoryTranscript(conversation: Conversation): Promis
   return {
     transcript: lines.join("\n"),
     subjects: [...subjects.entries()].map(([subject, name]) => ({ subject, name })),
+    inboundTexts,
   };
 }
 

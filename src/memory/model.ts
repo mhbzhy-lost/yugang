@@ -44,10 +44,13 @@ export interface MemoryFact {
   subject: string;
   text: string;
   at: number;
-  /** 被 supersede 命中后的失效时间；有效事实没有这个字段。 */
+  /** 失效时间：被 supersede 取代、或被 EXPIRE 判为过时后置位；有效事实没有这个字段。 */
   invalidAt?: number;
-  /** 审计链：取代它的那条新 fact 的 id（supersede 生效时由 applyPatch 回填）。 */
+  /** 审计链：取代它的那条新 fact 的 id（supersede 生效时由 applyPatch 回填）。
+   *  EXPIRE 是「没有替代品的失效」，**不写**这个字段。 */
   supersededBy?: string;
+  /** EXPIRE 的审计证据：触发失效的那句逐字原文（≤60 字）；不参与渲染。 */
+  expiredReason?: string;
   source: FactSource;
   /** reported 来源的转述人 subject。 */
   by?: string;
@@ -114,10 +117,17 @@ export interface MemoryPatch {
   lore?: { keys: string[]; text: string; kind: "word" | "meme" | "rule" }[];
   cards?: { text: string; importance: number; keys: string[]; subjects: string[] }[];
   supersede?: { subject: string; ids: string[] }[];
+  /** 时效性淘汰（EXPIRE）：命中同 subject 的有效 fact 就置 invalidAt，不新增事实、不写 supersededBy。 */
+  expire?: { subject: string; id: string; quote: string }[];
   /** 评价类（/评）：机器装配通道（buildFeedbackPending；T6 存量待审批准时由
    *  approvePending 映射）。抽取器不产——sanitizePatch 不读模型输出里的 feedback 键。 */
   feedback?: { text: string; meta: FeedbackFactMeta }[];
 }
+
+/** EXPIRE 的机械上限：单页最多淘汰几条（reconcile 与 apply 两层都按它截断）。 */
+export const MEMORY_EXPIRE_PER_PAGE = 5;
+/** EXPIRE 的 quote 长度上限（码点）：证据原文超过它就不认，防模型塞整段。 */
+export const MEMORY_EXPIRE_QUOTE_CHARS = 60;
 
 /** 评价包（/评）的机械上限：装配（buildFeedbackPending）与批准 apply 同源消费。 */
 export const FEEDBACK_TARGET_SUMMARY_CHARS = 20;
@@ -193,8 +203,11 @@ export const MEMORY_ZERO_EXTRACT_PAGES = 5;
 export interface ExtractSignals {
   /** 「命中 people 名单」：候选主体在已知记忆（公共+当前私有合并）的人物名单里。 */
   people: number;
-  /** 「与现有 fact 冲突」：SUPERSEDE 候选且 factId 在已知事实里机械解析成功。 */
+  /** 「与现有 fact 冲突」：SUPERSEDE 候选且 factId 在已知事实里机械解析成功。
+   *  只数 SUPERSEDE——EXPIRE 是「过时」不是「冲突」，单独计 expired。 */
   conflict: number;
+  /** 「判为过时」：EXPIRE 候选且 factId/quote 机械校验通过。 */
+  expired: number;
 }
 
 /** 渲染段预算：群里的说法 ≤200，单人 ≤240，卡片 ≤240，主人评价 ≤300。 */

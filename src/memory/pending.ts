@@ -124,8 +124,23 @@ export function isPatchEmpty(patch: MemoryPatch): boolean {
     (patch.lore?.length ?? 0) === 0 &&
     (patch.cards?.length ?? 0) === 0 &&
     (patch.supersede?.length ?? 0) === 0 &&
+    (patch.expire?.length ?? 0) === 0 &&
     (patch.feedback?.length ?? 0) === 0
   );
+}
+
+/**
+ * EXPIRE 的批准前预检（D9）：返回目标 doc 里找不到、已失效或 subject 不符的 fact id。
+ * 空数组 = 全部能在该层落地。抽成纯函数供审批链与自检脚本共用。
+ */
+export function missingExpireTargets(state: MemoryState | undefined, patch: MemoryPatch): string[] {
+  const missing: string[] = [];
+  for (const note of patch.expire ?? []) {
+    const person = state?.people[note.subject];
+    const hit = person?.facts.some((fact) => fact.id === note.id && fact.invalidAt === undefined) === true;
+    if (!hit) missing.push(note.id);
+  }
+  return missing;
 }
 
 /**
@@ -145,6 +160,7 @@ export function summarizePatch(patch: MemoryPatch): string {
   if (lore.length > 0) parts.push(`说法${lore.length}｜${lore[0].keys.join("/")} ${lore[0].text}`);
   if (cards.length > 0) parts.push(`卡片${cards.length}｜${cards[0].text}`);
   if ((patch.supersede?.length ?? 0) > 0) parts.push(`取代${patch.supersede!.length}`);
+  if ((patch.expire?.length ?? 0) > 0) parts.push(`淘汰${patch.expire!.length}`);
   // 评价类（/评）：待审列表（npm run memory --pending）与批准回执共用这个摘要，
   // 格式与 summarizeFeedback 同构（哪条 + 哪天）
   const feedback = patch.feedback ?? [];
