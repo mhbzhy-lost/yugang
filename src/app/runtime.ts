@@ -162,9 +162,13 @@ function applyWatched(chatKey: string, people: { userId: string; name?: string; 
   replaceWatched(watchedByChat, baseChatKey(chatKey), kept);
 }
 
-// 运行时数据目录：默认仓库 var/（按本文件位置解析，不依赖 cwd）；YUGANG_HOME 设置时完全胜出
-const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
+// 运行时数据目录：默认仓库 var/（按本文件位置解析，不依赖 cwd）；YUGANG_HOME 设置时完全胜出。
+// 注意本文件在 src/app/，仓库根是「../..」：移动文件时必须同步改这里，否则数据目录会
+// 静默漂到 src/var（2026-11-05 踩过：人格映射与历史全丢，ops 脚本却仍在读仓库 var/）。
+const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "..", "var");
 mkdirSync(HOME, { recursive: true });
+// 数据目录只在这里落一行：路径解析错位（如 2026-11-05 漂到 src/var）时，这行是唯一一眼可见的信号
+console.log(`[鱼缸] 数据目录 ${HOME}`);
 
 cleanupStaleVideoTemps(); // 清掉上次被打断的抽帧临时目录（正常路径在 finally 里删）
 
