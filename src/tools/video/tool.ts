@@ -70,6 +70,28 @@ export function cleanupStaleVideoTemps(): void {
   }
 }
 
+/**
+ * 失败分诊：把异常翻成模型能理解的一句话。
+ * 预算用尽 / 触发风控 / 其它 B 站客户端错误都不能被吞成「视频没打开：<url>」——
+ * 那会让模型误判成链接坏了，对群友编出「你换个链接」的假话（2026-11-05 线上事故）。
+ */
+export function videoErrorText(raw: string, error: unknown, messages: Record<string, string>): string {
+  const reason = (error instanceof Error ? error.message : String(error ?? ""))
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  if (/日预算已用尽/.test(reason)) {
+    return renderTemplate(messages["video_budget_exhausted"] ?? "今天看视频的额度用完了：{{reason}}", { reason });
+  }
+  if (/触发风控|熔断/.test(reason)) {
+    return renderTemplate(messages["video_risk_control"] ?? "B 站今天限流了：{{reason}}", { reason });
+  }
+  if (/^B站/.test(reason)) {
+    return renderTemplate(messages["video_unavailable"] ?? "这次没能打开视频：{{reason}}", { reason });
+  }
+  return renderTemplate(messages["video_failed"] ?? "视频没打开：{{url}}", { url: raw });
+}
+
 interface Frame {
   time: number;
   path: string;
@@ -378,8 +400,8 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         }
         console.log("[鱼缸] video", bv, "总用时", Date.now() - startedAt, "ms");
         return { output: [{ type: "text", text }] };
-      } catch {
-        throw new Error(renderTemplate(deps.prompts.messages["video_failed"] ?? "视频没打开", { url: raw }));
+      } catch (error) {
+        throw new Error(videoErrorText(raw, error, deps.prompts.messages));
       } finally {
         try {
           rmSync(tmp, { recursive: true, force: true });
