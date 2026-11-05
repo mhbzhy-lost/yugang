@@ -540,7 +540,12 @@ let sharedClient: BiliClient | undefined;
  * （YUGANG_HOME 优先，缺省仓库 var/）；构造本身无副作用，预算与 buvid 都在首次请求时才落盘。
  */
 export function getBiliClient(): BiliClient {
-  sharedClient ??= createBiliClient({ varDir: process.env["YUGANG_HOME"] ?? defaultVarDir() });
+  sharedClient ??= createBiliClient({
+    varDir: process.env["YUGANG_HOME"] ?? defaultVarDir(),
+    // 客户端内部只有三条低频日志（预算落盘失败 / buvid3 落盘失败 / 每日预算热更），
+    // 接上宿主日志前缀才能看到预算改动真的生效（2026-11-05 排查 video 误报时缺的就是这条）
+    log: (message) => console.log(`[鱼缸] ${message}`),
+  });
   return sharedClient;
 }
 
