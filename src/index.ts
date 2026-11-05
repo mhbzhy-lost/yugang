@@ -1171,6 +1171,8 @@ async function flushBurst(burst: PendingBurst): Promise<void> {
     // advanceSeenSeq）；[主人]/[特别关注] 标签由渲染器逐行机械打（master 优先互斥）
     backgroundLimit: fishConfig().config.engage.mentionContextSize,
     seenSeq: seenSeqOf(conv.id),
+    // inline 编号表：引用原文里的图也要跟 [图片#N] 对齐（回复一张图说「收图」的场景）
+    imageNumbers: plan.numbers,
     watched: (userId) => watchedByChat.get(baseChatKey(anchor.chatKey))?.has(String(userId)) === true,
   });
   // @ 鱼 + 文字里提到合集/转发：把这个群最近一条没展开的合集拉出来（10 分钟内有效）。
