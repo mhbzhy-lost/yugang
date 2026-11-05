@@ -2,12 +2,13 @@
  * 体检：把启动需要的东西挨个查一遍，缺什么直接说怎么补。
  *   npm run doctor
  */
+import { DATA_HOME as HOME } from "../src/paths.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { newsTargetGroup, sixtyHealth } from "./lib/deps.ts";
 
-const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
+
 const rows: [boolean, string, string][] = [];
 
 function check(ok: boolean, label: string, fix: string): void {

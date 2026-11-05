@@ -5,6 +5,7 @@
  *
  * 32 字节随机（base64url，43 字符），只打印长度不打印内容——它和 key 一样是凭据。
  */
+import { DATA_HOME } from "../src/paths.ts";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -30,7 +31,7 @@ console.log(`✓ 已写入 .env（${token.length} 字符，未打印内容）`);
 const protocolDir =
   process.platform === "darwin"
     ? join(homedir(), "Library", "Containers", "com.tencent.qq", "Data", "Documents", "napcat")
-    : join(process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var"), "protocol", "napcat");
+    : join(DATA_HOME, "protocol", "napcat");
 if (existsSync(protocolDir)) {
   const wsUrl = process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001";
   const port = Number(new URL(wsUrl).port || 3001);

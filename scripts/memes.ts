@@ -7,11 +7,12 @@
  * meme_import（固定扫 <mediaRoot>/meme-inbox/，逐批登记本轮清单）→ 逐张 look → 逐张 meme_add。
  * 本脚本只读索引，不做任何入库、不扫待收目录。库是生成数据，在 <HOME>/media/memes/ 下，不进 git。
  */
+import { DATA_HOME as HOME, MEDIA_ROOT } from "../src/paths.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
-const MEDIA = resolve(process.env.MEDIA_ROOT ?? join(HOME, "media"));
+
+const MEDIA = MEDIA_ROOT;
 const MEMES = join(MEDIA, "memes");
 const INDEX = join(MEMES, "index.json");
 

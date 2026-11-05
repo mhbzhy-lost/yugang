@@ -18,6 +18,7 @@ import { tmpdir, userInfo } from "node:os";
 import { connect } from "node:net";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { renderTemplate } from "../../prompt/index.ts";
+import { DATA_HOME } from "../../paths.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 
@@ -68,7 +69,7 @@ const INIT_MIN_SIDE = 64;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 let tunnelChild: ReturnType<typeof spawn> | null = null;
-const TUNNEL_PID = join(process.cwd(), "var", "sd-tunnel.pid");
+const TUNNEL_PID = join(DATA_HOME, "sd-tunnel.pid");
 
 /** 杀掉旧隧道（含跨鱼生命周期的，pidfile 记账，隧道数量恒为 1）。 */
 function killStaleTunnel(): void {
@@ -101,7 +102,7 @@ async function ensureTunnel(realHost: string, realPort: number, localPort: numbe
   );
   tunnelChild.unref();
   if (tunnelChild.pid) {
-    try { mkdirSync(join(process.cwd(), "var"), { recursive: true }); writeFileSync(TUNNEL_PID, String(tunnelChild.pid)); } catch { /* 无妨 */ }
+    try { mkdirSync(DATA_HOME, { recursive: true }); writeFileSync(TUNNEL_PID, String(tunnelChild.pid)); } catch { /* 无妨 */ }
   }
   for (let i = 0; i < 16; i++) {
     await new Promise((r) => setTimeout(r, 500));

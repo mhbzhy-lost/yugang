@@ -157,8 +157,14 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
 - **配置是本机文件**：`config/models.json`（gitignore，每台机器一份）写 models 角色表、provider 地址、模型清单、
   网关兼容值；模板是 `config/models.example.json`（进仓库），首次使用 `cp config/models.example.json config/models.json`
 - **凭据也是本机文件**：`config/auth.json`（gitignore，权限 600），只由 `npm run creds import` 写入；运行时**不读** `~/pi-config`
-- 默认数据目录是仓库 `var/`（鱼活动产生的数据，可用 `YUGANG_HOME` 整体覆盖），只放运行时产物
-  （`fish.db` / `chatlog` / `media` / `sent.json`），不放凭据、不放配置
+- **所有路径只有一个基准：仓库根**（`src/paths.ts` 的 `REPO_ROOT`，可用 `YUGANG_ROOT` 显式覆盖，
+  不填按源码位置推导）。数据目录 `DATA_HOME`、媒体 `MEDIA_ROOT`、工作区 `WORKSPACE_ROOT`、
+  prompt `PROMPT_ROOT`、`fish.config.json`、`config/models.json` 全部从它派生；
+  `src/` 与 `scripts/` 都从这里取，**不许再各自拼相对路径**（2026-11-05：runtime 搬进 `src/app/`
+  后按 `..` 算根，数据目录漂到 `src/var`，线上跑空库两小时而运维脚本还在读旧库）
+- 默认数据目录是仓库 `var/`（可用 `YUGANG_HOME` 整体覆盖），只放运行时产物
+  （`fish.db` / `chatlog` / `media` / `sent.json`），不放凭据、不放配置；启动日志会打一行
+  `[鱼缸] 数据目录 …`，路径一对不上先看它
 - 协议端配置由 `scripts/protocol.ts` 生成，**路径随平台**：macOS 在 QQ 容器目录，其它在 `var/protocol/napcat`
 - 不要在 `config/models.json` / `config/models.example.json` 里写 key，`npm test` 会扫模板
 - **key 只在内存里**：不进 prompt、不进 transcript、不进日志。`describeModel()` 只报"已加载 / N 字符"和来源路径

@@ -10,6 +10,7 @@
  * 进全局 messages 视图），最后照常扫描 src/ 的内嵌 prompt。
  * 只读仓库文件，不读 .env、不读凭据。
  */
+import { PROMPT_ROOT, REPO_ROOT } from "../src/paths.ts";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -21,8 +22,8 @@ import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
 import { loadToolSurface } from "../src/tools/index.ts";
 import { renderToolCatalog } from "../src/tools/catalog.ts";
 
-const repoRoot = process.cwd();
-const root = process.env.PROMPT_ROOT ?? join(repoRoot, "prompt");
+const repoRoot = REPO_ROOT;
+const root = PROMPT_ROOT;
 const prompts = loadPrompts(root);
 // 中心层条数：loadToolSurface 会把各工具的 tool-messages 就地合并进 prompts.messages，
 // 合并后再数就分不出归属了，先记下

@@ -39,6 +39,7 @@ import { loadFishConfig } from "../../fish-config.ts";
 import { renderTemplate } from "../../prompt/index.ts";
 import { describeImage } from "../../media/describe.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
+import { REPO_ROOT } from "../../paths.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
@@ -80,7 +81,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
   const maxMinutes = 30;
   const frameCount = 6;
   const pythonPath = process.env["VIDEO_PYTHON"] ?? join(homedir(), "tts", ".venv-video", "bin", "python");
-  const scriptPath = join(process.cwd(), "scripts", "video-frames.py");
+  const scriptPath = join(REPO_ROOT, "scripts", "video-frames.py");
 
   async function getJson(url: string): Promise<any> {
     const ctrl = new AbortController();

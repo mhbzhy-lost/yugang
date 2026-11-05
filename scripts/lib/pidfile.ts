@@ -6,12 +6,13 @@
  * 路径随数据目录：YUGANG_HOME 优先（.env 的值对三个脚本都可见），缺省 <仓库>/var/up.pid。
  * 内容就是一个十进制 pid；写失败只告警不阻断起鱼。
  */
+import { DATA_HOME } from "../../src/paths.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** up.pid 的唯一取径入口：YUGANG_HOME 优先，缺省仓库 var/。 */
 export function pidFilePath(): string {
-  const home = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "..", "var");
+  const home = DATA_HOME;
   return join(home, "up.pid");
 }
 

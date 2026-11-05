@@ -10,6 +10,7 @@
  * 实现：以极小阈值（1 条即触发）打开一个临时 fish 实例，对 chats 映射
  * 里的每个会话调 fish.compact（含摘要模型调用），然后关闭。
  */
+import { DATA_HOME as HOME, MEDIA_ROOT, WORKSPACE_ROOT } from "../src/paths.ts";
 import { join } from "node:path";
 import { loadFishModels } from "../src/model/config.ts";
 import { createFishModels } from "../src/model/models.ts";
@@ -17,7 +18,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { openFish } from "../src/harness.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 
-const HOME = process.env.YUGANG_HOME ?? join(import.meta.dirname, "..", "var");
+
 const selection = loadFishModels();
 // 压缩固定用主模型：models.json 没有单独的摘要角色
 const mainModel = { provider: selection.main.providerId, modelId: selection.main.modelId };
@@ -27,8 +28,8 @@ const fish = await openFish({
   models: createFishModels(selection.main),
   model: mainModel,
   promptRoot: process.env.PROMPT_ROOT ?? "prompt",
-  mediaRoot: join(HOME, "media"),
-  workspaceRoot: join(HOME, "workspace"),
+  mediaRoot: MEDIA_ROOT,
+  workspaceRoot: WORKSPACE_ROOT,
   master: process.env.MASTER_QQ ?? "",
   // 极小阈值：任何有内容的会话都会触发换页
   compact: { model: mainModel, maxEntries: 1, maxChars: 1 },

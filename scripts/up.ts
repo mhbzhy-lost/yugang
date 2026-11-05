@@ -8,6 +8,7 @@
  * 想让它顺手拉起协议端，就在 .env 里写：
  *   PROTOCOL_CMD=npm --prefix ~/napcat start     # 任何能起 OneBot v11 服务的命令
  */
+import { REPO_ROOT } from "../src/paths.ts";
 import { spawn } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
@@ -54,7 +55,7 @@ if (newsTargetGroup().length > 0) {
 
 // 4. 起鱼
 console.log("[up] 启动鱼缸");
-const fish = spawn(process.execPath, ["--env-file-if-exists=.env", "src/index.ts"], { stdio: "inherit" });
+const fish = spawn(process.execPath, ["--env-file-if-exists=.env", join(REPO_ROOT, "src", "index.ts")], { cwd: REPO_ROOT, stdio: "inherit" });
 children.push(fish);
 recordFishPid(fish.pid); // 与 deploy 写同一个 var/up.pid（单一事实源，down 读它收鱼）
 

@@ -9,6 +9,7 @@
  * 模型选择只有一个入口：config/models.json 的 models 角色表。没有环境变量、没有启动参数，
  * 鱼自己（read / edit）也能看到并修改；改完用 restart 工具生效。
  */
+import { MODELS_CONFIG_PATH } from "../paths.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -114,7 +115,7 @@ export interface ProviderLoadOptions extends LoadOptions {
 const ROLES: readonly ModelRole[] = ["main", "vision", "image", "vision_fallback"];
 
 function defaultModelsPath(): string {
-  return join(process.cwd(), "config", "models.json");
+  return MODELS_CONFIG_PATH;
 }
 
 function defaultAuthPath(configSource: string): string {
