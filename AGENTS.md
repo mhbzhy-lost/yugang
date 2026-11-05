@@ -461,7 +461,9 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
   **授权不再写在工具里**：`bili_hot` / `video` / `say_words` 都不检查轮类型，能不能逛什么时候逛
   由调用侧策略定——engage 的 0.3 门决定主动轮起不起，prompt 的 `video_answer_rule`
   （`[本轮要求]`，@ 轮确定性追加）要求「没被要求看视频就别去看」。工具只保留资源闸与防伪造：
-  `bili_hot` 按 topic（可选参数，缺省随机）取候选并用 `fish.video_pool` 去重；
+  `bili_hot` 按 topic（可选参数，缺省随机）取候选：**分区排行 + 以排行里的视频作种子的算法相关推荐
+  （related，无需 Cookie/WBI）**，合并去重后从前 20 名里随机取 10；候选先过 `fish.video_pool`
+  （chatKey 绑定）：`shared` 永久挡、`seen` 只挡 7 天（每次返回的 BV 都记 seen，避免固定榜单反复刷）；
   `video` 每轮最多 `video.browseMaxViewsPerRound`（缺省 5）次、成功观看才登记 viewed；
   `say_words` 的文本里每个 URL 必须是本轮工具结果里出现过的（`src/egress/seen-links.ts`
   白名单，宿主在工具包装层机械登记），文本里出现的 B 站 **BV 号（带不带链接都算）**顺手记进

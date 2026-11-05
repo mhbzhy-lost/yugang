@@ -33,8 +33,8 @@ export interface VideoPoolItem {
   topic: string;
   /** 入库时间（ms）。 */
   at: number;
-  /** 状态：目前唯一写入路径是分享事务，恒为 shared；字段保留作后续扩展。 */
-  state: "shared";
+  /** shared = 已分享过（永久去重）；seen = 只是在本群候选里出现过（带 TTL，避免同一批反复刷）。 */
+  state: "shared" | "seen";
 }
 
 export interface VideoPoolState {
@@ -58,6 +58,42 @@ export const VideoPoolDoc = defineDoc<VideoPoolState>({
 
 /** 推荐语写池的截断上限（码点）：出口校验管发送文本，池内记账再收一道。 */
 export const VIDEO_POOL_NOTE_MAX = 120;
+
+/** seen 条目的存活时间：7 天后允许重新出现（榜单是慢变的，太短会反复刷同一条）。 */
+export const VIDEO_SEEN_TTL_MS = 7 * 24 * 60 * 60_000;
+/** seen 条目总量上限（按新到旧保留）：防止池无限增长；shared 条目不受此限。 */
+export const VIDEO_SEEN_CAP = 300;
+
+/** 当前仍生效的 seen BV 集合（读侧过滤用；过期项不参与去重）。 */
+export function activeSeenOf(state: VideoPoolState | undefined, nowMs: number): Set<string> {
+  const out = new Set<string>();
+  for (const item of state?.items ?? []) {
+    if (item.state === "seen" && nowMs - item.at <= VIDEO_SEEN_TTL_MS) out.add(item.bvid);
+  }
+  return out;
+}
+
+/**
+ * 机械记录「已展示」候选（纯函数，调用方放进事务）：bili_hot 每次返回给模型的 BV 都记一笔，
+ * 7 天后自然过期；同时清理过期的 seen 与超出上限的老 seen。shared 条目不动。
+ */
+export function applyVideoPoolSeen(doc: VideoPoolState, bvids: readonly string[], nowMs: number): number {
+  const existing = new Set(doc.items.map((item) => item.bvid));
+  let added = 0;
+  for (const bvid of bvids) {
+    if (existing.has(bvid)) continue;
+    existing.add(bvid);
+    doc.items.push({ bvid, title: "", note: "", topic: "", at: nowMs, state: "seen" });
+    added += 1;
+  }
+  doc.items = doc.items.filter((item) => item.state !== "seen" || nowMs - item.at <= VIDEO_SEEN_TTL_MS);
+  const seen = doc.items.filter((item) => item.state === "seen");
+  if (seen.length > VIDEO_SEEN_CAP) {
+    const drop = new Set(seen.sort((a, b) => a.at - b.at).slice(0, seen.length - VIDEO_SEEN_CAP).map((item) => item.bvid));
+    doc.items = doc.items.filter((item) => !(item.state === "seen" && drop.has(item.bvid)));
+  }
+  return added;
+}
 
 /**
  * 去重表 key（唯一派生点）：优先 chatKey（群号/私聊号），拿不到才退回 conversationId。
@@ -97,7 +133,17 @@ function truncate(text: unknown, max: number): string {
  * title/note 由调用方先清洗，这里再做机械截断兜底。
  */
 export function applyVideoPoolAdd(doc: VideoPoolState, input: VideoPoolAddInput, nowMs: number): VideoPoolAddOutcome {
-  if (doc.items.some((item) => item.bvid === input.bvid)) {
+  const existing = doc.items.find((item) => item.bvid === input.bvid);
+  if (existing !== undefined) {
+    // 之前只是「展示过」，现在真的分享出去了：升级成 shared（永久去重），保留原条目
+    if (existing.state === "seen") {
+      existing.state = "shared";
+      existing.title = truncate(input.title, 60);
+      existing.note = truncate(input.note, VIDEO_POOL_NOTE_MAX);
+      existing.topic = input.topic;
+      existing.at = nowMs;
+      return { status: "ok", item: existing };
+    }
     return { status: "dup", bvid: input.bvid };
   }
   const item: VideoPoolItem = {
