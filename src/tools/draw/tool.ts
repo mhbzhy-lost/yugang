@@ -34,8 +34,10 @@ interface DrawArgs {
 
 const DRAWN = new Map<string, unknown>();
 // 预设：质量词前置注入，模型的 prompt 附在后面；SDXL 动漫模型竖版；步数与 CFG 取 Forge 常用档。模型/采样器用 WebUI 端当前配置。
-const PRESET_POSITIVE = `masterpiece, best quality, absurdres, score_7, score_8, score_9, `;
-const PRESET_NEGATIVE = `low quality, worst quality, score_1, score_2, score_3, early, old, `;
+const PRESET_POSITIVE = `masterpiece, best quality, absurdres, score_7, score_8, score_9, 
+newest, year 2025, detailed, novel illustration, game cg, anime, `;
+const PRESET_NEGATIVE = `low quality, worst quality, score_1, score_2, score_3, early, old, 
+dark skin, shiny skin, ugly face, `;
 const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 4.5, sampler_name: "ER SDE", scheduler: "beta" };
 /** 高分辨率模式（hires fix）：RealESRGAN anime_6B 放大 2 倍，二段步数 0=继承主步数，denoising 0.4，其余默认。
  *  hr_additional_modules 必须显式给 ["Use same choices"]（沿用当前模块）：Forge Neo 的 API 不传时为 None，
