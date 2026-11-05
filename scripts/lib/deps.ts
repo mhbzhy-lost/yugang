@@ -27,6 +27,11 @@ export type Exec = (command: string, args: string[]) => ExecResult;
 export const defaultExec: Exec = (command, args) =>
   spawnSync(command, args, { encoding: "utf8" });
 
+/** docker 命令单独加超时：镜像拉不动时不能让部署无限挂住。 */
+const DOCKER_TIMEOUT_MS = 120_000;
+const dockerExec: Exec = (command, args) =>
+  spawnSync(command, args, { encoding: "utf8", timeout: DOCKER_TIMEOUT_MS, killSignal: "SIGTERM" });
+
 /** 读 fish.config.json 的 news.targetGroup；读不到/为空 = 新闻未启用。 */
 export function newsTargetGroup(): string {
   try {
@@ -71,14 +76,17 @@ export function findDocker(exec: Exec = defaultExec, env: NodeJS.ProcessEnv = pr
 
 /** 健康检查：GET /health，2s 超时；任何异常都算不可用。 */
 export async function sixtyHealth(baseUrl: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/health`, {
-      signal: AbortSignal.timeout(2_000),
-    });
-    return response.ok;
-  } catch {
-    return false;
+  const base = baseUrl.replace(/\/+$/, "");
+  // 自建 60s 有 /health；官方公共实例没有 /health，退到数据面 /v2/60s。
+  for (const path of ["/health", "/v2/60s"]) {
+    try {
+      const response = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(2_000) });
+      if (response.ok) return true;
+    } catch {
+      // 试下一个端点
+    }
   }
+  return false;
 }
 
 export interface SixtyOptions {
@@ -104,7 +112,7 @@ export async function ensureSixtyService(options: SixtyOptions = {}): Promise<bo
   const baseUrl = options.baseUrl ?? process.env["SIXTY_BASE_URL"] ?? "http://127.0.0.1:4399";
   const container = options.container ?? process.env["SIXTY_CONTAINER"] ?? "60s";
   const image = options.image ?? process.env["SIXTY_IMAGE"] ?? "vikiboss/60s";
-  const exec = options.exec ?? defaultExec;
+  const exec = options.exec ?? dockerExec;
   const health = options.health ?? sixtyHealth;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const log = options.log ?? ((message: string) => console.log(`[deps] ${message}`));
@@ -113,6 +121,20 @@ export async function ensureSixtyService(options: SixtyOptions = {}): Promise<bo
   if (await health(baseUrl)) {
     log(`60s 已就绪：${baseUrl}`);
     return true;
+  }
+
+  // 外部 60s（例如公共实例）不由本机 Docker 管：不可达就告警，不去 pull/run。
+  const host = (() => {
+    try {
+      return new URL(baseUrl).hostname;
+    } catch {
+      return "";
+    }
+  })();
+  const local = host === "127.0.0.1" || host === "localhost" || host === "::1";
+  if (!local) {
+    log(`外部 60s 不可达，跳过本地容器：${baseUrl}`);
+    return false;
   }
 
   const docker = options.docker === null ? undefined : options.docker ?? findDocker(exec);
