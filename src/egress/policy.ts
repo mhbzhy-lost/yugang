@@ -202,15 +202,30 @@ export function validateVoice(rawPath: string, limits: EgressLimits): Rejection 
   return null;
 }
 
-/** 待发文本与 secret 的最长连续重合长度，达到阈值即判为抄写。 */
+/**
+ * 待发文本与 secret 的最长连续重合长度，达到阈值即判为抄写。
+ *
+ * 链接豁免（2026-11-05）：出口白名单**要求**模型原样抄本轮工具结果里的 canonical 链接
+ * （`https://www.bilibili.com/video/BV…` 有 40+ 字符），这与「不许抄工具结果」直接冲突——
+ * 线上出现过模型连改 6 次都被拒、最后只好只发 BV 号的事故。所以比对前先把两侧的 http(s)
+ * 链接整体抹掉：链接是机械字段，不算抄写；正文措辞照旧要自己写。
+ */
 export function findProvenanceLeak(text: string, secrets: readonly string[], minOverlap = 24): number | null {
-  if (text.length < minOverlap) return null;
+  const maskedText = maskUrls(text);
+  if (maskedText.length < minOverlap) return null;
   for (const secret of secrets) {
-    if (!secret || secret.length < minOverlap) continue;
-    const n = longestCommonSubstring(text, secret);
+    if (!secret) continue;
+    const masked = maskUrls(secret);
+    if (masked.length < minOverlap) continue;
+    const n = longestCommonSubstring(maskedText, masked);
     if (n >= minOverlap) return n;
   }
   return null;
+}
+
+/** 把 http(s) 链接替换成单个空格（保留其余文本的相对顺序）。 */
+function maskUrls(text: string): string {
+  return text.replace(/https?:\/\/[^\s，。！？、；）)】」』"']+/gi, " ");
 }
 
 /** 经典 DP，带长度上限早退；文本都很短，够用。 */
