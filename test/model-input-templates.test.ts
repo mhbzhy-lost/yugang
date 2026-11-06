@@ -377,7 +377,7 @@ interface Triggered {
   via: string;
 }
 
-/** scene → 真实入口触发器（16 个，全部走生产导出实现）。 */
+/** scene → 真实入口触发器（数量与矩阵一致，全部走生产导出实现）。 */
 const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
   // @ 轮：背景 1 条 + 锚点回复引用（decisions §4 标准群消息模板）
   answer_reply: () => {
@@ -722,7 +722,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
 
 // ── 权威矩阵与 helper 严格性 ─────────────────────────────────────────────
 
-test("权威矩阵：16 个 scene 全覆盖，模板与图片 block 都能只读解析", () => {
+test("权威矩阵：scene 全覆盖，模板与图片 block 都能只读解析", () => {
   const scenes = loadAuthoritativeScenes();
   assert.equal(scenes.length, AUTHORITATIVE_SCENE_COUNT, "矩阵 scene 数与 decisions §10 不一致");
   assert.equal(new Set(scenes.map((scene) => scene.scene)).size, scenes.length, "scene 有重复");

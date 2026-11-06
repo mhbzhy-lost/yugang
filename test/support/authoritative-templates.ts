@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 /** decisions 相对仓库根的位置（缺省路径；可被 YUGANG_DECISIONS_PATH 覆盖）。 */
 const DECISIONS_RELATIVE = "docs/decisions/2026-11-04-model-input-templates.md";
 
-/** 矩阵必须覆盖的 scene 数量（decisions §10：16 个 scene，一个都不能少）。 */
+/** 矩阵必须覆盖的 scene 数量（decisions §10：scene 数与常量一致，一个都不能少）。 */
 export const AUTHORITATIVE_SCENE_COUNT = 14;
 
 export interface AuthoritativeScene {
@@ -95,7 +95,7 @@ function fencedBlockAfter(source: string, marker: string, path: string): string 
 
 const MATRIX_MARKER = "<!-- input-scene-matrix -->";
 
-/** 解析并严格校验场景矩阵：16 个 scene、scene 唯一、模板 id 全部存在、JSON 合法。 */
+/** 解析并严格校验场景矩阵：scene 数与常量一致、scene 唯一、模板 id 全部存在、JSON 合法。 */
 export function loadAuthoritativeScenes(path: string = authoritativeDecisionsPath()): AuthoritativeScene[] {
   const source = readAuthoritativeSource(path);
   const raw = fencedBlockAfter(source, MATRIX_MARKER, path);
