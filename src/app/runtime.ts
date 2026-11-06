@@ -79,7 +79,7 @@ import { clearViewedVideos, videoBrowseGateOf, wireVideoBrowseHost } from "../ex
 import { clearSeenLinks, recordSeenLinks } from "../egress/seen-links.ts";
 import { shouldSendWorkingReceipt } from "../working-receipt.ts";
 import type { Middleware } from "./app.ts";
-import { planRoundImages, rewriteRoundForwardImages } from "../qq/round-images.ts";
+import { planInlineImages, planRoundImages, rewriteRoundForwardImages } from "../qq/round-images.ts";
 import { appendAnswerRules, appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderGifIngestInput, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
 import { NEWS_BROADCAST_MAX_CHARS, renderNewsBroadcast, renderNewsTask, type NewsDigest, type NewsDigestItem, type NewsDigestSection } from "../external/news-broadcast.ts";
 
@@ -1347,9 +1347,11 @@ async function submitBrowseOpportunity(chatKey: string, gate: { windowId: string
  * （宁少勿答，积压不重放）；注入后已读标记只推进到本轮实际注入集合（fresh）的
  * maxArrivalSeq——提交等待期间新到的未注入消息不算已读，仍归下一窗（决策 3：之后归
  * shard，不重复注入）。entry kind = fish.engage_tick（不写 fish.inbound、不进摘要与
- * 抽取，但计入换页阈值）；不附 inline 图；quoteIds = 本轮注入的积压消息集。
+ * 抽取，但计入换页阈值）；直发图不 inline（背景板全量附图太贵，引用图归 shard）；quoteIds = 本轮注入的积压消息集。
  * 输入统一用标准群消息列表（decisions §5.5：与 shard 同一模板，不在 user input 区分
  * 窗口规则）；沉默递进 nudge、旧账/弹药栏与宵禁 footer 已停用（2026-11-04 T3）。
+ * 直发图不 inline（背景板消息模型本不必逐张看，省的是每窗最多 30 条的全量附图成本）；
+ * 批内引用原文的图由 shard 轮负责 inline（那里模型真的可能回应）。
  * 空窗（零新增）不再由沉默/nudge/debt/ammo 触发：只在本窗 video.browseChance 门开时
  * 提交「主动交流机会」固定模板（decisions §5.6），并把 browseWindow/browseTopic 钉上
  * trigger（T4 浏览与分享授权的唯一来源）；ambient shard 与其它轮一律不携带。
@@ -1416,8 +1418,21 @@ async function submitShardRound(chatKey: string, items: readonly EngageShardItem
     (userId) => Boolean(config.master && String(userId) === config.master),
     (userId) => watchedByChat.get(baseChatKey(chatKey))?.has(String(userId)) === true,
   );
+  // 批内引用图 inline（2026-11-06）：vision==main 时引用原文里的图同样 base64 直读，
+  // 不再留给 look 转述；编号标签带 inbound 路径，模型可直接填给 draw / gpt_image
+  const quotedRefs: string[] = [];
+  const quotedSeen = new Set<string>();
+  for (const item of fresh) {
+    for (const ref of item.quoted?.images ?? []) {
+      if (ref && !quotedSeen.has(ref)) {
+        quotedSeen.add(ref);
+        quotedRefs.push(ref);
+      }
+    }
+  }
+  const imagePlan = planInlineImages(quotedRefs, config.mediaRoot, inlineVisionOn(), fish.prompts.messages);
   // 批内回复关系（2026-11-05）：列表里渲染 [回复了m:id]，被引原文按 @ 轮同款附在列表后
-  const quoted = renderOpenQuotedText(fresh, fish.prompts.messages);
+  const quoted = renderOpenQuotedText(fresh, fish.prompts.messages, imagePlan.numbers);
   const content = quoted.length > 0 ? `${list}\n\n${quoted}` : list;
   // 整拍里最近一条非空 bypass 段（整组语义：指令后面跟闲聊不丢指令）
   let payload: string | undefined;
@@ -1437,6 +1452,7 @@ async function submitShardRound(chatKey: string, items: readonly EngageShardItem
     entryKind: MEMORY_ENGAGE_KIND,
     quoteIds: quoteIdsOf(fresh),
     ...(payload !== undefined ? { bypass: payload } : {}),
+    ...(imagePlan.blocks.length > 0 ? { imageBlocks: imagePlan.blocks } : {}),
   });
   advanceSeenSeq(conv.id, maxArrivalSeq(fresh));
 }

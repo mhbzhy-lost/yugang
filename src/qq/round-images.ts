@@ -6,7 +6,9 @@ import type { BurstMessage } from "./debounce.ts";
 import { shrinkForModel } from "../media/shrink-image.ts";
 import { imageCompressedTagOf, imageTagOf, type ForwardAttachment, type MessageTable } from "./model-input.ts";
 
-const INLINE_IMAGE_MAX = 2;
+// vision==main 时静态图应全部直读（主人裁定 2026-11-06：不再为省额度强制 look 转述），
+// 上限只为防一轮几十张图把上下文撑爆；GIF 不 inline（sips 只出静态帧），仍走 look/收图轮
+const INLINE_IMAGE_MAX = 8;
 const IMAGE_REF_PATTERN = /\[图片 (inbound\/[^\]\s]+)\]/g;
 const FORWARD_IMAGE_PATTERN = /\[图片#\d+\]/g;
 
@@ -28,7 +30,7 @@ function rewriteForwardImages(forward: ForwardAttachment, numbers: ReadonlyMap<s
       const ref = child.images[index] ?? "";
       index += 1;
       const n = ref.length > 0 ? numbers.get(ref) : undefined;
-      if (n !== undefined) return imageTagOf(n, messages);
+      if (n !== undefined) return imageTagOf(n, ref, messages);
       return ref.length > 0 ? `[图片 ${ref}]` : "[图片 未展开]";
     });
     if (text === child.text) return child;
@@ -43,7 +45,38 @@ export function rewriteRoundForwardImages(forward: ForwardAttachment, numbers: R
   return rewriteForwardImages(forward, numbers, messages);
 }
 
-/** 统一规划直发图与合集子图的编号、压缩 block、末尾标签和 look fallback。 */
+/**
+ * inline 编号 + 压缩 block + 末尾压缩图标签：answer 轮（planRoundImages）与
+ * 开窗批（shard 引用原文）共用的核心。inline 关闭时返回空（fallback 模式）。
+ * GIF 与缺失文件不编号（GIF 只有静态帧压缩通道，静默收图轮/look 兜底）；
+ * 压缩失败的跳过、不占编号。
+ */
+export function planInlineImages(
+  refs: readonly string[],
+  mediaRoot: string,
+  inline: boolean,
+  messages: MessageTable,
+  shrink: typeof shrinkForModel = shrinkForModel,
+): Pick<RoundImagePlan, "numbers" | "blocks" | "tags"> {
+  const numbers = new Map<string, number>();
+  const blocks: RoundImageBlock[] = [];
+  const tags: string[] = [];
+  if (!inline) return { numbers, blocks, tags };
+  const eligible = refs.filter((ref) => ref && !ref.toLowerCase().endsWith(".gif") && existsSync(join(mediaRoot, ref)));
+  for (const ref of eligible.slice(0, INLINE_IMAGE_MAX)) {
+    const shrunk = shrink({ file: join(mediaRoot, ref) });
+    if (!shrunk.ok) continue;
+    const n = blocks.length + 1;
+    numbers.set(ref, n);
+    blocks.push({ type: "image", data: shrunk.buffer.toString("base64"), mimeType: shrunk.mimeType });
+    tags.push(imageCompressedTagOf(n, messages));
+  }
+  return { numbers, blocks, tags };
+}
+
+/** 统一规划直发图与合集子图的编号、压缩 block、末尾标签和 look fallback。
+ *  编号标签始终带 inbound 路径（[图片#N inbound/…]）：模型可直接把路径填给
+ *  draw / gpt_image 等吃图片引用的工具，读图本身不需要 look。 */
 export function planRoundImages(
   anchor: IncomingMessage,
   burst: readonly BurstMessage[],
@@ -72,22 +105,11 @@ export function planRoundImages(
     }
   }
 
-  const numbers = new Map<string, number>();
-  const blocks: RoundImageBlock[] = [];
-  const tags: string[] = [];
-  if (inline) {
-    const eligible = distinct.filter((ref) => !ref.toLowerCase().endsWith(".gif") && existsSync(join(mediaRoot, ref)));
-    for (const ref of eligible.slice(0, INLINE_IMAGE_MAX)) {
-      const shrunk = shrink({ file: join(mediaRoot, ref) });
-      if (!shrunk.ok) continue;
-      const n = blocks.length + 1;
-      numbers.set(ref, n);
-      blocks.push({ type: "image", data: shrunk.buffer.toString("base64"), mimeType: shrunk.mimeType });
-      tags.push(imageCompressedTagOf(n, messages));
-    }
-  }
+  const { numbers, blocks, tags } = planInlineImages(distinct, mediaRoot, inline, messages, shrink);
 
   let lookHint = false;
+  // 未编号的图才提示 look：inline 开启时静态图日常全量编号（≤8 张），提示只剩 GIF、
+  // 超限与缺文件三类兜底；inline 关闭（fallback 模式）时全部走 look
   for (const line of burst) {
     for (const match of line.text.matchAll(IMAGE_REF_PATTERN)) {
       const ref = match[1] ?? "";
@@ -109,7 +131,7 @@ export function planRoundImages(
 
   const rewritten = burst.map((line) => {
     let text = line.text;
-    for (const [ref, n] of numbers) text = text.split(`[图片 ${ref}]`).join(imageTagOf(n, messages));
+    for (const [ref, n] of numbers) text = text.split(`[图片 ${ref}]`).join(imageTagOf(n, ref, messages));
     const forward = line.forward ? rewriteForwardImages(line.forward, numbers, messages) : undefined;
     const quotedForward = line.quoted?.forward ? rewriteForwardImages(line.quoted.forward, numbers, messages) : undefined;
     if (text === line.text && forward === undefined && quotedForward === undefined) return line;

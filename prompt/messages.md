@@ -115,11 +115,13 @@ working_restart: 我去重启一下，马上回来
 tool_catalog_header: 当前可用的能力目录（按名字排序）：
 tool_catalog_line: - {{name}}：{{summary}}
 
-# 图片输入的 fallback 提示（decisions §5.4 fallback-image）：inline 直读关闭或本轮仍有
-# 没附上压缩图的图时，消息列表与附加段之后追加这一行，引导模型用 look 读压缩图。
-# inline 路径的 [图片#N] / [图片#N 压缩图] 是短机械标签，由 src/index.ts 按编号拼装。
-# 引用原文里的图走同一套：inline 时渲染 [图片#N]，否则保留 [图片 inbound/…] 供 look。
-image_tag: [图片#{{n}}]
+# 图片输入（decisions §5.4 fallback-image）：[图片#N inbound/…] 编号标签始终带路径——
+# 模型可直接把路径填给 draw / gpt_image 等吃图片引用的工具；读图本身走 inline 压缩图，
+# 不需要 look。inline 关闭（fallback 模式）或本轮仍有没附上压缩图的图（GIF、超限、缺文件）
+# 时，消息列表与附加段之后追加 image_look_hint 引导模型用 look 读。
+# 引用原文里的图走同一套：inline 时渲染 [图片#N inbound/…]（answer 轮与开窗批共用），
+# 否则保留 [图片 inbound/…] 供 look。
+image_tag: [图片#{{n}} {{ref}}]
 image_compressed_tag: [图片#{{n}} 压缩图]
 quoted_image: [图片 {{ref}}]
 image_look_hint: [本轮要求] 使用 look 工具读取消息中的图片。

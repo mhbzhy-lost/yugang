@@ -92,7 +92,7 @@ test("inline 模式：引用图参与编号，原文变 [图片#1]，压缩图�
   assert.deepEqual(plan.tags, [messages["image_compressed_tag"]?.replace("{{n}}", "1") ?? "[图片#1 压缩图]"]);
   assert.equal(plan.lookHint, false, "已 inline 的图不该再提示 look");
   const round = withContext(anchor(), [], plan.messages, { master: "", messages, imageNumbers: plan.numbers });
-  assert.match(round.content, /\[引用原文\]\[m:111784281\] 遐蝶小姐的狗\(2928390812\)：「\[图片#1\]」/);
+  assert.match(round.content, /\[引用原文\]\[m:111784281\] 遐蝶小姐的狗\(2928390812\)：「\[图片#1 inbound\/replied\.jpg\]」/);
 });
 
 test("inline 模式：直发图优先编号，引用图排在后面", () => {
@@ -112,8 +112,8 @@ test("inline 模式：直发图优先编号，引用图排在后面", () => {
   assert.equal(plan.numbers.get(JPG_DIRECT), 1, "直发图应该先编号");
   assert.equal(plan.numbers.get(JPG), 2, "引用图应该排在直发图之后");
   const round = withContext(direct, [], plan.messages, { master: "", messages, imageNumbers: plan.numbers });
-  assert.match(round.content, /「\[图片#2\]」/);
-  assert.match(round.content, /看看这个 \[图片#1\]/);
+  assert.match(round.content, /「\[图片#2 inbound\/replied\.jpg\]」/);
+  assert.match(round.content, /看看这个 \[图片#1 inbound\/direct\.jpg\]/);
 });
 
 test("look 模式：引用 GIF 不 inline，但保留引用并提示 look", () => {

@@ -95,9 +95,10 @@ function lineText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-/** inline 模式的图片编号标签（[图片#N]）：与末尾压缩图标签共用同一个 n。 */
-export function imageTagOf(n: number, messages: MessageTable): string {
-  return renderTemplate(messages["image_tag"] ?? "[图片#{{n}}]", { n: String(n) });
+/** inline 模式的图片编号标签（[图片#N inbound/…]）：始终带路径——模型可直接把路径
+ * 填给 draw / gpt_image 等要图片引用的工具，不需要为此再 look。 */
+export function imageTagOf(n: number, ref: string, messages: MessageTable): string {
+  return renderTemplate(messages["image_tag"] ?? "[图片#{{n}} {{ref}}]", { n: String(n), ref });
 }
 
 /** inline 模式的压缩图标签（[图片#N 压缩图]），按编号跟在 image block 之后。 */
@@ -211,7 +212,7 @@ export function renderQuotedOriginal(
       const n = imageNumbers?.get(ref);
       return n === undefined
         ? renderTemplate(messages["quoted_image"] ?? "[图片 {{ref}}]", { ref })
-        : imageTagOf(n, messages);
+        : imageTagOf(n, ref, messages);
     })
     .join(" ");
   const text = [lineText(quoted.text), images].filter((part) => part.length > 0).join(" ");

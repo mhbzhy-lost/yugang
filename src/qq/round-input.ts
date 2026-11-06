@@ -17,8 +17,13 @@ export interface OpenMessage {
 }
 
 /** 批内引用原文附加段：把各条 quoted 用 @ 轮同款渲染器渲染成 `[引用原文]` 行，按 id 去重；
- *  批内不做 inline 图定级（不传编号表），被引图保持 `[图片 inbound/…]` 交给 look。 */
-export function renderOpenQuotedText(items: readonly OpenMessage[], messages: MessageTable): string {
+ *  inline 开启时传编号表（vision==main 时引用图同样走 base64 直读，不再留给 look 转述），
+ *  关闭时缺省——被引图保持 `[图片 inbound/…]` 交给 look。 */
+export function renderOpenQuotedText(
+  items: readonly OpenMessage[],
+  messages: MessageTable,
+  imageNumbers?: ReadonlyMap<string, number>,
+): string {
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const item of items) {
@@ -26,7 +31,7 @@ export function renderOpenQuotedText(items: readonly OpenMessage[], messages: Me
     const id = String(item.quoted.id);
     if (seen.has(id)) continue;
     seen.add(id);
-    lines.push(renderQuotedOriginal(item.quoted, messages));
+    lines.push(renderQuotedOriginal(item.quoted, messages, imageNumbers));
   }
   return lines.join("\n");
 }
