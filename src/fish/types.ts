@@ -120,7 +120,7 @@ export interface FishOptions {
   streamTransport?: "sse" | "websocket" | "websocket-cached" | "auto";
   /** 按会话取 TTS 配置（人格相关）；返回 undefined 表示这个会话没有语音能力。 */
   ttsOf?: (conversationId: string) => TtsConfig | undefined;
-  /** 携话模式现取（热）：runtime 的「自由交流窗口」小节仅 next 注入；缺省 = legacy（裁掉）。 */
+  /** 搭话模式现取（热）：runtime 的「自由活动群」小节仅 free（GROUPS 群）注入；缺省 = legacy（裁掉）。 */
   engagementOf?: (chatKey: string) => EngagementMode;
   /** 静默轮（自动收表情包）：这一轮 say_* 一律拒绝。 */
   silentOf?: (roundId: unknown) => boolean;

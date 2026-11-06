@@ -49,9 +49,10 @@ test("@ 仍必答（含裸 @、@ 且回复合集）", async () => {
   assert.equal(replyWithAt.enter, true, "@ 优先于回复合集，展开语义不变");
   assert.equal(replyWithAt.reason, "mentioned");
 
-  const duringClosed = await build({ isOpen: () => false }).decide({ msg: msg({ mentionsBot: true }) });
-  assert.equal(duringClosed.enter, true, "closed 态 @ 照样必答");
-  assert.equal(duringClosed.reason, "mentioned");
+  // 自由模式没有相位，@ 必答不受任何窗口影响
+  const anytime = await build().decide({ msg: msg({ mentionsBot: true }) });
+  assert.equal(anytime.enter, true, "@ 照样必答");
+  assert.equal(anytime.reason, "mentioned");
 });
 
 test("引用合集没 @ 一律拒（不展开）；@ 了才展开", async () => {
@@ -60,14 +61,11 @@ test("引用合集没 @ 一律拒（不展开）；@ 了才展开", async () => 
   const replied = await gate.decide({ msg: msg({ repliedForward: true }) });
   assert.equal(replied.enter, false, "引用合集但没有 @ 不该进模型");
   assert.equal(replied.reason, "next_pending");
-  const open = await build({ isOpen: () => true }).decide({ msg: msg({ repliedForward: true }) });
-  assert.equal(open.enter, false, "open 态也不放行引用合集");
-  assert.equal(open.reason, "next_pending");
 
-  // 普通回复（不是合集）不改变闸语义：非 @ 仍按开窗两态
+  // 普通回复（不是合集）不改变闸语义：非 @ 走自由拍收集器
   const plain = await gate.decide({ msg: msg({ replyIds: ["123"] }) });
-  assert.equal(plain.enter, false);
-  assert.equal(plain.reason, "next_pending");
+  assert.equal(plain.enter, true);
+  assert.equal(plain.reason, "free_pass");
 });
 
 test("无 @ 自带合集零成本拒掉（id 缓存照记在闸外）", async () => {
@@ -77,14 +75,9 @@ test("无 @ 自带合集零成本拒掉（id 缓存照记在闸外）", async ()
   assert.equal(forward.reason, "next_pending");
 });
 
-test("特别关注者的非 @ 消息同样按开窗两态（关注判定已不在闸内）", async () => {
-  const closed = build();
-  const pending = await closed.decide({ msg: msg({ userId: 3001 }) });
-  assert.equal(pending.enter, false);
-  assert.equal(pending.reason, "next_pending");
-
-  const open = build({ isOpen: () => true });
-  const passed = await open.decide({ msg: msg({ userId: 3001 }) });
+test("特别关注者的非 @ 消息同样走自由拍（关注判定已不在闸内）", async () => {
+  const gate = build();
+  const passed = await gate.decide({ msg: msg({ userId: 3001 }) });
   assert.equal(passed.enter, true);
   assert.equal(passed.reason, "free_pass");
 });
@@ -102,7 +95,7 @@ test("私聊不受影响（主人进、陌生人拒）", async () => {
 });
 
 test("群白名单优先级不变", async () => {
-  const gate = build({ groups: ["42"], isOpen: () => true });
+  const gate = build({ groups: ["42"] });
   const other = await gate.decide({ msg: msg({ groupId: 99, chatKey: "qq:group:99" }) });
   assert.equal(other.enter, false);
   assert.equal(other.reason, "group_not_allowed");

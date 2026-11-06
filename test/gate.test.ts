@@ -52,27 +52,19 @@ test("任何群友 @ 都硬通行", async () => {
   assert.equal(mentioned.reason, "mentioned");
 });
 
-test("开窗两态：open 放行 free_pass，closed / 未跟踪拒 next_pending", async () => {
-  let open = false;
-  const gate = build({ isOpen: () => open });
-
-  const closed = await gate.decide({ msg: msg() });
-  assert.equal(closed.enter, false);
-  assert.equal(closed.reason, "next_pending");
-
-  open = true;
+test("自由模式：GROUPS 群非 @ 一律 free_pass（无 closed/open 相位）", async () => {
+  const gate = build();
   const passed = await gate.decide({ msg: msg() });
   assert.equal(passed.enter, true);
   assert.equal(passed.reason, "free_pass");
-
-  open = false;
-  const back = await gate.decide({ msg: msg() });
-  assert.equal(back.enter, false, "关窗后非 @ 回到 next_pending");
-  assert.equal(back.reason, "next_pending");
+  // 无相位可翻：重复判定稳定
+  const again = await gate.decide({ msg: msg() });
+  assert.equal(again.enter, true);
+  assert.equal(again.reason, "free_pass");
 });
 
 test("群白名单照旧拒掉名单外的群", async () => {
-  const gate = build({ groups: ["42"], isOpen: () => true });
+  const gate = build({ groups: ["42"] });
   const other = await gate.decide({ msg: msg({ groupId: 99, chatKey: "qq:group:99" }) });
   assert.equal(other.enter, false);
   assert.equal(other.reason, "group_not_allowed");

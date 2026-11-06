@@ -131,12 +131,11 @@ image_gif_tag: [图片#{{n}} {{ref}} ·动图{{frames}}帧]
 image_gif_compressed_tag: [图片#{{n}} 压缩图 ·动图{{frames}}帧按时间顺序，同一张GIF]
 image_gif_collect_hint: 值得收就用meme_add收它，不值得就不收
 
-# 搭话（开窗）的零新增主动轮文案（2026-11-04 模型输入决策 §5.6，src/index.ts 消费）：
-# open 空窗不再由沉默/nudge/旧账/弹药触发，只在每个 open 窗一次掷开的 video.browseChance
-# 门开时提交「主动交流机会」轮；模板四段逐字拼装（header + line + 空行 + actions header +
-# actions line），不预选具体视频、不附加元说明。browseWindow/browseTopic 钉在轮触发上，
-# 不在模板文本里。open 窗有消息的 injection/shard 轮改用标准消息列表（message_group_header），
-# 旧的 ctx_engage_header/line/shard_header/footer/nudge/seen_note/弹药栏 key 已随停用机制删除。
+# 搭话的零新增主动轮文案（2026-11-04 模型输入决策 §5.6；2026-11-06 开窗两态退役后唯一入口是
+# 自由活动群空拍一次掷开的 engage.freeBrowseChance 门——门开时提交「主动交流机会」轮）；
+# 模板四段逐字拼装（header + line + 空行 + actions header + actions line），不预选具体视频、
+# 不附加元说明。browseWindow/browseTopic 钉在轮触发上，不在模板文本里。有消息的拍走标准
+# 消息列表（message_group_header），旧的 ctx_engage_* 系 key 已随开窗机制删除。
 ctx_browse_active_header: [主动交流机会]
 ctx_browse_active_line: 当前没有新消息。你可以自由决定是否使用 say_* 工具开口。
 ctx_browse_actions_header: [可选动作]

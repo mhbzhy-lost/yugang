@@ -50,13 +50,6 @@ function show(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-/** 自由活动白名单的安全域硬闸（自检脚本也调它）：返回不在 .env GROUPS 内的群号。
- *  config set 走整次拒绝（不部分写入）；运行侧的交集在 fish-config 的 freeGroupsSafe 里再做一次。 */
-export function freeGroupsOutsideEnv(freeGroups: unknown, env: NodeJS.ProcessEnv = process.env): string[] {
-  const allowed = new Set((env["GROUPS"] ?? "").split(",").map((s) => s.trim()).filter(Boolean));
-  return (Array.isArray(freeGroups) ? freeGroups : []).map(String).filter((group) => !allowed.has(group));
-}
-
 /** 主人闸是硬前提：无主人配置时 factory 返回 undefined，由注册方跳过（不进工具面）。 */
 export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration | undefined {
   if (!deps.master) return undefined;
@@ -123,21 +116,10 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
     return lines.join("\n");
   }
 
-  /** set：白名单校验（返回 FieldCheck）→ 安全域硬闸 → 整文件读改 → 原子写盘；读写失败直接抛回执文案。不存在的文件按空对象起底。 */
+  /** set：白名单校验（返回 FieldCheck）→ 整文件读改 → 原子写盘；读写失败直接抛回执文案。不存在的文件按空对象起底。 */
   function writeFishConfigField(spec: FishConfigFieldSpec, raw: unknown): FieldCheck {
     const result = spec.check(raw);
     if (!result.ok) return result;
-    // 安全域硬闸（终验 #1/P0 修复的延续，2026-11-05 自由活动模式）：engage.freeGroups 只能
-    // 落在 .env GROUPS 内。含域外群号的整次设置直接以 tool error 拒绝（不部分写入）——先扩
-    // GROUPS 再设置；运行侧另有 freeGroupsSafe 交集机械兜底。
-    if (spec.name === "engage") {
-      const outside = freeGroupsOutsideEnv((result.value as { freeGroups?: unknown }).freeGroups);
-      if (outside.length > 0) {
-        throw new Error(renderTemplate(p.messages["config_free_groups_outside"] ?? "config_free_groups_outside", {
-          groups: outside.join("、"),
-        }));
-      }
-    }
     let current: Record<string, unknown>;
     try {
       current = JSON.parse(readFileSync(fishConfigPath, "utf8")) as Record<string, unknown>;

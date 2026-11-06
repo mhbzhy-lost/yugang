@@ -19,9 +19,9 @@ fish.config.json 受控字段白名单（生效时机逐字段标注）：
 
 | 字段 | 类型 | 生效时机 | 说明与取值 |
 | --- | --- | --- | --- |
-| engage | 对象 | 热加载 | 搭话参数（开窗两态 + 自由活动模式），只认十一个键：closedMinutes 1–240（closed 分钟）、openMinutes 1–120（open 分钟）、windowSize 1–100（开窗积压注入上限）、mentionContextSize 1–30（@ 轮背景条数）、silenceThreshold 1–50（连续零出口计数阈值，仅兼容保留，不再驱动任何注入）、windowRelaxCap 10–100（recent 流水上限兜底）、shardSeconds 5–120（open 态分片节拍，秒）、freeGroups（群号字符串数组，自由活动模式专用白名单；必须都在 .env GROUPS 内，域外整次拒绝；空数组 = 关闭该模式）、freeSeconds 15–300（自由拍长，秒，缺省 60）、freeBrowseChance 0–1（自由群空拍的自主开口概率，缺省 0.03，0 = 恒关，宵禁内恒关）、freeBatchMax 1–200（自由拍单拍收集上限，缺省 50，超出丢最旧并留日志）；未知键告警并忽略，全部非法才整块拒绝。开窗群表直接取 .env GROUPS；自由活动白名单与它取交集 |
-| video | 对象 | 热加载 | 视频浏览参数（现行 active 字段），只认三个键：browseChance 0–1（每个 open 窗进入时只掷一次的空窗主动轮概率，缺省 0.3，0 = 恒关）、browseMaxViewsPerRound 1–20（单个浏览轮内实际观看视频的次数上限，缺省 5）、dailyBudget 10–500（B 站每日请求总预算，次，缺省 60，热灌共享客户端）；未知键告警并忽略，全部非法才整块拒绝 |
-| ammo | 对象 | 热加载 | 已停用的旧 B 站弹药管线兼容字段：仍受理与校验（旧配置不报错），但不再驱动 worker 逛轮/弹药分享；仅 dailyBudget 在 video.dailyBudget 缺省时作回退。旧键：slots / browseMinutes / shareChance / ttlHours / dailyBudget / maxPicksPerRun / refillTarget |
+| engage | 对象 | 热加载 | 搭话参数（2026-11-06 起只有自由活动模式，开窗两态已退役），只认四个键：freeSeconds 15–300（自由拍长，秒，缺省 60——多久进群看一眼）、freeBrowseChance 0–1（空拍的自主开口概率，缺省 0.03，0 = 恒关，宵禁内恒关）、freeBatchMax 1–200（单拍收集上限，条，缺省 50，超出丢最旧并留日志）、answerContextSize 1–100（可选，@ 轮背景条数；不设 = 全量未读补到已读标记，设了 = 最近 N 条再剔已读，截断外的未读视为已读丢弃）；未知键告警并忽略，全部非法才整块拒绝。搭话群表直接取 .env GROUPS |
+| video | 对象 | 热加载 | 视频浏览参数（现行 active 字段），只认两个键：browseMaxViewsPerRound 1–20（单个浏览轮内实际观看视频的次数上限，缺省 5）、dailyBudget 10–500（B 站每日请求总预算，次，缺省 60，热灌共享客户端）；主动门概率在 engage.freeBrowseChance（video.browseChance 已随开窗模式退役删除）；未知键告警并忽略，全部非法才整块拒绝 |
+| ammo | 对象 | 热加载 | 已停用的旧 B 站弹药管线兼容字段：仍受理与校验（旧配置不报错），但不再驱动 worker 逛轮/弹药分享；仅 dailyBudget 在 video.dailyBudget 缺省时作回退。旧键：slots / browseMinutes / ttlHours / dailyBudget / maxPicksPerRun / refillTarget |
 | news | 对象 | 热加载 | 新闻播报参数，只认五个键：at（HH:MM 播报时点，缺省 10:30）、targetGroup（纯数字群号，空串 = 不启用；必须是 GROUPS 白名单内的群号，域校验在运行时）、topics（topic 数组，每条只认 name / sources / keywords / exclude 四键，sources 枚举 60s/jiemian/huxiu/ithome/people/zhihu_daily/weibo_hot/baidu_hot，坏 topic 整条剔除并告警，显式给 topics 就整体覆盖缺省五 topic：AI/时政/军事/科技数码/趣闻二次元）、perTopicInput 1–20（每 topic 送模型输入上限，条）、perTopicOutput 1–5（每 topic 输出上限，条）；未知键告警并忽略，全部非法才整块拒绝 |
 | sendPacingSeconds | 数值 | 热加载 | 0–60，出站配速：同会话相邻两条物理消息实际发送的最小间隔（秒），每条消息发送前生效，0 = 关闭 |
 | compact | 对象 | 热加载 | 换页阈值：maxEntries 1–5000、maxChars 1000–200000 |

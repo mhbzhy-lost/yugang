@@ -1,25 +1,15 @@
 /**
  * 搭话模式的纯判定（不 import runtime / pi-durable / memory）：
  *
- * - `freeGroupsSafe` 是安全域交集的唯一实现（fish-config 里也用它）：自由活动白名单
- *   只认 `.env GROUPS` 之内的群号，域外的静默失效；
- * - `engageModeOf` 把 chatKey 判成三种搭话模式，宿主（runtime 的 engagementOf）与自检
- *   脚本共用这一份——避免「纯函数验过、接线没接」。
+ * 2026-11-06 合并后只有两种模式：GROUPS 群全部 free（自由活动模式），
+ * 私聊 / worker / 群外会话 legacy（裁掉群搭话协议段）。开窗两态（next）已退役。
  *
- * chatKey 形如 `qq:group:NNN`（含 `#人格` 后缀也认前缀）；私聊 / worker 会话恒 legacy。
+ * chatKey 形如 `qq:group:NNN`（含 `#人格` 后缀也认前缀）。
  */
-import { freeGroupsSafe, type EngagementMode } from "../fish-config.ts";
 
-/** 群号是否命中自由活动白名单（域外群号在这里被滤掉）。 */
-export function freeGroupOf(freeGroups: readonly string[], groups: readonly string[], groupId: string): boolean {
-  return freeGroupsSafe(groups, freeGroups).includes(String(groupId));
-}
-
-/** chatKey → 搭话模式：群外会话 legacy；GROUPS 内按自由活动白名单分 free / next。 */
-export function engageModeOf(chatKey: string, freeGroups: readonly string[], groups: readonly string[]): EngagementMode {
+/** chatKey → 搭话模式：GROUPS 内的群 free；其余（私聊 / worker / 群外）legacy。 */
+export function engageModeOf(chatKey: string, groups: readonly string[]): "legacy" | "free" {
   const matched = /^qq:group:(\d+)/.exec(chatKey);
   if (matched === null) return "legacy";
-  const groupId = matched[1] ?? "";
-  if (!groups.includes(groupId)) return "legacy";
-  return freeGroupOf(freeGroups, groups, groupId) ? "free" : "next";
+  return groups.includes(matched[1]!) ? "free" : "legacy";
 }
