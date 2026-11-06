@@ -76,8 +76,8 @@ export interface EngageNextDeps {
   onFreeIdle?(chatKey: string, gate: { windowId: string; topic: string }): void | Promise<void>;
   /** 本拍是否让行（有正在攒的 @ 组）：true 时本拍不提交、不掷门，消息顺延到下一拍。 */
   yieldTo?(chatKey: string): boolean;
-  /** 每 tick 现读：拍长与概率都从这里来（无消息也生效）。 */
-  config(): EngageTickConfig;
+  /** 每 tick 现读（带 chatKey，支持按群覆盖）：拍长与概率都从这里来（无消息也生效）。 */
+  config(chatKey: string): EngageTickConfig;
   now?: () => number;
   setTimer?: (flush: () => void, ms: number) => EngageTimer;
   clearTimer?: (timer: EngageTimer) => void;
@@ -132,9 +132,9 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
   const random = deps.random ?? Math.random;
 
   /** 拍长（毫秒）：验证注入优先；否则每 tick 现读 engage.freeSeconds（缺省 60，热改下一拍生效）。 */
-  const freeMsOf = (): number => deps.freeMs ?? (deps.config().freeSeconds ?? 60) * 1000;
+  const freeMsOf = (chatKey: string): number => deps.freeMs ?? (deps.config(chatKey).freeSeconds ?? 60) * 1000;
   /** 拍收集上限（条）：缺省 50，超出丢最旧并计数。 */
-  const freeCapOf = (): number => Math.max(1, Math.floor(deps.config().freeBatchMax ?? 50));
+  const freeCapOf = (chatKey: string): number => Math.max(1, Math.floor(deps.config(chatKey).freeBatchMax ?? 50));
 
   const phases = new Map<string, GroupPhase>();
   let running = false;
@@ -197,7 +197,7 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
   const rollFreeBrowse = (chatKey: string, state: GroupPhase, at: number): { windowId: string; topic: string; open: boolean } => {
     const topic = VIDEO_TOPICS[Math.floor(random() * VIDEO_TOPICS.length)] ?? VIDEO_TOPICS[0]!;
     const windowId = "free-" + createHash("sha256").update(chatKey + "@" + String(at)).digest("hex").slice(0, 16);
-    const open = random() < (deps.config().freeBrowseChance ?? 0.03);
+    const open = random() < (deps.config(chatKey).freeBrowseChance ?? 0.03);
     state.windowId = windowId;
     state.videoTopic = topic;
     state.videoBrowseOpen = open;
@@ -244,7 +244,7 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
     const at = now();
     for (const chatKey of deps.groups()) {
       const state = ensureState(chatKey, at);
-      if (state.lastBeatAt !== undefined && at - state.lastBeatAt >= freeMsOf()) freeBeat(chatKey, state, at);
+      if (state.lastBeatAt !== undefined && at - state.lastBeatAt >= freeMsOf(chatKey)) freeBeat(chatKey, state, at);
     }
   };
 
@@ -283,7 +283,7 @@ export function createEngageNext(deps: EngageNextDeps): EngageNext {
       const shard = (state.shard ??= { messages: [] });
       shard.messages.push(message);
       // 拍有界：超出上限丢最旧并计数（flush 时留一行日志）——唯一的有损点
-      const cap = freeCapOf();
+      const cap = freeCapOf(chatKey);
       const over = shard.messages.length - cap;
       if (over > 0) {
         shard.messages.splice(0, over);

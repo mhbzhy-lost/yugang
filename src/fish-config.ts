@@ -24,7 +24,7 @@ export type EngagementMode = "legacy" | "free";
 
 /** 搭话参数（2026-11-06 合并：自由活动模式唯一，开窗两态已退役）；逐字段校验，非法告警保留缺省，热生效。 */
 export interface EngageConfig {
-  /** 自由活动模式的拍长（秒，15–300，缺省 60）：一拍把这段时间内全部发送者的非 @ 消息合成一轮。 */
+  /** 自由活动模式的拍长（秒，15–3600，缺省 60）：一拍把这段时间内全部发送者的非 @ 消息合成一轮。 */
   freeSeconds: number;
   /** 空拍时的自主开口概率（0–1，缺省 0.03）：门开才提交「主动交流机会」；0 = 恒关；宵禁恒关。 */
   freeBrowseChance: number;
@@ -34,6 +34,39 @@ export interface EngageConfig {
    *  设了 = 锚点前最近 N 条再剔已读，截断外的未读按主人裁定视为已读丢弃。已读标记本身
    *  不受它影响（每次唤醒轮无条件推满到最新消息）。 */
   answerContextSize?: number;
+  /** 按群覆盖（群号 → 差异化参数）：命中键覆盖全局缺省，未命中键/群用全局值。
+   *  大群降频的专用旋钮（如 freeSeconds 拉到 1200 = 20 分钟看一眼）。 */
+  byGroup?: Record<string, EngageGroupOverride>;
+}
+
+/** engage.byGroup 的单群覆盖形状：全部可选，只覆盖显式给出的键。 */
+export interface EngageGroupOverride {
+  freeSeconds?: number;
+  freeBrowseChance?: number;
+  freeBatchMax?: number;
+  answerContextSize?: number;
+}
+
+/** engage 参数的运行侧合并视图（消费点统一走它，不各自读 config.engage）。 */
+export interface EngageSettings {
+  freeSeconds: number;
+  freeBrowseChance: number;
+  freeBatchMax: number;
+  answerContextSize?: number;
+}
+
+/** chatKey（含 #人格 后缀也认前缀）→ engage 参数：按群覆盖命中优先，未命中用全局缺省。 */
+export function engageSettingsOf(config: { engage: EngageConfig }, chatKey: string): EngageSettings {
+  const matched = /^qq:group:(\d+)/.exec(chatKey);
+  const override = matched !== null ? config.engage.byGroup?.[matched[1]!] : undefined;
+  return {
+    freeSeconds: override?.freeSeconds ?? config.engage.freeSeconds,
+    freeBrowseChance: override?.freeBrowseChance ?? config.engage.freeBrowseChance,
+    freeBatchMax: override?.freeBatchMax ?? config.engage.freeBatchMax,
+    ...(override?.answerContextSize !== undefined || config.engage.answerContextSize !== undefined
+      ? { answerContextSize: override?.answerContextSize ?? config.engage.answerContextSize }
+      : {}),
+  };
 }
 
 export const ENGAGE_DEFAULTS: EngageConfig = {
@@ -290,13 +323,13 @@ function checkEngageBlock(raw: unknown): FieldCheck {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "engage 必须是对象" };
   const e = raw as Record<string, unknown>;
   const specs: Array<[keyof EngageConfig, string]> = [
-    ["freeSeconds", "engage.freeSeconds 必须在 15–300"],
+    ["freeSeconds", "engage.freeSeconds 必须在 15–3600"],
     ["freeBrowseChance", "engage.freeBrowseChance 必须是 0–1"],
     ["freeBatchMax", "engage.freeBatchMax 必须在 1–200"],
     ["answerContextSize", "engage.answerContextSize 必须在 1–100"],
   ];
   const ranges: Record<string, [number, number]> = {
-    freeSeconds: [15, 300],
+    freeSeconds: [15, 3600],
     freeBrowseChance: [0, 1],
     freeBatchMax: [1, 200],
     answerContextSize: [1, 100],
@@ -304,7 +337,7 @@ function checkEngageBlock(raw: unknown): FieldCheck {
   const parsed: Partial<EngageConfig> = {};
   const problems: string[] = [];
   let any = false;
-  const known = new Set<string>(specs.map(([key]) => key));
+  const known = new Set<string>([...specs.map(([key]) => key), "byGroup"]);
   for (const [key, reason] of specs) {
     if (e[key] === undefined) continue;
     const [lo, hi] = ranges[key];
@@ -315,6 +348,47 @@ function checkEngageBlock(raw: unknown): FieldCheck {
       any = true;
     } else {
       problems.push(`${reason}，已回默认`);
+    }
+  }
+  // byGroup：按群覆盖。键必须纯数字群号，值按与全局同款范围逐键校验（非法键剔除并告警，
+  // 覆盖块整体非法则丢弃该群覆盖）；answerContextSize 同语义（undefined = 不覆盖，回落全局）
+  if (e["byGroup"] !== undefined) {
+    const rawBy = e["byGroup"];
+    if (!rawBy || typeof rawBy !== "object" || Array.isArray(rawBy)) {
+      problems.push("engage.byGroup 必须是对象（群号 → 参数覆盖）");
+    } else {
+      const kept: Record<string, EngageGroupOverride> = {};
+      let keptAny = false;
+      for (const [group, rawOv] of Object.entries(rawBy as Record<string, unknown>)) {
+        if (!/^\d+$/.test(group)) {
+          problems.push(`engage.byGroup 键 ${group} 不是群号，已剔除`);
+          continue;
+        }
+        if (!rawOv || typeof rawOv !== "object" || Array.isArray(rawOv)) {
+          problems.push(`engage.byGroup.${group} 必须是对象，已剔除`);
+          continue;
+        }
+        const ov: Record<string, number> = {};
+        for (const [key, reason] of specs) {
+          const raw = (rawOv as Record<string, unknown>)[key];
+          if (raw === undefined) continue;
+          const [lo, hi] = ranges[key];
+          const r = numberIn(`engage.byGroup.${group}.${reason}`, lo, hi, key !== "freeBrowseChance")(raw);
+          if (r.ok) ov[key] = r.value as number;
+          else problems.push(`engage.byGroup.${group}.${reason}，已剔除该键`);
+        }
+        for (const key of Object.keys(rawOv as Record<string, unknown>)) {
+          if (!known.has(key)) problems.push(`engage.byGroup.${group}.${key} 不是受控字段，已忽略`);
+        }
+        if (Object.keys(ov).length > 0) {
+          kept[group] = ov;
+          keptAny = true;
+        }
+      }
+      if (keptAny) {
+        parsed.byGroup = kept;
+        any = true;
+      }
     }
   }
   // 未知嵌套键显式告警（终验 #8）：拼错的键名不再静默——保留忽略语义，但 problems 必须可见
