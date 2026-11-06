@@ -218,7 +218,8 @@ fallback 模式保留 inbound 路径由 look 转述。
   自带/引用合集仍 `skip:next_pending` 零成本拒掉。回复合集不构成例外（回复鱼或回复合集都只是
   引用动作，决定回复与展开的都是 @）。`@全体成员` / `@别人` 不置 mentionsBot，天然按非 @ 处理
 - **自由拍是默认搭话行为**（`src/qq/engage-next.ts` 状态机，每 tick 现读配置，群表直取 `.env GROUPS`
-  ——安全域即行为域）：非 @ 消息按 `engage.freeSeconds`（缺省 60 秒，15–300，热加载）一拍合并成
+  ——安全域即行为域）：非 @ 消息按 `engage.freeSeconds`（缺省 60 秒，15–3600，热加载；
+  `engage.byGroup` 可按群号差异化覆盖——大群单独拉长拍/收紧上限，未覆盖回落全局）一拍合并成
   一轮 ambient——**空拍不提交**（拍子继续走），单拍超过 `engage.freeBatchMax`（缺省 50）时丢最旧、
   计数进日志（收集器唯一的有损点）。@ 仍走 10 秒必答通道；会话在途时整拍并入下一拍，**有正在攒的
   @ 组时本拍让行**（`yieldTo`）。空拍才掷一次自主门 `engage.freeBrowseChance`（缺省 0.03，清醒时段

@@ -10,6 +10,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createEngageNext, type EngageShardItem } from "../src/qq/engage-next.ts";
+import { engageSettingsOf, loadFishConfig } from "../src/fish-config.ts";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fakeClock, localAt } from "../scripts/lib/fake-clock.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -130,4 +134,71 @@ test("@ 轮背景两态：answerContextSize 缺省全量、设了截最近 N（b
   assert.equal(full.length, 19, "缺省全量（锚点前 19 条，seq 1-19 减 burst 内 1 条）");
   const capped = backgroundFor(anchor as never, bucket, burst, 5);
   assert.deepEqual(capped.map((line) => line.text), ["t15", "t16", "t17", "t18", "t19"], "设了 N=5 取最近 5 条");
+});
+
+test("engage.byGroup：按群覆盖校验与运行侧合并（engageSettingsOf）", () => {
+  const dir = mkdtempSync(join(tmpdir(), "yugang-bygroup-"));
+  const path = join(dir, "fish.config.json");
+  const write = (value: unknown): void => writeFileSync(path, JSON.stringify(value));
+  const load = () => loadFishConfig({ path, env: {} });
+
+  write({ engage: { freeSeconds: 60, freeBrowseChance: 0.03, freeBatchMax: 50, byGroup: {
+    "174408629": { freeSeconds: 1200, freeBatchMax: 20, answerContextSize: 20 },
+    "abc": { freeSeconds: 30 },
+    "999": { freeSeconds: 99999 },
+    "777": { freeSeconds: 30, badKey: 1 },
+  } } });
+  const loaded = load();
+  const c = loaded.config.engage;
+  assert.equal(c.byGroup?.["174408629"]?.freeSeconds, 1200);
+  assert.equal(c.byGroup?.["174408629"]?.freeBatchMax, 20);
+  assert.equal(c.byGroup?.["174408629"]?.answerContextSize, 20);
+  assert.equal(c.byGroup?.["abc"], undefined, "非群号键剔除");
+  assert.equal(c.byGroup?.["999"]?.freeSeconds, undefined, "越界覆盖键剔除");
+  assert.ok(loaded.problems.some((p) => p.includes("999 不是群号") || p.includes("999")), `非法群号要有告警：${loaded.problems}`);
+  assert.ok(loaded.problems.some((p) => p.includes("badKey")), "覆盖块未知键要告警");
+
+  // 合并语义：命中群覆盖生效，未命中回落全局；人格后缀也认前缀；私聊走全局
+  const settings = (chatKey: string) => engageSettingsOf(loaded.config, chatKey);
+  assert.equal(settings("qq:group:174408629").freeSeconds, 1200, "命中群覆盖");
+  assert.equal(settings("qq:group:174408629#长征机").freeSeconds, 1200, "人格后缀也认");
+  assert.equal(settings("qq:group:174408629").freeBatchMax, 20);
+  assert.equal(settings("qq:group:174408629").answerContextSize, 20);
+  assert.equal(settings("qq:group:659976571").freeSeconds, 60, "未命中群回落全局");
+  assert.equal(settings("qq:group:659976571").answerContextSize, undefined, "未覆盖键回落全局（不设）");
+  assert.equal(settings("qq:group:659976571").freeBrowseChance, 0.03);
+  assert.equal(settings("qq:private:1").freeSeconds, 60, "私聊走全局");
+
+  // 超长拍长合法（大群降频旋钮）
+  write({ engage: { freeSeconds: 1200 } });
+  assert.equal(load().config.engage.freeSeconds, 1200, "freeSeconds 全局也放宽到 3600");
+});
+
+test("按群拍长驱动状态机：byGroup 群按覆盖拍长提交，其它群按全局", () => {
+  const clock = fakeClock(localAt(10));
+  const submits: string[] = [];
+  const engage = createEngageNext({
+    groups: () => ["qq:group:42", "qq:group:99"],
+    busy: () => false,
+    onShard: (chatKey) => {
+      submits.push(chatKey);
+    },
+    config: (chatKey: string) => (chatKey === "qq:group:99"
+      ? { freeSeconds: 120, freeBrowseChance: 0, freeBatchMax: 50 }
+      : { freeSeconds: 60, freeBrowseChance: 0, freeBatchMax: 50 }),
+    now: clock.now,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+    tickMs: 1_000,
+    random: () => 0.9,
+  });
+  engage.start();
+  clock.advance(2_000);
+  engage.collectShard("qq:group:42", shardItem(1));
+  engage.collectShard("qq:group:99", shardItem(1));
+  clock.advance(60_000);
+  assert.deepEqual(submits, ["qq:group:42"], "60 秒拍只触发全局拍长的群");
+  clock.advance(60_000);
+  assert.deepEqual(submits, ["qq:group:42", "qq:group:99"], "120 秒拍的群到点提交");
+  engage.stop();
 });

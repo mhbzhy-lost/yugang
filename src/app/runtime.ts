@@ -60,7 +60,7 @@ import { renderTemplate } from "../prompt/index.ts";
 import { MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "../memory/index.ts";
 import { memoryKeyOf, pushScope, shiftScope } from "../memory/scope.ts";
 import { beginNewsBroadcastRound, endNewsBroadcastRound, newsBroadcastDelivered, OutboundEntry, stripOutboundLinks, type OutboundPayload } from "../tools/say-shared.ts";
-import { createConfigLoader } from "../fish-config.ts";
+import { createConfigLoader, engageSettingsOf } from "../fish-config.ts";
 import { UsageDoc, defineDoc } from "@earendil-works/pi-durable";
 // —— 外部信息源基础设施（docs/plans/2026-11-02-external-ammo.md；2026-11-04 模型输入计划 T3）——
 // B 站弹药管线（worker 逛轮 / 空库补货 / 手动逛轮 / 全局分享挂点）已停用：旧源码
@@ -1135,9 +1135,9 @@ export async function flushBurst(burst: PendingBurst): Promise<void> {
     master: config.master,
     messages: fish.prompts.messages,
     // @（answer）轮背景（2026-11-06 合并）：engage.answerContextSize 不设 = 全量未读
-    //（补到 lastmsg flag，recent 30 条是天然上限）；设了 = 取最近 N 条再剔已读（热加载）。
-    // [主人]/[特别关注] 标签由渲染器逐行机械打（master 优先互斥）
-    backgroundLimit: fishConfig().config.engage.answerContextSize,
+    //（补到 lastmsg flag，recent 30 条是天然上限）；设了 = 取最近 N 条再剔已读（热加载）；
+    // byGroup 按群覆盖命中优先。[主人]/[特别关注] 标签由渲染器逐行机械打（master 优先互斥）
+    backgroundLimit: engageSettingsOf(fishConfig().config, anchor.chatKey).answerContextSize,
     seenSeq: seenSeqOf(conv.id),
     // inline 编号表：引用原文里的图也要跟 [图片#N] 对齐（回复一张图说「收图」的场景）
     imageNumbers: plan.numbers,
@@ -1742,15 +1742,15 @@ const engageNext = createEngageNext({
   onFreeIdle: (chatKey, gate) => submitBrowseOpportunity(chatKey, gate),
   // 让行：这一拍有人在攒 @ 组时先让必答轮走，本拍顺延（消息不丢，最多多等一拍）
   yieldTo: (chatKey) => debouncer.pendingOf(chatKey).length > 0,
-  config: () => {
-    const c = fishConfig().config;
+  config: (chatKey: string) => {
     // video.dailyBudget 的每 tick 热读点（T3）：弹药 scheduler 停用后仍在的 active 热加载路径
     syncBiliBudget();
+    // 按群覆盖（engage.byGroup）命中优先：大群可单独调拍长/概率/上限，每拍现读热生效
+    const s = engageSettingsOf(fishConfig().config, chatKey);
     return {
-      // 自由活动模式三键：拍长（秒）/ 空拍自主门概率 / 单拍收集上限，每拍现读热生效
-      freeSeconds: c.engage.freeSeconds,
-      freeBrowseChance: c.engage.freeBrowseChance,
-      freeBatchMax: c.engage.freeBatchMax,
+      freeSeconds: s.freeSeconds,
+      freeBrowseChance: s.freeBrowseChance,
+      freeBatchMax: s.freeBatchMax,
     };
   },
   log: (message) => console.log(`[鱼缸] ${message}`),

@@ -4,7 +4,10 @@
   "engage": {
     "freeSeconds": 60,
     "freeBrowseChance": 0.03,
-    "freeBatchMax": 50
+    "freeBatchMax": 50,
+    "byGroup": {
+      "123456789": { "freeSeconds": 1200, "freeBatchMax": 20, "answerContextSize": 20 }
+    }
   },
   "sendPacingSeconds": 6,
   "video": {
@@ -68,7 +71,7 @@
     }
   },
   "toolTimeoutSeconds": 30,
-  "_engage": "注释：搭话参数（2026-11-06 合并：自由活动模式是唯一搭话机制，开窗两态已退役）。freeSeconds=自由拍长（秒，15–300，缺省 60）——多久进群看一眼，一拍把这段时间全部发送者的非 @ 消息合成一轮，在途时累积不并发；freeBrowseChance=空拍自主开口概率（0–1，缺省 0.03，宵禁内恒关）；freeBatchMax=单拍收集上限（条，1–200，缺省 50，超出丢最旧并计数进日志）；answerContextSize=@ 轮背景条数（1–100，可选）——不设=从已读标记补到锚点的全部未读（recent 30 条天然上限），设了=最近 N 条再剔已读。已读标记不受它影响：每次注入群消息的唤醒轮结束无条件推满到最新。有正在攒的 @ 组时本拍让行。逐字段校验，非法值告警保留缺省，热生效",
+  "_engage": "注释：搭话参数（2026-11-06 合并：自由活动模式是唯一搭话机制，开窗两态已退役）。freeSeconds=自由拍长（秒，15–3600，缺省 60）——多久进群看一眼，一拍把这段时间全部发送者的非 @ 消息合成一轮，在途时累积不并发，大群可拉到 1200=20 分钟看一眼；freeBrowseChance=空拍自主开口概率（0–1，缺省 0.03，宵禁内恒关）；freeBatchMax=单拍收集上限（条，1–200，缺省 50，超出丢最旧并计数进日志）；answerContextSize=@ 轮背景条数（1–100，可选）——不设=从已读标记补到锚点的全部未读（recent 30 条天然上限），设了=最近 N 条再剔已读，已读标记不受它影响（每次注入群消息的唤醒轮结束无条件推满到最新）；byGroup=按群覆盖（群号→参数对象，只覆盖显式给出的键，未覆盖回落全局）——大群差异化调参入口，如示例里的 20 分钟拍+单拍 20 条。有正在攒的 @ 组时本拍让行。逐字段校验，非法值告警保留缺省，热生效",
   "_sendPacingSeconds": "注释：出站配速（秒）——发送队列同会话相邻两次实际发送至少隔这么多秒，防连珠炮；0 = 关闭。对全部消息生效（@ 轮/环境轮/机械回执一样配速），改完下一拍生效。合法 0–60，非法告警保留缺省",
   "_video": "注释：会话自主浏览参数。browseMaxViewsPerRound=每个 browse 轮最多实际观看视频数（缺省 5）、dailyBudget=B 站每日请求总预算（缺省 60，跨重启持久计数）；主动门概率在 engage.freeBrowseChance（video.browseChance 已随开窗模式退役）。逐字段校验，非法值告警保留缺省，未知键告警，热生效",
   "_ammo": "注释：旧弹药管线已停用，源码仅作兼容保留。只有 dailyBudget 在 video.dailyBudget 缺失时回退使用；slots/browseMinutes/shareChance/ttlHours/maxPicksPerRun 等旧字段不再驱动 active 调度、工具或分享",
