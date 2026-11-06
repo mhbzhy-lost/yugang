@@ -20,6 +20,7 @@ import { auditPrompts, loadPrompts } from "../src/prompt/index.ts";
 import { scanDir } from "../src/prompt/lint.ts";
 import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
 import { loadToolSurface } from "../src/tools/index.ts";
+import { makeReminderTask } from "../src/tools/remind/task.ts";
 import { renderToolCatalog } from "../src/tools/catalog.ts";
 
 const repoRoot = REPO_ROOT;
@@ -43,6 +44,8 @@ const surface = await loadToolSurface({
   limits: { ...DEFAULT_LIMITS, mediaRoot },
   react: () => {},
   master: "0",
+  // remind 工具的底座任务（宿主没传就不注册；审查视图要看到它）
+  reminderTask: makeReminderTask({ messages: () => ({}), drain: async () => {}, log: () => {} }),
 });
 
 console.log(`\n== 工具包 ${surface.manifests.length} 个（src/tools/<name>/ 的 TOOL.md + schema.json + messages.json + tool.ts，loader 实际注册结果）\n`);

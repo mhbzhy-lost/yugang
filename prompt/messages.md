@@ -93,6 +93,11 @@ news_closing: ——{{closing}}
 voice_hint: [本轮要求] 必须使用 say_voice 回复，不要使用文字。
 # @ 轮（必答轮）的看视频规范：机械上不再卡轮类型，改用这条要求约束模型
 video_answer_rule: [本轮要求] 只有 @ 你的这条消息明确要求你看/找一个 B 站视频时，才可以用 bili_hot 或 video；没被要求就别去看视频，也别分享视频链接。
+
+# 定时任务到点注入轮（src/tools/remind/，fish.reminder durable task 的 due 相位）：
+# {{note}}=要做的事、{{by}}=谁让设的（task 侧兜底「大家」）。单行模板（messages.md 一行一条），
+# 分行由 \n 转义在渲染后展开；到点必答。
+reminder_due: [定时任务到点]\n到点了——{{by}}让你在这个时间提醒：{{note}}\n[本轮要求] 必须用 say_words 把提醒说出来，用你自己的口吻，一两句话说清楚该做的事。
 tool_timeout: 这个工具卡住超过半分钟了，先别重试，换个办法或者说句话
 
 # 重耗时工具执行中的宿主机械提示（工具 execute 入口经 outbox 发出，不是模型发言）：

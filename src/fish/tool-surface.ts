@@ -53,6 +53,7 @@ export async function installToolSurface(base: FishBase): Promise<ToolSurfacePar
     ...(options.onSayCall ? { onSayCall: options.onSayCall } : {}),
     ...(options.onLongWork ? { onLongWork: options.onLongWork } : {}),
     ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}),
+    ...(options.reminderTask ? { reminderTask: options.reminderTask } : {}),
     // 宿主侧 limits 与 react 是 FishOptions 硬性要求，这里只是统一交给 factory
     react: options.react,
   };

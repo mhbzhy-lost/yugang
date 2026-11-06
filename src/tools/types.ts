@@ -7,7 +7,7 @@
  * 由 loader 跳过，不进入 agent.tools / deferred / tool_catalog。
  */
 import type { Models } from "@earendil-works/pi-ai";
-import type { ConversationId, ToolRegistration } from "@earendil-works/pi-durable";
+import type { AnyTask, ConversationId, ToolRegistration } from "@earendil-works/pi-durable";
 import type { PromptSet } from "../prompt/index.ts";
 
 /** TOOL.md Schema 里受控的动态枚举扩展键；x-yugang-* 是保留命名空间，其它键一律拒绝。 */
@@ -168,6 +168,8 @@ export interface ToolPackageDeps {
   onLongWork?: (tool: string, submissionId: unknown) => void | Promise<void>;
   /** 表情包跨轮冷却（毫秒）；给函数是每次现取。 */
   memeCooldownMs?: number | (() => number);
+  /** fish.reminder 任务定义（宿主装配时注入）：remind 工具 add 时建任务用；缺省不注册该工具。 */
+  reminderTask?: AnyTask;
 }
 
 /** 工具包工厂：manifest + 依赖 → 注册对象；依赖不齐时返回 undefined，由 loader 跳过。 */

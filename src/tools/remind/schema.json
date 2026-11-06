@@ -1,0 +1,38 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["add", "list", "cancel"],
+        "description": "add=设提醒；list=看活着的提醒；cancel=取消"
+      },
+      "at": {
+        "type": "string",
+        "description": "add 用：触发时间，本地时间 YYYY-MM-DD HH:MM（24小时制）；与 in_minutes 二选一，最长 7 天"
+      },
+      "in_minutes": {
+        "type": "number",
+        "description": "add 用：多少分钟后触发（1 到 10080）；与 at 二选一"
+      },
+      "note": {
+        "type": "string",
+        "description": "add 用：到点要做的事，一句话说清，≤120字"
+      },
+      "by": {
+        "type": "string",
+        "description": "add 用：谁让设的（昵称），到点提醒里说明出处"
+      },
+      "repeat": {
+        "type": "string",
+        "enum": ["daily", "weekly"],
+        "description": "add 可选：daily=每天同一时刻；weekly=每周同一时刻；不填=只提醒一次"
+      },
+      "id": {
+        "type": "string",
+        "description": "cancel 用：要取消的任务编号（list 回执里的 id）"
+      }
+    },
+    "required": ["action"]
+  }
+}
