@@ -218,20 +218,6 @@ fallback 视觉模型路径：
 
 GIF 消息进入标准消息列表，任务放在列表后：
 
-<!-- input-template:gif-ingest -->
-```text
-群里有新消息啦。
-> 消息起始
-[m:1111528716] [有人@我](2627618651): [图片 inbound/1793784029351-186453.gif]
-> 消息结束
-
-[GIF 收图任务]
-使用 look 工具读取 [m:1111528716] 的 GIF 压缩图，判断是否值得收录。
-值得收录则使用 meme_add；不值得则保持沉默，不要使用 say_* 工具。
-```
-
-实际实现可在此前保留真实环境消息，顺序不变。
-
 ### 5.9 合并转发
 
 合并转发不是第五种消息列表，也不把展开后的子消息伪装成群里新收到的消息。父消息仍按真实接收顺序进入标准列表；合集正文作为列表后的附加信息，与引用原文一样不参与时间线重排：
@@ -449,7 +435,6 @@ Elysia(3768557204): 我待会儿去看看
   {"scene":"open_shard","templates":["open-standard"]},
   {"scene":"browse_empty","templates":["active-empty"]},
   {"scene":"news","templates":["news"]},
-  {"scene":"gif_ingest","templates":["gif-ingest"]},
   {"scene":"forward_direct","templates":["forward-direct"],"blocks":["inline-image-block"]},
   {"scene":"forward_reply","templates":["forward-reply"]},
   {"scene":"forward_recent","templates":["forward-recent"]},

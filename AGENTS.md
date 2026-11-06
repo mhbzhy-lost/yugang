@@ -107,13 +107,19 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
   符号链接 / 目录 / 非图片 / 超限一律跳过并逐项报给模型；仅主人触发的轮可用；每批最多 50 张，`cursor` 续批，
   同一轮的清单合并保留；登记结果只写入本轮 manifest，round 结束即清
 
-主会话有一条条件式 inline 直读通道（docs/plans/2026-11-01-inline-vision.md）：`models.vision` 解析结果 == `models.main` 且 main 的 api 在白名单（`google-code-assist` / `antigravity-code-assist` 真机验证过；`openai-completions` 即 zai/deepseek 2026-11-02 经主人决定放开——describe 路径本就向该通道发 image_url，且附图已压到 ≤50KB；codex 适配器不支持图片输入，仍排除）时，锚点消息的图经压图（`src/media/shrink-image.ts`：1280px 上限 / 50KB 阈值 / q80 只降分辨率）后以 image block 直接附在本轮 user message 上（普通轮 ≤2 张，直发图优先、被回复的引用图排在后面；GIF、导入轮、私聊不附；ref 缺失/压图失败跳过不阻塞）。`/关看图` 同时关掉 inline 附图（止损：当年 zai 网关曾被无压图的大图撞挂）。图进 transcript 但换页即丢弃、摘要永远只吃文本。**被回复的引用图两种读图模式都要给到模型**：inline 模式编号成 `[图片#N]` 附压缩图，look 模式在 `[引用原文]` 里保留 `[图片 inbound/…]` 并触发 look 提示（2026-11-05 修复：此前 `quoted.images` 从不渲染，回复一张图说「收图」时模型拿不到引用，收不了）。
+主会话有一条条件式 inline 直读通道（docs/plans/2026-11-01-inline-vision.md）：`models.vision` 解析结果 == `models.main` 且 main 的 api 在白名单（`google-code-assist` / `antigravity-code-assist` 真机验证过；`openai-completions` 即 zai/deepseek 2026-11-02 经主人决定放开——describe 路径本就向该通道发 image_url，且附图已压到 ≤50KB；codex 适配器不支持图片输入，仍排除）时，锚点消息的图经压图（`src/media/shrink-image.ts`：1280px 上限 / 50KB 阈值 / q80 只降分辨率）后以 image block 直接附在本轮 user message 上（普通轮 ≤8 张，直发图优先、被回复的引用图排在后面；ref 缺失/压图失败跳过不阻塞）。**GIF 走抽帧多 block**（2026-11-06 实测：glm 网关对 image/gif 只解码首帧，token 按首帧分辨率计费、与体积帧数无关）：`src/media/gif-frames.ts` 等距抽 2-4 帧（按时长自适应、含首末）、每帧压到长边 ≤640px JPEG（静态图是 1280px），一个 GIF 占 1 个编号 N 个 block；行内标签带 `·动图N帧`、末尾标签声明帧序与同一性（社区实践：Qwen fps 语义 / MiniCPM image_id）；抽帧失败降级首帧。`/关看图` 同时关掉 inline 附图（止损：当年 zai 网关曾被无压图的大图撞挂）。图进 transcript 但换页即丢弃、摘要永远只吃文本。**编号标签始终带 inbound 路径**（`[图片#N inbound/…]`）：模型可直接把路径填给 draw / gpt_image，读图不必 look。**被回复的引用图两种读图模式都要给到模型**：inline 模式编号成 `[图片#N inbound/…]` 附压缩图（answer 轮与开窗 shard 批共用），look 模式在 `[引用原文]` 里保留 `[图片 inbound/…]` 并触发 look 提示（2026-11-05 修复：此前 `quoted.images` 从不渲染，回复一张图说「收图」时模型拿不到引用，收不了）。
 
 读媒体目录的入口只有两处：`look` 只把图描述成文字；`draw` 的 `ref` 只读一张 `inbound/` 或 `gen/` 的图片当 img2img 初图。`look` 的额度：**普通一轮最多 2 张**。
 唯一的受控例外是**导入轮**——主人本轮调过 `meme_import`、且这张图就在本轮 manifest 里时，
 额度放宽到 manifest 数量（硬上限 50 张），可以逐张看、逐张用 `meme_add` 收。
 这**不是**通用文件读取的回归：目录固定、身份固定（主人）、清单只活一轮、图仍然只从 `MEDIA_ROOT` 里读，
-而且 `meme_add` 对本地导入的 ref 会机械核对「本轮 manifest 里有它、且这一轮成功 look 过」。
+而且 `meme_add` 对本地导入的 ref 会机械核对「本轮 manifest 里有它、且这一轮模型真的见过它」
+（inline 模式 = meme_import 结果里直接附过图并记 seen，fallback 模式 = look 过）。
+**look 在 inline 模式（vision==main）下被机械锁死**（2026-11-06 主人裁定）：execute 入口直接拒绝，
+图全部 inline 直读（普通轮/收图轮/导入轮/GIF），没有任何剩余场景；fallback 模式照旧。
+**导入轮 inline 化**：meme_import 结果直接附清单图（每批 ≤12 张、cursor 续批）并全部记 seen，
+meme_add 的机械校验链零改动（「seen」语义覆盖两种模式）。**GIF 静默收图轮 inline 化**：
+目标 GIF 直接附在提交上（同 GIF 直附规则），任务文案不再引导 look；fallback 模式照旧走 look 转述。
 
 原因：这些都是一条「通往一切的边」，而群里坐着的是可以被 prompt 注入的陌生人。
 一个工具的危险性应该写在它的 `execute()` 里被人读到，而不是藏在模型能拼出来的命令行里。
@@ -289,14 +295,17 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
   检索，库存以检索结果为准；检索无命中时的回执（`meme_no_mood` / `meme_no_tag`）仍附带
   当前库存概览，那是 tool 结果不是 system 注入，不影响缓存
 - 一级词查空时退回字面匹配兜底——防止迁移没跑完就把功能变哑
-- **本地批量导入**（2026-10 新增）：主人把图放进 `<MEDIA_ROOT>/meme-inbox/`，在群里让鱼导入；
-  鱼先调 `meme_import` 登记（固定目录、每批最多 50 张、`cursor` 续批），再**逐张** `look`（导入轮额度 = manifest 数量，
-  上限 50；普通轮仍然只有 2 张），最后由**主模型**结合当前群聊逐张调 `meme_add` 打标
-- 清单只属于当前 round：换轮/异常/中断都清掉，跨轮、不在清单里、或没在本轮成功 look 过的
+- **本地批量导入**（2026-10 新增；2026-11-06 inline 化）：主人把图放进 `<MEDIA_ROOT>/meme-inbox/`，在群里让鱼导入；
+  鱼先调 `meme_import` 登记（固定目录、`cursor` 续批：inline 模式每批 ≤12 张且结果直接附图全部记 seen，
+  fallback 模式每批最多 50 张、再逐张 `look`），最后由**主模型**结合当前群聊逐张调 `meme_add` 打标
+- 清单只属于当前 round：换轮/异常/中断都清掉，跨轮、不在清单里、或没在本轮真正见过（inline 附过 / look 过）的
   `meme-inbox/` 引用会被 `meme_add` 拒；
   群友不能借这条路径收本地图（`meme_import` 与本地导入的 `meme_add` 都只认主人触发的轮）
-- 仍然保留：md5 去重（同一张内容不重复入库）；群里 `.gif` 的自动收图（静默轮，只认 `inbound/` 的动图，
-  不能拿来绕开本地导入的清单）
+- 仍然保留：md5 去重（同一张内容不重复入库）。**静默收图轮已退役**（2026-11-06 主人裁定）：
+  GIF 不再起专门轮次，随 ambient 轮进上下文（inline 抽帧 + 行内双边标记
+  「值得收就用meme_add收它，不值得就不收」，收不收当场判断；fallback 模式 GIF 保留
+  inbound 路径由 look 转述）。`fish.gif_ingest` entry kind 只剩历史数据，
+  compact 的排除口径继续认它。
 - 存量补标：`scripts/migrate-memes.ts`（规则映射）与 `scripts/retag-memes.ts`（flash 读 caption/tags 判词，
   **不许**新增词表外的 tag、不许改 caption，写回前备份 + 重读合并）
 
