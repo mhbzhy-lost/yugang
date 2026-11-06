@@ -4,11 +4,7 @@
     "properties": {
       "prompt": {
         "type": "string",
-        "description": "画面描述。danbooru tag 为主（先查词表拿准词），可混自然语言，逗号分隔"
-      },
-      "negative": {
-        "type": "string",
-        "description": "不要出现的东西，tag 写法，可留空"
+        "description": "画面描述。danbooru tag 为主（先查词表拿准词），可混自然语言，逗号分隔；负向词表是内置预设，不要在这里写「不要出现什么」"
       },
       "preset": {
         "type": "string",
@@ -21,7 +17,7 @@
       },
       "highres": {
         "type": "boolean",
-        "description": "要高分辨率/大图/超分时传 true；默认 false 出普通图，true 更大也更慢。只对从零画生效，带 ref 时忽略"
+        "description": "用户明确要高清/大图/精细超分时传 true（RealESRGAN 2 倍超分）；默认自带轻量超分（4x-AnimeSharp 1.5 倍）不用传。只对从零画生效，带 ref 时忽略"
       },
       "ref": {
         "type": "string",

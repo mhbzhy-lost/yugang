@@ -1,7 +1,9 @@
 /**
  * draw —— 本地 Stable Diffusion 出图（Windows 宿主机上的 SD WebUI Forge Neo）。
  *
- * 只开放 positive / negative 两项注入，模型、采样器、步数、尺寸全是预设；
+ * 只开放 positive 一项注入（负向词表是内置预设，不接受模型注入）；
+ * 模型、采样器、步数、尺寸全是预设；hires fix 默认档 4x-AnimeSharp 1.5x，
+ * 用户点名高清（highres=true）才换 RealESRGAN anime_6B 2x；
  * 带 ref 时改走 img2img（初图只认媒体目录 inbound/ 或 gen/ 下的图片），出口与限次不变。
  * 图落 <mediaRoot>/gen/，出口仍走 say_media。一轮最多画一次，失败不消耗次数。
  *
@@ -25,7 +27,6 @@ import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface DrawArgs {
   prompt: string;
-  negative?: string;
   preset?: "default" | "hsr" | "secret";
   highres?: boolean;
   ref?: string;
@@ -33,16 +34,19 @@ interface DrawArgs {
 }
 
 const DRAWN = new Map<string, unknown>();
-// 预设：质量词前置注入，模型的 prompt 附在后面；SDXL 动漫模型竖版；步数与 CFG 取 Forge 常用档。模型/采样器用 WebUI 端当前配置。
+// 预设：质量词前置注入，模型的 prompt 附在后面；SDXL 动漫模型竖版；采样器 DPM++ 2M + SGM Uniform、CFG 5。
+// 负向词表同样是预设，模型只能附加正向描述，没有 negative 参数。
 const PRESET_POSITIVE = `masterpiece, best quality, absurdres, score_7, score_8, score_9, 
 newest, year 2025, detailed, novel illustration, game cg, anime, `;
 const PRESET_NEGATIVE = `low quality, worst quality, score_1, score_2, score_3, early, old, 
-dark skin, shiny skin, ugly face, `;
-const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 4.5, sampler_name: "ER SDE", scheduler: "beta" };
-/** 高分辨率模式（hires fix）：RealESRGAN anime_6B 放大 2 倍，二段步数 0=继承主步数，denoising 0.4，其余默认。
+dark skin, shiny skin, abs, `;
+const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 5, sampler_name: "DPM++ 2M", scheduler: "sgm_uniform" };
+/** 高分辨率模式（hires fix）默认档：4x-AnimeSharp 放大 1.5 倍，二段步数 0=继承主步数，denoising 0.4，其余默认。
  *  hr_additional_modules 必须显式给 ["Use same choices"]（沿用当前模块）：Forge Neo 的 API 不传时为 None，
  *  会在采样后的换模块环节炸 TypeError（'NoneType' object is not iterable）。 */
-const HIRES = { enable_hr: true, hr_upscaler: "RealESRGAN_x4plus_anime_6B", hr_scale: 2, hr_second_pass_steps: 0, denoising_strength: 0.4, hr_additional_modules: ["Use same choices"] };
+const HIRES_DEFAULT = { enable_hr: true, hr_upscaler: "4x-AnimeSharp", hr_scale: 1.5, hr_second_pass_steps: 0, denoising_strength: 0.4, hr_additional_modules: ["Use same choices"] };
+/** 高清档（用户明确要高清/大图，highres=true）：换回 RealESRGAN anime_6B 放大 2 倍，其余同默认档。 */
+const HIRES_HD = { ...HIRES_DEFAULT, hr_upscaler: "RealESRGAN_x4plus_anime_6B", hr_scale: 2 };
 /** 画风预设：追加在 positive 末尾的额外注入。 */
 const PRESETS: Record<string, string> = {
   default: "",
@@ -198,9 +202,10 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         const target = useTunnel ? `http://127.0.0.1:${localPort}/sdapi/v1/${endpoint}` : `${deps.sdUrl}/sdapi/v1/${endpoint}`;
 
         const positivePrompt = PRESET_POSITIVE + positive + (PRESETS[args.preset ?? "default"] ?? "") + (stash ? `, ${stash}` : "");
-        const negativePrompt = PRESET_NEGATIVE + (args.negative ?? "").trim();
-        // 无 ref：与历史 txt2img 逐字段一致，highres 只在这一支生效；
-        // 有 ref：img2img 请求模型里没有 enable_hr/hr_* 字段（发了也被忽略），所以不带 HIRES；
+        // 负向只有内置预设，模型没有注入入口
+        const negativePrompt = PRESET_NEGATIVE;
+        // 无 ref：默认开 hires fix（4x-AnimeSharp 1.5x），highres=true 换高清档（RealESRGAN 2x）；
+        // 有 ref：img2img 请求模型里没有 enable_hr/hr_* 字段（发了也被忽略），所以不带 hires；
         // 先 ...PRESET 再覆盖宽高，别让预设的 832×1216 盖掉按初图算出的尺寸
         const body = JSON.stringify(
           init
@@ -222,7 +227,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
                 prompt: positivePrompt,
                 negative_prompt: negativePrompt,
                 ...PRESET,
-                ...(args.highres ? HIRES : {}),
+                ...(args.highres ? HIRES_HD : HIRES_DEFAULT),
               },
         );
         const post = async (): Promise<string> => {
