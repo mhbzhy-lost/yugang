@@ -445,7 +445,7 @@ Elysia(3768557204): 我待会儿去看看
 
 机械测试必须遵守：
 
-- 每个 `scene` 都从对应真实场景入口触发拼装，取得实际提交给模型的 content；open injection 与 shard 必须分别触发，即使二者期望模板相同。
+- 每个 `scene` 都从对应真实场景入口触发拼装，取得实际提交给模型的 content（2026-11-06 合并：free_shard 与 free_browse 分别由 collectShard→onShard 与空拍门→onFreeIdle 触发）。
 - 文本使用精确相等比较，保留换行、空行、全角/半角标点与顺序，不做 trim、空白归一化或包含式断言。多段模板按矩阵顺序以一个空行连接后比较完整 input。
 - 图片场景同时比较 content block 的类型、顺序、base64 与 MIME：一个 text block 在前，压缩 image blocks 按编号在后。测试可用确定性压缩 stub 产生 `compressed-1`，但不得用原图字节替代。
 - 测试触发器覆盖矩阵全部 scene，且不得复制生产组装函数来生成 actual。无法从真实入口取得 content 时记为失败或阻塞，不修改生产代码增加测试后门。
