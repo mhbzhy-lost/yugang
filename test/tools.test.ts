@@ -16,6 +16,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
 import { loadToolManifests, toolFullDescription } from "../src/tools/manifest.ts";
+import { makeReminderTask } from "../src/tools/remind/task.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
@@ -42,6 +43,8 @@ function boot() {
     },
     react: () => {},
     master: "1",
+    // remind 工具的底座任务（宿主没传就不注册；工具面断言要求它在册）
+    reminderTask: makeReminderTask({ messages: () => ({}), drain: async () => {}, log: () => {} }),
   });
   return { faux, mediaRoot, outbox, fish };
 }
@@ -62,7 +65,7 @@ test("工具面为窄接口：无 bash，自改工具已注册", async () => {
     // 完整性校验照旧但不进 active/deferred/catalog
     assert.deepEqual(
       agent.deferred.map((t) => t.name),
-      ["bili_hot", "bili_video", "config", "draw", "gpt_image", "grep", "look", "meme", "meme_add", "meme_import", "read", "restart", "search", "tags", "tree", "video", "watch", "write"],
+      ["bili_hot", "bili_video", "config", "draw", "gpt_image", "grep", "look", "meme", "meme_add", "meme_import", "now", "read", "remind", "restart", "search", "tags", "tree", "video", "watch", "write"],
     );
   } finally {
     await open.close();
