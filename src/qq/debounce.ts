@@ -288,14 +288,15 @@ export function backgroundFor(
   anchor: IncomingMessage,
   bucket: readonly RecentChatMessage[],
   burst: readonly BurstMessage[],
-  limit = 10,
+  limit?: number,
 ): RecentChatMessage[] {
   const candidates =
     anchor.arrivalSeq !== undefined && bucket.some((line) => line.arrivalSeq !== undefined)
       ? bucket.filter((line) => line.arrivalSeq !== undefined && line.arrivalSeq < (anchor.arrivalSeq as number))
       : bucket.slice(0, Math.max(0, anchorIndex(anchor, bucket)));
   const inBurst = burstMatcher(burst);
-  return candidates.filter((line) => !inBurst(line)).slice(-limit);
+  const filtered = candidates.filter((line) => !inBurst(line));
+  return limit === undefined ? filtered : filtered.slice(-limit);
 }
 
 /**
@@ -315,7 +316,7 @@ export interface ContextOptions {
   master: string;
   /** prompt/messages.md 的文案表：所有可见文案从这里来。 */
   messages: MessageTable;
-  /** 背景板条数上限（T5）：@（answer）轮传 engage.mentionContextSize，缺省 10。 */
+  /** 背景板条数上限：undefined = 不限（全量未读，@ 轮缺省）；数值 = 取最近 N 条再剔已读。 */
   backgroundLimit?: number;
   /** 已读标记（决策 20）：背景板先取上限再剔除 arrivalSeq ≤ 它的行（已进过模型的不重复注入）；缺省不去重。 */
   seenSeq?: number;
@@ -408,9 +409,10 @@ export function withContext(
     return { content: parts.join("\n\n"), seen: [seenOf(anchor)] };
   }
 
-  // 背景板（决策 20）：先按上限取最近 N 条，再剔除已进过模型的部分（arrivalSeq ≤ seenSeq；
+  // 背景板（2026-11-06 合并）：answer 轮缺省全量（backgroundLimit 不传 = 不截），
+  // answerContextSize 设了才取最近 N 条；先取条数再剔除已进过模型的（arrivalSeq ≤ seenSeq；
   // 旧流水没有序号的没法判已读，保守保留）。不传 seenSeq = 整段不去重。
-  let background = backgroundFor(anchor, bucket, burst, options.backgroundLimit ?? 10);
+  let background = backgroundFor(anchor, bucket, burst, options.backgroundLimit);
   if (options.seenSeq !== undefined) {
     const seenSeq = options.seenSeq;
     background = background.filter((line) => line.arrivalSeq === undefined || line.arrivalSeq > seenSeq);

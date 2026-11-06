@@ -105,10 +105,10 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
 
 鱼不止被动接话，还有自主浏览与定时新闻两条外部链路：
 
-- **会话自主浏览**：每个 open 窗进入时按 `video.browseChance`（缺省 0.3）掷一次门，门开才给当前
-  （群 × 人格）会话一个零新增主动交流机会。会话用 `bili_hot` 按本窗 topic 取候选，用 `video` 实际观看
-  （每轮最多 `video.browseMaxViewsPerRound`，缺省 5），再通过 `say_words(videoBvid)` 把推荐语和宿主
-  canonical 链接发到群里。`fish.video_pool` 按 chatKey（群/私聊）绑定去重，跨会话同 BV 不互斥；写入与
+- **会话自主浏览**：自由活动群在**空拍**（收集器无消息的拍）按 `engage.freeBrowseChance`（缺省 0.03，
+  宵禁恒关）掷一次门，门开才给当前（群 × 人格）会话一个零新增主动交流机会。会话用 `bili_hot` 按本拍
+  topic 取候选，用 `video` 实际观看（每轮最多 `video.browseMaxViewsPerRound`，缺省 5），再通过
+  `say_words` 把推荐语和宿主 canonical 链接发到群里。`fish.video_pool` 按 chatKey（群/私聊）绑定去重，跨会话同 BV 不互斥；写入与
   outbox 入队同事务。旧弹药库、后台逛轮和 `ammo_*` 工具只保留兼容源码，不进入 active 工具面或调度。
   B 站请求全走 `bili-client` 频控内核（白名单端点、串行 + 同端点 ≥2s、`video.dailyBudget` 缺省
   60/天 + 风控当日熔断），普通 `video` 工具共用。
@@ -293,7 +293,6 @@ npm run token             # 生成 OneBot token，同步到 .env 和 NapCat 配�
 
 | 字段 | 缺省 | 说明 |
 |---|---|---|
-| `video.browseChance` | `0.3` | 每个 open 窗进入时一次自主浏览门概率（0–1，同窗稳定） |
 | `video.browseMaxViewsPerRound` | `5` | 每个 browse 轮最多实际观看视频数 |
 | `video.dailyBudget` | `60` | B 站每日请求总预算（次），跨重启持久计数；缺省时回退旧 `ammo.dailyBudget` |
 | `news.at` | `"10:30"` | 每天播报时点（HH:MM） |

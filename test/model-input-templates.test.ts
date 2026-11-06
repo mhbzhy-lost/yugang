@@ -60,8 +60,7 @@ import {
   type RoundContentBlock,
 } from "../src/qq/round-input.ts";
 import { renderNewsBroadcast, renderNewsTask } from "../src/external/news-broadcast.ts";
-import { createEngageNext, type EngageBacklogItem, type EngageShardItem } from "../src/qq/engage-next.ts";
-import { videoBrowseGateOf, wireVideoBrowseHost, type VideoBrowseGate } from "../src/external/video-browse.ts";
+import { createEngageNext, type EngageShardItem } from "../src/qq/engage-next.ts";
 import type { ShrinkResult } from "../src/media/shrink-image.ts";
 import { openFish } from "../src/harness.ts";
 import type { IncomingMessage } from "../src/qq/onebot.ts";
@@ -181,7 +180,7 @@ function answerRound(options: AnswerRoundOptions): { text: string; submit: strin
   const round = withContext(options.anchor, options.bucket ?? [], plan.messages, {
     master: options.master ?? "",
     messages,
-    backgroundLimit: 5, // engage.mentionContextSize 缺省值
+    backgroundLimit: 5, // engage.answerContextSize=5（模板按此定格；生产缺省=全量未读）
     seenSeq: 0, // 新会话：背景板全未读
     ...(options.watched ? { watched: options.watched } : {}),
   });
@@ -235,50 +234,17 @@ const notWatched = (): boolean => false;
 /** 换页尾巴的历史行不涉及主人/特别关注标签（剖面卡片与尾巴都是机械投影）。 */
 const notMaster = (): boolean => false;
 
-/** open injection：真状态机 closed→open，onPhase 带积压（index.ts L1298 的渲染入口）。 */
-function triggerOpenInjection(): Triggered {
-  const clock = fakeClock(1_000);
-  const backlog: EngageBacklogItem[] = [{ arrivalSeq: 7, at: 7, ...OPEN_ITEM }];
-  let text = "";
-  const engage = createEngageNext({
-    groups: () => [GROUP],
-    recentOf: () => [],
-    backlogOf: () => backlog,
-    busy: () => false,
-    onPhase: (chatKey, phase, items) => {
-      if (phase !== "open") return;
-      // index.ts submitInjectionRound：seenSeq=0（新会话）时 fresh 过滤是恒等，直接渲染
-      text = renderOpenMessageList(items, messages, masterOf, notWatched);
-    },
-    onShard: () => {},
-    config: () => ({ closedMinutes: 1, openMinutes: 5, shardSeconds: 20, videoBrowseChance: 0 }),
-    now: clock.now,
-    setTimer: clock.setTimer,
-    clearTimer: clock.clearTimer,
-    tickMs: 1_000,
-    random: () => 0.9,
-  });
-  engage.start();
-  clock.advance(61_000); // 第一拍建相位，第二拍满 closedMinutes 开窗
-  const submit = submitContentOf(text, []);
-  engage.stop();
-  return { text, submit, via: "engage-next onPhase(open, backlog) → renderOpenMessageList → submitContentOf" };
-}
-
-/** open shard：同一状态机 open 窗内 collectShard，节拍到期 onShard（index.ts L1335）。 */
-function triggerOpenShard(): Triggered & { collected: boolean; gate: VideoBrowseGate | undefined } {
+/** 自由拍 shard（2026-11-06 合并）：真状态机 collectShard → 拍到期 onShard（submitShardRound 的渲染入口）。 */
+function triggerFreeShard(): Triggered & { collected: boolean } {
   const clock = fakeClock(1_000);
   let text = "";
   const engage = createEngageNext({
     groups: () => [GROUP],
-    recentOf: () => [],
-    backlogOf: () => [],
     busy: () => false,
-    onPhase: () => {},
     onShard: (chatKey, items) => {
       text = renderOpenMessageList(items, messages, masterOf, notWatched);
     },
-    config: () => ({ closedMinutes: 1, openMinutes: 5, shardSeconds: 20, videoBrowseChance: 0 }),
+    config: () => ({ freeSeconds: 60, freeBrowseChance: 0, freeBatchMax: 50 }),
     now: clock.now,
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
@@ -286,47 +252,40 @@ function triggerOpenShard(): Triggered & { collected: boolean; gate: VideoBrowse
     random: () => 0.9,
   });
   engage.start();
-  clock.advance(61_000);
   const item: EngageShardItem = { arrivalSeq: 7, at: 7, ...OPEN_ITEM };
   const collected = engage.collectShard(GROUP, item);
-  clock.advance(20_000); // 一拍 shardSeconds 到期
-  const gate = engage.videoBrowseGateOf(GROUP);
+  clock.advance(61_000); // 首 tick 建相位，第二拍满 freeSeconds 提交
   const submit = submitContentOf(text, []);
   engage.stop();
-  return { text, submit, via: "engage-next collectShard → onShard(items) → renderOpenMessageList → submitContentOf", collected, gate };
+  return { text, submit, via: "engage-next collectShard → onShard(items) → renderOpenMessageList → submitContentOf", collected };
 }
 
-/** 零新增主动轮：空积压 + 本窗 video.browseChance 门开（index.ts L1268-1277）。 */
-function triggerBrowseEmpty(): Triggered & { gate: VideoBrowseGate | undefined } {
-  // 白天开窗（2026-11-04 10:00）：宵禁（本地 00:00–08:00）内 videoBrowseGateOf 门恒关，
-  // 空窗主动轮本就不该起——这里只能拿白天时钟验门开路径
+/** 自由拍空拍自主轮（2026-11-06 合并）：空拍掷 freeBrowseChance 门，门开 onFreeIdle。 */
+function triggerFreeBrowse(): Triggered & { gateOpen: boolean } {
+  // 白天（2026-11-04 10:00）：宵禁（本地 00:00–08:00）内空拍不掷门
   const clock = fakeClock(stamp(10, 0));
   let text = "";
+  let gateOpen = false;
   const engage = createEngageNext({
     groups: () => [GROUP],
-    recentOf: () => [],
-    backlogOf: () => [],
     busy: () => false,
-    onPhase: (chatKey, phase, backlog) => {
-      if (phase !== "open" || backlog.length > 0) return;
-      const gate = videoBrowseGateOf(chatKey);
-      if (!gate?.open) return; // 门没开：整窗不提交（宁少勿答）
+    onShard: () => {},
+    onFreeIdle: (_chatKey, gate) => {
+      gateOpen = gate.open;
       text = renderBrowseOpportunity(messages);
     },
-    config: () => ({ closedMinutes: 1, openMinutes: 5, shardSeconds: 20, videoBrowseChance: 1 }),
+    config: () => ({ freeSeconds: 60, freeBrowseChance: 1, freeBatchMax: 50 }),
     now: clock.now,
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
     tickMs: 1_000,
     random: () => 0, // 严格小于：0 < 1 → 门开；topic 取 VIDEO_TOPICS[0]
   });
-  wireVideoBrowseHost({ gateOf: (chatKey) => engage.videoBrowseGateOf(chatKey) });
   engage.start();
-  clock.advance(61_000);
-  const gate = videoBrowseGateOf(GROUP);
+  clock.advance(61_000); // 空拍：收集器无消息 → 掷门 → onFreeIdle
   const submit = submitContentOf(text, []);
   engage.stop();
-  return { text, submit, via: "engage-next 空积压 + videoBrowseGateOf(open) → renderBrowseOpportunity → submitContentOf", gate };
+  return { text, submit, via: "engage-next 空拍 freeBrowseChance 门开 → onFreeIdle → renderBrowseOpportunity → submitContentOf", gateOpen };
 }
 
 /** 合集子消息（只有 API 真实给了 ID/QQ 才有对应字段）。 */
@@ -549,9 +508,8 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
     return { ...round, via: "planRoundImages(fallback) → withContext → assembleRoundContent(lookHint)" };
   },
 
-  open_injection: () => triggerOpenInjection(),
-  open_shard: () => triggerOpenShard(),
-  browse_empty: () => triggerBrowseEmpty(),
+  free_shard: () => triggerFreeShard(),
+  free_browse: () => triggerFreeBrowse(),
 
   // 新闻播报（decisions §5.7，index.ts L2102/L2114）
   news: () => {
@@ -795,7 +753,7 @@ test("helper 严格性：缺标记 / 重复标记 / 非法 JSON / 缺场景 / �
 
   assert.throws(
     () => loadAuthoritativeScenes(tempDoc((raw) => raw.replace('{"scene":"news","templates":["news"]},\n  ', ""))),
-    /应为 15 个/,
+    /应为 14 个/,
     "矩阵缺场景没有失败",
   );
   assert.throws(
@@ -825,18 +783,15 @@ test("helper 严格性：缺标记 / 重复标记 / 非法 JSON / 缺场景 / �
   );
 });
 
-test("open injection 与 shard 分别由两条不同真实路径触发，shard 无浏览授权", () => {
-  const injection = triggerOpenInjection();
-  const shard = triggerOpenShard();
-  assert.notEqual(injection.via, shard.via, "injection 与 shard 走了同一条触发路径");
-  assert.match(injection.via, /onPhase\(open/, "injection 不是开窗积压路径");
-  assert.match(shard.via, /collectShard/, "shard 不是窗内分片路径");
-  assert.equal(shard.collected, true, "open 窗内 collectShard 没收下消息");
-  // decisions §5.5：两者期望同一模板；§5.6/AGENTS 第 7 节：ambient shard 不携带 browse 授权
-  assert.equal(shard.text, injection.text, "injection 与 shard 的输入模板不一致");
-  assert.equal(shard.gate?.open, false, "browseChance=0 时 shard 窗不该有浏览授权");
-  const browse = triggerBrowseEmpty();
-  assert.equal(browse.gate?.open, true, "browseChance=1 时开窗门应打开");
+test("自由拍 shard 由真实路径触发；空拍自主轮走 onFreeIdle", () => {
+  const shard = triggerFreeShard();
+  assert.match(shard.via, /collectShard/, "shard 不是收集器路径");
+  assert.equal(shard.collected, true, "collectShard 没收下消息");
+  assert.ok(shard.text.length > 0, "shard 轮没有渲染出标准消息列表");
+  // browse 授权不挂在 shard 上：freeBrowseChance=0 的拍不掷门，shard 文本无浏览语义
+  const browse = triggerFreeBrowse();
+  assert.equal(browse.gateOpen, true, "freeBrowseChance=1 时空拍门应打开");
+  assert.match(browse.text, /主动交流|自由决定/, "自主轮模板未渲染");
 });
 
 /**

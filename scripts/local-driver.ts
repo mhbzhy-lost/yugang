@@ -36,7 +36,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { loadFishModels } from "../src/model/config.ts";
 import { openFish } from "../src/harness.ts";
 import { planRoundImages, planInlineImages } from "../src/qq/round-images.ts";
-import { assembleRoundContent, submitContentOf, appendAnswerRules, renderOpenMessageList, renderOpenQuotedText } from "../src/qq/round-input.ts";
+import { assembleRoundContent, submitContentOf, appendAnswerRules, renderOpenMessageList, renderOpenQuotedText, renderBrowseOpportunity } from "../src/qq/round-input.ts";
 import { gifTagOf, imageTagOf } from "../src/qq/model-input.ts";
 import { withContext, type BurstMessage } from "../src/qq/debounce.ts";
 import type { QuotedMessage, ForwardAttachment } from "../src/qq/model-input.ts";
@@ -60,6 +60,10 @@ interface ScriptLine {
   quoted?: QuotedMessage;
   /** 自带合集（@ 了鱼才展开）。 */
   forward?: ForwardAttachment;
+  /** 空拍自主门轮：true = 直接提交 [主动交流机会]（不经掷门，测试确定性触发）。 */
+  browse?: boolean;
+  /** 自主轮 topic（缺省「二次元」）。 */
+  topic?: string;
 }
 
 const DEFAULT_SCRIPT: ScriptLine[] = [
@@ -175,6 +179,33 @@ async function main(): Promise<void> {
     arrivalSeq += 1;
     const id = messageId;
     const isAnswer = line.mention === true;
+
+    // 空拍自主门轮（browse: true）：确定性触发，不掷 freeBrowseChance 骰子
+    if (line.browse === true) {
+      const topic = line.topic ?? "二次元";
+      const content = renderBrowseOpportunity(fish.prompts.messages);
+      console.log(`  ↳ 主动交流机会（topic: ${topic}）`);
+      const submission = await conv.submit(
+        { type: "input", content, entry: { kind: "fish.engage_tick", data: { chatKey: "qq:group:local", browse: true, topic } } },
+        ctx,
+      );
+      scriptTrigger.set(String(submission.id), { messageId: id, mentionsBot: false, userId: MASTER, kind: "injection", browseWindow: `free-driver-${id}`, browseTopic: topic });
+      const settled = await submission.wait(ctx);
+      await fish.drain([conv.id]);
+      const view = await conv.viewState(ctx);
+      const entries = view.value.entries as readonly { id?: number; kind?: string; model?: unknown }[];
+      view.dispose();
+      let bare = "";
+      for (const entry of entries) {
+        if (entry.kind !== "pi.assistant") continue;
+        const blocks = (entry.model as { content?: { type: string; text?: string }[] }[] | undefined)?.[0]?.content ?? [];
+        bare = blocks.filter((b) => b.type === "text" && b.text).map((b) => b.text).join("\n");
+      }
+      if (bare) console.log(`  ↳ 裸回复（未走出口）: ${bare.split("\n").find((l) => l.trim())?.slice(0, 100) ?? ""}`);
+      appendFileSync(roundsLog, JSON.stringify({ at: nowIso(), status: settled.status, from: "browse", text: `主动交流机会 topic=${topic}`, bare: bare.slice(0, 200) }) + "\n");
+      console.log(`  ↳ 轮结束: ${settled.status}`);
+      continue;
+    }
     console.log(`\n── [${index + 1}/${script.length}] ${line.name}(${line.from})${isAnswer ? " @鱼" : ""}: ${line.text.slice(0, 60)}`);
 
     // 生产渲染路径，按轮类型分流（与 runtime 一致）：
@@ -218,7 +249,8 @@ async function main(): Promise<void> {
       const roundContext = withContext(anchor as never, [], burst, {
         master: MASTER,
         messages: fish.prompts.messages,
-        backgroundLimit: 0,
+        // 2026-11-06 合并：@ 轮背景缺省全量未读；driver 无 recent 流水，bucket 为空即无背景
+        seenSeq: 0,
         imageNumbers: plan.numbers,
         watched: () => false,
       });

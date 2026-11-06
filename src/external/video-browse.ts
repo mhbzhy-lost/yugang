@@ -1,14 +1,10 @@
 /**
- * 开窗视频浏览门与当前轮 viewed 登记（2026-11-04 模型输入计划 T3）。
+ * 视频浏览 topic 枚举与当前轮 viewed 登记（2026-11-04 模型输入计划 T3；
+ * 2026-11-06 开窗两态退役：浏览门单例查询已删，授权由 RoundTrigger 直接携带）。
  *
- * 门（VideoBrowseGate）由宿主（src/app/runtime.ts）在 engage-next 状态机每个 open 窗进入时
- * 一次性掷出（video.browseChance，同窗稳定、关窗作废），经 wireVideoBrowseHost 接线；
- * 自由活动模式的群没有窗：改在**空拍**时掷一次（engage.freeBrowseChance，windowId 是
- * `free-` 前缀的拍 id）。有消息的拍不掷；忙 / 让行的那一拍在清门之前就返回，旧门因此
- * 会多留一拍，但没有任何提交路径会消费它（只有空拍才提交机会轮），下一拍开拍即作废。
- * 工具侧只通过 videoBrowseGateOf(chatKey) 只读查询——closed / 未跟踪 / 白名单外
- * 一律 undefined（fail closed）。零新增主动轮（decisions §5.6）只在门开时提交，
- * browseWindow / browseTopic 随 RoundTrigger 钉在轮上；ambient shard 与其它轮不携带。
+ * 浏览授权：engage-next 空拍掷门（engage.freeBrowseChance）→ onFreeIdle → 宿主把
+ * browseWindow/browseTopic 钉上 RoundTrigger（submitBrowseOpportunity）；ambient 拍
+ * 与其它轮一律不携带——工具与出口侧不需要查询任何全局门。
  *
  * viewed 登记是 T4 的窄依赖：`video` 工具在 browse 轮实际成功观看一条视频后
  * recordViewedVideo(roundId, bvid)，每轮观看上限用 viewedVideoOf(roundId)
@@ -21,31 +17,6 @@
 
 /** 视频浏览 topic 枚举（宿主掷门时随机选一；T4 的 bili_hot 候选过滤消费）。 */
 export const VIDEO_TOPICS: readonly string[] = ["二次元", "游戏", "军事", "数码"];
-
-/** 当前 open 窗的浏览门：windowId = 本窗稳定标识（engage-next 派生），topic = 本窗话题，
- *  open = 掷门结果。closed / 未跟踪时宿主接线返回 undefined。 */
-export interface VideoBrowseGate {
-  windowId: string;
-  topic: string;
-  open: boolean;
-}
-
-/** 宿主接线口：gateOf 由 src/app/runtime.ts 落到 engage-next 的相位内存（单例，启动时 wire 一次）。 */
-export interface VideoBrowseHost {
-  gateOf(chatKey: string): VideoBrowseGate | undefined;
-}
-
-let host: VideoBrowseHost | undefined;
-
-/** 宿主接线（src/app/runtime.ts 启动时一次）；未接线时 videoBrowseGateOf 恒 undefined（fail closed）。 */
-export function wireVideoBrowseHost(wired: VideoBrowseHost): void {
-  host = wired;
-}
-
-/** 只读查询当前 open 窗的浏览门；closed / 未跟踪 / 未接线 = undefined。 */
-export function videoBrowseGateOf(chatKey: string): VideoBrowseGate | undefined {
-  return host?.gateOf(chatKey);
-}
 
 // roundId → 本轮实际成功观看的 BV 集合：只活在当前 browse 轮，宿主轮末整份清掉。
 const viewedByRound = new Map<string, Set<string>>();

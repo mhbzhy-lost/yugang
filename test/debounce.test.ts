@@ -140,8 +140,11 @@ test("背景只取锚点之前，且整组自己不出现在背景里", () => {
     { userId: 7, nickname: "某人", text: "前一句", at: 0, mentionsBot: false, replyIds: [], messageId: 19, arrivalSeq: 19 },
     { userId: 7, nickname: "某人", text: "锚点", at: 0, mentionsBot: false, replyIds: [], messageId: 20, arrivalSeq: 20 },
   ];
-  const background = backgroundFor(anchor, bucket, burst);
-  assert.deepEqual(background.map((line) => line.text), ["t9", "t10", "t11", "t12", "t13", "t14", "t15", "t16", "t17", "t18"]);
+  // 2026-11-06 合并：backgroundLimit 缺省 = 全量未读（answer 轮语义）；设了才截最近 N 条
+  const full = backgroundFor(anchor, bucket, burst);
+  assert.deepEqual(full.map((line) => line.text), Array.from({ length: 18 }, (_, i) => `t${i + 1}`));
+  const capped = backgroundFor(anchor, bucket, burst, 10);
+  assert.deepEqual(capped.map((line) => line.text), ["t9", "t10", "t11", "t12", "t13", "t14", "t15", "t16", "t17", "t18"]);
 });
 
 test("有 id/序号时不拿「同人同话」误删背景；旧流水没有 id 才回退", () => {

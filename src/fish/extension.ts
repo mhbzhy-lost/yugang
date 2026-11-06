@@ -25,7 +25,7 @@ export function makeFishExtension(
     memoryKeyOf: (conversationId: string) => string | undefined;
     /** conversationId → 原始 chatKey：私有层 doc key（人格名@chatKey）由它现算 */
     chatKeyOf: (conversationId: string) => string | undefined;
-    /** 携话模式现取（热）：runtime 的「自由交流窗口」小节仅 next 注入（决策 18，T3 接线）。 */
+    /** 搭话模式现取（热）：runtime 的「自由活动群」小节仅 free（GROUPS 群）注入（决策 18）。 */
     engagementOf: (chatKey: string) => EngagementMode;
   },
 ): Extension {
@@ -34,7 +34,7 @@ export function makeFishExtension(
     tools: parts.tools,
     sections: [
       // 运行时协议：能力边界、输入信任、出口、错误处理、渐进加载；人格无关，不随人格换页。
-      // 两段搭话协议（自由交流窗口 / 自由活动群）按会话模式动态裁剪（见 qq/runtime-text.ts）
+      // 搭话协议段（自由活动群）按会话模式动态裁剪（见 qq/runtime-text.ts）
       section("runtime", (input) => runtimeTextOf(parts.prompts.runtime, parts.engagementOf(parts.chatKeyOf?.(String(input.conversationId)) ?? "")), { tag: false }),
       section("persona", () => persona, { tag: false }),
       // 工具目录：每次请求由 trusted manifest 现渲染，只列已启用工具的 name + 顶部摘要；
