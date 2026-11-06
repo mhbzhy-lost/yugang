@@ -70,11 +70,8 @@ fs_too_big: 文件太大
 # src/tools/watch/TOOL.md 的 ---tool-messages 块）
 watch_is_master: 你是我的主人，不入特别关注名单——名单只收群友
 
-# 合集与静默收图轮
+# 合集（静默收图轮已于 2026-11-06 退役：GIF 随 ambient 轮进上下文，双边标记引导收录）
 forward_collapsed: [转发合集（内容略）]
-gif_ingest_header: [GIF 收图任务]
-gif_ingest_task: 使用 look 工具读取 [m:{{id}}] 的 GIF 压缩图，判断是否值得收录。
-gif_ingest_outcome: 值得收录则使用 meme_add；不值得则保持沉默，不要使用 say_* 工具。
 
 # 新闻播报（外部信息源计划 Task E7，src/index.ts 10:30 job）：scheduled answer 轮的触发语与成品
 # 播报模板。news_broadcast_task 是触发语（下面紧接着宿主渲染好的整份播报文本，模型用 say_words
@@ -117,7 +114,7 @@ tool_catalog_line: - {{name}}：{{summary}}
 
 # 图片输入（decisions §5.4 fallback-image）：[图片#N inbound/…] 编号标签始终带路径——
 # 模型可直接把路径填给 draw / gpt_image 等吃图片引用的工具；读图本身走 inline 压缩图，
-# 不需要 look。inline 关闭（fallback 模式）或本轮仍有没附上压缩图的图（GIF、超限、缺文件）
+# 不需要 look。inline 开启时不加 look 提示（look 已机械锁死）；inline 关闭（fallback 模式）
 # 时，消息列表与附加段之后追加 image_look_hint 引导模型用 look 读。
 # 引用原文里的图走同一套：inline 时渲染 [图片#N inbound/…]（answer 轮与开窗批共用），
 # 否则保留 [图片 inbound/…] 供 look。
@@ -125,6 +122,14 @@ image_tag: [图片#{{n}} {{ref}}]
 image_compressed_tag: [图片#{{n}} 压缩图]
 quoted_image: [图片 {{ref}}]
 image_look_hint: [本轮要求] 使用 look 工具读取消息中的图片。
+
+# GIF inline（2026-11-06）：glm 网关对 image/gif 只解码首帧（实测），动图一律抽帧多 block。
+# 行内标签带帧数后缀；末尾标签声明帧序与同一性（社区实践：Qwen fps 语义 / MiniCPM image_id）。
+# image_gif_collect_hint 是 ambient 轮里直发 GIF 的双边收录标记（两边都说，不鼓励一直收图；
+# 静默收图轮已退役，ambient 轮就是收录现场）。
+image_gif_tag: [图片#{{n}} {{ref}} ·动图{{frames}}帧]
+image_gif_compressed_tag: [图片#{{n}} 压缩图 ·动图{{frames}}帧按时间顺序，同一张GIF]
+image_gif_collect_hint: 值得收就用meme_add收它，不值得就不收
 
 # 搭话（开窗）的零新增主动轮文案（2026-11-04 模型输入决策 §5.6，src/index.ts 消费）：
 # open 空窗不再由沉默/nudge/旧账/弹药触发，只在每个 open 窗一次掷开的 video.browseChance

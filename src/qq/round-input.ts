@@ -1,6 +1,5 @@
 /** 可导入的轮级输入拼装入口：index.ts 与权威模板机械测试共用，无副作用。 */
 import type { IncomingMessage } from "./onebot.ts";
-import { renderTemplate } from "../prompt/index.ts";
 import { renderForwardAttachment, renderMessageList, renderQuotedOriginal, type ForwardAttachment, type MessageTable, type ModelMessage, type QuotedMessage } from "./model-input.ts";
 
 export interface OpenMessage {
@@ -23,6 +22,7 @@ export function renderOpenQuotedText(
   items: readonly OpenMessage[],
   messages: MessageTable,
   imageNumbers?: ReadonlyMap<string, number>,
+  gifFrames?: ReadonlyMap<string, number>,
 ): string {
   const seen = new Set<string>();
   const lines: string[] = [];
@@ -31,7 +31,7 @@ export function renderOpenQuotedText(
     const id = String(item.quoted.id);
     if (seen.has(id)) continue;
     seen.add(id);
-    lines.push(renderQuotedOriginal(item.quoted, messages, imageNumbers));
+    lines.push(renderQuotedOriginal(item.quoted, messages, imageNumbers, gifFrames));
   }
   return lines.join("\n");
 }
@@ -77,15 +77,6 @@ export function renderBrowseOpportunity(messages: MessageTable): string {
     messages["ctx_browse_actions_header"] ?? "",
     messages["ctx_browse_actions_line"] ?? "",
   ].join("\n");
-}
-
-/** GIF 静默收图：标准消息列表 + 绑定真实消息 ID 的任务段。 */
-export function renderGifIngestInput(history: readonly ModelMessage[], target: ModelMessage, messages: MessageTable): string {
-  const task = renderTemplate(messages["gif_ingest_task"] ?? "", { id: String(target.messageId ?? "") });
-  const suffix = [messages["gif_ingest_header"] ?? "", task, messages["gif_ingest_outcome"] ?? ""]
-    .filter((line) => line.length > 0)
-    .join("\n");
-  return `${renderMessageList([...history, target], messages, "group")}\n\n${suffix}`;
 }
 
 /** answer 列表后的附加段统一顺序：最近合集 → 压缩图标签 → look 提示。 */

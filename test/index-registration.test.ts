@@ -25,7 +25,6 @@ test("index.ts 的消息链顺序就是契约", () => {
   const stages = [...source.matchAll(/^app\.use\((\w+)\);/gm)].map((match) => match[1]);
   assert.deepEqual(stages, [
     "normalizeInbound",
-    "ingestGifStage",
     "commandsStage",
     "gateStage",
     "groupWindowStage",

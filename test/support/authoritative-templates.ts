@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 const DECISIONS_RELATIVE = "docs/decisions/2026-11-04-model-input-templates.md";
 
 /** 矩阵必须覆盖的 scene 数量（decisions §10：16 个 scene，一个都不能少）。 */
-export const AUTHORITATIVE_SCENE_COUNT = 16;
+export const AUTHORITATIVE_SCENE_COUNT = 15;
 
 export interface AuthoritativeScene {
   scene: string;

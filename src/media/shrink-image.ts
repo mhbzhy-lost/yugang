@@ -12,7 +12,7 @@
  * 实现只用 macOS 自带 sips（本地开发机与生产 mini 都是 macOS，deploy 不装依赖）。
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -95,4 +95,21 @@ export function shrinkForModel(input: { file: string }): ShrinkResult {
     if (next.length <= TARGET_BYTES) return { ok: true, buffer: next, mimeType: "image/jpeg" };
   }
   return { ok: true, buffer: last, mimeType: "image/jpeg", floor: true };
+}
+
+/**
+ * inline 附图的统一取图（静态图）：shrinkForModel（≤50KB）。GIF 不在此处理——
+ * 网关对 image/gif 只解码首帧（2026-11-06 实测），动图一律走 gif-frames.ts 的
+ * 抽帧多 block 路径。压缩注入点可测试替换。
+ */
+export type InlineImageResult =
+  | { ok: true; buffer: Buffer; mimeType: string }
+  | { ok: false; reason: string };
+
+export function inlineImageOf(
+  file: string,
+  shrink: (input: { file: string }) => ShrinkResult = shrinkForModel,
+): InlineImageResult {
+  const shrunk = shrink({ file });
+  return shrunk.ok ? { ok: true, buffer: shrunk.buffer, mimeType: shrunk.mimeType } : { ok: false, reason: shrunk.reason };
 }

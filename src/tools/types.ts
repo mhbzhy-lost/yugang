@@ -170,6 +170,8 @@ export interface ToolPackageDeps {
   memeCooldownMs?: number | (() => number);
   /** fish.reminder 任务定义（宿主装配时注入）：remind 工具 add 时建任务用；缺省不注册该工具。 */
   reminderTask?: AnyTask;
+  /** 主模型直读图的宿主事实（vision==main 且白名单且未 /关看图）：look 与 meme_import 消费；缺省 = fallback。 */
+  inlineVisionOn?: () => boolean;
 }
 
 /** 工具包工厂：manifest + 依赖 → 注册对象；依赖不齐时返回 undefined，由 loader 跳过。 */
