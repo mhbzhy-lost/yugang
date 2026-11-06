@@ -45,6 +45,7 @@ import { createMemeAddTool } from "./meme_add/tool.ts";
 import { createMemeImportTool } from "./meme_import/tool.ts";
 import { createReactTool } from "./react/tool.ts";
 import { createReadTool } from "./read/tool.ts";
+import { createRemindTool } from "./remind/tool.ts";
 import { createRestartTool } from "./restart/tool.ts";
 import { createSayMediaTool } from "./say_media/tool.ts";
 import { createSayMemeTool } from "./say_meme/tool.ts";
@@ -74,6 +75,7 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
   meme_import: createMemeImportTool,
   react: createReactTool,
   read: createReadTool,
+  remind: createRemindTool,
   restart: createRestartTool,
   say_media: createSayMediaTool,
   say_meme: createSayMemeTool,

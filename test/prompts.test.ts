@@ -18,6 +18,7 @@ import { auditPrompts, loadPrompts, parseMessageTable, renderTemplate } from "..
 import { loadToolManifests, parseToolManifest, toolFullDescription } from "../src/tools/manifest.ts";
 import { mergeToolMessages, DISABLED_TOOL_PACKAGES } from "../src/tools/loader.ts";
 import { scanDir, scanSource } from "../src/prompt/lint.ts";
+import { makeReminderTask } from "../src/tools/remind/task.ts";
 import { REJECTION_CODES } from "../src/egress/policy.ts";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -158,6 +159,8 @@ test("messages.md 里没有死文案，tools/ 里没有死文件", async () => {
     emit: () => {},
     react: () => {},
     master: "1",
+    // remind 工具的底座任务（宿主没传就不注册；这里给个最小 host 让它进工具面）
+    reminderTask: makeReminderTask({ messages: () => ({}), drain: async () => {}, log: () => {} }),
   });
 
   try {

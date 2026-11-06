@@ -42,6 +42,7 @@ import {
 } from "../qq/debounce.ts";
 import { replaceWatched, type WatchedMap } from "../qq/watch-state.ts";
 import { MEMORY_ENGAGE_KIND, type CompactResult } from "../compact.ts";
+import { makeReminderTask } from "../tools/remind/task.ts";
 import type { RoundKind, RoundTrigger } from "../tools/types.ts";
 import { setLookDisabled } from "../tools/look/tool.ts";
 import { clearMemeImportRound } from "../tools/meme_import/shared.ts";
@@ -483,6 +484,15 @@ export async function bootRuntime(): Promise<void> {
   // （sdUrl 存在时见启动处的邻居保温定时器）
   tagsCsv: join(HOME, "danbooru.csv"),
   master: config.master,
+  // 定时任务底座：fish.reminder durable task（pi-durable 的 sleepUntil 定时唤醒，
+  // 到点往本会话注入一轮）。宿主回调懒取：messages/drain 都在 openFish 之后才可用。
+  reminderTask: makeReminderTask({
+    messages: () => fish.prompts.messages,
+    drain: async () => {
+      await drainLoop();
+    },
+    log: (message) => console.log(message),
+  }),
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
   silentOf: (roundId) => silentRounds.has(String(roundId)),
   // 搭话模式（决策 18 + 自由活动模式）：next 保留「自由交流窗口」段、free 保留「自由活动群」段、

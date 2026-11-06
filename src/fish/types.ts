@@ -5,6 +5,7 @@
  */
 import type { Models } from "@earendil-works/pi-ai/models";
 import type {
+  AnyTask,
   Conversation,
   ConversationId,
   Extension,
@@ -76,6 +77,11 @@ export interface FishOptions {
   chatKeyOf?: (conversationId: string) => string | undefined;
   /** conversationId → 当前人格的鱼昵称与真实 self QQ，供换页历史统一消息行使用。 */
   selfOf?: (conversationId: string) => { nickname: string; userId: string };
+  /**
+   * fish.reminder 任务定义（宿主用 makeReminderTask 造好传入）：同一个对象进
+   * registry（Harness 能跑）与 remind 工具的 deps（add 时建任务）。缺省 = 无定时任务能力。
+   */
+  reminderTask?: AnyTask;
   /**
    * 主动 @ 的身份闸：由宿主机械提供（私聊 = not_group；群内白名单 = allow），按轮类型
    * （决策 7）：answer/legacy 轮 userId 是本轮触发者；ambient/injection 环境轮对每个

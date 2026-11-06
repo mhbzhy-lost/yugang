@@ -3,7 +3,7 @@
  * （2026-11-05 从 harness.ts 拆出）。
  */
 import { mkdirSync } from "node:fs";
-import { createRegistry, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
+import { createRegistry, defineExtension, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { ToolManifest } from "../tools/types.ts";
 import type { FishBase } from "./base.ts";
 import { makeFishExtension } from "./extension.ts";
@@ -60,6 +60,11 @@ export function installExtensions(
   const registry = createRegistry();
   registry.install(fishExtension);
   for (const extension of personaExtensions.values()) registry.install(extension);
+  // fish.reminder 任务定义单独一个小 extension 装：任务按 name 全局解析（不依赖会话
+  // 选择哪个 extension），这里只解决「Harness 的 registry 认得这个 kind」。
+  if (options.reminderTask) {
+    registry.install(defineExtension({ name: "fish:reminders", tasks: [options.reminderTask] }));
+  }
 
   mkdirSync(workspaceRoot, { recursive: true });
   mkdirSync(mediaRoot, { recursive: true });

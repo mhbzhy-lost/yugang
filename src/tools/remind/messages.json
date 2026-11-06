@@ -1,0 +1,13 @@
+{
+  "remind_added": "已设好：{{time}} {{note}}（编号 {{id}}，到点我会开口提醒）",
+  "remind_list_header": "本会话还活着的提醒：",
+  "remind_list_item": "{{id}}. {{when}}{{left}} — {{note}}",
+  "remind_list_empty": "现在没有任何待触发的提醒。",
+  "remind_cancel_done": "已取消 {{id}}，到点不会再提。",
+  "remind_cancel_missing": "没找到这个编号的活提醒，先用 list 看看编号。",
+  "remind_note_bad": "note 要在 1 到 120 字之间，把要做的事说清楚。",
+  "remind_time_bad": "时间没看懂：at 要写成 YYYY-MM-DD HH:MM，或给 in_minutes（正整数分钟）。",
+  "remind_time_past": "这个时间已经过去了，设个将来的时间。",
+  "remind_time_far": "最多只能设 7 天内的提醒，更远的到时候再说。",
+  "remind_cap": "本会话已经有 {{cap}} 条活着的提醒，先取消几条再来。"
+}
