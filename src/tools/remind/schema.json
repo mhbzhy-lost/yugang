@@ -7,13 +7,13 @@
         "enum": ["add", "list", "cancel"],
         "description": "add=设提醒；list=看活着的提醒；cancel=取消"
       },
-      "at": {
+      "clock_time": {
         "type": "string",
-        "description": "add 用：触发时间，本地时间 YYYY-MM-DD HH:MM（24小时制）；与 in_minutes 二选一，最长 7 天"
+        "description": "add 用：钟面时间 HH:MM（24 小时制），指今天这个时刻；已过去的话自动顺延到明天同一时刻。与 offset_minutes 二选一"
       },
-      "in_minutes": {
+      "offset_minutes": {
         "type": "number",
-        "description": "add 用：多少分钟后触发（1 到 10080）；与 at 二选一"
+        "description": "add 用：从现在起多少分钟后触发（1 到 10080）；与 clock_time 二选一，最稳"
       },
       "note": {
         "type": "string",

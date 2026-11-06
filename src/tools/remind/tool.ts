@@ -18,8 +18,10 @@ import { REMIND_CAP, REMIND_MAX_AHEAD_MS, REMIND_NOTE_MAX, RemindersDoc } from "
 
 interface RemindArgs {
   action: "add" | "list" | "cancel";
-  at?: string;
-  in_minutes?: number;
+  /** 钟面时间 HH:MM（今天，已过自动顺延明天）；工具内部换算，模型不碰当前时间。 */
+  clock_time?: string;
+  /** 从现在起 N 分钟后（1–10080）；「现在」由宿主注入，模型不碰当前时间。 */
+  offset_minutes?: number;
   note?: string;
   /** 谁让设的（昵称，add 用）：到点提醒里说明出处。 */
   by?: string;
@@ -27,12 +29,17 @@ interface RemindArgs {
   id?: string;
 }
 
-/** 本地时间 YYYY-MM-DD HH:MM → epoch ms；解析失败返回 undefined。 */
-function parseLocalAt(raw: string): number | undefined {
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/.exec(raw.trim());
+/** 钟面时间 HH:MM → 今天的 epoch ms；已过（比 now 早超 1 分钟）顺延到明天同一时刻。 */
+function clockAt(raw: string, now: number): number | undefined {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(raw.trim());
   if (!m) return undefined;
-  const at = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])).getTime();
-  return Number.isFinite(at) ? at : undefined;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return undefined;
+  const d = new Date(now);
+  let at = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, min).getTime();
+  if (at < now + 60_000) at += 86_400_000;
+  return at;
 }
 
 /** 触发时间换算成回执/清单里可读的本地时间串。 */
@@ -64,18 +71,18 @@ export function createRemindTool(manifest: ToolManifest, deps: ToolPackageDeps):
         }
         const by = (args.by ?? "").trim().slice(0, 24);
         const repeat: "none" | "daily" | "weekly" = args.repeat ?? "none";
-        // 两种给时方式：at 绝对本地时间 / in_minutes 相对分钟
+        // 时间语义只有两种，当前时间由宿主注入（deps.now），模型侧不存在「传当前时间」的入口：
+        //   clock_time  钟面 HH:MM（今天，已过顺延明天）——「固定什么时候提醒」
+        //   offset_minutes  从现在起 N 分钟——「当前时间 + offset」
         let at: number | undefined;
-        if (args.at !== undefined) at = parseLocalAt(args.at);
-        else if (args.in_minutes !== undefined) {
-          const mins = Number(args.in_minutes);
+        if (args.clock_time !== undefined) at = clockAt(args.clock_time, now);
+        else if (args.offset_minutes !== undefined) {
+          const mins = Number(args.offset_minutes);
           if (Number.isFinite(mins) && mins > 0) at = now + Math.round(mins * 60_000);
         }
         if (at === undefined) throw new Error(messages["remind_time_bad"] ?? "remind_time_bad");
         if (at <= now + 30_000) throw new Error(messages["remind_time_past"] ?? "remind_time_past");
-        if (args.at !== undefined && at - now > REMIND_MAX_AHEAD_MS) {
-          throw new Error(messages["remind_time_far"] ?? "remind_time_far");
-        }
+        if (at - now > REMIND_MAX_AHEAD_MS) throw new Error(messages["remind_time_far"] ?? "remind_time_far");
 
         // 上限校验 + 建任务 + 进清单：同一个 commit，原子
         const id = await api.commit(async (tx) => {
