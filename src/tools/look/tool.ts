@@ -75,6 +75,12 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
     callers: ["model"],
     parameters: manifestParameters<LookArgs>(manifest),
     execute: async (args, api, context) => {
+      // 机械锁（2026-11-06 主人裁定）：主模型直读模式下图全部 inline 附上（普通轮 ≤8 张、
+      // 收图轮、导入轮），look 没有任何剩余场景，一律拒绝——prompt 引导 + 硬边界双保险。
+      // fallback 模式（vision≠main）与本开关无关，照旧走 look 转述。
+      if (deps.inlineVisionOn?.()) {
+        throw new Error(deps.prompts.messages["look_inline_locked"] ?? "look_inline_locked");
+      }
       if (lookDisabled) {
         return { output: [{ type: "text", text: deps.prompts.messages["look_cmd_off"] ?? "看图已关" }] };
       }

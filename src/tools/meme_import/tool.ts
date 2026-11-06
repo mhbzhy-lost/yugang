@@ -17,10 +17,15 @@ import { join, resolve } from "node:path";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { DEFAULT_LIMITS } from "../../egress/policy.ts";
 import { checkMemeSource, type MemeSourceCode } from "../../media/meme-store.ts";
+import { extractGifFrames } from "../../media/gif-frames.ts";
+import { inlineImageOf } from "../../media/shrink-image.ts";
 import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { MEME_IMPORT_MAX, registerMemeImportRound } from "./shared.ts";
+import { MEME_IMPORT_MAX, memeImportMarkLooked, registerMemeImportRound } from "./shared.ts";
+
+/** inline 模式每批登记（= 附图）张数：50 张一口气塞一轮太重，12 张一批 cursor 续。 */
+const INLINE_IMPORT_BATCH = 12;
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface MemeImportArgs {
@@ -56,7 +61,11 @@ export function createMemeImportTool(manifest: ToolManifest, deps: ToolPackageDe
       const { valid, skipped } = scan;
       const cursor = (args.cursor ?? "").trim();
       const rest = cursor.length > 0 ? valid.filter((name) => name > cursor) : valid;
-      const batch = rest.slice(0, MEME_IMPORT_MAX);
+      // inline 模式所见即所登记：每批只登记工具结果附得下的张数，cursor 续批
+      // （50 张 × 每张 ≤50KB 一口气塞进一轮太重）。fallback 模式维持 50/批 + 逐张 look。
+      const inline = deps.inlineVisionOn?.() ?? false;
+      const batchSize = inline ? INLINE_IMPORT_BATCH : MEME_IMPORT_MAX;
+      const batch = rest.slice(0, batchSize);
       const nextCursor = rest.length > batch.length ? batch[batch.length - 1] : undefined;
       const refs = batch.map((name) => `meme-inbox/${name}`);
       if (refs.length > 0) registerMemeImportRound(String(round), refs);
@@ -72,12 +81,14 @@ export function createMemeImportTool(manifest: ToolManifest, deps: ToolPackageDe
       } else if (refs.length === 0) {
         lines.push(deps.prompts.messages["meme_import_empty"] ?? "meme_import_empty");
       } else {
-        lines.push(
-          renderTemplate(deps.prompts.messages["meme_import_list"] ?? "{{count}}", {
-            count: String(refs.length),
-          }),
-        );
-        // refs 是数据不是文案：一行一个，让模型能逐个拿来当 look/meme_add 的参数
+        // 两模式的清单头文案分开（inline：图已附上；fallback：引导逐张 look）
+        const listLine = inline
+          ? deps.prompts.messages["meme_import_list_inline"]
+          : deps.prompts.messages["meme_import_list"];
+        lines.push(renderTemplate(listLine ?? "{{count}}", {
+          count: String(refs.length),
+        }));
+        // refs 是数据不是文案：一行一个，让模型能逐个拿来当 meme_add 的参数
         lines.push(refs.join("\n"));
       }
       if (nextCursor !== undefined) {
@@ -98,7 +109,30 @@ export function createMemeImportTool(manifest: ToolManifest, deps: ToolPackageDe
       }
       const text = lines.join("\n");
       console.log(`[鱼缸] meme_import round=${String(round)} 登记 ${refs.length} 张，跳过 ${skipped.length} 个`);
-      return { output: [{ type: "text", text }] };
+      // inline 模式：清单图直接作为本工具结果的 image blocks 附上（模型当场看完），
+      // 全部记「已看过」——meme_add 的机械校验零改动（语义从「look 过」扩为「直接见过」）。
+      // 读不了的图（压缩失败）不附也不记，meme_add 会拒——模型只给见过的打标。
+      // GIF 抽 2 帧（打标判断够用、控批量；格式声明见 meme_import_inline_note）。
+      if (!inline || refs.length === 0) return { output: [{ type: "text", text }] };
+      const textFirst = [text, deps.prompts.messages["meme_import_inline_note"] ?? ""]
+        .filter((s) => s.length > 0)
+        .join("\n");
+      const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      for (const ref of refs) {
+        const full = join(inboxDir, ref.slice("meme-inbox/".length));
+        if (ref.toLowerCase().endsWith(".gif")) {
+          const frames = extractGifFrames(full, 2);
+          for (const frame of frames.frames) images.push({ type: "image", data: frame, mimeType: "image/jpeg" });
+          if (frames.frames.length > 0) memeImportMarkLooked(String(round), ref);
+          continue;
+        }
+        const image = inlineImageOf(full);
+        if (image.ok) {
+          images.push({ type: "image", data: image.buffer.toString("base64"), mimeType: image.mimeType });
+          memeImportMarkLooked(String(round), ref);
+        }
+      }
+      return { output: [{ type: "text", text: textFirst }, ...images] };
     },
   });
 }

@@ -38,7 +38,7 @@ import {
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
 const TOOL_ROOT = fileURLToPath(new URL("../src/tools/", import.meta.url));
 
-const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 7)]);
+const PNG = readFileSync(fileURLToPath(new URL("./fixtures/dot.png", import.meta.url)));
 const GIF = Buffer.concat([Buffer.from("GIF89a"), Buffer.alloc(64, 3)]);
 const JUNK = Buffer.from("这根本不是图片，只是一段文本内容而已");
 
@@ -54,7 +54,7 @@ function fakeApi(conversationId: string, roundId: string, extra: Record<string, 
   } as never;
 }
 
-function setup(over: { master?: string; userId?: number; maxBytes?: number } = {}) {
+function setup(over: { master?: string; userId?: number; maxBytes?: number; inline?: boolean } = {}) {
   const mediaRoot = mkdtempSync(join(tmpdir(), "yg-import-"));
   for (const dir of ["inbound", "memes", "meme-inbox", "gen"]) mkdirSync(join(mediaRoot, dir), { recursive: true });
   const prompts = loadPrompts(PROMPTS);
@@ -79,6 +79,7 @@ function setup(over: { master?: string; userId?: number; maxBytes?: number } = {
     master,
     triggerOf,
     limits: { ...DEFAULT_LIMITS, mediaRoot },
+    ...(over.inline ? { inlineVisionOn: () => true } : {}),
   });
   const cappedLimits = { ...DEFAULT_LIMITS, mediaRoot, ...(over.maxBytes === undefined ? {} : { maxMediaBytes: over.maxBytes }) };
   const memeAdd = createMemeAddTool(manifests.get("meme_add")!, {
@@ -94,6 +95,7 @@ function setup(over: { master?: string; userId?: number; maxBytes?: number } = {
     master,
     triggerOf,
     limits: cappedLimits,
+    ...(over.inline ? { inlineVisionOn: () => true } : {}),
   })!;
   const say = createSayMediaTool(manifests.get("say_media")!, { limits: { ...DEFAULT_LIMITS, mediaRoot }, prompts })!;
   const conversationId = `conv-${++seq}`;
@@ -381,6 +383,37 @@ test("逐张配额：清单 1 张就是 1 张，20 张按 20，51 张按 50 + cu
 
     clearMemeImportRound("round-8");
     assert.equal(memeImportLookLimit("round-8"), undefined, "清单不跨轮");
+  } finally {
+    cleanup();
+  }
+});
+
+test("inline 模式：登记即附图 + 全部记已看过，批次缩到 12；look 被机械锁死", async () => {
+  const { mediaRoot, memeImport, memeAdd, look, conversationId, cleanup } = setup({ inline: true });
+  try {
+    // 15 张：inline 批次 12，cursor 提示续批
+    for (let i = 0; i < 15; i++) writeInbox(mediaRoot, `h${String(i).padStart(2, "0")}.png`, PNG);
+    const api = fakeApi(conversationId, "round-inline");
+    const result = (await memeImport.execute({} as never, api as never, {} as never)) as {
+      output: Array<{ type: string; text?: string; data?: string }>;
+    };
+    // 所见即所登记：12 张静态图全部附成 image block，text 在最前
+    assert.equal(result.output.length, 13);
+    assert.equal(result.output[0].type, "text");
+    assert.match(result.output[0].text ?? "", /图已按顺序附在下面/);
+    assert.equal(result.output.filter((o) => o.type === "image").length, 12);
+    assert.match(result.output[0].text ?? "", /还有 4 张/);
+    // 附过的全部记已看过：meme_add 直接放行（不需要 look）
+    assert.equal(memeImportRefs("round-inline").length, 12);
+    for (const ref of memeImportRefs("round-inline")) assert.ok(memeImportLooked("round-inline", ref));
+    const add = await textOf(memeAdd, { ...CAPTION, ref: "meme-inbox/h00.png" }, api);
+    assert.ok(add.length > 0, "meme_add 放行");
+    // look 已被机械锁死（inline 模式）
+    await assert.rejects(
+      () => look.execute({ ref: "inbound/a.png" } as never, api as never, {} as never),
+      /不需要 look|look_inline_locked/,
+    );
+    clearMemeImportRound("round-inline");
   } finally {
     cleanup();
   }

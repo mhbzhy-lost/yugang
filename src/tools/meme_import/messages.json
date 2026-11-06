@@ -5,6 +5,8 @@
   "meme_import_denied": "meme-inbox 打不开（权限不对或者不是目录），先检查一下再导入",
   "meme_import_linkdir": "meme-inbox 本身是个符号链接，那就不算固定目录了，先改成真目录",
   "meme_import_list": "这一批登记了 {{count}} 张，只能逐张 look、逐张用 meme_add 收，别靠文件名猜内容：",
+  "meme_import_list_inline": "这一批登记了 {{count}} 张，图已按顺序附在下面，逐张看完逐张用 meme_add 收，别靠文件名猜内容：",
+  "meme_import_inline_note": "（上面的清单顺序与附图顺序一一对应；动图是原始 GIF，静态图是压缩图）",
   "meme_import_more": "目录里还有 {{rest}} 张，这一批处理完再调一次 meme_import，cursor 填 {{cursor}}",
   "meme_import_skipped": "跳过了 {{count}} 个不能收的：{{items}}"
 }
