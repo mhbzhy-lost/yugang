@@ -140,7 +140,7 @@ test("engage.byGroup：按群覆盖校验与运行侧合并（engageSettingsOf�
   const dir = mkdtempSync(join(tmpdir(), "yugang-bygroup-"));
   const path = join(dir, "fish.config.json");
   const write = (value: unknown): void => writeFileSync(path, JSON.stringify(value));
-  const load = () => loadFishConfig({ path, env: {} });
+  const load = () => loadFishConfig({ path });
 
   write({ engage: { freeSeconds: 60, freeBrowseChance: 0.03, freeBatchMax: 50, byGroup: {
     "174408629": { freeSeconds: 1200, freeBatchMax: 20, answerContextSize: 20 },
