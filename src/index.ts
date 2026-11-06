@@ -3,11 +3,12 @@
  *
  * 顺序就是行为契约（自上而下）：
  *   归一（末条自言/原文/卡片/流水/昵称/chatlog/bypass）
- *   → 动图自动收（fire-and-forget）
  *   → 主人 `/` 指令（闸前机械通道）
  *   → 规则闸（白名单 / @ / 开窗）
  *   → 群消息：shard 或 10 秒窗口
  *   → 私聊：即时提交
+ *
+ * （动图自动收的独立阶段已于 2026-11-06 退役：GIF 随 ambient 轮进上下文。）
  *
  * debounce 攒满后的整组提交走 app 的第二入口（onFlush）；生命周期（开窗、新闻、
  * 连 OneBot、恢复、横幅、退出冲刷）走 onStart/onStop。具体实现在 src/app/runtime.ts，
@@ -24,7 +25,6 @@ import {
   flushBurst,
   gateStage,
   groupWindowStage,
-  ingestGifStage,
   installSignals,
   listenMessages,
   normalizeInbound,
@@ -44,7 +44,6 @@ const app = createApp<MessageCtx, PendingBurst>();
 
 // —— 入站消息链 ——
 app.use(normalizeInbound);
-app.use(ingestGifStage);
 app.use(commandsStage);
 app.use(gateStage);
 app.use(groupWindowStage);

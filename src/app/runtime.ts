@@ -28,7 +28,7 @@ import { OneBot, orderByArrival, type IncomingMessage, type OneBotSendFailure } 
 import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "../qq/voice-route.ts";
 import { createGate, type GateDecision } from "../qq/gate.ts";
 import { isCurfewAt } from "../qq/curfew.ts";
-import { mentionTargetsOf, type ForwardAttachment, type ModelMessage } from "../qq/model-input.ts";
+import { gifTagOf, imageTagOf, mentionTargetsOf, type ForwardAttachment, type ModelMessage } from "../qq/model-input.ts";
 import { engageGroupsIncludes, createEngageNext, type EngageBacklogItem, type EngageShardItem } from "../qq/engage-next.ts";
 import { engageModeOf } from "../qq/engage-mode.ts";
 import {
@@ -46,7 +46,6 @@ import { makeReminderTask } from "../tools/remind/task.ts";
 import type { RoundKind, RoundTrigger } from "../tools/types.ts";
 import { setLookDisabled } from "../tools/look/tool.ts";
 import { clearMemeImportRound } from "../tools/meme_import/shared.ts";
-import { hasMemeMd5, md5OfFile } from "../media/meme-store.ts";
 import { shrinkForModel } from "../media/shrink-image.ts";
 import { absorbSecrets } from "../egress/absorb.ts";
 import { resetRun, resetLook, ledgerOf } from "../egress/ledger.ts";
@@ -58,7 +57,7 @@ import { createUsageLedger, sumUsage } from "../records/usage.ts";
 import { bypassAllowed, splitBypass, BYPASS_RE } from "../qq/bypass.ts";
 import { ChatsDoc, MemoryPendingDoc, WatchDoc } from "../store.ts";
 import { renderTemplate } from "../prompt/index.ts";
-import { MEMORY_GIF_KIND, MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "../memory/index.ts";
+import { MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "../memory/index.ts";
 import { memoryKeyOf, pushScope, shiftScope } from "../memory/scope.ts";
 import { beginNewsBroadcastRound, endNewsBroadcastRound, newsBroadcastDelivered, OutboundEntry, stripOutboundLinks, type OutboundPayload } from "../tools/say-shared.ts";
 import { createConfigLoader } from "../fish-config.ts";
@@ -80,7 +79,7 @@ import { clearSeenLinks, recordSeenLinks } from "../egress/seen-links.ts";
 import { shouldSendWorkingReceipt } from "../working-receipt.ts";
 import type { Middleware } from "./app.ts";
 import { planInlineImages, planRoundImages, rewriteRoundForwardImages } from "../qq/round-images.ts";
-import { appendAnswerRules, appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderGifIngestInput, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
+import { appendAnswerRules, appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
 import { NEWS_BROADCAST_MAX_CHARS, renderNewsBroadcast, renderNewsTask, type NewsDigest, type NewsDigestItem, type NewsDigestSection } from "../external/news-broadcast.ts";
 
 // 每条入站消息的原始文本（卡片渲染 / bypass 剥离之前取）：记忆 entry 只存群友原话，
@@ -112,9 +111,6 @@ const ctx = BACKGROUND_CONTEXT;
 
 // 可热更新的行为配置：fish.config.json > .env > 内置默认
 const fishConfig = createConfigLoader();
-
-// 收表情包等后台轮：这一轮只允许调工具，不许说话（say_* 会拒绝）
-const silentRounds = new Set<string>();
 
 // 会话 id → 映射键（chatKey 或 chatKey#人格）。chatKeys 存的是剥离人格的 base 键
 // （emit 要解析数字 id），人格相关的配置（音色）必须走这张表，否则重启后
@@ -261,13 +257,11 @@ function markSent(key: string): boolean {
 const chatKeys = new Map<string | number, string>();
 // 换页（自动 / 手动 `/压缩`）中的会话：期间不受理新提交，被@只回机械忙碌语
 const compacting = new Set<string>();
-// 静默收图轮在跑的会话：同一会话不许并发提交 / 不许换页（两条路径共用 conversationBusy）
-const ingestRounds = new Set<string>();
-// 会话忙（换页 / 静默收图轮 / next 在途轮）的判定：起新提交与起换页前都要先看它。
+// 会话忙（换页 / next 在途轮）的判定：起新提交与起换页前都要先看它。
 // 在途轮登记见 nextInFlight（shard 到期与开窗注入据此退避，同一会话绝不并发提交）。
 function conversationBusy(id: string | number): boolean {
   const key = String(id);
-  return compacting.has(key) || ingestRounds.has(key) || nextInFlight.has(key);
+  return compacting.has(key) || nextInFlight.has(key);
 }
 
 // ── 携话 next（开窗两态）的轮级互斥（决策 8 + shard 修订）─────────────────
@@ -403,6 +397,9 @@ const workingSent = new Map<string, Set<string>>();
 // 零 say_* 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
 const burstMustAnswer = new Map<string, boolean>();
 
+/** 入站文本里 inline 图引用的机械模式（与 round-images.ts 的 IMAGE_REF_PATTERN 同式）。 */
+const IMAGE_REF_PATTERN = /\[图片 (inbound\/[^\]\s]+)\]/g;
+
 /** 与 debouncer 一致的窗口键：群 + 发送者唯一确定一个待定组。 */
 function windowKey(chatKey: string, userId: number): string {
   // 与 debouncer 一致的窗口键：群 + 发送者唯一确定一个待定组（拼接式：模板内含 \u0000
@@ -493,8 +490,9 @@ export async function bootRuntime(): Promise<void> {
     },
     log: (message) => console.log(message),
   }),
+  // 主模型直读图的事实（每轮现算）：look 机械锁死 / meme_import 结果附图都以它为准
+  inlineVisionOn: () => inlineVisionOn(),
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
-  silentOf: (roundId) => silentRounds.has(String(roundId)),
   // 搭话模式（决策 18 + 自由活动模式）：next 保留「自由交流窗口」段、free 保留「自由活动群」段、
   // legacy（私聊 / worker / 群外会话）两段都裁掉；判定与自检脚本共用 engageModeOf
   engagementOf: (chatKey: string) => engageModeOf(chatKey, fishConfig().config.engage.freeGroups, config.groups),
@@ -745,92 +743,11 @@ async function conversationFor(chatKey: string): Promise<Conversation> {
  * 这里只负责把 flush / submit 接上，并做轮级清账与记账。
  */
 /**
- * 动图自动收：gif 进群时起一个静默轮，把前 10 条上下文一起给鱼，
- * 由它判断这张图值不值得当表情包、调用 meme_add 打标入库。
- *
- * 边界：只认 .gif（白名单，避免把截图/照片也拖进模型）；md5 已在库里的跳过。
+ * 动图自动收（2026-11-06 裁定：静默收图轮整体退役）：GIF 不再起专门轮次，
+ * 改随 ambient 轮（自由拍 / open 窗 shard）进上下文——批内直发图同样参与
+ * inline 编号（GIF 抽帧多 block），消息行带双边标记「值得收就用 meme_add
+ * 收它，不值得就不收」，收不收由鱼当轮判断；md5 去重仍在 meme_add 入库时兜底。
  */
-async function maybeIngestGif(msg: IncomingMessage, bucket: RecentChatMessage[]): Promise<void> {
-  if (!msg.chatKey.startsWith("qq:group:")) return;
-  if (!config.groups.length || !config.groups.includes(String(msg.groupId))) return;
-  if (msg.messageId === undefined) return;
-  const gifs = msg.images.filter((img) => typeof img.ref === "string" && img.ref.toLowerCase().endsWith(".gif"));
-  if (gifs.length === 0) return;
-
-  for (const gif of gifs) {
-    const full = resolve(config.mediaRoot, gif.ref);
-    let md5: string;
-    try {
-      md5 = md5OfFile(full);
-    } catch {
-      continue;
-    }
-    // 库里已有同一张（按 md5）就不再跑模型（读索引与 meme_add 共用同一个 helper）
-    if (hasMemeMd5(config.mediaRoot, md5)) return;
-
-    const conv = await conversationFor(msg.chatKey);
-    // 会话正被换页 / 另一轮收图占着：不提交（换页会把活跃轮吃掉，两轮抢同一个会话更糟）
-    if (conversationBusy(conv.id)) {
-      console.log(`[鱼缸] 收图轮跳过 ${gif.ref}：会话忙`);
-      return;
-    }
-    const prior = bucket.slice(0, -1).slice(-10);
-    const history = prior.map((line): ModelMessage => ({
-      ...(line.messageId !== undefined ? { messageId: line.messageId } : {}),
-      userId: String(line.userId),
-      nickname: line.nickname,
-      text: line.text,
-      mentionsBot: false,
-      replyIds: [],
-      master: String(line.userId) === config.master,
-      watched: watchedByChat.get(baseChatKey(msg.chatKey))?.has(String(line.userId)) === true,
-      ...(line.mentionTargets !== undefined ? { mentionTargets: line.mentionTargets } : {}),
-      ...((line.quotedAuthor ?? line.quoted?.nickname) !== undefined
-        ? { quotedAuthor: line.quotedAuthor ?? line.quoted!.nickname }
-        : {}),
-      ...(line.quotedAuthorIsSelf === true || line.quoted?.fromSelf === true ? { quotedAuthorIsSelf: true } : {}),
-    }));
-    const target: ModelMessage = {
-      messageId: msg.messageId,
-      userId: String(msg.userId),
-      nickname: msg.nickname,
-      text: msg.text,
-      mentionsBot: msg.mentionsBot,
-      replyIds: [...msg.replyIds],
-      master: String(msg.userId) === config.master,
-      watched: watchedByChat.get(baseChatKey(msg.chatKey))?.has(String(msg.userId)) === true,
-      ...(mentionTargetsOf(msg.mentions) !== undefined ? { mentionTargets: mentionTargetsOf(msg.mentions) } : {}),
-      ...(msg.quoted ? { quoted: msg.quoted } : {}),
-      ...(msg.forward ? { forward: msg.forward } : {}),
-    };
-    const content = renderGifIngestInput(history, target, fish.prompts.messages);
-    ingestRounds.add(String(conv.id));
-    try {
-      // 留痕：这一轮是收图轮，起止都打日志，否则「为什么不收」永远查不到
-      console.log(`[鱼缸] 收图轮开始 ${gif.ref} md5=${md5.slice(0, 10)}`);
-      // 收图任务不是群友原话：专用 entry kind（fish.gif_ingest），不 pushScope，
-      // 也不进 renderMemoryTranscript——不能触发记忆召回或抽取
-      const submission = await conv.submit({ type: "input", content, entry: { kind: MEMORY_GIF_KIND } }, ctx);
-      const roundId = String(submission.id);
-      silentRounds.add(roundId);
-      try {
-        const settled = await submission.wait(ctx);
-        const added = hasMemeMd5(config.mediaRoot, md5);
-        const reason = settled.status === "done" ? (added ? "已入库" : "鱼判断不值得收") : `${settled.status}`;
-        console.log(`[鱼缸] 收图轮结束 ${gif.ref} → ${reason}`);
-      } finally {
-        silentRounds.delete(roundId);
-        clearMemeImportRound(roundId);
-      }
-    } catch (error) {
-      console.error("[鱼缸] 收图轮失败", error instanceof Error ? error.message : error);
-    } finally {
-      ingestRounds.delete(String(conv.id));
-      await drainLoop();
-    }
-    return; // 一条消息只收一张
-  }
-}
 
 
 /** 会话忙（换页 / 收图轮）时：被@的给一句机械回复（同样走 outbox 唯一出口），其余直接等下一轮。 */
@@ -1160,7 +1077,7 @@ async function submitRound(input: {
  * 摘要失败降级机械换页成功时在这里打告警（文案在 prompt/messages.md，不打印内容）。
  */
 async function compactWithGuard(conv: Conversation, force = false, chatKey = ""): Promise<CompactResult> {
-  if (ingestRounds.has(String(conv.id))) return { compacted: false };
+
   compacting.add(String(conv.id));
   try {
     const result = await fish.compact(conv, force);
@@ -1195,7 +1112,7 @@ export async function flushBurst(burst: PendingBurst): Promise<void> {
   const conv = (burst.binding as Conversation | undefined) ?? (await conversationFor(anchor.chatKey));
 
   // 换页 / 收图轮进行中：不再受理新提交（根治换页竞态把活跃轮吃掉的问题）
-  if (compacting.has(String(conv.id)) || ingestRounds.has(String(conv.id))) {
+  if (compacting.has(String(conv.id))) {
     console.log(`[鱼缸] ${anchor.chatKey} 会话忙，丢弃待定组 ${burst.messages.length}`);
     await sendBusyReplies(conv, burst.messages.filter((m) => m.mentionsBot).map((m) => m.messageId));
     return;
@@ -1209,7 +1126,7 @@ export async function flushBurst(burst: PendingBurst): Promise<void> {
     }
     console.log(`[鱼缸] ${anchor.chatKey} 在途环境轮，@ 轮排队等待`);
     const cleared = await waitAmbientClear(conv.id, ANSWER_WAIT_MS);
-    if (!cleared || compacting.has(String(conv.id)) || ingestRounds.has(String(conv.id)) || hasAmbientInFlight(conv.id)) {
+    if (!cleared || compacting.has(String(conv.id)) || hasAmbientInFlight(conv.id)) {
       console.log(`[鱼缸] ${anchor.chatKey} @ 轮等待未清，转忙碌语`);
       await sendBusyReplies(conv, burst.messages.filter((m) => m.mentionsBot).map((m) => m.messageId));
       return;
@@ -1312,7 +1229,7 @@ function engageBacklogOf(chatKey: string, afterSeq: number | undefined): readonl
   return (recent.get(chatKey) ?? [])
     .filter((m) => m.arrivalSeq !== undefined && m.arrivalSeq > afterSeq)
     .filter((m) => !((m.messageId !== undefined && pendingIds.has(String(m.messageId))) || (m.arrivalSeq !== undefined && pendingSeqs.has(m.arrivalSeq))))
-    .filter((m) => !m.text.startsWith("/") && m.mediaOnly !== "gif")
+    .filter((m) => !m.text.startsWith("/"))
     .slice(-cap);
 }
 
@@ -1414,26 +1331,57 @@ async function submitShardRound(chatKey: string, items: readonly EngageShardItem
   }
   const fresh = items.filter((m) => m.arrivalSeq === undefined || m.arrivalSeq > seenSeqOf(conv.id));
   if (fresh.length === 0) return;
-  const list = renderOpenMessageList(fresh, fish.prompts.messages,
+  // 批内图统一 inline（2026-11-06）：直发图与引用图都参与编号（vision==main 时
+  // base64 直读；GIF 抽帧多 block）。直发 GIF 在行尾加双边标记——收不收当场判断
+  //（静默收图轮已退役，ambient 轮就是收录现场）。
+  const inline = inlineVisionOn();
+  const refs: string[] = [];
+  const seenRefs = new Set<string>();
+  const pushRef = (ref: string): void => {
+    if (ref && !seenRefs.has(ref)) {
+      seenRefs.add(ref);
+      refs.push(ref);
+    }
+  };
+  for (const item of fresh) {
+    for (const match of item.text.matchAll(IMAGE_REF_PATTERN)) pushRef(match[1] ?? "");
+    for (const ref of item.quoted?.images ?? []) pushRef(ref);
+  }
+  const imagePlan = planInlineImages(refs, config.mediaRoot, inline, fish.prompts.messages);
+  // 直发行文本换编（含 GIF 的双边标记）；fallback 模式不换，保留 inbound 路径 + look 提示
+  const collectHint = fish.prompts.messages["image_gif_collect_hint"] ?? "";
+  const renderFresh = inline
+    ? fresh.map((item) => {
+      let text = item.text;
+      for (const [ref, n] of imagePlan.numbers) {
+        const frames = imagePlan.gifFrames.get(ref);
+        let tag: string;
+        if (frames !== undefined) {
+          tag = gifTagOf(n, ref, frames, fish.prompts.messages);
+          // 双边标记（主人裁定 2026-11-06：两边都说，避免一边倒地鼓励收图）
+          if (collectHint.length > 0) tag = `${tag}${collectHint}`;
+        } else {
+          tag = imageTagOf(n, ref, fish.prompts.messages);
+        }
+        text = text.split(`[图片 ${ref}]`).join(tag);
+      }
+      return { ...item, text };
+    })
+    : fresh;
+  const list = renderOpenMessageList(renderFresh, fish.prompts.messages,
     (userId) => Boolean(config.master && String(userId) === config.master),
     (userId) => watchedByChat.get(baseChatKey(chatKey))?.has(String(userId)) === true,
   );
-  // 批内引用图 inline（2026-11-06）：vision==main 时引用原文里的图同样 base64 直读，
-  // 不再留给 look 转述；编号标签带 inbound 路径，模型可直接填给 draw / gpt_image
-  const quotedRefs: string[] = [];
-  const quotedSeen = new Set<string>();
-  for (const item of fresh) {
-    for (const ref of item.quoted?.images ?? []) {
-      if (ref && !quotedSeen.has(ref)) {
-        quotedSeen.add(ref);
-        quotedRefs.push(ref);
-      }
-    }
-  }
-  const imagePlan = planInlineImages(quotedRefs, config.mediaRoot, inlineVisionOn(), fish.prompts.messages);
   // 批内回复关系（2026-11-05）：列表里渲染 [回复了m:id]，被引原文按 @ 轮同款附在列表后
-  const quoted = renderOpenQuotedText(fresh, fish.prompts.messages, imagePlan.numbers);
-  const content = quoted.length > 0 ? `${list}\n\n${quoted}` : list;
+  const quoted = renderOpenQuotedText(fresh, fish.prompts.messages, imagePlan.numbers, imagePlan.gifFrames);
+  const sections = [list];
+  if (quoted.length > 0) sections.push(quoted);
+  if (imagePlan.tags.length > 0) sections.push(imagePlan.tags.join("\n"));
+  if (!inline && imagePlan.numbers.size < refs.length) {
+    // fallback 模式有没编上号的图才提示 look；inline 模式 look 已锁死，不提示
+    sections.push(fish.prompts.messages["image_look_hint"] ?? "");
+  }
+  const content = sections.filter((s) => s.length > 0).join("\n\n");
   // 整拍里最近一条非空 bypass 段（整组语义：指令后面跟闲聊不丢指令）
   let payload: string | undefined;
   for (let index = fresh.length - 1; index >= 0; index--) {
@@ -2436,14 +2384,11 @@ export const normalizeInbound: Middleware<MessageCtx> = async (ctx, next) => {
 };
 
 /**
- * ② 动图自动收：群里来了一张 gif，就让鱼看着「前 10 条上下文」决定要不要收进库。
- * 不走随机门（收图与开不开口无关），但它在静默轮里跑，不会冒话；fire-and-forget，
- * 不阻塞后续消息链。
+ * ② 动图自动收已退役（2026-11-06 裁定）：GIF 随 ambient 轮进上下文（inline 抽帧
+ * + 行内双边标记），不再起专门轮次；此处保留空位注释以维持消息链编号的可读性。
  */
-export const ingestGifStage: Middleware<MessageCtx> = async (ctx, next) => {
-  void maybeIngestGif(ctx.msg, ctx.bucket);
-  await next();
-};
+export const gifIngestRetired = true;
+void gifIngestRetired;
 
 /** ③ 主人 `/` 指令：bypass 剥离后、闸前机械拦截，不进 gate、不进 conversation。 */
 export const commandsStage: Middleware<MessageCtx> = async (ctx, next) => {
@@ -2486,10 +2431,10 @@ export const groupWindowStage: Middleware<MessageCtx> = async (ctx, next) => {
   const decision = ctx.decision!;
   // next 的 open 态：free_pass（非 @）消息不进按发送者的合并窗口，改投 shard
   // 收集器（每 10 秒一拍、全部发送者合成一轮 ambient）。同发送者已有 @ 待定窗口
-  // 时照旧并入——一组话不拆两轮；纯 GIF 交给静默收图轮，不进 shard 行。
+  // 时照旧并入——一组话不拆两轮；纯 GIF 也进 shard（收图轮已退役，shard 是收录现场）。
   // 收集器不收（窗口已关 / 未跟踪的边缘竞态）：宁少勿答，留日志丢弃。
   if (decision.reason === "free_pass" && !debouncer.pending(msg.chatKey, msg.userId)) {
-    if (msg.mediaOnly !== "gif") {
+    {
       const collected = engageNext.collectShard(msg.chatKey, {
         userId: msg.userId,
         nickname: msg.nickname,

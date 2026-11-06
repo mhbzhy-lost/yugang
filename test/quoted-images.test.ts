@@ -12,7 +12,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +30,9 @@ const JPG = "inbound/replied.jpg";
 const JPG_DIRECT = "inbound/direct.jpg";
 const GIF = "inbound/replied.gif";
 mkdirSync(join(mediaRoot, "inbound"), { recursive: true });
-for (const ref of [JPG, JPG_DIRECT, GIF]) writeFileSync(join(mediaRoot, ref), "fixture");
+    for (const ref of [JPG, JPG_DIRECT]) writeFileSync(join(mediaRoot, ref), "fixture");
+// GIF fixture 带 GIF8 魔数（备用：fallback 路径与存在性检查认它）
+writeFileSync(join(mediaRoot, GIF), Buffer.concat([Buffer.from("GIF89a"), Buffer.alloc(64, 3)]));
 
 const shrink = (_input: { file: string }): ShrinkResult => ({
   ok: true,
@@ -123,6 +125,25 @@ test("look 模式：引用 GIF 不 inline，但保留引用并提示 look", () =
   assert.equal(plan.lookHint, true, "引用 GIF 没有别的读取路径，应提示 look");
   const round = withContext(anchor(), [], plan.messages, { master: "", messages, imageNumbers: plan.numbers });
   assert.match(round.content, new RegExp(`「\\[图片 ${GIF}\\]」`));
+});
+
+test("inline 模式：GIF 走抽帧多 block（共享 1 个编号），lookHint 恒 false", () => {
+  const q = quoted([GIF]);
+  // 抽帧 stub：两张确定性帧（绕开 ffmpeg；生产在 planInlineImages 的注入点外层）
+  const gifFramesOf = (): { frames: string[]; count: number; total: number } => ({
+    frames: [Buffer.from("frame-1").toString("base64"), Buffer.from("frame-2").toString("base64")],
+    count: 2,
+    total: 11,
+  });
+  const plan = planRoundImages(anchor(), [burstLine(q)], mediaRoot, true, messages, shrink, gifFramesOf);
+  assert.equal(plan.numbers.get(GIF), 1, "GIF 应参与编号（1 个编号）");
+  assert.equal(plan.blocks.length, 2, "两个帧 block");
+  assert.equal(plan.blocks[0].mimeType, "image/jpeg", "帧输出是 JPEG");
+  assert.equal(plan.gifFrames.get(GIF), 2, "帧数记账");
+  assert.equal(plan.lookHint, false, "inline 模式下 look 已锁死，一律不再提示");
+  const round = withContext(anchor(), [], plan.messages, { master: "", messages, imageNumbers: plan.numbers, gifFrames: plan.gifFrames });
+  assert.match(round.content, /「\[图片#1 inbound\/replied\.gif ·动图2帧\]」/);
+  assert.match(plan.tags.join("\n"), /·动图2帧按时间顺序，同一张GIF/);
 });
 
 test("引用图与文字同时存在时都保留，读图失败标记不误伤", () => {

@@ -83,6 +83,11 @@ export interface FishOptions {
    */
   reminderTask?: AnyTask;
   /**
+   * 主模型直读图（vision==main 且通道在白名单且未 /关看图）的宿主事实，每轮现算。
+   * 为 true 时 inline 附图生效、look 机械锁死；缺省 = 恒按 fallback（look 转述）。
+   */
+  inlineVisionOn?: () => boolean;
+  /**
    * 主动 @ 的身份闸：由宿主机械提供（私聊 = not_group；群内白名单 = allow），按轮类型
    * （决策 7）：answer/legacy 轮 userId 是本轮触发者；ambient/injection 环境轮对每个
    * @ 目标各调一次、userId 携带目标 QQ，白名单同为 {主人} ∪ 本群 watched（宿主记审计）。

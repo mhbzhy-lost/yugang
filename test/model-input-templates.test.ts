@@ -55,7 +55,6 @@ import {
   assembleRoundContent,
   backgroundTextOf,
   renderBrowseOpportunity,
-  renderGifIngestInput,
   renderOpenMessageList,
   submitContentOf,
   type RoundContentBlock,
@@ -574,22 +573,6 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
     return { text, submit: submitContentOf(text, []), via: "renderNewsBroadcast → renderNewsTask" };
   },
 
-  // GIF 静默收图（decisions §5.8，index.ts L745）：任务段绑定真实 [m:id]
-  gif_ingest: () => {
-    const target: ModelMessage = {
-      messageId: 1111528716,
-      userId: "2627618651",
-      nickname: "[有人@我]",
-      text: "[图片 inbound/1793784029351-186453.gif]",
-      mentionsBot: false,
-      replyIds: [],
-      master: false,
-      watched: false,
-    };
-    const text = renderGifIngestInput([], target, messages);
-    return { text, submit: submitContentOf(text, []), via: "renderGifIngestInput" };
-  },
-
   // 自带合集且 @（decisions §5.9 forward-direct）：父消息标准行 + 后置附件 + 子图压缩 block
   forward_direct: () => {
     const forward: ForwardAttachment = {
@@ -812,7 +795,7 @@ test("helper 严格性：缺标记 / 重复标记 / 非法 JSON / 缺场景 / �
 
   assert.throws(
     () => loadAuthoritativeScenes(tempDoc((raw) => raw.replace('{"scene":"news","templates":["news"]},\n  ', ""))),
-    /应为 16 个/,
+    /应为 15 个/,
     "矩阵缺场景没有失败",
   );
   assert.throws(

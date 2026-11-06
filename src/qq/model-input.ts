@@ -106,6 +106,23 @@ export function imageCompressedTagOf(n: number, messages: MessageTable): string 
   return renderTemplate(messages["image_compressed_tag"] ?? "[图片#{{n}} 压缩图]", { n: String(n) });
 }
 
+/** inline 模式的 GIF 帧压缩图标签：声明帧序与同一性（模型据此把连续 block 归为一张动图）。 */
+export function gifCompressedTagOf(n: number, frames: number, messages: MessageTable): string {
+  return renderTemplate(messages["image_gif_compressed_tag"] ?? "[图片#{{n}} ·GIF{{frames}}f]", {
+    n: String(n),
+    frames: String(frames),
+  });
+}
+
+/** inline 模式的 GIF 编号标签（带帧数后缀）：与 gifCompressedTagOf 共用编号。 */
+export function gifTagOf(n: number, ref: string, frames: number, messages: MessageTable): string {
+  return renderTemplate(messages["image_gif_tag"] ?? "[图片#{{n}} {{ref}} ·GIF{{frames}}f]", {
+    n: String(n),
+    ref,
+    frames: String(frames),
+  });
+}
+
 /** `[m:id]` 锚点：没有真实 id 就不渲染，不伪造。 */
 function idTag(id: number | string | undefined): string {
   return id === undefined || String(id).length === 0 ? "" : `[m:${id}]`;
@@ -199,6 +216,7 @@ export function renderQuotedOriginal(
   quoted: QuotedMessage,
   messages: MessageTable,
   imageNumbers?: ReadonlyMap<string, number>,
+  gifFrames?: ReadonlyMap<string, number>,
 ): string {
   const who = person(quoted.nickname, quoted.userId);
   if (quoted.forward) {
@@ -210,9 +228,9 @@ export function renderQuotedOriginal(
   const images = quoted.images
     .map((ref) => {
       const n = imageNumbers?.get(ref);
-      return n === undefined
-        ? renderTemplate(messages["quoted_image"] ?? "[图片 {{ref}}]", { ref })
-        : imageTagOf(n, ref, messages);
+      if (n === undefined) return renderTemplate(messages["quoted_image"] ?? "[图片 {{ref}}]", { ref });
+      const frames = gifFrames?.get(ref);
+      return frames !== undefined ? gifTagOf(n, ref, frames, messages) : imageTagOf(n, ref, messages);
     })
     .join(" ");
   const text = [lineText(quoted.text), images].filter((part) => part.length > 0).join(" ");

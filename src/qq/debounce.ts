@@ -323,6 +323,8 @@ export interface ContextOptions {
   watched?: (userId: number | string) => boolean;
   /** inline 附图编号表（planRoundImages 的 numbers）：引用原文里的图命中就渲染成 [图片#N]。 */
   imageNumbers?: ReadonlyMap<string, number>;
+  /** GIF 路径 → 帧数（与 imageNumbers 配套，引用原文里渲染「·动图N帧」）。 */
+  gifFrames?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -400,7 +402,7 @@ export function withContext(
       ...(anchor.forward ? { forward: anchor.forward } : {}),
     };
     const parts = [renderMessageList([model], messages, "private")];
-    if (model.quoted) parts.push(renderQuotedOriginal(model.quoted, messages, options.imageNumbers));
+    if (model.quoted) parts.push(renderQuotedOriginal(model.quoted, messages, options.imageNumbers, options.gifFrames));
     if (model.forward) parts.push(renderForwardAttachment(model.forward, messages));
     if (model.quoted?.forward) parts.push(renderForwardAttachment(model.quoted.forward, messages));
     return { content: parts.join("\n\n"), seen: [seenOf(anchor)] };
@@ -469,7 +471,7 @@ export function withContext(
   // 列表后附加段（decisions §5.9）：先全部引用原文，再合集附件（自带合集在前、
   // 被引合集在后）；最近合集补展开与图片段由宿主（flushBurst）接在最后。
   for (const slot of ordered) {
-    if (slot.model.quoted) parts.push(renderQuotedOriginal(slot.model.quoted, messages, options.imageNumbers));
+    if (slot.model.quoted) parts.push(renderQuotedOriginal(slot.model.quoted, messages, options.imageNumbers, options.gifFrames));
   }
   for (const slot of ordered) {
     if (slot.model.forward) parts.push(renderForwardAttachment(slot.model.forward, messages));
