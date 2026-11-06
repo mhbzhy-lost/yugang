@@ -211,7 +211,7 @@ export interface FishConfig {
 
 export interface ConfigLoadResult {
   config: FishConfig;
-  source: "file" | "env" | "default" | "mixed";
+  source: "file" | "default";
   problems: string[];
 }
 
@@ -669,30 +669,6 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
   return out;
 }
 
-function parseEnv(env: NodeJS.ProcessEnv, problems: string[]): Partial<FishConfig> {
-  const out: Partial<FishConfig> = {};
-
-  const toolTimeout = num(env["TOOL_TIMEOUT_SECONDS"]);
-  if (toolTimeout !== undefined && toolTimeout >= 5) out.toolTimeoutSeconds = toolTimeout;
-
-  const level = env["THINKING_LEVEL"];
-  if (level && THINKING_LEVELS.includes(level as ThinkingLevel)) out.thinkingLevel = level as ThinkingLevel;
-
-  const maxEntries = num(env["COMPACT_MAX_ENTRIES"]);
-  const maxChars = num(env["COMPACT_MAX_CHARS"]);
-  if ((maxEntries !== undefined && maxEntries >= 1) || (maxChars !== undefined && maxChars >= 1000)) {
-    out.compact = {
-      maxEntries: maxEntries !== undefined && maxEntries >= 1 ? Math.floor(maxEntries) : 200,
-      maxChars: maxChars !== undefined && maxChars >= 1000 ? Math.floor(maxChars) : 50_000,
-    };
-  }
-
-  const weekly = env["WEEKLY_GROUP_ID"]?.trim();
-  if (weekly && /^\d+$/.test(weekly)) out.weeklyGroupId = weekly;
-
-  return out;
-}
-
 const DEFAULTS: FishConfig = {
   engage: ENGAGE_DEFAULTS,
   ammo: AMMO_DEFAULTS,
@@ -708,12 +684,11 @@ const DEFAULTS: FishConfig = {
 };
 
 /** 读一次（不缓存），供热加载与启动各取所需。 */
-export function loadFishConfig(options: { path?: string; env?: NodeJS.ProcessEnv } = {}): ConfigLoadResult {
-  const env = options.env ?? process.env;
+export function loadFishConfig(options: { path?: string } = {}): ConfigLoadResult {
   const path = options.path ?? FISH_CONFIG_PATH;
   const problems: string[] = [];
 
-  const fromEnv = parseEnv(env, problems);
+  // 行为参数不再认任何 env 变量（2026-11-06 清理）：全部走 fish.config.json / 缺省
   let fromFile: Partial<FishConfig> = {};
   let hasFile = false;
   if (existsSync(path)) {
@@ -727,13 +702,12 @@ export function loadFishConfig(options: { path?: string; env?: NodeJS.ProcessEnv
 
   const config: FishConfig = {
     ...DEFAULTS,
-    ...fromEnv,
     ...fromFile,
-    compact: { ...DEFAULTS.compact, ...(fromEnv.compact ?? {}), ...(fromFile.compact ?? {}) },
-    engage: { ...DEFAULTS.engage, ...(fromEnv.engage ?? {}), ...(fromFile.engage ?? {}) },
-    ammo: { ...DEFAULTS.ammo, ...(fromEnv.ammo ?? {}), ...(fromFile.ammo ?? {}) },
-    video: { ...DEFAULTS.video, ...(fromEnv.video ?? {}), ...(fromFile.video ?? {}) },
-    news: { ...DEFAULTS.news, ...(fromEnv.news ?? {}), ...(fromFile.news ?? {}) },
+    compact: { ...DEFAULTS.compact, ...(fromFile.compact ?? {}) },
+    engage: { ...DEFAULTS.engage, ...(fromFile.engage ?? {}) },
+    ammo: { ...DEFAULTS.ammo, ...(fromFile.ammo ?? {}) },
+    video: { ...DEFAULTS.video, ...(fromFile.video ?? {}) },
+    news: { ...DEFAULTS.news, ...(fromFile.news ?? {}) },
   };
 
   // 旧 ammo.dailyBudget 回退（2026-11-04 模型输入计划 T3）：文件里没给新的 video.dailyBudget
@@ -742,8 +716,7 @@ export function loadFishConfig(options: { path?: string; env?: NodeJS.ProcessEnv
     config.video = { ...config.video, dailyBudget: fromFile.ammo.dailyBudget };
   }
 
-  const usesEnv = Object.keys(fromEnv).length > 0;
-  const source: ConfigLoadResult["source"] = hasFile && usesEnv ? "mixed" : hasFile ? "file" : usesEnv ? "env" : "default";
+  const source: ConfigLoadResult["source"] = hasFile ? "file" : "default";
   return { config, source, problems };
 }
 
@@ -757,7 +730,7 @@ export function createConfigLoader(options: { path?: string; env?: NodeJS.Proces
   let mtime = existsSync(path) ? statSync(path).mtimeMs : 0;
 
   for (const problem of current.problems) console.warn(`[鱼缸] 配置 ${problem}`);
-  console.log(`[鱼缸] 配置来源 ${current.source === "file" ? path : current.source === "mixed" ? `${path} + .env` : current.source === "env" ? ".env" : "内置默认"}`);
+  console.log(`[鱼缸] 配置来源 ${current.source === "file" ? path : "内置默认"}`);
 
   return () => {
     const now = existsSync(path) ? statSync(path).mtimeMs : 0;

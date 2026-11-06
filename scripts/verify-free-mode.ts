@@ -115,7 +115,7 @@ async function f1(): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "yugang-free-"));
   const path = join(dir, "fish.config.json");
   const write = (value: unknown): void => writeFileSync(path, JSON.stringify(value));
-  const load = () => loadFishConfig({ path, env: {} });
+  const load = () => loadFishConfig({ path });
 
   write({ engage: { freeSeconds: 30, freeBrowseChance: 0.5, freeBatchMax: 10, answerContextSize: 20 } });
   const valid = load();
