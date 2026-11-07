@@ -44,7 +44,7 @@ function buildProvider(config: FishModelConfig) {
   const isAntigravity = config.api === "antigravity-code-assist";
   const isGoogleOAuth = isCodeAssist || isAntigravity;
   const api = isAntigravity
-    ? googleCodeAssistApi({ flavor: "antigravity" })
+    ? googleCodeAssistApi({ flavor: "antigravity", ...(config.userAgent ? { userAgent: config.userAgent } : {}) })
     : isCodeAssist
       ? googleCodeAssistApi()
       : config.api === "openai-codex-responses"

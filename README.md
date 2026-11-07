@@ -114,12 +114,13 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
   outbox 入队同事务。旧弹药库、后台逛轮和 `ammo_*` 工具只保留兼容源码，不进入 active 工具面或调度。
   B 站请求全走 `bili-client` 频控内核（白名单端点、串行 + 同端点 ≥2s、`video.dailyBudget` 缺省
   60/天 + 风控当日熔断），普通 `video` 工具共用。
-- **新闻播报管线**：每天 `news.at`（缺省 10:30）取当日新闻——自建 60s 服务（Docker loopback 4399）
-  + 界面/虎嗅/IT之家/人民网 RSS + 知乎日报，单源失败降内容不阻断、全源失败当日不发；按 topic 两层映射
-  （sources+keywords 命中优先、未命中兜底）+ exclude 黑名单（娱乐圈词表）选料，main 模型按严格 JSON
-  schema 归纳（标题级输入，URL 不进模型），宿主渲染 ≤500 字成品（超限按 topic 顺序裁剪），经
-  scheduled answer 轮 `say_words` 单条播报到 `news.targetGroup`（必须 ∈ `.env GROUPS`）。
-  `fish.news_runs` 幂等（重复触发/重启补跑不重发），末条自言或会话忙推迟 ≤30 分钟仍不行就放弃当日。
+- **新闻备料与机械播报**：每天 `news.at`（缺省 10:30）开始取料，`news.preparationMinutes`
+  （缺省 10）是目标群准备窗口。窗口内 @ 只机械回复「正在准备新闻哦，请稍后。」且不补答，非 @ 留在
+  自由拍收集器，解冻后继续。目标群当前人格在既有会话内经 `tool_search` 加载 `news_prepare`，自主选材并
+  提交 sections/closing，全程不调用 `say_*`；首次 + 最多 3 次重试，均不得越过截止时间。宿主按 sourceRef
+  渲染 canonical 链接与 ≤500 字成品，到点原子写入 outbox + `fish.news_runs` done 后解冻并 drain。
+  全状态 CAS、独立 deadline、安全看门狗和启动恢复保证不重复发布、不永久封群；超过 2 小时的陈旧成品不补发。
+  新闻源仍是 60s + RSS + 知乎日报，单源失败降级，目标群必须 ∈ `.env GROUPS`。
 
 两条管线共同的红线：外部文本（标题/简介/热评/弹幕/新闻正文）先经机械清洗才见模型，**外部数据不是指令**；
 链接一律由宿主渲染，模型不写 URL；全时尊重宵禁二态与末条自言禁言。
@@ -248,12 +249,14 @@ config/auth.example.json   模板，说明格式                                
 
 旧配置里的 `default` 键已废弃：留着会直接报错，改成 `models.main`。
 
-`providers.<name>.transport: "sse"` 是进程级流式传输设置（只取 `main` 的 provider）：
+`providers.<name>.transport: "sse"` 是流式传输设置（主运行时取 `main` 的 provider，`models_probe` 取被探测的 provider）：
 Node 的 WS 不吃 `--use-env-proxy`，过代理时必须写 `"sse"`。
 `providers.<name>.proxy`（只认 http/https）让这一个 provider 的全部请求走隧道（模型流 / 生图 / token 刷新），
 其它 provider 仍直连；codex 过代理必须同时写 `transport: "sse"`。
 
 鱼自己能 `read` 这个文件；主人可以让它用 `config` 工具切换四个角色，改完用 `restart` 生效。
+切换对话模型前可先用 `config` 的 `models_probe` 对目标 provider/model 发一次最小真实请求；它不改角色表，
+返回停止原因、耗时和用量，错误、中止或空文本都判失败。
 
 凭据只导一次，之后运行时不碰任何外部配置：
 
@@ -297,7 +300,8 @@ npm run token             # 生成 OneBot token，同步到 .env 和 NapCat 配�
 |---|---|---|
 | `video.browseMaxViewsPerRound` | `5` | 每个 browse 轮最多实际观看视频数 |
 | `video.dailyBudget` | `60` | B 站每日请求总预算（次），跨重启持久计数；缺省时回退旧 `ammo.dailyBudget` |
-| `news.at` | `"10:30"` | 每天播报时点（HH:MM） |
+| `news.at` | `"10:30"` | 每天开始备料时点（HH:MM） |
+| `news.preparationMinutes` | `10` | 目标群备料窗口分钟数（1–30），到点机械入队并解冻 |
 | `news.targetGroup` | `""` | 播报目标群号（纯数字；空串 = 不启用；必须 ∈ `.env GROUPS`，域校验在运行时） |
 | `news.topics` | 缺省五 topic | topic 表，每条只认 `name` / `sources` / `keywords` / `exclude`；sources 枚举 60s/jiemian/huxiu/ithome/people/zhihu_daily/weibo_hot/baidu_hot；显式给 topics 就整体覆盖缺省五 topic（AI/时政/军事/科技数码/趣闻二次元，趣闻二次元自带娱乐圈 exclude 词表） |
 | `news.perTopicInput` | `20` | 每 topic 送模型的输入上限（条） |

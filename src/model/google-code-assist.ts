@@ -13,8 +13,8 @@
  *
  * 两个 flavor（gemini / antigravity）共用这同一套协议实现，差异全部集中在四处常量：
  *   - baseUrl：antigravity 主用 daily-cloudcode-pa.sandbox.googleapis.com（配置可覆盖）
- *   - 必需请求头：antigravity 后端按 user-agent / x-goog-api-client / client-metadata 识别
- *     客户端，缺了会 403 license；流式另加 accept: text/event-stream
+ *   - 必需请求头：antigravity 后端按当前 IDE user-agent 识别客户端；旧 Gemini
+ *     x-goog-api-client / client-metadata 不再发送；流式另加 accept: text/event-stream
  *   - 请求信封：antigravity 多两个字段 body.userAgent="antigravity" 与 requestId（每次
  *     HTTP 请求新生成，重试也换新）
  *   - 项目发现的 metadata：antigravity 用 ideType ANTIGRAVITY
@@ -66,15 +66,19 @@ function defaultBaseUrl(flavor: CodeAssistFlavor): string {
   return flavor === "antigravity" ? ANTIGRAVITY_BASE_URL : DEFAULT_BASE_URL;
 }
 
-/** antigravity 后端按这些头识别客户端，缺了会 403 license（实测值，勿改）。 */
-const ANTIGRAVITY_CLIENT_METADATA = '{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}';
+const ANTIGRAVITY_IDE_VERSION = "2.29.0";
 
-function requestHeaders(flavor: CodeAssistFlavor, apiKey: string, streaming: boolean): Record<string, string> {
+/** 当前 IDE 指纹；完整值可由 provider.userAgent 覆盖，避免服务端升最低版本时改源码。 */
+export function antigravityUserAgent(version = ANTIGRAVITY_IDE_VERSION): string {
+  const os = process.platform === "win32" ? "windows" : process.platform;
+  const arch = process.arch === "x64" ? "amd64" : process.arch === "ia32" ? "386" : process.arch;
+  return `antigravity/ide/${version} (os_type=${os}; arch=${arch}; aidev_client; auth_method=oauth)`;
+}
+
+function requestHeaders(flavor: CodeAssistFlavor, apiKey: string, streaming: boolean, userAgent?: string): Record<string, string> {
   const headers: Record<string, string> = { "content-type": "application/json", authorization: `Bearer ${apiKey}` };
   if (flavor === "antigravity") {
-    headers["user-agent"] = "antigravity/1.11.5 macos/arm64";
-    headers["x-goog-api-client"] = "google-cloud-sdk vscode_cloudshelleditor/0.1";
-    headers["client-metadata"] = ANTIGRAVITY_CLIENT_METADATA;
+    headers["user-agent"] = userAgent?.trim() || antigravityUserAgent();
     if (streaming) headers["accept"] = "text/event-stream";
   }
   return headers;
@@ -97,7 +101,11 @@ export interface GoogleCodeAssistOptions extends StreamOptions {
   };
   /** 订阅通道：gemini（默认，gemini-cli）或 antigravity（AI Pro 现通道）。 */
   flavor?: CodeAssistFlavor;
+  /** Antigravity 完整 User-Agent 覆盖；来自 provider.userAgent。 */
+  userAgent?: string;
 }
+
+export type GoogleCodeAssistSimpleOptions = SimpleStreamOptions & { userAgent?: string };
 
 // toolCallCounter：functionCall 没带 id 时生成唯一 id（对照 google 适配器的同名计数器）
 let toolCallCounter = 0;
@@ -291,8 +299,8 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
           const attempt = await (options?.fetch ?? globalThis.fetch)(url, {
             method: "POST",
             // gemini：出站只留这两个头（含 x-yugang-ca-project 在内的其余头都不转发）；
-            // antigravity：另加它识别客户端的那三个头与流式 accept
-            headers: requestHeaders(flavor, apiKey, true),
+            // antigravity：另加当前 IDE User-Agent 与流式 accept
+            headers: requestHeaders(flavor, apiKey, true, options?.userAgent),
             body: JSON.stringify(encodeBody(params, flavor)),
             ...(options?.signal ? { signal: options.signal } : {}),
           });
@@ -504,7 +512,7 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
 export const streamSimple = (
   model: CodeAssistModel,
   context: TranscriptContext,
-  options?: SimpleStreamOptions,
+  options?: GoogleCodeAssistSimpleOptions,
   flavor: CodeAssistFlavor = "gemini",
 ) => {
   const apiKey = options?.apiKey;
@@ -515,6 +523,7 @@ export const streamSimple = (
     ...buildBaseOptions(model, context, options, apiKey),
     toolChoice: options?.toolChoice,
     flavor,
+    ...(options?.userAgent ? { userAgent: options.userAgent } : {}),
   };
   if (!options?.reasoning) {
     return stream(model, context, { ...base, thinking: { enabled: false } });
@@ -683,15 +692,22 @@ export async function fetchAvailableModels(
 }
 
 /** 装配给 createProvider 的 api 实现（ProviderStreams 形状）；flavor 缺省 gemini（现有调用不变）。 */
-export function googleCodeAssistApi(options: { flavor?: CodeAssistFlavor } = {}): {
+export function googleCodeAssistApi(options: { flavor?: CodeAssistFlavor; userAgent?: string } = {}): {
   id: Api;
   stream: (model: Model<Api>, context: TranscriptContext, options?: StreamOptions) => ReturnType<typeof stream>;
-  streamSimple: (model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions) => ReturnType<typeof streamSimple>;
+  streamSimple: (model: Model<Api>, context: TranscriptContext, options?: GoogleCodeAssistSimpleOptions) => ReturnType<typeof streamSimple>;
 } {
   const flavor = options.flavor ?? "gemini";
   return {
     id: (flavor === "antigravity" ? "antigravity-code-assist" : "google-code-assist") as Api,
-    stream: (model, context, opts) => stream(model as CodeAssistModel, context, { ...(opts as GoogleCodeAssistOptions), flavor }),
-    streamSimple: (model, context, opts) => streamSimple(model as CodeAssistModel, context, opts, flavor),
+    stream: (model, context, opts) => stream(model as CodeAssistModel, context, {
+      ...(opts as GoogleCodeAssistOptions),
+      flavor,
+      userAgent: (opts as GoogleCodeAssistOptions)?.userAgent ?? options.userAgent,
+    }),
+    streamSimple: (model, context, opts) => streamSimple(model as CodeAssistModel, context, {
+      ...opts,
+      userAgent: opts?.userAgent ?? options.userAgent,
+    }, flavor),
   };
 }

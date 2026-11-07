@@ -91,6 +91,25 @@ npm run ping
 - 报 `没有拿到 key` → 跑 `npm run creds show`；没有就 `npm run creds import`（写 `config/auth.json`，已被 gitignore）
 - 报 `400 ... unsupported field "max_completion_tokens"` → `config/models.json` 里这个 provider 缺 `compat.maxTokensField: "max_tokens"`
 - 换模型不改代码：编辑 `config/models.json` 的 `models.main` / `models.vision` / `models.vision_fallback` / `models.image`，再让鱼 restart
+- 主人在私聊让鱼切换前，可先让它用 `config` 的 `models_probe` 探测目标 provider/model：真实最小请求、不改配置，失败就不要切
+- `Google stream ended without a finish reason` 且正文是 `This version of Antigravity is no longer supported`
+  → Antigravity 客户端指纹过旧，不是单个模型故障；`providers.google-antigravity.userAgent` 可覆盖完整 UA，
+  缺省用当前 IDE 指纹。保持 `daily-cloudcode-pa.sandbox.googleapis.com`，不要改去生产端点硬试。
+- `google-gemini` 返回 `403 ... valid license ... (#3501)` → 账户/通道没有许可，换模型名无效。
+- `ping` 会把 `stopReason:error/aborted` 当失败；不能再把一段网关错误文本误判为「通了」。
+
+## 新闻没发怎么查
+
+`news.at` 是开始备料，不是立即播报；目标群在 `news.preparationMinutes` 窗口内只处理新闻。
+窗口内 @ 收到「正在准备新闻哦，请稍后。」且不补答，非 @ 留自由拍，属设计如此。
+
+按日志顺序看：`新闻备料尝试 <day> <group> N/4` → `新闻备料完成` → `新闻已入队` →
+`新闻发送核对 ... sent=N outbox=...`。首次 + 最多 3 次重试，`attempts_exhausted` 是备料耗尽，
+`news_timeout` 是越过 publishAt，`missed_window` 是重启后超过 2 小时的陈旧成品（不补发）。
+入队不等于 QQ 送达：`outbox=queued/sending` 要看队首阻塞与既有发送日志，不能跳过 sending。
+所有成功、失败、deadline 与 publishAt+5 秒看门狗路径都应解冻；若目标群持续不说话，先看安全看门狗日志。
+本地确定性竞态与真实模型全管线验收：`npm test` 中的 R1–R12，以及 `npm run smoke:news` 的 N1–N5；
+smoke 使用隔离 SQLite/凭据副本和虚构新闻，不接 QQ、不改生产配置，证据在 `var/local-driver/news-smoke-*/evidence.jsonl`。
 
 ## 诊断连不上 QQ
 

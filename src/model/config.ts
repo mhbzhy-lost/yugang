@@ -38,6 +38,8 @@ export interface ProviderConfig {
    * Node 的 WS 不吃 --use-env-proxy，过代理时必须写 "sse"。
    */
   transport?: "sse";
+  /** Antigravity 的完整 User-Agent 覆盖；缺省用当前 IDE 指纹与真实平台。 */
+  userAgent?: string;
   /**
    * provider 级代理：配了它就这一个 provider 的全部请求走代理（聊天 / 生图 / token 刷新），
    * 其它 provider 仍直连。codex 记得同时写 transport: "sse"（WS 不吃 fetch 注入）。
@@ -81,8 +83,12 @@ export interface FishModelConfig {
   configSource: string;
   /** 凭据文件位置：oauth 刷新后要写回这里。 */
   credentialsPath: string;
+  /** Antigravity 的完整 User-Agent 覆盖；只来自本机 models.json。 */
+  userAgent?: string;
   /** provider 级代理；空 = 直连。只影响这个 provider 的域名（含 oauth token 主机）。 */
   proxy?: string;
+  /** 该 provider 的请求传输；codex 过代理时强制 SSE，与主角色运行时一致。 */
+  transport?: "sse";
   /** OAuth client（google-code-assist 用）；来自本机配置，不要打印。 */
   oauthClient?: { id: string; secret: string };
 }
@@ -184,17 +190,12 @@ export function loadFishModels(options: LoadOptions = {}): FishModelsSelection {
     image = { provider: imageRef.provider, modelId: imageRef.model, ...(imageProvider.proxy ? { proxy: imageProvider.proxy } : {}) };
   }
 
-  // 过代理 + codex：WS 不吃 fetch 注入，强制 SSE；provider 自己写了 transport 的照旧尊重
-  const mainProvider = file.providers[mainRef.provider];
-  const transport = mainProvider?.transport === "sse" || (Boolean(mainProvider?.proxy) && mainProvider?.api === "openai-codex-responses")
-    ? ("sse" as const)
-    : undefined;
-  return { main, vision, ...(visionFallback ? { visionFallback } : {}), ...(image ? { image } : {}), ...(transport ? { transport } : {}) };
+  return { main, vision, ...(visionFallback ? { visionFallback } : {}), ...(image ? { image } : {}), ...(main.transport ? { transport: main.transport } : {}) };
 }
 
 /**
- * 按 provider 名读一份配置：只给运维脚本用（creds / login / 测试）。
- * 运行时不要用它选模型——模型选择只走 loadFishModels 的角色表。
+ * 按 provider 名读一份配置：给运维脚本与 models_probe 的真实连通性探测用。
+ * 不要用它替代运行时的角色选择——正常对话只走 loadFishModels 的角色表。
  */
 export function loadProviderConfig(providerId: string, options: ProviderLoadOptions = {}): FishModelConfig {
   const { file, configSource } = readModelsFile(options.modelsPath ?? defaultModelsPath());
@@ -245,7 +246,9 @@ function buildConfig(
     keySource: credentialsPath,
     configSource,
     credentialsPath,
+    ...(provider.userAgent ? { userAgent: provider.userAgent } : {}),
     ...(provider.proxy ? { proxy: provider.proxy } : {}),
+    ...(provider.transport === "sse" || (Boolean(provider.proxy) && provider.api === "openai-codex-responses") ? { transport: "sse" as const } : {}),
     ...(oauthClient ? { oauthClient } : {}),
   };
 }
