@@ -140,10 +140,9 @@ export interface FishOptions {
     model?: ModelRef;
     /** 记忆抽取用的模型；缺省与 handoff 同一个。 */
     memoryModel?: ModelRef;
-    maxEntries?: number;
-    maxChars?: number;
-    /** 现取的阈值（热更新用）：改配置后下一轮压缩就按新值判断。 */
-    limits?: () => { maxEntries: number; maxChars: number };
+    maxTokens?: number;
+    /** 现取的 token 阈值（热更新用）：改配置后下一轮压缩就按新值判断。 */
+    limits?: () => { maxTokens: number };
   };
   /** look 的视觉描述模型；缺省用主模型。 */
   visionModel?: ModelRef;

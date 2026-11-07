@@ -32,7 +32,7 @@ const fish = await openFish({
   workspaceRoot: WORKSPACE_ROOT,
   master: process.env.MASTER_QQ ?? "",
   // 极小阈值：任何有内容的会话都会触发换页
-  compact: { model: mainModel, maxEntries: 1, maxChars: 1 },
+  compact: { model: mainModel, maxTokens: 1 },
   emit: () => {},
   react: () => {},
 });

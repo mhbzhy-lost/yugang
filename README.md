@@ -159,7 +159,7 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
 - **尾巴只从被压缩页 transcript 机械截取**：保持原 entry 顺序与标注格式，不把鱼没见过的消息伪装成
   已读上下文。换页文本会被当成鱼自己的记忆，不是别人对它说的话。
 
-配置：`fish.config.json` 的 `compact.maxEntries` / `compact.maxChars`；摘要固定用主模型（`models.main`）。
+配置：`fish.config.json` 的 `compact.maxTokens`（缺省 100000）与 `compact.byModel`（provider 或 provider/model 覆盖，`google-antigravity` 缺省 90000）；按最近一次真实请求的 input+cacheRead，在完整轮次结束后换页，不截断消息。摘要固定用主模型（`models.main`）。
 
 ## 校验分两类
 

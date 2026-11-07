@@ -30,7 +30,7 @@
  *
  * 用法：
  *   node scripts/itbed/launch.ts [--sandbox-dir <dir>] [--port-base 4400]
- *                                [--config-patch '{"compact":{"maxChars":20000}}' | @file.json]
+ *                                [--config-patch '{"compact":{"maxTokens":100000}}' | @file.json]
  *                                [--serve | --no-smoke] [--serve-max-ms 600000]
  *   端口分配：napcat=base、60s=base+1、bili=base+2（缺省 4400/4401/4402）。
  *   缺省（无 --serve）：冒烟闭环自动跑完并限时退出。
@@ -93,7 +93,7 @@ if (hasFlag("help")) {
   console.log(
     "IT bed sandbox 启动器\n" +
       "用法：node scripts/itbed/launch.ts [--sandbox-dir <dir>] [--port-base 4400]\n" +
-      "                    [--config-patch '{\"compact\":{\"maxChars\":20000}}' | @file.json]\n" +
+      "                    [--config-patch '{\"compact\":{\"maxTokens\":100000}}' | @file.json]\n" +
       "                    [--serve | --no-smoke] [--serve-max-ms 600000]\n" +
       "端口：napcat=base、60s=base+1、bili=base+2。\n" +
       "鱼的 cwd=<sandbox>/runtime（仓库 package.json/src/config/prompt/node_modules 与 var 的符号链接 + 覆盖层，零复制）。\n" +
@@ -386,8 +386,7 @@ async function main(): Promise<number> {
     ...(numOf(fishConfig["ambientMinIntervalSeconds"]) !== undefined ? { AMBIENT_MIN_INTERVAL_SECONDS: String(numOf(fishConfig["ambientMinIntervalSeconds"])) } : {}),
     ...(numOf(fishConfig["toolTimeoutSeconds"]) !== undefined ? { TOOL_TIMEOUT_SECONDS: String(numOf(fishConfig["toolTimeoutSeconds"])) } : {}),
     ...(typeof fishConfig["thinkingLevel"] === "string" ? { THINKING_LEVEL: fishConfig["thinkingLevel"] } : {}),
-    ...(numOf(compact["maxEntries"]) !== undefined ? { COMPACT_MAX_ENTRIES: String(numOf(compact["maxEntries"])) } : {}),
-    ...(numOf(compact["maxChars"]) !== undefined ? { COMPACT_MAX_CHARS: String(numOf(compact["maxChars"])) } : {}),
+    ...(numOf(compact["maxTokens"]) !== undefined ? { COMPACT_MAX_TOKENS: String(numOf(compact["maxTokens"])) } : {}),
   };
   console.log("[itbed] 注入 env：");
   for (const [key, value] of Object.entries(fishEnv)) {

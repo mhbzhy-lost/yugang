@@ -58,12 +58,10 @@ export interface CompactorOptions {
   /** 用来生成剖面卡片的模型；比主模型便宜一档即可。 */
   model: { provider: string; modelId: string };
   prompts: PromptSet;
-  /** 攒够多少条就压。 */
-  maxEntries: number;
-  /** 现取的阈值（热更新用）；给了就盖过上面两个静态值。 */
-  limits?: () => { maxEntries: number; maxChars: number };
-  /** 或者攒够多少字就压。 */
-  maxChars: number;
+  /** 单次请求上下文达到多少 tokens 就换页；只在完整轮次结束后判断。 */
+  maxTokens: number;
+  /** 现取的 token 阈值（热更新用）；给了就盖过静态值。 */
+  limits?: () => { maxTokens: number };
   /** conversation → 当前人格的鱼昵称与真实 self QQ；拿不到 QQ 时留空，不伪造。 */
   selfOf?: (conversationId: ConversationId) => { nickname: string; userId: string };
   onError?: (error: unknown) => void;
@@ -89,6 +87,8 @@ export interface CompactResult {
   reason?: "below_threshold" | "empty" | "failed";
   entries?: number;
   chars?: number;
+  /** 换页前最后一次普通模型请求的实际上下文 tokens（input + cacheRead）。 */
+  tokens?: number;
   /** 机械降级换页：摘要有界重试全败后的兜底（新页 = 尾部原文 + 机械时间头），换页已完成。 */
   fallback?: boolean;
   /** 剖面生成失败原因摘要（已脱敏，不含对话内容）；仅 fallback 时携带，供宿主告警日志使用。 */
@@ -108,23 +108,26 @@ export function createCompactor(options: CompactorOptions): Compactor {
       if (counted.length === 0) return { compacted: false, reason: "empty" };
 
       const entries = counted.length;
-      // 阈值字符数按 CountedEntry.chars 累加：engage_tick 背景板行不进摘要（lines 空）
-      // 但字符计入阈值（终审 #2），否则背景板永远顶不动 maxChars
+      // chars 仅用于审计日志；触发阈值只看下面真实请求的 tokens，不再按条数或字符数换页。
       const chars = counted.reduce((sum, entry) => sum + entry.chars, 0);
-      const limits = options.limits ? options.limits() : { maxEntries: options.maxEntries, maxChars: options.maxChars };
-      if (!force && entries < limits.maxEntries && chars < limits.maxChars) {
-        return { compacted: false, reason: "below_threshold", entries, chars };
+      const limits = options.limits ? options.limits() : { maxTokens: options.maxTokens };
+      const tokens = await latestRequestTokens(conversation);
+      // 只在完整轮次结束后按真实 usage 判断；即使这一轮越过阈值，也先保留并处理完整消息。
+      if (!force && (tokens === undefined || tokens < limits.maxTokens)) {
+        return { compacted: false, reason: "below_threshold", entries, chars, ...(tokens !== undefined ? { tokens } : {}) };
       }
+
+      const measured = { entries, chars, ...(tokens !== undefined ? { tokens } : {}) };
 
       // 页里只有 engage_tick 这类无文本 entry（背景板轮把条数/字符阈值顶到）时没有可摘要的内容：
       // 直接机械降级换页（时间头照旧），不做三次注定失败的摘要尝试
       if (transcript.trim().length === 0) {
         try {
           await conversation.reset(mechanicalHandoff(counted, options.prompts.messages), ctx);
-          return { compacted: true, entries, chars, fallback: true, detail: "no_summary_text" };
+          return { compacted: true, ...measured, fallback: true, detail: "no_summary_text" };
         } catch (error) {
           options.onError?.(error);
-          return { compacted: false, reason: "failed", entries, chars };
+          return { compacted: false, reason: "failed", ...measured };
         }
       }
 
@@ -202,7 +205,7 @@ export function createCompactor(options: CompactorOptions): Compactor {
         }
 
         await conversation.reset(handoff, ctx);
-        return { compacted: true, entries, chars };
+        return { compacted: true, ...measured };
       } catch (error) {
         // 剖面生成有界重试全败（含逐字校验/JSON 形状不过）：机械降级换页——换页必须总能
         // 完成，不许在失败页上死循环。新页 = 机械时间头 + 被压缩页尾部最近 50 条 entry 的
@@ -211,9 +214,9 @@ export function createCompactor(options: CompactorOptions): Compactor {
           await conversation.reset(mechanicalHandoff(counted, options.prompts.messages), ctx);
         } catch {
           options.onError?.(error);
-          return { compacted: false, reason: "failed", entries, chars };
+          return { compacted: false, reason: "failed", ...measured };
         }
-        return { compacted: true, entries, chars, fallback: true, detail: errorDigest(error) };
+        return { compacted: true, ...measured, fallback: true, detail: errorDigest(error) };
       }
     },
   };
@@ -635,7 +638,7 @@ export async function renderTranscript(conversation: Conversation): Promise<Rend
 /**
  * 一条入册 entry 摊平后的行与它的时间戳（时间头 / 尾巴用；没有可靠时间戳时为 undefined）。
  * lines 进摘要输入（剖面生成的 transcript）；chars 是计入换页阈值的字符数——engage_tick
- * 的 tailLines 不进摘要但同样计入 chars（终审 #2：背景板行必须能顶动 maxChars 阈值）；
+ * 的 tailLines 不进摘要但保留 chars 供审计；换页触发只看真实请求 tokens；
  * speaker（fish.inbound 的结构化数据）供剖面卡片的活跃成员纯机械统计。
  */
 export interface CountedEntry {
@@ -706,6 +709,26 @@ function entryTimestamp(entry: { kind: string; model?: unknown; data?: unknown }
  * stopReason:error 的空 assistant entry（生产观察：失败轮会留一条 content 空的错误
  * entry 在活跃链，重放成噪音）在这里显式跳过，不进摘要也不进尾巴。
  */
+/** 最近一次普通模型请求的实际上下文：input + cacheRead；错误/无 usage 时不猜 token。 */
+async function latestRequestTokens(conversation: Conversation): Promise<number | undefined> {
+  const view = await conversation.viewState(ctx);
+  try {
+    for (const entry of [...view.value.entries].reverse()) {
+      if (entry.kind !== "pi.assistant") continue;
+      const messages = Array.isArray(entry.model) ? entry.model : [entry.model];
+      for (const message of [...messages].reverse()) {
+        const usage = (message as { usage?: { input?: unknown; cacheRead?: unknown } } | undefined)?.usage;
+        if (typeof usage?.input === "number" && typeof usage.cacheRead === "number") {
+          return usage.input + usage.cacheRead;
+        }
+      }
+    }
+    return undefined;
+  } finally {
+    view.dispose();
+  }
+}
+
 async function renderCountedEntries(conversation: Conversation, self: { nickname: string; userId: string } = { nickname: "Elysia", userId: "" }): Promise<CountedEntry[]> {
   const view = await conversation.viewState(ctx);
   const counted: CountedEntry[] = [];

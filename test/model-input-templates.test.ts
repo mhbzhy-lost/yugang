@@ -332,7 +332,7 @@ async function compactHistoryScene(submit: HistoryHarnessOptions["submit"]): Pro
     promptRoot: PROMPTS,
     mediaRoot: mkdtempSync(join(tmpdir(), "yg-history-media-")),
     workspaceRoot: mkdtempSync(join(tmpdir(), "yg-history-work-")),
-    compact: { maxEntries: 3, maxChars: 999_999 },
+    compact: { maxTokens: 1 },
     selfOf: () => ({ nickname: "Elysia", userId: "3768557204" }),
     now: () => current,
     emit: () => {},

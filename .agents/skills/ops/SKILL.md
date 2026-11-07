@@ -39,6 +39,9 @@ scripts/fish.sh help                 # 全部子命令（其它命令原样透�
 `ambientMinIntervalSeconds` / `watchAmbientChance` / `thinkingLevel` / `compact` /
 `memeCooldownMinutes` / `toolTimeoutSeconds` / `voices`（人格 → TTS 地址与参考音频）。
 优先级：`fish.config.json` > `.env` > 内置默认；文件写坏时保留上一次的有效值。
+`compact` 只按 tokens 换页：`maxTokens` 缺省 100000，`byModel` 可按 provider 或 provider/model 覆盖，
+`google-antigravity` 缺省 90000；最近一次真实请求 input+cacheRead 达阈值后，等完整轮次结束再换页，
+不截断消息。旧 `maxEntries/maxChars` 已停用。config 的 set 支持对象 JSON 字符串与点路径修改。
 
 音色只认 `voices`，`.env` 里的 `TTS_*` 已经删了——**没有任何兜底**，没配就是那个会话没有语音能力。
 
@@ -95,7 +98,6 @@ npm run ping
 - `Google stream ended without a finish reason` 且正文是 `This version of Antigravity is no longer supported`
   → Antigravity 客户端指纹过旧，不是单个模型故障；`providers.google-antigravity.userAgent` 可覆盖完整 UA，
   缺省用当前 IDE 指纹。保持 `daily-cloudcode-pa.sandbox.googleapis.com`，不要改去生产端点硬试。
-- `google-gemini` 返回 `403 ... valid license ... (#3501)` → 账户/通道没有许可，换模型名无效。
 - `ping` 会把 `stopReason:error/aborted` 当失败；不能再把一段网关错误文本误判为「通了」。
 
 ## 新闻没发怎么查

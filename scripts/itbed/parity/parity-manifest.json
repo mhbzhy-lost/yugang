@@ -14,8 +14,10 @@
     "watchAmbientChance": 0.25,
     "thinkingLevel": "off",
     "compact": {
-      "maxEntries": 200,
-      "maxChars": 50000
+      "maxTokens": 100000,
+      "byModel": {
+        "google-antigravity": 90000
+      }
     },
     "weeklyGroupId": "",
     "memeCooldownMinutes": 8,

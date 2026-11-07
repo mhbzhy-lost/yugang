@@ -60,7 +60,7 @@ import { renderTemplate } from "../prompt/index.ts";
 import { MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "../memory/index.ts";
 import { memoryKeyOf, pushScope, shiftScope } from "../memory/scope.ts";
 import { OutboundEntry, type OutboundPayload } from "../tools/say-shared.ts";
-import { createConfigLoader, engageSettingsOf } from "../fish-config.ts";
+import { compactTokenLimitOf, createConfigLoader, engageSettingsOf } from "../fish-config.ts";
 import { UsageDoc } from "@earendil-works/pi-durable";
 // —— 外部信息源基础设施（docs/plans/2026-11-02-external-ammo.md；2026-11-04 模型输入计划 T3）——
 // B 站弹药管线（worker 逛轮 / 空库补货 / 手动逛轮 / 全局分享挂点）已停用：旧源码
@@ -601,9 +601,10 @@ export async function bootRuntime(): Promise<void> {
   workspaceRoot: config.workspaceRoot,
   compact: {
     model: mainModel,
-    maxEntries: fishConfig().config.compact.maxEntries,
-    maxChars: fishConfig().config.compact.maxChars,
-    limits: () => fishConfig().config.compact,
+    maxTokens: compactTokenLimitOf(fishConfig().config.compact, modelSelection.main.providerId, modelSelection.main.modelId),
+    limits: () => ({
+      maxTokens: compactTokenLimitOf(fishConfig().config.compact, modelSelection.main.providerId, modelSelection.main.modelId),
+    }),
   },
   // outbox 里的消息由 fish.drain() 逐条交给这里；幂等表再加一层保险。
   // 发送链记账（T6，/评 定位）：群文本/图片逐条返回实际 message_id 给 drain 写 fish.sentmap；
@@ -995,7 +996,7 @@ export async function submitRound(input: {
       if (roundKind !== "news" && attempt === MAX_MODEL_ATTEMPTS && MAX_MODEL_ATTEMPTS > 1) {
         const cleared = await compactWithGuard(conv, true, chatKey);
         if (cleared.compacted) {
-          console.log(`[鱼缸] ${chatKey} 换页 ${cleared.entries}条/${cleared.chars}字 ·强制`);
+          console.log(`[鱼缸] ${chatKey} 换页 ${cleared.entries}条/${cleared.chars}字/${cleared.tokens ?? "-"}tok ·强制`);
         }
       }
       // 触发消息绑在 submission 上：轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）。
@@ -1092,9 +1093,9 @@ export async function submitRound(input: {
     // 轮内重试与强制换页都试过仍失败：再尝试一次常规自动换页（阈值满足时），保持既有行为
     const compacted = await compactWithGuard(conv, false, chatKey);
     if (compacted.compacted) {
-      console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
+      console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字/${compacted.tokens ?? "-"}tok`);
     } else {
-      console.log(`[鱼缸] ${chatKey} 失败轮换页未执行：${compacted.reason ?? "skipped"} entries=${compacted.entries ?? "-"} chars=${compacted.chars ?? "-"}`);
+      console.log(`[鱼缸] ${chatKey} 失败轮换页未执行：${compacted.reason ?? "skipped"} entries=${compacted.entries ?? "-"} chars=${compacted.chars ?? "-"} tokens=${compacted.tokens ?? "-"}`);
     }
     return settled.status;
   }
@@ -1112,7 +1113,7 @@ export async function submitRound(input: {
   if (roundKind === "news") return settled.status;
   const compacted = await compactWithGuard(conv, false, chatKey);
   if (compacted.compacted) {
-    console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
+    console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字/${compacted.tokens ?? "-"}tok`);
   }
   return settled.status;
   } finally {
@@ -1783,7 +1784,7 @@ async function handleCommand(msg: IncomingMessage): Promise<string | null> {
     // 走统一守卫：换页期间到达的群消息/私聊会看到 compacting，不会与换页并发。
     const result = await compactWithGuard(conv, true, msg.chatKey);
     text = result.compacted
-      ? renderTemplate(fish.prompts.messages["cmd_compacted"] ?? "", { entries: String(result.entries), chars: String(result.chars) })
+      ? renderTemplate(fish.prompts.messages["cmd_compacted"] ?? "", { entries: String(result.entries), chars: String(result.chars), tokens: String(result.tokens ?? "-") })
       : (fish.prompts.messages["cmd_compact_skip"] ?? "");
   } else if (target) {
     const persona = target[1];

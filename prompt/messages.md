@@ -141,7 +141,7 @@ ctx_browse_actions_line: 调用 bili_hot 去逛 B 站；遇到有意思的视频
 bypass_placeholder: （一条画图指令：图片的细节发送者已单独指定，直接用 draw 画一张就好）
 cmd_look_off: 已关看图。网关视觉服务恢复后用 /开看图 重新打开
 cmd_look_on: 已开看图
-cmd_compacted: 已压缩：{{entries}} 条/{{chars}} 字换成新页
+cmd_compacted: 已压缩：{{tokens}} tokens 换成新页（原 {{entries}} 条/{{chars}} 字）
 cmd_compact_skip: 这个会话没什么可压的
 cmd_personas: 可用人格：{{list}}（用 /切换人格 <名> 切换）
 cmd_switched: 切换完成，当前人格：{{persona}}

@@ -727,10 +727,10 @@ function runSelfTest(): number {
   check("parse: configOverride 与 inject 原样保留", () => {
     const inject = { kind: "group", at: ["bot"], text: "你好" };
     const s = parseScenario(
-      { name: "x", configOverride: { compact: { maxEntries: 5 } }, steps: [{ atMs: 1000, inject }, { awaitMs: 500 }], expects: [] },
+      { name: "x", configOverride: { compact: { maxTokens: 100000 } }, steps: [{ atMs: 1000, inject }, { awaitMs: 500 }], expects: [] },
       "a.json",
     );
-    eq(s.configOverride, { compact: { maxEntries: 5 } }, "configOverride");
+    eq(s.configOverride, { compact: { maxTokens: 100000 } }, "configOverride");
     eq(s.steps[0]?.inject, inject, "inject 原样");
     eq(s.spanMs, 1500, "spanMs 步骤游标");
   });

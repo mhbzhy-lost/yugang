@@ -22,8 +22,7 @@ export function installCompactor(
     model: options.compact.model ?? options.model,
     prompts,
     selfOf: options.selfOf,
-    maxEntries: options.compact.maxEntries ?? 80,
-    maxChars: options.compact.maxChars ?? 12_000,
+    maxTokens: options.compact.maxTokens ?? 100_000,
     ...(options.compact.limits ? { limits: options.compact.limits } : {}),
     onError: (error) => {
       if (error instanceof MemoryExtractError) console.error("[鱼缸] 记忆抽取失败", error.message);

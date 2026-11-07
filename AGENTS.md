@@ -150,6 +150,10 @@ fallback 模式保留 inbound 路径由 look 转述。
 
 ### 5. 压缩走自己的实现（2026-11 重构：剖面卡片 + transcript 尾巴）
 
+- **换页只按 token 阈值**（2026-11-07）：最近一次普通模型请求的 `input + cacheRead` 达到
+  `compact.maxTokens`（缺省 100000）或 `compact.byModel` 的 provider / provider/model 覆盖值
+  （`google-antigravity` 缺省 90000）后，等完整轮次结束再换页；不按消息条数/字数，不截断当前消息。
+  旧 `maxEntries/maxChars` 仅作退役告警，不参与触发。config set 支持对象 JSON 字符串和点路径合并写入
 - **禁止打开 pi-durable 内置的 compaction**（它会在中途注入库里写死的提示词，不可审查）
 - 压缩 = `src/compact.ts` 的换页 + `prompt/handoff.md` 的剖面提示词 + `prompt/messages.md` 的渲染模板（时间头与卡片，降级与剖面共用）
 - 换页新页结构 = **剖面卡片（≤300 字）+ 被压缩页尾部最近 50 条标准历史消息**：卡片字段 = 本页时间范围（纯机械）、活跃成员 top≤5（纯机械统计 fish.inbound 结构化数据）、进行中的话头/梗 ≤5（LLM 逐字引用原文短语附 [m:id] 锚点，禁转述）、这个群员的未完话头与承诺（LLM 逐字引用）、氛围一行（LLM）；**尾巴只从被压缩页 transcript 机械投影**（不碰 recent/chatlog，不把鱼没见过的消息伪装成已读），保持真实 entry 顺序，统一为 `[历史消息]` + 标准消息列表，引用/合集附件后置；旧窗口说明、旧账、工具过程不进尾部，旧数据缺真实 ID 时不伪造。engage_tick 背景板行也进尾巴（T12 裁定：背景板也是模型见过的内容），但不进摘要输入
@@ -187,9 +191,6 @@ fallback 模式保留 inbound 路径由 look 转述。
   的**全部**请求走隧道（模型流、`gpt_image`、内部 OAuth 刷新），其它 provider 与 SD/QQ 仍直连；
   不设进程级的 `--use-env-proxy`（那会把 zai / deepseek 也拖进代理）。codex 过代理必须同时 `transport: "sse"`——
   WebSocket 不吃 fetch 注入；`main` / `vision` / `image` / `vision_fallback` 复用同一个 provider 时共用这条代理。
-  google-gemini（Google 订阅 OAuth，Code Assist 通道）同理走 provider 代理：`cloudcode-pa.googleapis.com` 与
-  `oauth2.googleapis.com`（token 刷新走全局 fetch，靠 scoped proxy 接管）都进隧道；登录用
-  `npm run login -- google-gemini`（只有浏览器流程，授权码从 codeassist.google.com/authcode 页面复制回来）。
   google-antigravity（Antigravity 通道）是 AI Pro 订阅的**现通道**——个人账户 2026-06-18 起 gemini-cli
   通道整体停用，新登录一律走它；端点 `daily-cloudcode-pa.sandbox.googleapis.com`，同款 provider 代理
   （token 刷新的 `oauth2.googleapis.com` 一并进隧道）。oauthClient 同样只放本机 `config/models.json` 的
@@ -198,8 +199,8 @@ fallback 模式保留 inbound 路径由 look 转述。
   2026-11-07 实测：旧 `antigravity/1.11.5` 与旧 Gemini x-goog/client-metadata 头会被整通道拒绝，
   现按真实平台发送当前 IDE User-Agent；`providers.google-antigravity.userAgent` 可覆盖完整值，
   端点必须保持 sandbox（生产端点实测 429）。`npm run ping` 对 stopReason:error/aborted 必须非零退出
-- **OAuth client 常量只放本机配置**：gemini-cli 公开的 id/secret 只写本机 `config/models.json` 的
-  `providers.google-gemini.oauthClient`（模板留空串占位），源码里不出现——git 里含明文 client 会被
+- **OAuth client 常量只放本机配置**：Antigravity 的 id/secret 只写本机 `config/models.json` 的
+  `providers.google-antigravity.oauthClient`（模板留空串占位），源码里不出现——git 里含明文 client 会被
   GitHub push protection 拦推送；登录成功后 client 随凭据落盘（`config/auth.json`），token 刷新从
   凭据自带字段读，不依赖启动配置
 
@@ -518,7 +519,7 @@ npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消�
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
 npm run memory     # 长期记忆查看与审批（--persona / --chat / --json / --pending / --approve / --reject，见第 16 节）
 npm run creds show  # 凭据状态（只有长度）
-npm run login -- google-gemini [--browser | --finish '<授权码>']  # Google 订阅登录（只有浏览器流程；openai-codex 同入口）
+npm run login -- google-antigravity [--browser | --finish '<授权码>']  # Antigravity 登录（只有浏览器流程；openai-codex 同入口）
 npm run ping        # 模型连通性 + 用量（不打印 key）
 npm start          # 真跑（自动读 .env）——只在 macmini 上
 npm run deploy     # 部署：git pull + 平滑重启鱼（只在 macmini 上跑）

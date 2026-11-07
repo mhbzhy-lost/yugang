@@ -185,6 +185,18 @@ export const NEWS_DEFAULTS: NewsConfig = {
   perTopicOutput: 5,
 };
 
+export interface CompactConfig {
+  /** 默认单次请求上下文阈值（tokens）；完整轮次结束后才换页，不截断消息。 */
+  maxTokens: number;
+  /** provider 或 provider/model → token 阈值；精确模型键优先于 provider 键。 */
+  byModel: Record<string, number>;
+}
+
+/** 当前主模型实际使用的换页阈值：精确 provider/model 覆盖优先，其次 provider，最后默认。 */
+export function compactTokenLimitOf(config: CompactConfig, provider: string, modelId: string): number {
+  return config.byModel[`${provider}/${modelId}`] ?? config.byModel[provider] ?? config.maxTokens;
+}
+
 export interface FishConfig {
   /** next 搭话开窗参数：closed/open 节拍、积压与背景上限、nudge 阈值。 */
   engage: EngageConfig;
@@ -198,8 +210,8 @@ export interface FishConfig {
   sendPacingSeconds: number;
   /** 思考档位；启动时写进会话 agent，改完重启才生效。 */
   thinkingLevel: ThinkingLevel;
-  /** 换页阈值：条目数 / 字符数。 */
-  compact: { maxEntries: number; maxChars: number };
+  /** 换页阈值：按实际请求 tokens，支持按模型覆盖。 */
+  compact: CompactConfig;
   /** 单次工具调用超时（秒）：某个工具卡住超过这么久就报错，不再干等。 */
   toolTimeoutSeconds: number;
   /** 表情包跨轮冷却（分钟）：同一群两次配图之间的最短间隔。 */
@@ -265,19 +277,32 @@ function oneOf(body: string, values: readonly string[]) {
 function checkCompact(raw: unknown): FieldCheck {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "compact 必须是对象" };
   const c = raw as Record<string, unknown>;
-  const maxEntries = num(c["maxEntries"]);
-  const maxChars = num(c["maxChars"]);
-  if (c["maxEntries"] !== undefined && (maxEntries === undefined || maxEntries < 1 || maxEntries > 5000)) {
-    return { ok: false, reason: "compact.maxEntries 必须在 1–5000" };
+  const problems: string[] = [];
+  for (const legacy of ["maxEntries", "maxChars"]) {
+    if (c[legacy] !== undefined) problems.push(`compact.${legacy} 已停用，换页只按 tokens`);
   }
-  if (c["maxChars"] !== undefined && (maxChars === undefined || maxChars < 1000 || maxChars > 200_000)) {
-    return { ok: false, reason: "compact.maxChars 必须在 1000–200000" };
+  const maxTokens = c["maxTokens"] === undefined ? 100_000 : num(c["maxTokens"]);
+  if (maxTokens === undefined || maxTokens < 1_000 || maxTokens > 1_000_000) {
+    return { ok: false, reason: "compact.maxTokens 必须在 1000–1000000" };
   }
-  if (maxEntries === undefined && maxChars === undefined) return { ok: false, reason: "compact 至少要有 maxEntries 或 maxChars" };
-  return {
-    ok: true,
-    value: { maxEntries: maxEntries !== undefined ? Math.floor(maxEntries) : 200, maxChars: maxChars !== undefined ? Math.floor(maxChars) : 50_000 },
-  };
+  const byModel: Record<string, number> = {};
+  const rawOverrides = c["byModel"];
+  if (rawOverrides !== undefined && (!rawOverrides || typeof rawOverrides !== "object" || Array.isArray(rawOverrides))) {
+    return { ok: false, reason: "compact.byModel 必须是 provider/model 到 token 阈值的对象" };
+  }
+  for (const [key, rawLimit] of Object.entries((rawOverrides ?? {}) as Record<string, unknown>)) {
+    const limit = num(rawLimit);
+    const validKey = /^[^\s/]+(?:\/[^\s/]+)?$/.test(key);
+    if (!validKey || limit === undefined || limit < 1_000 || limit > 1_000_000) {
+      problems.push(`compact.byModel.${key || "(空键)"} 非法，已忽略`);
+      continue;
+    }
+    byModel[key] = Math.floor(limit);
+  }
+  for (const key of Object.keys(c)) {
+    if (!["maxTokens", "byModel", "maxEntries", "maxChars"].includes(key)) problems.push(`compact.${key} 不是受控字段，已忽略`);
+  }
+  return { ok: true, value: { maxTokens: Math.floor(maxTokens), byModel }, ...(problems.length > 0 ? { problems } : {}) };
 }
 
 function checkSalvage(raw: unknown): FieldCheck {
@@ -680,7 +705,7 @@ const DEFAULTS: FishConfig = {
   news: NEWS_DEFAULTS,
   sendPacingSeconds: 6,
   thinkingLevel: "low",
-  compact: { maxEntries: 200, maxChars: 50_000 },
+  compact: { maxTokens: 100_000, byModel: { "google-antigravity": 90_000 } },
   memeCooldownMinutes: 8,
   voices: {},
   toolTimeoutSeconds: 30,
