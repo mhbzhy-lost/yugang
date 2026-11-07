@@ -1,6 +1,6 @@
 ---
 name: config
-description: 查看或修改自己的运行配置：fish.config.json 受控字段与 config/models.json 角色表；只有主人在私聊里能用，标「需重启」的改动要重启进程才生效。
+description: 查看或修改自己的运行配置：fish.config.json 受控字段与 config/models.json 四角色表；只有主人在私聊里能用，标「需重启」的改动要重启进程才生效。
 ---
 
 查看和修改你自己的运行配置，两个能力：fish.config.json 的行为参数、config/models.json 的模型角色表。
@@ -9,8 +9,9 @@ description: 查看或修改自己的运行配置：fish.config.json 受控字�
 - `read`：一次看清两边现状——受控字段的当前生效值（含生效时机）和角色表现状。
 - `set`：改 fish.config.json 的一个受控字段，field + value 都必填；只认下面字段表的白名单，
   表外字段和不合法的值都会被拒绝、不落盘。
-- `models_list` / `models_switch`：看或切 models 角色表（main / vision / image）；provider 与 model
-  必须来自 `models_list` 的结果，别自己拼一个不存在的名字；image 是图片透传通道，模型名不校验。
+- `models_list` / `models_switch`：看或切 models 角色表（main / vision / vision_fallback / image）；provider 与 model
+  必须来自 `models_list` 的结果，别自己拼一个不存在的名字；vision_fallback 是主视觉失败后的兜底，
+  image 是图片透传通道，模型名不校验。
 
 主人没让改就别自己动。改完回话说清楚改了什么、什么时候生效；标「需重启」的字段
 要提醒主人调 restart。每次改动都会留审计日志。
