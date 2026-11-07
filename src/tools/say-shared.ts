@@ -331,61 +331,8 @@ export function takeAmmoShare(key: string): { id: string; windowId: string } | u
   return ammo;
 }
 
-// ── 新闻播报轮闸（外部计划 E7 修复）：scheduled answer 轮单次 say_words + 宿主重建 payload ──
-//
-// 新闻轮不再信任模型输出：宿主在 submitRound 前登记该轮（beginNewsBroadcastRound），
-// 出口层在 enqueueOutbound 里机械重建 payload——模型文本剥 URL，canonical 链接只从
-// 宿主索引（sourceRef）拼接；本轮第一次出口后置 consumed，第二次出口 tool error。
-// 以 conversationId 为键：新闻轮提交期间 awaitNewsSlot 已保证会话不忙，单轮独占。
-
-interface NewsBroadcastRegistration {
-  /** canonical 链接串（宿主从 sourceRef 索引渲染，URL 只来自宿主）。 */
-  links: readonly string[];
-  /** 本轮已出口：首次 say_words 置位，之后一切出口都以 tool error 拒绝。 */
-  consumed: boolean;
-}
-
-const newsBroadcastRounds = new Map<string, NewsBroadcastRegistration>();
-
-/** 宿主提交新闻轮前登记（附 canonical 链接）；未登记的会话不受闸，行为零变化。 */
-export function beginNewsBroadcastRound(conversationId: string, links: readonly string[]): void {
-  newsBroadcastRounds.set(String(conversationId), { links: [...links], consumed: false });
-}
-
-/** 新闻轮 settle 后注销登记（成功、失败、抛错都要清，不留孤儿闸）。 */
-export function endNewsBroadcastRound(conversationId: string): void {
-  newsBroadcastRounds.delete(String(conversationId));
-}
-
-/** 本轮是否已经出口过（宿主判「零出口」用：没出口的播报记 failed，不记 done）。 */
-export function newsBroadcastDelivered(conversationId: string): boolean {
-  return newsBroadcastRounds.get(String(conversationId))?.consumed === true;
-}
-
-/**
- * 登记中的新闻轮出口重建：媒体/语音出口拒绝（播报只许一条文字），第二次出口拒绝；
- * 文字出口剥 URL 后拼接宿主 canonical 链接。未登记 = 原样返回（其它轮零变化）。
- */
-function rebuildNewsPayloadIfRegistered(api: SayApi, payload: OutboundPayload): OutboundPayload {
-  const registration = newsBroadcastRounds.get(String(api.conversationId));
-  if (registration === undefined) return payload;
-  if (payload.media !== undefined || payload.voice !== undefined) {
-    throw new Error("新闻轮只许文字出口");
-  }
-  if (registration.consumed) {
-    throw new Error("新闻出口只有一次");
-  }
-  registration.consumed = true;
-  const body = payload.items.map(stripOutboundLinks).filter(Boolean).join("\n");
-  const items = [[body, ...registration.links].filter(Boolean).join("\n")];
-  return { ...payload, items };
-}
-
 /** 把 payload 落进 outbox（和 transcript entry 同一次提交）：宿主崩了也不会丢，重启后接着发。 */
-export async function enqueueOutbound(api: SayApi, rawPayload: OutboundPayload, context: unknown): Promise<void> {
-  // 新闻播报轮闸（外部计划 E7 修复）：登记中的轮只允许一次文字出口，payload 由宿主重建——
-  // 模型文本剥 URL，canonical 链接只按宿主索引（sourceRef）拼接，媒体/语音出口一律拒绝。
-  const payload = rebuildNewsPayloadIfRegistered(api, rawPayload);
+export async function enqueueOutbound(api: SayApi, payload: OutboundPayload, context: unknown): Promise<void> {
   await api.commit(async (tx) => {
     await tx.appendEntry(OutboundEntry, api.conversationId, { data: payload });
     const box = await tx.doc(OutboxDoc, api.conversationId);

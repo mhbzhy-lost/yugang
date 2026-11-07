@@ -5,6 +5,7 @@
  *   归一（末条自言/原文/卡片/流水/昵称/chatlog/bypass）
  *   → 主人 `/` 指令（闸前机械通道）
  *   → 规则闸（白名单 / @ / 开窗）
+ *   → 新闻准备冻结（目标群 @ 机械接待 / 非 @ 留拍）
  *   → 群消息：shard 或 10 秒窗口
  *   → 私聊：即时提交
  *
@@ -28,6 +29,7 @@ import {
   installSignals,
   listenMessages,
   normalizeInbound,
+  newsFreezeStage,
   printBanner,
   privateChatStage,
   restoreSessions,
@@ -46,6 +48,7 @@ const app = createApp<MessageCtx, PendingBurst>();
 app.use(normalizeInbound);
 app.use(commandsStage);
 app.use(gateStage);
+app.use(newsFreezeStage);
 app.use(groupWindowStage);
 app.use(privateChatStage);
 

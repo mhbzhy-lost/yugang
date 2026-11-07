@@ -16,7 +16,7 @@ import type { EgressLimits } from "../egress/policy.ts";
 import type { EngagementMode } from "../fish-config.ts";
 import type { PromptSet } from "../prompt/index.ts";
 import type { OutboundPayload } from "../tools/say-shared.ts";
-import type { RoundKind, RoundTrigger } from "../tools/types.ts";
+import type { RoundKind, RoundTrigger, ToolPackageDeps } from "../tools/types.ts";
 import type { CompactResult } from "../compact.ts";
 import type { MemoryCommand, PendingMemoryEntry } from "../memory/index.ts";
 import type { WatchedPerson } from "../store.ts";
@@ -122,6 +122,8 @@ export interface FishOptions {
   ttsOf?: (conversationId: string) => TtsConfig | undefined;
   /** 搭话模式现取（热）：runtime 的「自由活动群」小节仅 free（GROUPS 群）注入；缺省 = legacy（裁掉）。 */
   engagementOf?: (chatKey: string) => EngagementMode;
+  /** 新闻备料工具的生产适配；缺省不注册 news_prepare。 */
+  newsPrepare?: ToolPackageDeps["newsPrepare"];
   /** 静默轮（自动收表情包）：这一轮 say_* 一律拒绝。 */
   silentOf?: (roundId: unknown) => boolean;
   /** 本轮 say_* 的 execute 被进入时回调；宿主按 submission 计数，识别零出口轮。 */

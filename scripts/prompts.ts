@@ -44,6 +44,7 @@ const surface = await loadToolSurface({
   limits: { ...DEFAULT_LIMITS, mediaRoot },
   react: () => {},
   master: "0",
+  newsPrepare: async () => ({ status: "rejected", reason: "audit_only" }),
   // remind 工具的底座任务（宿主没传就不注册；审查视图要看到它）
   reminderTask: makeReminderTask({ messages: () => ({}), drain: async () => {}, log: () => {} }),
 });

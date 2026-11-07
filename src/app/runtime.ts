@@ -55,13 +55,13 @@ import { localDay } from "../records/usage.ts";
 import { weeklyStats, renderWeekly } from "../records/stats.ts";
 import { createUsageLedger, sumUsage } from "../records/usage.ts";
 import { bypassAllowed, splitBypass, BYPASS_RE } from "../qq/bypass.ts";
-import { ChatsDoc, MemoryPendingDoc, WatchDoc } from "../store.ts";
+import { ChatsDoc, MemoryPendingDoc, OutboxDoc, WatchDoc } from "../store.ts";
 import { renderTemplate } from "../prompt/index.ts";
 import { MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "../memory/index.ts";
 import { memoryKeyOf, pushScope, shiftScope } from "../memory/scope.ts";
-import { beginNewsBroadcastRound, endNewsBroadcastRound, newsBroadcastDelivered, OutboundEntry, stripOutboundLinks, type OutboundPayload } from "../tools/say-shared.ts";
+import { OutboundEntry, type OutboundPayload } from "../tools/say-shared.ts";
 import { createConfigLoader, engageSettingsOf } from "../fish-config.ts";
-import { UsageDoc, defineDoc } from "@earendil-works/pi-durable";
+import { UsageDoc } from "@earendil-works/pi-durable";
 // —— 外部信息源基础设施（docs/plans/2026-11-02-external-ammo.md；2026-11-04 模型输入计划 T3）——
 // B 站弹药管线（worker 逛轮 / 空库补货 / 手动逛轮 / 全局分享挂点）已停用：旧源码
 // （external/scheduler、external/ammo-store、ammo_list / ammo_submit 工具包、say-shared 的
@@ -71,8 +71,7 @@ import { UsageDoc, defineDoc } from "@earendil-works/pi-durable";
 // 不可信文本清洗见 src/external/sanitize.ts，新闻取料客户端见 src/external/news-client.ts，
 // 视频浏览门与 viewed 登记见 src/external/video-browse.ts。
 import { createScheduler, nodeTimers } from "../external/scheduler.ts";
-import { createNewsClient, type NewsItem, type NewsTopicFeed } from "../external/news-client.ts";
-import { sanitizeExternalText } from "../external/sanitize.ts";
+import { createNewsClient, type NewsTopicFeed } from "../external/news-client.ts";
 import { getBiliClient } from "../external/bili-client.ts";
 import { clearViewedVideos } from "../external/video-browse.ts";
 import { clearSeenLinks, recordSeenLinks } from "../egress/seen-links.ts";
@@ -80,7 +79,10 @@ import { shouldSendWorkingReceipt } from "../working-receipt.ts";
 import type { Middleware } from "./app.ts";
 import { planInlineImages, planRoundImages, rewriteRoundForwardImages } from "../qq/round-images.ts";
 import { appendAnswerRules, appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
-import { NEWS_BROADCAST_MAX_CHARS, renderNewsBroadcast, renderNewsTask, type NewsDigest, type NewsDigestItem, type NewsDigestSection } from "../external/news-broadcast.ts";
+import { buildNewsCandidateInput, renderNewsBroadcast, validateNewsDigest, type NewsCandidateInput, type NewsDigest } from "../external/news-broadcast.ts";
+import { createNewsJob, type NewsJob } from "../external/news-job.ts";
+import { createNewsFreeze, NewsFrozenError, splitNewsBurst } from "../external/news-freeze.ts";
+import { createNewsRunStore, isCompleteNewsRun, newsRunKeyOf, type NewsRunStore } from "../external/news-runs.ts";
 
 // 每条入站消息的原始文本（卡片渲染 / bypass 剥离之前取）：记忆 entry 只存群友原话，
 // 不把 card_bilibili / forward_collapsed 等宿主文案写进 fish.inbound。WeakMap 键是消息对象，
@@ -253,7 +255,7 @@ const chatKeys = new Map<string | number, string>();
 const compacting = new Set<string>();
 // 会话忙（换页 / next 在途轮）的判定：起新提交与起换页前都要先看它。
 // 在途轮登记见 nextInFlight（shard 到期与开窗注入据此退避，同一会话绝不并发提交）。
-function conversationBusy(id: string | number): boolean {
+export function conversationBusy(id: string | number): boolean {
   const key = String(id);
   return compacting.has(key) || nextInFlight.has(key);
 }
@@ -391,6 +393,24 @@ const workingSent = new Map<string, Set<string>>();
 // 零 say_* 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
 const burstMustAnswer = new Map<string, boolean>();
 
+export const newsFreezes = createNewsFreeze();
+
+export class NewsDeadlineError extends Error {
+  constructor() {
+    super("news_timeout");
+    this.name = "NewsDeadlineError";
+  }
+}
+
+const freezeNewsTarget = newsFreezes.freeze;
+const expireNewsTarget = newsFreezes.expire;
+const unfreezeNewsTarget = newsFreezes.unfreeze;
+const setNewsAttempt = newsFreezes.attempt;
+
+function assertNewsAdmission(chatKey: string, conv: Conversation, trigger: RoundTrigger): void {
+  newsFreezes.assert(chatKey, String(conv.id), trigger);
+}
+
 /** 入站文本里 inline 图引用的机械模式（与 round-images.ts 的 IMAGE_REF_PATTERN 同式）。 */
 const IMAGE_REF_PATTERN = /\[图片 (inbound\/[^\]\s]+)\]/g;
 
@@ -406,6 +426,11 @@ const MUST_ANSWER_REASONS: ReadonlySet<string> = new Set(["private", "mentioned"
 const conversations = new Map<string, Conversation>();
 
 let fish!: Fish;
+
+/** 已装配的运行时 Fish：本地生产宿主 smoke 与运维适配共用，不增加第二个实例。 */
+export function runtimeFish(): Fish {
+  return fish;
+}
 
 export async function bootRuntime(): Promise<void> {
   fish = await openFish({
@@ -487,6 +512,8 @@ export async function bootRuntime(): Promise<void> {
   // 主模型直读图的事实（每轮现算）：look 机械锁死 / meme_import 结果附图都以它为准
   inlineVisionOn: () => inlineVisionOn(),
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
+  silentOf: (roundId) => triggerOf.get(String(roundId))?.kind === "news",
+  newsPrepare: (input) => prepareNewsFromTool(input),
   // 搭话模式（2026-11-06 合并）：GROUPS 群全部 free（保留「自由活动群」段）、
   // legacy（私聊 / worker / 群外会话）裁掉；判定与自检脚本共用 engageModeOf
   engagementOf: (chatKey: string) => engageModeOf(chatKey, config.groups),
@@ -660,6 +687,8 @@ export async function bootRuntime(): Promise<void> {
   },
   });
 
+  installNewsJob();
+
   // 启动装载特别关注名单：锚点行打标与主动 @ 白名单都要用，重启后立刻生效。
   // 放在 boot 里（engage 启动之前），与迁移前的模块加载时点等价。
   const chats = await fish.harness.snapshot(ChatsDoc, ctx);
@@ -709,7 +738,7 @@ async function personaOfChatKey(chatKey: string): Promise<{ persona: string; eff
   return { persona, effective };
 }
 
-async function conversationFor(chatKey: string): Promise<Conversation> {
+export async function conversationFor(chatKey: string): Promise<Conversation> {
   // 当前人格：非变更式读取（严禁对 snapshot() 结果赋值）；fish.group 拿原始值（悬空它自己回退）
   const { persona, effective } = await personaOfChatKey(chatKey);
   const mapKey = effective === "默认" ? chatKey : `${chatKey}#${effective}`;
@@ -869,7 +898,7 @@ async function salvagePlainReply(
  * 全部挪到这里、在真正 submit 之前做：以前是 gate 放行那一刻就清，同一组连续发言的
  * follow-up 进来会把这一轮的引用目标和记账提前抹掉。
  */
-async function submitRound(input: {
+export async function submitRound(input: {
   chatKey: string;
   conv: Conversation;
   content: string;
@@ -883,6 +912,9 @@ async function submitRound(input: {
      *  ambient shard 与其它轮不传 = 无授权（T4 的浏览/分享工具只认这两个字段）。 */
     browseWindow?: string;
     browseTopic?: string;
+    /** 新闻备料轮身份：run key 与本次尝试序号。 */
+    newsRunId?: string;
+    newsAttempt?: number;
   };
   /** 本轮是不是在回复别人（回复链要引用） */
   reply: boolean;
@@ -900,13 +932,27 @@ async function submitRound(input: {
   entryKind?: string;
   /** 本轮注入窗口的消息 id（T4 quoteMsgId 合法目标）；随 triggerOf 在 settle 清除 */
   quoteIds?: ReadonlySet<string>;
+  /** 新闻备料：通用模型错误重试缺省 3，新闻固定 1，由调度器计首次 + 3 次重试。 */
+  modelAttempts?: number;
+  /** 硬截止 epoch ms；入口、密钥吸收后与每次真实提交前都复查。 */
+  deadline?: number;
 }): Promise<SettledSubmissionRecord["status"]> {
   const { chatKey, conv, trigger } = input;
-  // 在途登记要在任何 await 之前（busy 检查与提交之间不开窗口）：仅 next 登记对称登记/释放
   const roundKind: RoundKind = trigger.kind ?? "answer";
+  assertNewsAdmission(chatKey, conv, trigger);
+  if (input.deadline !== undefined && Date.now() >= input.deadline) throw new NewsDeadlineError();
+  // 在途登记要在任何 await 之前（busy 检查与提交之间不开窗口）：仅 next 登记对称登记/释放
   const trackInFlight = engageNextOf(chatKey);
-  if (trackInFlight) registerInFlight(conv.id, roundKind);
+  let inFlightRegistered = Boolean(trackInFlight);
+  const releaseTrackedInFlight = (): void => {
+    if (!inFlightRegistered) return;
+    inFlightRegistered = false;
+    releaseInFlight(conv.id, roundKind);
+  };
+  try {
   await absorbSecrets(conv);
+  assertNewsAdmission(chatKey, conv, trigger);
+  if (input.deadline !== undefined && Date.now() >= input.deadline) throw new NewsDeadlineError();
   resetRun(conv.id);
   resetLook(conv.id);
   // 被@必回引用，让群里看得出鱼在回谁
@@ -941,10 +987,12 @@ async function submitRound(input: {
   let settled: SettledSubmissionRecord;
   // 轮内自愈：模型错误（如内容拦截 1301）时自动重试，第三次尝试前强制换页——
   // 摘要同源失败会走机械降级把可能的中毒内容清出活跃页，一次输入就能自愈，不依赖用户重发
-  const MAX_MODEL_ATTEMPTS = 3;
+  const MAX_MODEL_ATTEMPTS = input.modelAttempts ?? 3;
   try {
     for (let attempt = 1; ; attempt++) {
-      if (attempt === MAX_MODEL_ATTEMPTS) {
+      assertNewsAdmission(chatKey, conv, trigger);
+      if (input.deadline !== undefined && Date.now() >= input.deadline) throw new NewsDeadlineError();
+      if (roundKind !== "news" && attempt === MAX_MODEL_ATTEMPTS && MAX_MODEL_ATTEMPTS > 1) {
         const cleared = await compactWithGuard(conv, true, chatKey);
         if (cleared.compacted) {
           console.log(`[鱼缸] ${chatKey} 换页 ${cleared.entries}条/${cleared.chars}字 ·强制`);
@@ -973,6 +1021,8 @@ async function submitRound(input: {
         // 视频浏览授权（T3）：只随零新增主动轮钉上（T4 的 bili_hot/video/say_words 消费）
         ...(trigger.browseWindow !== undefined ? { browseWindow: trigger.browseWindow } : {}),
         ...(trigger.browseTopic !== undefined ? { browseTopic: trigger.browseTopic } : {}),
+        ...(trigger.newsRunId !== undefined ? { newsRunId: trigger.newsRunId } : {}),
+        ...(trigger.newsAttempt !== undefined ? { newsAttempt: trigger.newsAttempt } : {}),
       });
       // 重耗时工具的机械提示要落回本轮会话：登记轮的会话，settle 的 finally 里删
       roundConv.set(String(submission.id), conv);
@@ -988,7 +1038,7 @@ async function submitRound(input: {
         // answer 轮打一行宿主日志让这类轮立刻可见（收图轮不经 submitRound，天然不在观测范围），
         // 完整解释在 .agents/skills/ops/SKILL.md；ambient（shard）/ injection 轮零出口是
         // 合法沉默（F2/F3），不算异常不占观测日志
-        if (result.status === "done" && (sayCalled.get(String(submission.id)) ?? 0) === 0) {
+        if (roundKind !== "news" && result.status === "done" && (sayCalled.get(String(submission.id)) ?? 0) === 0) {
           if (roundKind === "answer") console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say_*`);
           // 必答轮的兜底补发：配置可关（mtime 热加载，每次触发现读）；环境轮只留上面的观测日志。
           // done 变体的 settle 记录带本轮输入（entry）与末条 assistant（answer）的 entry id，兜底按 id 定位
@@ -1030,13 +1080,15 @@ async function submitRound(input: {
     // scope 队列满（scopeToken undefined）时本轮没压过 scope，不能弹掉别人的队首
     if (scopeToken !== undefined) shiftScope(String(conv.id), scopeToken);
     // 在途登记对称释放（仅 next 登记过）；ambient/injection 清零时唤醒等待的 @ 轮
-    if (trackInFlight) releaseInFlight(conv.id, roundKind);
+    releaseTrackedInFlight();
   }
   if (settled.status !== "done") {
     const why = [settled.status, (settled as { reason?: string }).reason, (settled as { detail?: string }).detail]
       .filter(Boolean)
       .join(" · ");
     console.error(`[鱼缸] ${chatKey} 这一轮没答上来：${why}`);
+    // 新闻备料失败不压缩：它不携带群对话，且换页会越过备料硬截止。
+    if (roundKind === "news") return settled.status;
     // 轮内重试与强制换页都试过仍失败：再尝试一次常规自动换页（阈值满足时），保持既有行为
     const compacted = await compactWithGuard(conv, false, chatKey);
     if (compacted.compacted) {
@@ -1057,11 +1109,16 @@ async function submitRound(input: {
     console.log(`[鱼缸] ${chatKey} +${delta.total} tokens / ${delta.cost}`);
   }
 
+  if (roundKind === "news") return settled.status;
   const compacted = await compactWithGuard(conv, false, chatKey);
   if (compacted.compacted) {
     console.log(`[鱼缸] ${chatKey} 换页 ${compacted.entries}条/${compacted.chars}字`);
   }
   return settled.status;
+  } finally {
+    // absorbSecrets、准入复查或轮后处理任一处提前抛出，都不能把会话永久留在 busy。
+    releaseTrackedInFlight();
+  }
 }
 
 /**
@@ -1089,6 +1146,49 @@ async function compactWithGuard(conv: Conversation, force = false, chatKey = "")
 /** @ 轮遇在途 ambient（shard）/ injection 轮的排队上限：超时转 busy_reply，不静默丢。 */
 const ANSWER_WAIT_MS = 60_000;
 
+async function sendNewsPreparingReplies(conv: Conversation, messages: readonly BurstMessage[]): Promise<void> {
+  let queued = false;
+  for (const message of messages) {
+    if (!message.mentionsBot || message.messageId === undefined) continue;
+    await fish.enqueue(conv.id, {
+      items: [fish.prompts.messages["news_preparing_reply"] ?? "news_preparing_reply"],
+      quote: true,
+      quoteId: message.messageId,
+      quoteForce: true,
+      at: Date.now(),
+      key: `news-preparing:${localDay(Date.now())}:${message.messageId}`,
+    });
+    queued = true;
+  }
+  if (queued) await drainLoop();
+}
+
+function recycleNewsNonMentions(chatKey: string, messages: readonly BurstMessage[]): void {
+  for (const message of messages) {
+    if (message.mentionsBot) continue;
+    engageNext.collectShard(chatKey, {
+      userId: message.userId,
+      nickname: message.nickname,
+      text: message.text,
+      at: message.at,
+      ...(message.arrivalSeq !== undefined ? { arrivalSeq: message.arrivalSeq } : {}),
+      ...(message.messageId !== undefined ? { messageId: message.messageId } : {}),
+      ...(message.mediaOnly !== undefined ? { mediaOnly: message.mediaOnly } : {}),
+      ...(message.payload !== undefined ? { payload: message.payload } : {}),
+      replyIds: message.replyIds,
+      ...(message.quoted !== undefined ? { quoted: message.quoted } : {}),
+      ...(message.mentionTargets !== undefined ? { mentionTargets: message.mentionTargets } : {}),
+    });
+  }
+}
+
+async function holdBurstForNews(burst: PendingBurst, conv: Conversation): Promise<void> {
+  const { mentions, nonMentions } = splitNewsBurst(burst.messages);
+  await sendNewsPreparingReplies(conv, mentions);
+  recycleNewsNonMentions(burst.chatKey, nonMentions);
+  console.log(`[鱼缸] ${burst.chatKey} 新闻冻结回收待定组 ${burst.messages.length}`);
+}
+
 /**
  * 10 秒静默到期：整组一起进模型。
  *
@@ -1104,6 +1204,11 @@ export async function flushBurst(burst: PendingBurst): Promise<void> {
   burstMustAnswer.delete(windowKey(burst.chatKey, burst.userId));
   // 会话/人格只认首次 push 那一份：10 秒窗口里主人 /切换人格 也改不了这一组的落点
   const conv = (burst.binding as Conversation | undefined) ?? (await conversationFor(anchor.chatKey));
+
+  if (newsFreezes.has(anchor.chatKey)) {
+    await holdBurstForNews(burst, conv);
+    return;
+  }
 
   // 换页 / 收图轮进行中：不再受理新提交（根治换页竞态把活跃轮吃掉的问题）
   if (compacting.has(String(conv.id))) {
@@ -1125,6 +1230,11 @@ export async function flushBurst(burst: PendingBurst): Promise<void> {
       await sendBusyReplies(conv, burst.messages.filter((m) => m.mentionsBot).map((m) => m.messageId));
       return;
     }
+  }
+
+  if (newsFreezes.has(anchor.chatKey)) {
+    await holdBurstForNews(burst, conv);
+    return;
   }
 
   // 图片输入（decisions §5.4）：inline 模式把本轮图换成 [图片#N] 编号 + 末尾压缩图
@@ -1181,7 +1291,8 @@ export async function flushBurst(burst: PendingBurst): Promise<void> {
     const qq = nameToQq.get(anchor.chatKey)?.get(name);
     if (qq && !speakers.some((s) => s.subject === `qq:${qq}`)) speakers.push({ subject: `qq:${qq}`, name });
   }
-  await submitRound({
+  try {
+    await submitRound({
     chatKey: anchor.chatKey,
     conv,
     content,
@@ -1194,7 +1305,12 @@ export async function flushBurst(burst: PendingBurst): Promise<void> {
     ...(payload !== undefined ? { bypass: payload } : {}),
     ...(plan.blocks.length > 0 ? { imageBlocks: plan.blocks } : {}),
     memory: { inbound: memoryInbound, speakers },
-  });
+    });
+  } catch (error) {
+    if (!(error instanceof NewsFrozenError)) throw error;
+    await holdBurstForNews(burst, conv);
+    return;
+  }
   // 唤醒轮 flag 无条件推满（主人裁定 2026-11-06，不受背景配置影响）：推进到 recent 末条
   //（最新消息），被背景截断跳过的未读视为已读丢弃。收集器里的消息随后由
   // submitShardRound 的 fresh 过滤剔掉，不会重复注入。
@@ -1731,6 +1847,7 @@ const engageNext = createEngageNext({
   // gate 也只放行 GROUPS 群，两处同源。
   groups: () => config.groups.map((g) => "qq:group:" + g),
   busy: (chatKey) => {
+    if (newsFreezes.has(chatKey)) return true;
     // 该群任一会话（含人格映射键）正被换页 / 收图 / 在途轮占着：本拍作废（消息留到下一拍）
     for (const conv of conversations.values()) {
       if (chatKeys.get(conv.id) === chatKey && conversationBusy(conv.id)) return true;
@@ -1778,334 +1895,181 @@ function syncBiliBudget(): void {
 }
 syncBiliBudget(); // 启动即灌一次：共享客户端在首次请求前就持有当前预算上限（缺省 60）
 
-// ── 新闻播报 job（外部计划 Task E7，决策 10–12）：scheduler 第二实例 news.at 起播 ──────
+// ── 新闻备料 job：人格选材、独立准备窗口、宿主机械发布 ─────────────────────
 
-const NEWS_JOB_TIMEOUT_MS = 45 * 60_000; // 硬截止：30 分钟推迟窗口 + 取料/归纳/播报余量
-const NEWS_ABORT_MARGIN_MS = 60_000; // 抢跑余量：比 scheduler watchdog 早 60s abort 在途会话，保证 failed_timeout 落账前已收束
-const NEWS_DEFER_MAX_MS = 30 * 60_000; // T15：末条自言最多推迟 30 分钟（决策 10，宁少勿扰）
-const NEWS_DEFER_STEP_MS = 5 * 60_000; // 推迟重查步长（每 5 分钟重查）
-const NEWS_RUNS_TTL_DAYS = 30; // fish.news_runs 只服务幂等与近期审计，写入时顺手清老账
-
-/** fish.news_runs 账本（决策 4）：localDay+targetGroup 幂等，state + digest。 */
-interface NewsRunRecord {
-  localDay: string;
-  targetGroup: string;
-  state: "running" | "done" | "failed";
-  startedAt: number;
-  finishedAt?: number;
-  /** 失败原因（成功时不写）。 */
-  error?: string;
-  /** 成品播报文本（≤500 字，审计用）。 */
-  digest?: string;
-}
-interface NewsRunsState {
-  /** key = newsRunKeyOf(localDay, targetGroup)。 */
-  runs: Record<string, NewsRunRecord>;
-}
-const NewsRunsDoc = defineDoc<NewsRunsState>({
-  kind: "fish.news_runs",
-  version: 1,
-  scope: "session",
-  initial: () => ({ runs: {} }),
-  checkpointWhen: () => true,
-});
-
-function newsRunKeyOf(day: string, group: string): string {
-  return `${day} ${group}`;
-}
-
-async function readNewsRun(day: string, group: string): Promise<NewsRunRecord | undefined> {
-  const doc = await fish.harness.snapshot(NewsRunsDoc, ctx);
-  return doc?.runs?.[newsRunKeyOf(day, group)];
-}
-
-async function writeNewsRun(record: NewsRunRecord): Promise<void> {
-  await fish.harness.commit(async (tx) => {
-    const doc = await tx.doc(NewsRunsDoc);
-    doc.runs ??= {};
-    doc.runs[newsRunKeyOf(record.localDay, record.targetGroup)] = record;
-    const horizon = localDay(Date.now() - NEWS_RUNS_TTL_DAYS * 86_400_000);
-    for (const [key, run] of Object.entries(doc.runs)) {
-      if (run.localDay < horizon) delete doc.runs[key];
-    }
-  }, ctx);
-}
-
-/** 新闻取料客户端：单源失败降内容不阻断，全源失败抛 NewsAllSourcesDownError（E6）。 */
 const newsClient = createNewsClient({ log: (message) => console.log(`[鱼缸] ${message}`) });
+const newsPreparationCandidates = new Map<string, {
+  feeds: NewsTopicFeed[];
+  input: NewsCandidateInput;
+  perTopicOutput: number;
+}>();
+let newsRunStore: NewsRunStore | undefined;
+let newsJob: NewsJob | undefined;
+let onebotReady = false;
 
-/** 归纳输入：标题级 items 带宿主索引（[n] = sourceRef），URL 不进模型。 */
-function buildNewsDigestInput(feeds: readonly NewsTopicFeed[]): { prompt: string; index: Map<string, NewsItem> } {
-  const index = new Map<string, NewsItem>();
-  const blocks: string[] = [];
-  let seq = 0;
-  for (const feed of feeds) {
-    const lines: string[] = [];
-    for (const item of feed.items) {
-      const ref = String(seq++);
-      index.set(ref, item);
-      lines.push(`[${ref}] ${item.title}`);
-    }
-    blocks.push([`## ${feed.topic}`, ...lines].join("\n"));
-  }
-  return { prompt: blocks.join("\n\n"), index };
+function newsStore(): NewsRunStore {
+  if (!newsRunStore) throw new Error("news_store_not_ready");
+  return newsRunStore;
 }
 
-/** main 模型一次性调用（与记忆脱敏同款入口）：返回拼接后的纯文本输出。 */
-async function completeNewsDigest(prompt: string): Promise<string> {
-  const model = models.getModel(mainModel.provider, mainModel.modelId);
-  if (!model) throw new Error(`model_not_found:${mainModel.provider}/${mainModel.modelId}`);
-  const message = await models.streamSimple(model, { messages: [{ role: "user", content: prompt }] }).result();
-  return message.content
-    .filter((block): block is { type: "text"; text: string } => block.type === "text" && typeof block.text === "string")
-    .map((block) => block.text)
-    .join("\n");
+async function prepareNewsFromTool(input: {
+  runId: string;
+  attempt: number;
+  conversationId: string;
+  digest: NewsDigest;
+}): Promise<{ status: "prepared" | "rejected"; reason?: string }> {
+  const separator = input.runId.indexOf(" ");
+  if (separator <= 0) return { status: "rejected", reason: "run_id" };
+  const day = input.runId.slice(0, separator);
+  const group = input.runId.slice(separator + 1);
+  const run = await newsStore().read(day, group);
+  if (!isCompleteNewsRun(run) || run.state !== "preparing") return { status: "rejected", reason: "run_state" };
+  if (run.conversationId !== input.conversationId || run.attempts !== input.attempt) {
+    return { status: "rejected", reason: "stale_attempt" };
+  }
+  const now = Date.now();
+  if (now >= run.publishAt) return { status: "rejected", reason: "news_timeout" };
+  const cached = newsPreparationCandidates.get(input.runId);
+  if (!cached) return { status: "rejected", reason: "candidates_missing" };
+  const checked = validateNewsDigest(input.digest, cached.feeds, cached.input, cached.perTopicOutput);
+  if (!checked.ok) return { status: "rejected", reason: checked.reason };
+  const broadcast = renderNewsBroadcast(day, checked.digest, cached.input.index, fish.prompts.messages);
+  if (!broadcast.text || broadcast.links.length === 0) return { status: "rejected", reason: "render_empty" };
+  const status = await newsStore().prepare({
+    day,
+    group,
+    attempt: input.attempt,
+    conversationId: input.conversationId,
+    now,
+    broadcast,
+  });
+  return status === "prepared" ? { status: "prepared" } : { status: "rejected", reason: status };
 }
 
-function newsStrOf(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-/** 严格对象判定：非 null 非数组的 object 才算，否则 undefined（严格 schema 的形状闸）。 */
-function newsObjOf(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-}
-
-/** 键集合完全一致才算过：NewsDigest 严格 schema 的「不增」检查（未知字段拒绝）。 */
-function newsKeysMatch(obj: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(obj).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, i) => key === expected[i]);
-}
-
-/**
- * 严格解析 NewsDigest（终验 #10 修复）：
- *   - 未知字段拒绝：根对象只认 sections+closing，section 只认 topic+items，item 只认
- *     summary+sourceRef，键集合多一个、少一个都整体作废（调用方重试一次后放弃当日）；
- *   - sections 按输入 feed 顺序重建：模型乱序输出由宿主纠序，输入里的 topic 缺席、
- *     未知/重复 topic、未知/重复 sourceRef 一律整体作废（不增不减）；
- *   - 空 section 策略（与 prompt/news-digest.md 一致）：模型可以对没有可播条目的 topic
- *     给空 items——宿主丢弃空 section 并记一行日志（「无可播条目，已省略」，不算违约），
- *     全部 topic 都空才返回 undefined。
- */
-function parseNewsDigest(
-  raw: string,
-  feeds: readonly NewsTopicFeed[],
-  index: ReadonlyMap<string, NewsItem>,
-  perTopicOutput: number,
-): NewsDigest | undefined {
-  // 容忍一层代码围栏：只取首个 { 到末个 } 之间的内容，其余一概不认
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start < 0 || end <= start) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.slice(start, end + 1));
-  } catch {
-    return undefined;
-  }
-  const root = newsObjOf(parsed);
-  if (root === undefined || !newsKeysMatch(root, ["sections", "closing"]) || !Array.isArray(root["sections"])) return undefined;
-  const topicNames = new Set(feeds.map((feed) => feed.topic));
-  const byTopic = new Map<string, NewsDigestSection>();
-  for (const rawSection of root["sections"]) {
-    const section = newsObjOf(rawSection);
-    if (section === undefined || !newsKeysMatch(section, ["topic", "items"]) || !Array.isArray(section["items"])) return undefined;
-    const topic = newsStrOf(section["topic"]);
-    // topic 必须逐字命中输入（不增不减）：未知或重复 topic 都是 schema 违约，整体作废
-    if (!topicNames.has(topic) || byTopic.has(topic)) return undefined;
-    const seenRefs = new Set<string>();
-    const items: NewsDigestItem[] = [];
-    for (const rawItem of section["items"]) {
-      if (items.length >= perTopicOutput) break; // 超上限的部分不采信（截断语义不变）
-      const entry = newsObjOf(rawItem);
-      if (entry === undefined || !newsKeysMatch(entry, ["summary", "sourceRef"])) return undefined;
-      const ref = newsStrOf(entry["sourceRef"]).trim();
-      if (!index.has(ref) || seenRefs.has(ref)) return undefined; // 未知/重复索引：违约
-      const summary = sanitizeExternalText(newsStrOf(entry["summary"]), { maxLen: 60 });
-      if (summary.length === 0 || /https?:\/\//i.test(summary)) return undefined; // URL 不进模型输出
-      seenRefs.add(ref);
-      items.push({ summary, sourceRef: ref });
-    }
-    byTopic.set(topic, { topic, items });
-  }
-  // 按输入 feed 顺序重建；输入里的 topic 少一个 section 都算「减」，整体作废
-  const sections: NewsDigestSection[] = [];
-  for (const feed of feeds) {
-    const section = byTopic.get(feed.topic);
-    if (section === undefined) return undefined;
-    if (section.items.length === 0) {
-      console.log(`[鱼缸] 新闻 ${feed.topic} 空条目，省略`);
-      continue;
-    }
-    sections.push(section);
-  }
-  if (sections.length === 0) return undefined;
-  // closing 同样剥 URL（终验 #7）：宿主渲染时链接只从 sourceRef 索引拼接，收尾句不许带链接
-  const closing = stripOutboundLinks(sanitizeExternalText(newsStrOf(root["closing"]), { maxLen: 60 }));
-  return { sections, closing };
-}
-
-/** 归纳（决策 12）：模型/解析失败重试 1 次，两次都失败抛错——调用方放弃当日。 */
-async function digestNewsWithRetry(
-  prompt: string,
-  feeds: readonly NewsTopicFeed[],
-  index: ReadonlyMap<string, NewsItem>,
-  perTopicOutput: number,
-): Promise<NewsDigest> {
-  let reason = "digest_invalid";
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    let raw = "";
-    try {
-      raw = await completeNewsDigest(prompt);
-    } catch (error) {
-      reason = `digest_model:${error instanceof Error ? error.message.slice(0, 60) : "error"}`;
-      continue;
-    }
-    const digest = parseNewsDigest(raw, feeds, index, perTopicOutput);
-    if (digest !== undefined) return digest;
-    reason = "digest_invalid";
-  }
-  throw new Error(reason);
-}
-
-/**
- * 宿主渲染成品播报：模板 key（news_header/news_topic/news_item/news_closing）逐行拼装，
- * canonical 链接由 sourceRef 索引现查（模型输出里没有 URL）；≤budget（缺省 500）字，
- * 超限按 topic 顺序裁剪；收尾句预算预留，只要头行之后放得下就保证在场。
- * 返回值附 links：实际进了播报的条目的 canonical URL（按 sourceRef 索引现查，顺序同播报），
- * 宿主登记进新闻轮闸，出口重建 payload 时只认这份列表——模型文本里的 URL 一律剥掉。
- */
-const sleepUnref = (ms: number): Promise<void> => new Promise((resolve) => {
-  const timer = setTimeout(resolve, ms);
-  timer.unref?.();
-});
-
-/**
- * T15 推迟（决策 10）：发送前查末条自言（lastWasFish），为 true 则每 5 分钟重查，
- * ≤30 分钟；会话忙（换页/收图/在途轮）一并等。窗口内仍不行返回 false——放弃当日，宁少勿扰。
- * cancelled 回调（新闻硬截止抢跑闸）返回 true 时立即放失败，不再等槽位。
- */
-async function awaitNewsSlot(conv: Conversation, chatKey: string, cancelled?: () => boolean): Promise<boolean> {
-  const startedAt = Date.now();
-  for (;;) {
-    if (cancelled?.() === true) return false;
-    if (!lastWasFish.has(chatKey) && !conversationBusy(conv.id)) return true;
-    if (Date.now() - startedAt >= NEWS_DEFER_MAX_MS) return false;
-    console.log(`[鱼缸] 新闻推迟 ${chatKey}（自言或忙）`);
-    await sleepUnref(NEWS_DEFER_STEP_MS);
-  }
-}
-
-/**
- * 一次新闻播报作业（news scheduler 的 onJob）：
- *   ① targetGroup ∈ GROUPS 硬校验（不过则跳过并告警，不记 run）；
- *   ② 幂等：fish.news_runs（localDay+targetGroup）已有任意状态记录就不再触发；
- *   ③ 取料（全源失败抛错→当日不发）→ main 模型按 NewsDigest 严格 schema 归纳
- *     （失败重试 1 次后放弃当日）→ 宿主渲染 ≤500 字（超限按 topic 顺序裁剪，
- *     links = 实际进播报条目的 canonical 链接表）；
- *   ④ T15 末条自言推迟 ≤30 分钟，仍自言放弃当日；
- *   ⑤ scheduled answer 轮（目标群当前人格的 conversation）——出口被新闻轮闸机械收束
- *     （say-shared 登记）：只许一次 say_words，payload 由宿主重建（模型文本剥 URL，
- *     canonical 链接只按 sourceRef 索引拼接）；mustAnswer 关闭（裸文本兜底不发——
- *     播报必须带宿主链接，无出口记 failed，当日不再触发），零出口/发送失败不重发。
- *   ⑥ 硬截止抢跑闸：比 scheduler watchdog 早 NEWS_ABORT_MARGIN_MS 把对应 Conversation
- *     abort（abort 自带等待 idle），scheduler 落 failed_timeout 前在途轮已收束，
- *     不存在「已判失败还在发」的窗口。
- */
-async function runNewsJob(slot: string, date: string): Promise<void> {
-  const news = fishConfig().config.news;
-  const group = String(news.targetGroup).trim();
-  // 安全域（P1-7）：目标群必须 ∈ .env GROUPS；空目标群时调度器时点表为空，根本不会起作业
-  if (group.length === 0 || !config.groups.includes(group)) {
-    console.log(`[鱼缸] 新闻跳过 ${date} ${slot}（GROUPS 域外）`);
-    return;
-  }
-  const key = newsRunKeyOf(date, group);
-  const startedAt = Date.now();
-  const prior = await readNewsRun(date, group);
-  if (prior) {
-    console.log(`[鱼缸] 新闻跳过 ${key}（已 ${prior.state}）`);
-    return;
-  }
-  await writeNewsRun({ localDay: date, targetGroup: group, state: "running", startedAt });
-  const fail = async (reason: string): Promise<void> => {
-    const clipped = reason.slice(0, 120);
-    await writeNewsRun({ localDay: date, targetGroup: group, state: "failed", startedAt, finishedAt: Date.now(), error: clipped });
-    console.log(`[鱼缸] 新闻失败 ${key} ${clipped}`);
-  };
-  // 硬截止抢跑闸：到点先置 timedOut 并 abort 对应会话（在途轮收束、排队输入撤回），
-  // 后续各阶段见到 timedOut 都直接放弃；conv 在 conversationFor 之后才存在，之前的阶段
-  // 没有可发的出口，置位即可。scheduler 自己的 watchdog 晚 NEWS_ABORT_MARGIN_MS 才落账。
-  let conv: Conversation | undefined;
-  let timedOut = false;
-  const guard = setTimeout(() => {
-    timedOut = true;
-    if (conv === undefined) return;
-    console.log(`[鱼缸] 新闻硬截止 ${key}：abort 在途会话`);
-    void conv.abort(ctx).catch((error: unknown) =>
-      console.error("[鱼缸] 新闻 abort 失败", error instanceof Error ? error.message : error),
-    );
-  }, Math.max(1_000, NEWS_JOB_TIMEOUT_MS - NEWS_ABORT_MARGIN_MS));
-  guard.unref?.();
-  try {
-    const feeds = await newsClient.collectForTopics(news.topics, { perTopicInput: news.perTopicInput });
-    if (timedOut) throw new Error("news_timeout");
-    // 空 topic 不进归纳：某个源全挂时（如 60s/微博同时不可用），军事/趣闻可能一条候选都没有。
-    // 把空的 `## topic` 段喂给模型会诱发畸形 JSON（模型会试图补空 section，甚至输出两段
-    // JSON 自我修正），严格解析必然 digest_invalid。空 topic 本来就会被丢弃，这里提前过滤，
-    // 语义不变，只是不再让它污染模型输入。
-    const present = feeds.filter((feed) => feed.items.length > 0);
-    const { prompt, index } = buildNewsDigestInput(present);
-    if (index.size === 0) throw new Error("no_items");
-    // 归纳提示词（prompt/news-digest.md）：指令 + {{topics}} 标题块 + {{max}} 每 topic 上限
-    const digestPrompt = renderTemplate(fish.prompts.newsDigest, { topics: prompt, max: String(news.perTopicOutput) });
-    const digest = await digestNewsWithRetry(digestPrompt, present, index, news.perTopicOutput);
-    if (timedOut) throw new Error("news_timeout");
-    const broadcast = renderNewsBroadcast(date, digest, index, fish.prompts.messages);
-    if (broadcast.text.length === 0) throw new Error("render_empty");
-    const chatKey = `qq:group:${group}`;
-    conv = await conversationFor(chatKey);
-    if (!(await awaitNewsSlot(conv, chatKey, () => timedOut))) throw new Error(timedOut ? "news_timeout" : "defer_giveup");
-    if (timedOut) throw new Error("news_timeout");
-    // 新闻轮闸：登记本轮 + canonical 链接表，say_words 出口由宿主重建 payload、单次封顶
-    beginNewsBroadcastRound(String(conv.id), broadcast.links);
-    try {
-      const outcome = await submitRound({
+function installNewsJob(): void {
+  newsRunStore = createNewsRunStore(fish.harness, ctx);
+  const store = newsRunStore;
+  newsJob = createNewsJob({
+    store,
+    now: Date.now,
+    collect: () => {
+      const news = fishConfig().config.news;
+      return newsClient.collectForTopics(news.topics, { perTopicInput: news.perTopicInput });
+    },
+    candidates: buildNewsCandidateInput,
+    bind: async (chatKey) => {
+      const conv = await conversationFor(chatKey);
+      const { effective } = await personaOfChatKey(chatKey);
+      return {
+        conversationId: String(conv.id),
+        effectivePersona: effective,
+        mappingKey: mappingKeys.get(String(conv.id)) ?? chatKey,
+      };
+    },
+    bindExisting: async (run) => {
+      if (!run.conversationId || !run.effectivePersona || !run.mappingKey) return undefined;
+      const conv = await fish.harness.conversation(Number(run.conversationId), ctx);
+      if (!conv) return undefined;
+      const chatKey = `qq:group:${run.targetGroup}`;
+      conversations.set(run.mappingKey, conv);
+      chatKeys.set(conv.id, chatKey);
+      mappingKeys.set(conv.id, run.mappingKey);
+      return {
+        conversationId: String(conv.id),
+        effectivePersona: run.effectivePersona,
+        mappingKey: run.mappingKey,
+      };
+    },
+    freeze: (chatKey, run) => {
+      if (!isCompleteNewsRun(run)) return;
+      freezeNewsTarget(chatKey, {
+        runId: newsRunKeyOf(run.localDay, run.targetGroup),
+        conversationId: run.conversationId,
+        attempt: run.attempts,
+        publishAt: run.publishAt,
+      });
+    },
+    attempt: setNewsAttempt,
+    expire: expireNewsTarget,
+    unfreeze: unfreezeNewsTarget,
+    setCandidates: (runId, value) => {
+      if (!value) {
+        newsPreparationCandidates.delete(runId);
+        return;
+      }
+      newsPreparationCandidates.set(runId, {
+        ...value,
+        perTopicOutput: fishConfig().config.news.perTopicOutput,
+      });
+    },
+    submit: async ({ run, chatKey, attempt, candidates }) => {
+      const content = renderTemplate(fish.prompts.newsDigest, {
+        topics: candidates.prompt,
+        max: String(fishConfig().config.news.perTopicOutput),
+      });
+      return submitRound({
         chatKey,
-        conv,
-        content: renderNewsTask(fish.prompts.messages, broadcast.text),
-        trigger: { mentionsBot: false, kind: "answer" },
+        conv: (await fish.harness.conversation(Number(run.conversationId), ctx))!,
+        content,
+        trigger: {
+          mentionsBot: false,
+          kind: "news",
+          newsRunId: newsRunKeyOf(run.localDay, run.targetGroup),
+          newsAttempt: attempt,
+        },
         reply: false,
         mustAnswer: false,
         entryKind: MEMORY_ENGAGE_KIND,
+        modelAttempts: 1,
+        deadline: run.publishAt,
       });
-      if (timedOut) throw new Error("news_timeout");
-      if (outcome !== "done") throw new Error(`round_${outcome}`);
-      // 单出口闸核对：模型一次 say_words 都没调（零出口）不算播完——裸文本兜底已关，
-      // 没有宿主重建的 canonical 链接就不该有「done」的播报账
-      if (!newsBroadcastDelivered(String(conv.id))) throw new Error("news_no_exit");
-    } finally {
-      endNewsBroadcastRound(String(conv.id));
-    }
-    await writeNewsRun({ localDay: date, targetGroup: group, state: "done", startedAt, finishedAt: Date.now(), digest: broadcast.text });
-    console.log(`[鱼缸] 新闻播完 ${key}`);
-  } catch (error) {
-    await fail(error instanceof Error ? error.message : String(error));
-  } finally {
-    clearTimeout(guard);
-  }
+    },
+    waitIdle: async (run, deadline) => {
+      const conv = await fish.harness.conversation(Number(run.conversationId), ctx);
+      if (!conv) return false;
+      while (conversationBusy(conv.id) && Date.now() < deadline) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 100);
+          timer.unref?.();
+        });
+      }
+      return Date.now() < deadline;
+    },
+    abort: async (conversationId) => {
+      const conv = await fish.harness.conversation(Number(conversationId), ctx);
+      await conv?.abort(ctx);
+    },
+    drain: async (conversationId) => onebotReady ? fish.drain([Number(conversationId)]) : 0,
+    outbox: async (conversationId, key) => {
+      const box = await fish.harness.snapshot(OutboxDoc, Number(conversationId), ctx);
+      const item = box?.queue.find((entry) => entry.key === key);
+      return item?.status ?? "absent";
+    },
+    log: (message) => console.log(`[鱼缸] ${message}`),
+    setTimer: (callback, ms) => {
+      const timer = setTimeout(callback, ms);
+      timer.unref?.();
+      return timer;
+    },
+    clearTimer: (timer) => clearTimeout(timer as NodeJS.Timeout),
+  });
 }
 
-// 第二实例（决策 1 的 job 模型 + 决策 11 的 news.at 时点）：错过 ≤2h 补跑是 scheduler
-// 通用能力；幂等账在 fish.news_runs，不传 jobs（不写 external_jobs，避免与逛轮的
-// date+slot 键互相覆盖），重启后的补跑重触发由 news_runs 挡住（重复触发不重发）
 const newsScheduler = createScheduler({
   slots: () => (fishConfig().config.news.targetGroup.trim().length > 0 ? [fishConfig().config.news.at] : []),
-  onJob: (slot, date) => runNewsJob(slot, date),
+  onJob: async (slot, date) => {
+    const news = fishConfig().config.news;
+    const group = news.targetGroup.trim();
+    if (!group || !config.groups.includes(group)) {
+      console.log(`[鱼缸] 新闻跳过 ${date} ${slot}（GROUPS 域外）`);
+      return;
+    }
+    if (!newsJob) throw new Error("news_job_not_ready");
+    await newsJob.start(slot, date, `qq:group:${group}`, news.preparationMinutes);
+  },
   now: () => new Date(),
   ...nodeTimers,
-  jobTimeoutMs: () => NEWS_JOB_TIMEOUT_MS,
+  jobTimeoutMs: () => (fishConfig().config.news.preparationMinutes + 2) * 60_000,
   log: (message) => console.log(`[鱼缸] news ${message}`),
 });
 
@@ -2315,6 +2279,43 @@ export const gateStage: Middleware<MessageCtx> = async (ctx, next) => {
   await next();
 };
 
+/** 新闻准备窗口：目标群 @ 只机械接待，非 @ 留在自由拍收集器。 */
+export const newsFreezeStage: Middleware<MessageCtx> = async (ctx, next) => {
+  const msg = ctx.msg;
+  if (!newsFreezes.has(msg.chatKey)) {
+    await next();
+    return;
+  }
+  const conv = await conversationFor(msg.chatKey);
+  if (msg.mentionsBot) {
+    if (msg.messageId !== undefined) {
+      await fish.enqueue(conv.id, {
+        items: [fish.prompts.messages["news_preparing_reply"] ?? "news_preparing_reply"],
+        quote: true,
+        quoteId: msg.messageId,
+        quoteForce: true,
+        at: Date.now(),
+        key: `news-preparing:${localDay(Date.now())}:${msg.messageId}`,
+      });
+      await drainLoop();
+    }
+    return;
+  }
+  engageNext.collectShard(msg.chatKey, {
+    userId: msg.userId,
+    nickname: msg.nickname,
+    text: ctx.burstText,
+    at: Date.now(),
+    ...(msg.arrivalSeq !== undefined ? { arrivalSeq: msg.arrivalSeq } : {}),
+    ...(msg.messageId !== undefined ? { messageId: msg.messageId } : {}),
+    ...(msg.mediaOnly !== undefined ? { mediaOnly: msg.mediaOnly } : {}),
+    ...(ctx.bypass ? { payload: ctx.bypass.stash } : {}),
+    replyIds: msg.replyIds,
+    ...(msg.quoted !== undefined ? { quoted: msg.quoted } : {}),
+    ...(mentionTargetsOf(msg.mentions) !== undefined ? { mentionTargets: mentionTargetsOf(msg.mentions) } : {}),
+  });
+};
+
 /**
  * ⑤ 群消息去向：open 态 free_pass 进 shard 收集器；其余进按发送者的 10 秒窗口。
  * 不调 next —— 群消息到这一层就交给 debounce / shard，不再往下走。
@@ -2437,6 +2438,7 @@ export async function connectOnebot(): Promise<void> {
     process.exit(1);
   }
 
+  onebotReady = true;
   if (!config.master) {
     console.error("[鱼缸] 没设 MASTER_QQ");
     console.error("  私聊会被当成陌生人");
@@ -2513,13 +2515,15 @@ export function stopEngage(): void {
   engageNext.stop();
 }
 
-export function startNews(): void {
+export async function startNews(): Promise<void> {
+  if (!newsJob) throw new Error("news_job_not_ready");
+  await newsJob.recover((group) => `qq:group:${group}`);
   newsScheduler.start();
 }
 
 export function stopNews(): void {
-  // 停新闻调度：在途播报由 scheduler watchdog 收束，news_runs 幂等挡重启重发
   newsScheduler.stop();
+  newsJob?.stop();
 }
 
 /** 退出前冲刷 outbox（已承诺发送的消息不丢；在途生成轮会被中断）。 */
@@ -2533,6 +2537,7 @@ export async function drainOnStop(): Promise<void> {
 }
 
 export function closeOnebot(): void {
+  onebotReady = false;
   // 先冲刷再断 WS：让协议端立即感知重连，不等它自己的超时
   onebot.close();
 }
