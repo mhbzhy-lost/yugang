@@ -16,7 +16,7 @@
   "models_list_available": "可切换的 provider / 模型：",
   "models_image_hint": "image 是图片透传通道，模型名不校验",
   "models_switch_missing": "models_switch 需要 role、provider、model 三个参数",
-  "models_bad_role": "role 只能是 main / vision / image",
+  "models_bad_role": "role 只能是 main / vision / vision_fallback / image",
   "models_unknown_provider": "providers 里没有 {{provider}}；现有：{{providers}}",
   "models_unknown_model": "{{provider}} 没有模型 {{model}}；可用：{{models}}",
   "models_write_failed": "写 config/models.json 失败：{{error}}",

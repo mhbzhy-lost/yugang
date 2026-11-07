@@ -4,8 +4,8 @@
  * 两份受控配置、一个入口：
  *   ① fish.config.json 受控字段（白名单制）：校验规格与 parseFile 同源（../../fish-config.ts 的
  *      FISH_CONFIG_FIELDS），逐字段标注热加载 / 需重启，非法或越界的值直接拒绝、不落盘；
- *   ② config/models.json 的 models 角色表（main / vision / image）：写盘后由运维流程 restart 生效，
- *      main / vision 必须能在所选 provider 清单里查到，image 是图片透传通道不校验模型名；
+ *   ② config/models.json 的 models 角色表（main / vision / vision_fallback / image）：写盘后由运维流程 restart 生效，
+ *      main / vision / vision_fallback 必须能在所选 provider 清单里查到，image 是图片透传通道不校验模型名；
  *   ③ 读现状：read / models_list 一次看清两份配置的当前生效值（含逐字段生效时机）。
  *
  * 身份闸是双重的（二者缺一即以 tool 错误拒绝，群内轮一律拒绝）：
@@ -34,12 +34,12 @@ interface ConfigArgs {
   action: "read" | "set" | "models_list" | "models_switch";
   field?: string;
   value?: unknown;
-  role?: "main" | "vision" | "image";
+  role?: ModelRole;
   provider?: string;
   model?: string;
 }
 
-const ROLES: readonly ModelRole[] = ["main", "vision", "image"];
+const ROLES: readonly ModelRole[] = ["main", "vision", "vision_fallback", "image"];
 
 /** config 工具的字段白名单：与 parseFile 同源（../../fish-config.ts 的 FISH_CONFIG_FIELDS，
  *  engage 块也在其中，终审 #7：不再另持一份字段集与校验）。 */
@@ -154,7 +154,7 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
     return result;
   }
 
-  /** models 角色表写回：main / vision 必须能在所选 provider 清单里查到，image 是透传通道不校验；tmp + rename 原子写。 */
+  /** models 角色表写回：main / vision / vision_fallback 必须能在所选 provider 清单里查到，image 是透传通道不校验；tmp + rename 原子写。 */
   function writeModelRole(role: ModelRole, provider: string, model: string): void {
     const file = readModelsFile();
     const entry = file.providers?.[provider];

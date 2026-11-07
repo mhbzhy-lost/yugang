@@ -24,9 +24,10 @@
         "enum": [
           "main",
           "vision",
+          "vision_fallback",
           "image"
         ],
-        "description": "models_switch 必填：main 主对话 / vision 看图看视频 / image 在线画图"
+        "description": "models_switch 必填：main 主对话 / vision 看图看视频 / vision_fallback 视觉兜底 / image 在线画图"
       },
       "provider": {
         "type": "string",

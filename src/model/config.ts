@@ -2,7 +2,7 @@
  * 模型配置与凭据都是本机文件（gitignore，不进 git），模板进仓库。
  *
  * 两件事分开：
- *   config/models.json           provider 地址、角色（main / vision / image）、模型清单、兼容值；
+ *   config/models.json           provider 地址、角色（main / vision / vision_fallback / image）、模型清单、兼容值；
  *                                模板是 config/models.example.json（进仓库），首次使用 cp 一份再改
  *   config/auth.json             只有 key —— gitignore，由 `npm run creds` 写，权限 0600
  *
@@ -146,7 +146,7 @@ function roleRef(roles: Partial<Record<ModelRole, RoleRef>>, role: ModelRole): R
 export function loadFishModels(options: LoadOptions = {}): FishModelsSelection {
   const { file, configSource } = readModelsFile(options.modelsPath ?? defaultModelsPath());
   if ("default" in file) {
-    throw new Error("config/models.json 的 default 已废弃：改成 models.main / models.vision / models.image");
+    throw new Error("config/models.json 的 default 已废弃：改成 models.main（可选 models.vision / models.vision_fallback / models.image）");
   }
   const roles = file.models;
   if (!roles || typeof roles !== "object") throw new Error("config/models.json 缺少 models（至少要写 models.main）");

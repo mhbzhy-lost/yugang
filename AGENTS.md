@@ -100,7 +100,7 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
 禁止 shell / 脚本执行 / MCP server。读写与自改另设语义工具（`read`/`grep`/`write`/`tree`/`config`/`restart`）：
 - `read` / `grep`：可读仓库与 `/tmp/yugang`；.env、config/auth.json、.git、node_modules、.trash 硬封禁
 - `write`：**只能写 `/tmp/yugang`**（鱼的草稿区），仓库文件写不进去
-- `config`：统一配置工具，仅主人私聊轮可用（群内轮拒绝）；改 `fish.config.json` 受控字段（白名单制，逐字段标注热加载 / 需重启，非法值拒绝不落盘）与 `config/models.json` 的 `models` 角色表（main / vision / image，写完靠 `restart` 生效）
+- `config`：统一配置工具，仅主人私聊轮可用（群内轮拒绝）；改 `fish.config.json` 受控字段（白名单制，逐字段标注热加载 / 需重启，非法值拒绝不落盘）与 `config/models.json` 的 `models` 角色表（main / vision / vision_fallback / image，写完靠 `restart` 生效）
 - 身份闸（机械判定）：仅主人（MASTER_QQ）触发的轮里可用，execute 内核对 triggerOf 的 userId
 - 全部操作打审计日志；自改大事故靠 git 回滚
 - `meme_import`：只扫**固定目录** `<MEDIA_ROOT>/meme-inbox/`（不接受任何路径参数），只认图片直系子文件，
@@ -180,8 +180,8 @@ fallback 模式保留 inbound 路径由 look 转述。
 - 不要在 `config/models.json` / `config/models.example.json` 里写 key，`npm test` 会扫模板
 - **key 只在内存里**：不进 prompt、不进 transcript、不进日志。`describeModel()` 只报"已加载 / N 字符"和来源路径
 - 网关兼容值（`maxTokensField: max_tokens`）由 `src/model/config.ts` 的 `withCompat()` 兜底，模型自带 compat 可覆盖
-- 换模型：编辑 `config/models.json` 的 `models.main` / `models.vision` / `models.image`（`vision` 省略 = main，
-  `image` 省略 = `gpt_image` 不可用，`vision_fallback` 省略 = 无兜底），改完让鱼 `restart` 生效；没有 `MODEL_PROVIDER` / `MODEL_ID` / `GATE_*` / `VISION_*` / `YUGANG_MODELS` 这类入口
+- 换模型：编辑 `config/models.json` 的 `models.main` / `models.vision` / `models.vision_fallback` / `models.image`
+  （`vision` 省略 = main，`image` 省略 = `gpt_image` 不可用，`vision_fallback` 省略 = 无兜底），改完让鱼 `restart` 生效；没有 `MODEL_PROVIDER` / `MODEL_ID` / `GATE_*` / `VISION_*` / `YUGANG_MODELS` 这类入口
 - 验证：`npm run creds show` / `npm run ping`（都只报长度，不打印 key）
 - **provider 级代理**：`config/models.json` 的 `providers.<id>.proxy`（只认 http/https）。配了它，这个 provider
   的**全部**请求走隧道（模型流、`gpt_image`、内部 OAuth 刷新），其它 provider 与 SD/QQ 仍直连；
