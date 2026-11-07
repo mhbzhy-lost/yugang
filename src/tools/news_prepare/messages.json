@@ -1,0 +1,5 @@
+{
+  "news_prepare_ok": "新闻备料已保存，本轮不用再发言。",
+  "news_prepare_rejected": "备料未接受：{{reason}}。请按候选清单修正后重试。",
+  "news_prepare_not_news": "这个工具只能在宿主发起的新闻准备轮使用。"
+}

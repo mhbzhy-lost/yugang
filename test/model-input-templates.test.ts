@@ -12,8 +12,8 @@
  *  - open injection / shard / 零新增：真 `createEngageNext` 状态机（假时钟推进）触发
  *    onPhase(open, backlog) / onShard(items)，回调里调 `renderOpenMessageList` /
  *    `renderBrowseOpportunity`（与 index.ts L1277/L1298/L1335 同一入口）；
- *  - GIF：`renderGifIngestInput`（index.ts L745）；新闻：`renderNewsBroadcast` +
- *    `renderNewsTask`（index.ts L2102/L2114）；换页：`buildProfileHandoff`（src/compact.ts L451）。
+ *  - GIF：随 ambient 标准消息列表；新闻：`buildNewsCandidateInput` + `news-digest.md`
+ *   （人格备料输入）；换页：`buildProfileHandoff`（src/compact.ts）。
  * 测试只提供固定内存输入（消息/合集/卡片/entry）与文案表，不做任何文本拼装。
  *
  * 比较口径（decisions §10）：多段模板按矩阵顺序以一个空行连接后 `assert.equal` 精确比较
@@ -26,9 +26,8 @@
  *  1. answer_burst_voice：prompt/messages.md 的 `voice_hint` 仍是
  *     「（这一条必须用语音回：用 say_voice 发，别用文字。这是规则，不是建议）」，
  *     decisions §5.2 要求「[本轮要求] 必须使用 say_voice 回复，不要使用文字。」；
- *  2. news：`renderNewsBroadcast` 的 {{source}} 直接用 NewsItem.source 的枚举 id
- *     （people / ithome），decisions §5.7 要求中文来源署名（人民网 / IT之家）——
- *     线上真实 entry 也是 id 形态（docs/reports/2026-11-04-turn-input-shapes.md §3.6）；
+ *  2. news：2026-11-07 起改为人格备料候选输入，模型经 news_prepare 提交结构化选材，
+ *     不再把宿主成品交给模型用 say_words 重发；
  *  3. history_forward：换页尾巴是被压缩页输入的**逐字投影**，合集父消息行带
  *     `[转发合集][这条消息@了你]` 机械标签（renderMessageLine；自带合集只有在 @ 时才会被
  *     展开，所以这一行必然同时带 @ 标签），decisions §7.2 的 history-forward-tail 该行
@@ -44,7 +43,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { MemoryStorage } from "@earendil-works/pi-durable";
-import { loadPrompts } from "../src/prompt/index.ts";
+import { loadPrompts, renderTemplate } from "../src/prompt/index.ts";
 import { loadToolManifests } from "../src/tools/manifest.ts";
 import { DISABLED_TOOL_PACKAGES, mergeToolMessages } from "../src/tools/loader.ts";
 import { withContext, type BurstMessage, type RecentChatMessage } from "../src/qq/debounce.ts";
@@ -59,13 +58,12 @@ import {
   submitContentOf,
   type RoundContentBlock,
 } from "../src/qq/round-input.ts";
-import { renderNewsBroadcast, renderNewsTask } from "../src/external/news-broadcast.ts";
+import { buildNewsCandidateInput } from "../src/external/news-broadcast.ts";
 import { createEngageNext, type EngageShardItem } from "../src/qq/engage-next.ts";
 import type { ShrinkResult } from "../src/media/shrink-image.ts";
 import { openFish } from "../src/harness.ts";
 import type { IncomingMessage } from "../src/qq/onebot.ts";
 import type { ForwardAttachment, ModelMessage, QuotedMessage } from "../src/qq/model-input.ts";
-import type { NewsItem } from "../src/external/news-client.ts";
 import {
   AUTHORITATIVE_SCENE_COUNT,
   authoritativeDecisionsPath,
@@ -511,24 +509,17 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
   free_shard: () => triggerFreeShard(),
   free_browse: () => triggerFreeBrowse(),
 
-  // 新闻播报（decisions §5.7，index.ts L2102/L2114）
+  // 新闻准备（decisions §5.7：人格候选输入，不再是宿主成品 + say_words）
   news: () => {
-    const index = new Map<string, NewsItem>([
-      ["a1", { title: "示例模型发布新能力", url: "https://example.com/news/ai-1", source: "people", publishedAt: "2026-11-04T01:00:00Z" }],
-      ["c2", { title: "示例芯片开始量产", url: "https://example.com/news/chip-2", source: "ithome", publishedAt: "2026-11-04T02:00:00Z" }],
-    ]);
-    const broadcast = renderNewsBroadcast("2026-11-04", {
-      sections: [{
-        topic: "AI",
-        items: [
-          { summary: "示例模型发布新能力", sourceRef: "a1" },
-          { summary: "示例芯片开始量产", sourceRef: "c2" },
-        ],
-      }],
-      closing: "以上就是今天的新闻",
-    }, index, messages);
-    const text = renderNewsTask(messages, broadcast.text);
-    return { text, submit: submitContentOf(text, []), via: "renderNewsBroadcast → renderNewsTask" };
+    const candidates = buildNewsCandidateInput([{
+      topic: "AI",
+      items: [
+        { title: "示例模型发布新能力", url: "https://example.com/news/ai-1", source: "people", publishedAt: "2026-11-04T01:00:00Z" },
+        { title: "示例芯片开始量产", url: "https://example.com/news/chip-2", source: "ithome", publishedAt: "2026-11-04T02:00:00Z" },
+      ],
+    }]);
+    const text = renderTemplate(loadPrompts(PROMPTS).newsDigest, { topics: candidates.prompt, max: "5" });
+    return { text, submit: submitContentOf(text, []), via: "buildNewsCandidateInput → news-digest.md" };
   },
 
   // 自带合集且 @（decisions §5.9 forward-direct）：父消息标准行 + 后置附件 + 子图压缩 block

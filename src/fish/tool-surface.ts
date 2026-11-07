@@ -49,6 +49,7 @@ export async function installToolSurface(base: FishBase): Promise<ToolSurfacePar
     // 末条自言禁言（决策 24）：宿主事实回调，say_* 的 ambient/injection 轮素材分享校验消费
     ...(options.lastWasFishOf ? { lastWasFishOf: options.lastWasFishOf } : {}),
     ...(options.ttsOf ? { ttsOf: options.ttsOf } : {}),
+    ...(options.newsPrepare ? { newsPrepare: options.newsPrepare } : {}),
     ...(options.silentOf ? { silentOf: options.silentOf } : {}),
     ...(options.onSayCall ? { onSayCall: options.onSayCall } : {}),
     ...(options.onLongWork ? { onLongWork: options.onLongWork } : {}),

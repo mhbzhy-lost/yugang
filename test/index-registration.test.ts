@@ -27,6 +27,7 @@ test("index.ts 的消息链顺序就是契约", () => {
     "normalizeInbound",
     "commandsStage",
     "gateStage",
+    "newsFreezeStage",
     "groupWindowStage",
     "privateChatStage",
   ]);

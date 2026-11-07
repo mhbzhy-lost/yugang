@@ -73,14 +73,10 @@ watch_is_master: 你是我的主人，不入特别关注名单——名单只收
 # 合集（静默收图轮已于 2026-11-06 退役：GIF 随 ambient 轮进上下文，双边标记引导收录）
 forward_collapsed: [转发合集（内容略）]
 
-# 新闻播报（外部信息源计划 Task E7，src/index.ts 10:30 job）：scheduled answer 轮的触发语与成品
-# 播报模板。news_broadcast_task 是触发语（下面紧接着宿主渲染好的整份播报文本，模型用 say_words
-# 单条发出）；渲染模板逐行拼装：news_header（{{date}}=localDay）→ 每 topic 一段（news_topic 分节
-# + news_item 逐条；{{source}}=来源署名、{{url}}=宿主按 sourceRef 索引拼的原文 canonical 链接，
-# 模型输出里没有也不许有 URL）→ news_closing（{{closing}}=归纳模型给出的人格化收尾，宿主原样用）。
-# 整份 ≤500 字，超限按 topic 顺序裁剪；行首统一用「·」等符号，不许出现「数字.」「-」等 markdown
-# 列表标记（出口策略的列表规则会整条拒绝多行播报）。
-news_broadcast_task: [新闻播报]
+# 新闻备料与机械播报：news_preparing_reply 是冻结期 @ 的固定回执；其余为宿主成品模板。
+# 人格在 news 轮通过 news_prepare 提交选材，不调用 say_*；宿主按 sourceRef 渲染 canonical
+# 链接，整份 ≤500 字，超限按 topic 顺序裁剪；行首保持出口策略接受的符号。
+news_preparing_reply: 正在准备新闻哦，请稍后。
 news_header: 「{{date}} 新闻速递」
 news_topic: ▸ {{topic}}
 news_item: · {{summary}}（{{source}}）{{url}}

@@ -23,7 +23,7 @@ export type EnumFromContextKey = "memeTags";
  * 独立 worker 会话，say_* 机械拒绝，模型只经 ammo_submit 提交结构化候选）。
  * legacy 轮全部 answer。
  */
-export type RoundKind = "ambient" | "injection" | "answer" | "worker";
+export type RoundKind = "ambient" | "injection" | "answer" | "worker" | "news";
 
 /**
  * triggerOf 的值：本轮触发消息 + 轮类型 + quoteMsgId 窗口。
@@ -63,6 +63,9 @@ export interface RoundTrigger {
    */
   browseWindow?: string;
   browseTopic?: string;
+  /** 新闻备料轮：run key 与本次尝试序号，工具只认这一组宿主绑定。 */
+  newsRunId?: string;
+  newsAttempt?: number;
 }
 
 /** loadToolManifests 的动态上下文；词表为空时对应属性退化为普通字符串（与现行为一致）。 */
@@ -155,6 +158,13 @@ export interface ToolPackageDeps {
   ttsOf?: (conversationId: string) => import("../tts.ts").TtsConfig | undefined;
   /** 语音合成实现；测试可注入桩，线上用 synthesizeToMedia。 */
   ttsSynthesize?: (config: import("../tts.ts").TtsConfig, text: string, mediaRoot: string) => Promise<{ ref: string; bytes: Buffer }>;
+  /** 新闻备料窄接口：宿主核验 run/attempt/会话、候选与截止，并原子保存成品。 */
+  newsPrepare?: (input: {
+    runId: string;
+    attempt: number;
+    conversationId: string;
+    digest: import("../external/news-broadcast.ts").NewsDigest;
+  }) => Promise<{ status: "prepared" | "rejected"; reason?: string }>;
   /** 静默轮（如收图轮）：这一轮不许说话。 */
   silentOf?: (roundId: unknown) => boolean;
   /** 本轮出口工具的 execute 被进入时回调（成败都算一次）；宿主据此识别「零出口轮」。 */

@@ -159,6 +159,7 @@ test("messages.md 里没有死文案，tools/ 里没有死文件", async () => {
     emit: () => {},
     react: () => {},
     master: "1",
+    newsPrepare: async () => ({ status: "rejected", reason: "test_only" }),
     // remind 工具的底座任务（宿主没传就不注册；这里给个最小 host 让它进工具面）
     reminderTask: makeReminderTask({ messages: () => ({}), drain: async () => {}, log: () => {} }),
   });

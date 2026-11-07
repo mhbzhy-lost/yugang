@@ -43,6 +43,7 @@ function boot() {
     },
     react: () => {},
     master: "1",
+    newsPrepare: async () => ({ status: "rejected", reason: "test_only" }),
     // remind 工具的底座任务（宿主没传就不注册；工具面断言要求它在册）
     reminderTask: makeReminderTask({ messages: () => ({}), drain: async () => {}, log: () => {} }),
   });
@@ -65,7 +66,7 @@ test("工具面为窄接口：无 bash，自改工具已注册", async () => {
     // 完整性校验照旧但不进 active/deferred/catalog
     assert.deepEqual(
       agent.deferred.map((t) => t.name),
-      ["bili_hot", "bili_video", "config", "draw", "gpt_image", "grep", "look", "meme", "meme_add", "meme_import", "now", "read", "remind", "restart", "search", "tags", "tree", "video", "watch", "write"],
+      ["bili_hot", "bili_video", "config", "draw", "gpt_image", "grep", "look", "meme", "meme_add", "meme_import", "news_prepare", "now", "read", "remind", "restart", "search", "tags", "tree", "video", "watch", "write"],
     );
   } finally {
     await open.close();

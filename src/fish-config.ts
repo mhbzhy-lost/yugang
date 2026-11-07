@@ -150,8 +150,10 @@ export interface NewsTopicConfig {
 
 /** 新闻播报管线（外部计划 E6–E7）的行为参数。逐字段校验，非法告警保留缺省，热生效。 */
 export interface NewsConfig {
-  /** 每天播报时点（HH:MM）。 */
+  /** 每天开始备料时点（HH:MM）。 */
   at: string;
+  /** 备料窗口分钟数（1–30，缺省 10）；到点停止备料并机械入队。 */
+  preparationMinutes: number;
   /** 播报目标群号（纯数字）；空串 = 不启用。必须是 .env GROUPS 白名单内的群号——域校验在运行时消费处（E7），这里只做格式校验。 */
   targetGroup: string;
   /** 播报 topic 表；显式给 topics 就整体覆盖缺省五 topic。 */
@@ -165,6 +167,7 @@ export interface NewsConfig {
 /** 缺省五 topic（AI/时政/军事/科技数码/趣闻二次元）；趣闻二次元带娱乐圈 exclude 词表，词表可热改。 */
 export const NEWS_DEFAULTS: NewsConfig = {
   at: "10:30",
+  preparationMinutes: 10,
   targetGroup: "",
   topics: [
     { name: "AI", sources: ["60s", "huxiu", "ithome", "zhihu_daily"], keywords: ["AI", "人工智能", "大模型", "机器学习", "AIGC"], exclude: [] },
@@ -189,7 +192,7 @@ export interface FishConfig {
   ammo: AmmoConfig;
   /** 视频浏览管线参数：open 空窗主动门概率、单轮观看上限与 B 站每日预算。 */
   video: VideoConfig;
-  /** 新闻播报管线参数：播报时点、目标群、topic 供料与输入/输出上限。 */
+  /** 新闻备料管线参数：开始时点、准备窗口、目标群、topic 供料与输入/输出上限。 */
   news: NewsConfig;
   /** 出站配速（秒）：outbox drain 同会话相邻两次实际发送的最小间隔，防连珠炮（0 = 关闭）。 */
   sendPacingSeconds: number;
@@ -591,6 +594,7 @@ function checkNewsBlock(raw: unknown): FieldCheck {
   }
 
   const ranges: Array<[keyof NewsConfig, number, number]> = [
+    ["preparationMinutes", 1, 30],
     ["perTopicInput", 1, 20],
     ["perTopicOutput", 1, 5],
   ];
@@ -613,7 +617,7 @@ function checkNewsBlock(raw: unknown): FieldCheck {
     }
   }
 
-  const known = new Set<string>(["at", "targetGroup", "topics", "perTopicInput", "perTopicOutput"]);
+  const known = new Set<string>(["at", "targetGroup", "preparationMinutes", "topics", "perTopicInput", "perTopicOutput"]);
   for (const key of Object.keys(n)) {
     if (known.has(key)) continue;
     problems.push(`news.${key} 不是受控字段，已忽略`);

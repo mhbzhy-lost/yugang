@@ -25,7 +25,8 @@
     "memory": "node --env-file-if-exists=.env scripts/memory.ts",
     "login": "node --env-file-if-exists=.env scripts/login.ts",
     "tts": "node --env-file-if-exists=.env scripts/tts.ts",
-    "deps": "node --env-file-if-exists=.env scripts/deps.ts"
+    "deps": "node --env-file-if-exists=.env scripts/deps.ts",
+    "smoke:news": "node scripts/news-real-model-smoke.ts && node scripts/news-runtime-smoke.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",
