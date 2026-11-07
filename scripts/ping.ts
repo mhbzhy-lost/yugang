@@ -3,11 +3,12 @@
  *
  *   npm run ping
  *
- * 模型选择只认 config/models.json 的 models.main / models.vision / models.image，
+ * 模型选择只认 config/models.json 的 models.main / models.vision / models.vision_fallback / models.image，
  * 没有环境变量、没有启动参数。凭据只在进程内存里，输出里只有"已加载 / N 字符"和来源路径。
  */
 import { createFishModels, assertModelExists } from "../src/model/models.ts";
 import { describeModel, loadFishModels } from "../src/model/config.ts";
+import { probeModelConfig } from "../src/model/probe.ts";
 
 const selection = loadFishModels();
 const main = selection.main;
@@ -26,22 +27,13 @@ assertModelExists(models, main.providerId, main.modelId);
 const model = models.getModel(main.providerId, main.modelId)!;
 console.log("context  :", model.contextWindow, "| maxTokens:", model.maxTokens, "| input:", model.input.join("+"));
 
-const started = Date.now();
-const stream = models.streamSimple(model, {
-  messages: [{ role: "user", content: "只回复两个字：在的" }],
-});
-const message = await stream.result();
-const text = message.content
-  .filter((block): block is { type: "text"; text: string } => block.type === "text")
-  .map((block) => block.text)
-  .join("")
-  .trim();
-
-console.log("耗时     :", `${Date.now() - started}ms`);
-console.log("回复     :", JSON.stringify(text.slice(0, 60)));
-console.log("用量     :", `in ${message.usage.input} / out ${message.usage.output} / 计费 ${message.usage.cost.total}`);
-if (!text) {
-  console.error("✗ 没有拿到文本，可能模型或网关不匹配");
+try {
+  const result = await probeModelConfig(main);
+  console.log("耗时     :", `${result.elapsedMs}ms`);
+  console.log("回复     :", JSON.stringify(result.text));
+  console.log("用量     :", `in ${result.usage.input} / out ${result.usage.output} / 计费 ${result.usage.cost}`);
+  console.log("✓ 通了");
+} catch (error) {
+  console.error("✗ 模型探测失败：", error instanceof Error ? error.message : String(error));
   process.exit(1);
 }
-console.log("✓ 通了");

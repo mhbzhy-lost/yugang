@@ -24,6 +24,7 @@ import { renderTemplate } from "../../prompt/index.ts";
 import { loadFishConfig, FISH_CONFIG_FIELDS, type FieldCheck, type FishConfigFieldSpec } from "../../fish-config.ts";
 import { getBiliClient } from "../../external/bili-client.ts";
 import type { ModelsFile, ModelRole } from "../../model/config.ts";
+import { probeFishModel } from "../../model/probe.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import { FISH_CONFIG_PATH, MODELS_CONFIG_PATH } from "../../paths.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
@@ -31,7 +32,7 @@ import { assertTriggeredByMaster, type SnapshotApi } from "../fs-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface ConfigArgs {
-  action: "read" | "set" | "models_list" | "models_switch";
+  action: "read" | "set" | "models_list" | "models_probe" | "models_switch";
   field?: string;
   value?: unknown;
   role?: ModelRole;
@@ -203,6 +204,39 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
       if (args.action === "models_list") {
         console.log("[鱼缸] config models_list");
         return { output: [{ type: "text", text: modelsText() }] };
+      }
+
+      if (args.action === "models_probe") {
+        const provider = args.provider?.trim();
+        const model = args.model?.trim();
+        if (!provider || !model) throw new Error(p.messages["models_probe_missing"] ?? "models_probe_missing");
+        try {
+          const result = await probeFishModel(provider, model, { modelsPath });
+          console.log(`[鱼缸] config models_probe ${provider}/${model} ok ${result.elapsedMs}ms`);
+          return {
+            output: [{
+              type: "text",
+              text: renderTemplate(p.messages["models_probe_ok"] ?? "{{provider}}/{{model}}", {
+                provider,
+                model,
+                elapsedMs: String(result.elapsedMs),
+                stopReason: result.stopReason,
+                text: result.text,
+                input: String(result.usage.input),
+                output: String(result.usage.output),
+                cost: String(result.usage.cost),
+              }),
+            }],
+          };
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          console.warn(`[鱼缸] config models_probe ${provider}/${model} failed: ${reason}`);
+          throw new Error(renderTemplate(p.messages["models_probe_failed"] ?? "{{provider}}/{{model}}: {{reason}}", {
+            provider,
+            model,
+            reason,
+          }));
+        }
       }
 
       if (args.action === "models_switch") {

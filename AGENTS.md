@@ -100,7 +100,7 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
 禁止 shell / 脚本执行 / MCP server。读写与自改另设语义工具（`read`/`grep`/`write`/`tree`/`config`/`restart`）：
 - `read` / `grep`：可读仓库与 `/tmp/yugang`；.env、config/auth.json、.git、node_modules、.trash 硬封禁
 - `write`：**只能写 `/tmp/yugang`**（鱼的草稿区），仓库文件写不进去
-- `config`：统一配置工具，仅主人私聊轮可用（群内轮拒绝）；改 `fish.config.json` 受控字段（白名单制，逐字段标注热加载 / 需重启，非法值拒绝不落盘）与 `config/models.json` 的 `models` 角色表（main / vision / vision_fallback / image，写完靠 `restart` 生效）
+- `config`：统一配置工具，仅主人私聊轮可用（群内轮拒绝）；改 `fish.config.json` 受控字段（白名单制，逐字段标注热加载 / 需重启，非法值拒绝不落盘）与 `config/models.json` 的 `models` 角色表（main / vision / vision_fallback / image，写完靠 `restart` 生效）；`models_probe` 可在切换前对任意已配置对话模型发一次最小真实请求，不改角色表，stopReason error/aborted 或空文本均判失败，错误文本先抹除凭据
 - 身份闸（机械判定）：仅主人（MASTER_QQ）触发的轮里可用，execute 内核对 triggerOf 的 userId
 - 全部操作打审计日志；自改大事故靠 git 回滚
 - `meme_import`：只扫**固定目录** `<MEDIA_ROOT>/meme-inbox/`（不接受任何路径参数），只认图片直系子文件，
@@ -194,7 +194,10 @@ fallback 模式保留 inbound 路径由 look 转述。
   通道整体停用，新登录一律走它；端点 `daily-cloudcode-pa.sandbox.googleapis.com`，同款 provider 代理
   （token 刷新的 `oauth2.googleapis.com` 一并进隧道）。oauthClient 同样只放本机 `config/models.json` 的
   `providers.google-antigravity.oauthClient`（模板空串占位）；登录 `npm run login -- google-antigravity`，
-  回调页是 `http://localhost:51121/oauth-callback`，无头机打不开是正常的，把地址栏整条 URL 复制回来
+  回调页是 `http://localhost:51121/oauth-callback`，无头机打不开是正常的，把地址栏整条 URL 复制回来。
+  2026-11-07 实测：旧 `antigravity/1.11.5` 与旧 Gemini x-goog/client-metadata 头会被整通道拒绝，
+  现按真实平台发送当前 IDE User-Agent；`providers.google-antigravity.userAgent` 可覆盖完整值，
+  端点必须保持 sandbox（生产端点实测 429）。`npm run ping` 对 stopReason:error/aborted 必须非零退出
 - **OAuth client 常量只放本机配置**：gemini-cli 公开的 id/secret 只写本机 `config/models.json` 的
   `providers.google-gemini.oauthClient`（模板留空串占位），源码里不出现——git 里含明文 client 会被
   GitHub push protection 拦推送；登录成功后 client 随凭据落盘（`config/auth.json`），token 刷新从
@@ -488,25 +491,29 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
   否则「必须带链接」与「不许抄工具结果」直接冲突，模型只能退回只发 BV 号（2026-11-05 事故）。
   代价：secret 本身就是一条 URL（或敏感内容全在 URL 内）时，溯源比对会被整条跳过；
   密钥/token/绝对路径仍由独立的 `findSecret` 机械规则兜底。
-- **新闻播报管线**：`news.at`（缺省 10:30）触发第二 scheduler 实例（幂等账独立在 `fish.news_runs`，
-  不写 `fish.external_jobs`）。取料 `src/external/news-client.ts`：自建 60s 服务（loopback 4399 的
-  `/v2/60s`、`/v2/weibo`、`/v2/baidu/hot`）+ 界面/虎嗅/IT之家/人民网 RSS（fast-xml-parser 受限解析：
-  ≤2MB、10s 超时）+ 知乎日报；sources 枚举 60s/jiemian/huxiu/ithome/people/zhihu_daily/weibo_hot/
-  baidu_hot，单源失败降内容不阻断、全源失败当日不发；topic 两层映射（sources+keywords 命中优先、
-  未命中兜底）+ exclude 标题黑名单（娱乐圈词表可热改）。归纳用 main 模型按 `prompt/news-digest.md`
-  的严格 JSON schema（标题级输入带宿主索引，URL 不进模型；summary≤60 字；失败重试 1 次后放弃当日）；
-  宿主渲染 ≤500 字成品（超限按 topic 顺序裁剪，链接与来源署名宿主拼装），经 **scheduled answer 轮**
-  （目标群当前人格）的 `say_words` 单条出口到 `news.targetGroup`——必须 ∈ `.env GROUPS`（P1-7 安全域，
-  域外直接跳过）；幂等 `fish.news_runs`（localDay+targetGroup，重复触发/重启补跑不重发）；末条自言或
-  会话忙推迟 ≤30 分钟（5 分钟步长重查），仍不行放弃当日——宁少勿扰。
+- **新闻备料与机械播报管线（2026-11-07 重构）**：`news.at`（缺省 10:30）是开始备料时点，
+  `news.preparationMinutes`（缺省 10，1–30，热加载）决定目标群准备窗口。窗口内目标群普通模型响应冻结：
+  @ 只经 outbox 机械回复「正在准备新闻哦，请稍后。」且不补答，非 @ 仍记原话簿/recent/自由拍收集器，
+  解冻后按原到达序处理；其它群和私聊不受影响，主人 `/` 指令照常。取料仍由 `src/external/news-client.ts`
+  的 60s/RSS/知乎日报八源完成，单源失败降级；目标群必须 ∈ `.env GROUPS`。
+  新闻轮绑定**开始时目标群当前人格的既有 Conversation**，由该人格先经 `tool_search` 加载 deferred
+  `news_prepare`，再提交结构化 sections/closing 选材（topic/sourceRef 严格校验、summary≤60 字、closing≤30 字），
+  全程禁 `say_*`、跳过正文兜底与轮后 compact；首次 + 最多 3 次重试，全部尝试不得越过 publishAt。
+  宿主渲染 ≤500 字成品（canonical 链接只按 sourceRef 索引），到点在同一个 harness commit 内完成稳定 key
+  `news:<day>:<group>` 的 outbox 入队与 `fish.news_runs` prepared→done，再解冻并 drain；FIFO 保证新闻先于
+  解冻后的普通回复，入队不冒充 QQ 送达。run 全状态 CAS（preparing/prepared/done/failed）、run-key single-flight、
+  独立 deadline 与 publishAt+5 秒安全看门狗共同保证失败/存储悬挂也解冻；启动 `recoverNewsRuns` 直接恢复非终态，
+  prepared 不重复备料，超过 2 小时的陈旧成品记 missed_window 不补发。旧 30 分钟 `awaitNewsSlot`、defer_giveup
+  和 scheduled answer 的 `say_words` 播报路径已删除。
 - 部署依赖：60s 是 macmini 上的自建 Docker 服务（镜像固定、loopback、健康检查、升级回滚的 runbook
   见 `docs/plans/2026-11-02-external-ammo.md` 附录）；RSS/知乎日报无自建依赖；60s 不可达只降级不阻断。
 
 ## 命令
 
 ```bash
-npm test           # 145 项，含上面每条约束的兜底
-npm run prompts    # 列出 prompt 文件 + sha256 + 24 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属 + 内嵌扫描结果
+npm test           # 166 项，含上面每条约束与新闻 R1–R12 竞态矩阵的兜底
+npm run prompts    # 列出 prompt 文件 + sha256 + 27 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属 + 内嵌扫描结果
+npm run smoke:news # 新闻 N1–N5 + 生产 runtime 竞态 smoke（真实模型、隔离 SQLite/凭据、虚构新闻源，不接 QQ）
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
 npm run memory     # 长期记忆查看与审批（--persona / --chat / --json / --pending / --approve / --reject，见第 16 节）

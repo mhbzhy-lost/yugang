@@ -8,9 +8,10 @@
           "read",
           "set",
           "models_list",
+          "models_probe",
           "models_switch"
         ],
-        "description": "read 看两边配置现状；set 改 fish.config.json 的一个受控字段；models_list 看角色表和可用模型；models_switch 切换某个角色的模型"
+        "description": "read 看两边配置现状；set 改 fish.config.json 的一个受控字段；models_list 看角色表和可用模型；models_probe 真实探测指定模型；models_switch 切换某个角色的模型"
       },
       "field": {
         "type": "string",
@@ -31,11 +32,11 @@
       },
       "provider": {
         "type": "string",
-        "description": "models_switch 必填：config/models.json 里 providers 的名字"
+        "description": "models_probe / models_switch 必填：config/models.json 里 providers 的名字"
       },
       "model": {
         "type": "string",
-        "description": "models_switch 必填：该 provider 下的模型 id；image 可写任意图片模型名"
+        "description": "models_probe / models_switch 必填：该 provider 下的模型 id；image 切换时可写任意图片模型名，probe 只探测对话模型"
       }
     },
     "required": [

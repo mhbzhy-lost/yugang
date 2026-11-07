@@ -377,6 +377,7 @@
       "auth": "oauth",
       "oauthClient": { "id": "", "secret": "" },
       "baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+      "userAgent": "",
       "proxy": "http://127.0.0.1:7890",
       "models": [
         {
