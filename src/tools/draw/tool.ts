@@ -39,7 +39,7 @@ const DRAWN = new Map<string, unknown>();
 const PRESET_POSITIVE = `masterpiece, best quality, absurdres, score_7, score_8, score_9, 
 newest, year 2025, detailed, novel illustration, game cg, anime, `;
 const PRESET_NEGATIVE = `low quality, worst quality, score_1, score_2, score_3, early, old, 
-dark skin, shiny skin, abs, `;
+lips, shiny skin, abs, `;
 const PRESET = { width: 832, height: 1216, steps: 28, cfg_scale: 5, sampler_name: "DPM++ 2M", scheduler: "sgm_uniform" };
 /** 高分辨率模式（hires fix）默认档：4x-AnimeSharp 放大 1.5 倍，二段步数 0=继承主步数，denoising 0.4，其余默认。
  *  hr_additional_modules 必须显式给 ["Use same choices"]（沿用当前模块）：Forge Neo 的 API 不传时为 None，
