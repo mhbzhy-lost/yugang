@@ -302,7 +302,15 @@ function checkCompact(raw: unknown): FieldCheck {
   for (const key of Object.keys(c)) {
     if (!["maxTokens", "byModel", "maxEntries", "maxChars"].includes(key)) problems.push(`compact.${key} 不是受控字段，已忽略`);
   }
-  return { ok: true, value: { maxTokens: Math.floor(maxTokens), byModel }, ...(problems.length > 0 ? { problems } : {}) };
+  return {
+    ok: true,
+    value: {
+      maxTokens: Math.floor(maxTokens),
+      // 未写 byModel 时保留内置覆盖；只有显式写 {} 才是清空全部模型覆盖。
+      ...(rawOverrides !== undefined ? { byModel } : {}),
+    },
+    ...(problems.length > 0 ? { problems } : {}),
+  };
 }
 
 function checkSalvage(raw: unknown): FieldCheck {
