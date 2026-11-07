@@ -15,10 +15,10 @@
       },
       "field": {
         "type": "string",
-        "description": "set 必填：fish.config.json 的受控字段名，只认下面字段表里的白名单"
+        "description": "set 必填：受控字段名或点路径，如 video、video.dailyBudget、engage.byGroup.174408629.freeSeconds"
       },
       "value": {
-        "description": "set 必填：字段新值，类型随字段（数值 / 布尔 / 字符串 / 对象），见字段表"
+        "description": "set 必填：字段新值，类型随字段（数值 / 布尔 / 字符串 / 对象 / 数组）；对象也可传 JSON 字符串"
       },
       "role": {
         "type": "string",

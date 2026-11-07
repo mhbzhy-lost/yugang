@@ -45,6 +45,7 @@ const ROLES: readonly ModelRole[] = ["main", "vision", "vision_fallback", "image
 /** config 工具的字段白名单：与 parseFile 同源（../../fish-config.ts 的 FISH_CONFIG_FIELDS，
  *  engage 块也在其中，终审 #7：不再另持一份字段集与校验）。 */
 const CONFIG_FIELDS: readonly FishConfigFieldSpec[] = FISH_CONFIG_FIELDS;
+const OBJECT_CONFIG_FIELDS = new Set(["engage", "ammo", "video", "news", "compact", "voices"]);
 
 /** 值的回执显示：字符串裸显，其余 JSON 化。 */
 function show(value: unknown): string {
@@ -118,9 +119,7 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
   }
 
   /** set：白名单校验（返回 FieldCheck）→ 整文件读改 → 原子写盘；读写失败直接抛回执文案。不存在的文件按空对象起底。 */
-  function writeFishConfigField(spec: FishConfigFieldSpec, raw: unknown): FieldCheck {
-    const result = spec.check(raw);
-    if (!result.ok) return result;
+  function writeFishConfigField(spec: FishConfigFieldSpec, raw: unknown, path: readonly string[] = []): FieldCheck {
     let current: Record<string, unknown>;
     try {
       current = JSON.parse(readFileSync(fishConfigPath, "utf8")) as Record<string, unknown>;
@@ -133,6 +132,37 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
         }));
       }
     }
+    let candidate = raw;
+    if (typeof candidate === "string") {
+      const text = candidate.trim();
+      if (text.startsWith("{") || text.startsWith("[")) {
+        try { candidate = JSON.parse(text); } catch { /* 交给原字段校验报形状错误 */ }
+      }
+    }
+    if (path.length > 0) {
+      const parent = current[spec.name];
+      const merged = parent && typeof parent === "object" && !Array.isArray(parent)
+        ? structuredClone(parent) as Record<string, unknown>
+        : {};
+      let cursor = merged;
+      for (const segment of path.slice(0, -1)) {
+        const next = cursor[segment];
+        if (next !== undefined && (!next || typeof next !== "object" || Array.isArray(next))) {
+          return { ok: false, reason: `${spec.name}.${path.join(".")} 的父级不是对象` };
+        }
+        cursor[segment] = next ?? {};
+        cursor = cursor[segment] as Record<string, unknown>;
+      }
+      cursor[path.at(-1)!] = candidate;
+      candidate = merged;
+    }
+    const result = spec.check(candidate);
+    const target = `${spec.name}${path.length > 0 ? `.${path.join(".")}` : ""}`;
+    const targetProblem = result.ok && path.length > 0
+      ? result.problems?.find((problem) => problem.includes(target))
+      : undefined;
+    if (targetProblem) return { ok: false, reason: targetProblem };
+    if (!result.ok) return result;
     current[spec.name] = result.value;
     try {
       const tmp = `${fishConfigPath}.tmp`;
@@ -143,10 +173,10 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
         error: error instanceof Error ? error.message : String(error),
       }));
     }
-    console.log(`[鱼缸] config set fish.config.json ${spec.name}=${show(result.value)} (${spec.effect})`);
+    console.log(`[鱼缸] config set fish.config.json ${target}=${show(result.value)} (${spec.effect})`);
     // ammo.dailyBudget 配置变更即灌入共享 bili 客户端（终验 #8）：热配置真正生效，
     // 不等下一次 scheduler tick；宿主侧启动/读路径的灌入在 src/index.ts（syncBiliBudget）
-    if (spec.name === "ammo" && result.ok) {
+    if ((spec.name === "ammo" || spec.name === "video") && result.ok) {
       const budget = (result.value as { dailyBudget?: unknown }).dailyBudget;
       if (typeof budget === "number") getBiliClient().setDailyBudget(budget);
     }
@@ -256,9 +286,14 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
 
       // set：白名单外的字段与不合法的值都以 tool 错误拒绝，不落盘
       const field = args.field?.trim() ?? "";
-      const spec = CONFIG_FIELDS.find((candidate) => candidate.name === field);
-      if (!spec) throw new Error(renderTemplate(p.messages["config_unknown_field"] ?? "{{field}}", { field }));
-      const result = writeFishConfigField(spec, args.value);
+      const segments = field.split(".");
+      const top = segments.shift() ?? "";
+      const spec = CONFIG_FIELDS.find((candidate) => candidate.name === top);
+      const invalidPath = segments.some((segment) => !segment || ["__proto__", "prototype", "constructor"].includes(segment));
+      if (!spec || invalidPath || (segments.length > 0 && !OBJECT_CONFIG_FIELDS.has(top))) {
+        throw new Error(renderTemplate(p.messages["config_unknown_field"] ?? "{{field}}", { field }));
+      }
+      const result = writeFishConfigField(spec, args.value, segments);
       if (!result.ok) throw new Error(renderTemplate(p.messages["config_bad_value"] ?? "{{reason}}", { field, reason: result.reason }));
       const lines = [renderTemplate(p.messages["config_set_done"] ?? "{{field}}", {
         field: spec.name,
