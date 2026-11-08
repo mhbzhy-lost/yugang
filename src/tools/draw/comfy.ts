@@ -132,9 +132,9 @@ export function makeMultiSceneGraph(args: MultiDraw): Graph {
     // 构图预览：阶段二上传的底图从这取回
     "208": { class_type: "PreviewImage", inputs: { images: ["34", 0] } },
     // 分割链：YOLO 检测 → SEGS 裁切 → SAM 分实例
-    "200": { class_type: "UltralyticsDetectorProvider", inputs: { model_name: "bbox/person_yolov8m.pt" } },
+    "200": { class_type: "UltralyticsDetectorProvider", inputs: { model_name: "segm/yolov8m-seg.pt" } },
     "201": { class_type: "SAMLoader", inputs: { model_name: "sam_vit_b_01ec64.pth", device_mode: "AUTO" } },
-    "202": { class_type: "BboxDetectorSEGS", inputs: { bbox_detector: ["200", 0], image: ["34", 0], threshold: 0.35, dilation: 10, crop_factor: 3, drop_size: 10, labels: "" } },
+    "202": { class_type: "SegmDetectorSEGS", inputs: { segm_detector: ["200", 1], image: ["34", 0], threshold: 0.35, dilation: 10, crop_factor: 3, drop_size: 10, labels: "" } },
     "203": { class_type: "SAMDetectorSegmented", inputs: { sam_model: ["201", 0], segs: ["202", 0], image: ["34", 0], detection_hint: "center-1", dilation: 0, threshold: 0.93, bbox_expansion: 0, mask_hint_threshold: 0.7, mask_hint_use_negative: "False" } },
     "204": { class_type: "MaskToImage", inputs: { mask: ["203", 0] } },
     "205": { class_type: "PreviewImage", inputs: { images: ["204", 0] } }, // combined mask（调试用，不消费）
@@ -476,16 +476,24 @@ async function runMultiJob(url: string, args: MultiDraw, onSubmitted: () => void
   // ── 阶段一：构图 + 分实例分割，取回构图底图与逐实例 mask ──
   // 空检测兑底：构图未画出可检出人形时 SAM 节点会 None 崩（Impact 对 0 SEGS 的缺陷），
   // 换 seed 重构图一次（2026-11-09 线上事故修复；仍失败则按失败路径返回）。
+  // 两类概率性失败都纳入重试：graph 执行错（空检测节点崩）与「执行成功但实例<2」
+  // （构图未画出可分两人——躺姿/交叠场景检出不稳，重构图大概率改善）。
   let sceneId = randomUUID();
   onSubmitted();
   let sceneJob;
-  try {
-    sceneJob = await submitAndWait(base, makeMultiSceneGraph(args), sceneId, clientId, deadline - 240_000);
-  } catch (error) {
-    if (!(error instanceof ComfyExecutionFailed)) throw error;
-    console.error("[fish] multi scene retry: no detectable person, re-compose");
-    sceneId = randomUUID();
-    sceneJob = await submitAndWait(base, makeMultiSceneGraph({ ...args, seed: (args.seed ?? 0) + 1 + randomBytes(2).readUInt16BE() }), sceneId, clientId, deadline - 240_000);
+  let retries = 0;
+  for (;;) {
+    try {
+      sceneJob = await submitAndWait(base, makeMultiSceneGraph(retries === 0 ? args : { ...args, seed: (args.seed ?? 0) + 1 + randomBytes(2).readUInt16BE() }), sceneId, clientId, deadline - 240_000);
+      const batch = sceneJob.outputs?.["207"]?.images;
+      if (Array.isArray(batch) && batch.length >= 2) break;
+      throw new ComfyExecutionFailed("multi segmentation insufficient");
+    } catch (error) {
+      if (!(error instanceof ComfyExecutionFailed) || retries >= 2 || Date.now() > deadline - 240_000) throw error;
+      retries += 1;
+      console.error(`[fish] multi scene retry #${retries}: segmentation insufficient, re-compose`);
+      sceneId = randomUUID();
+    }
   }
   const composition = await fetchOutputImage(base, sceneJob, "208");
   const batchImages = sceneJob.outputs?.["207"]?.images;
