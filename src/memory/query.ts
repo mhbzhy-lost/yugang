@@ -31,6 +31,7 @@ export function deleteFactById(state: MemoryState, id: string): boolean {
 
 export type MemoryCommand =
   | { kind: "list" }
+  | { kind: "view"; id: string }
   | { kind: "approve"; id: string; track: "公共" | "私有" }
   | { kind: "reject"; id: string; all: boolean }
   | { kind: "delete"; id: string }
@@ -38,14 +39,17 @@ export type MemoryCommand =
 
 /**
  * 解析 /记忆 指令（闸前机械通道，不进模型）：
- * `/记忆` 列表；`/记忆 同意 <id> [公共|私有]`（缺省私有——默认最小可见面，公开是主动决定）；
- * `/记忆 拒绝 <id|全部>`；`/记忆 删除 <fact-id>`（真删除已入库的 fact，仅主人私聊通道生效）；
+ * `/记忆` 列表；`/记忆 查看 <父id>` 展开子项；`/记忆 同意 <父id|子项id> [公共|私有]`
+ * （缺省私有——默认最小可见面，公开是主动决定）；
+ * `/记忆 拒绝 <父id|全部>`；`/记忆 删除 <fact-id>`（真删除已入库的 fact，仅主人私聊通道生效）；
  * 其它 /记忆 开头的一律回用法。不是 /记忆 指令返回 undefined。
  */
 export function parseMemoryCommand(text: string): MemoryCommand | undefined {
   if (text === "/记忆") return { kind: "list" };
   if (!text.startsWith("/记忆 ")) return undefined;
   const rest = text.slice("/记忆 ".length).trim();
+  const view = /^查看\s+(\S+)$/.exec(rest);
+  if (view) return { kind: "view", id: view[1] };
   const approve = /^同意\s+(\S+)(?:\s+(公共|私有))?$/.exec(rest);
   if (approve) return { kind: "approve", id: approve[1], track: approve[2] === "公共" ? "公共" : "私有" };
   if (rest === "拒绝 全部") return { kind: "reject", id: "all", all: true };

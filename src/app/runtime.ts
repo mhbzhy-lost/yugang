@@ -57,7 +57,7 @@ import { createUsageLedger, sumUsage } from "../records/usage.ts";
 import { bypassAllowed, splitBypass, BYPASS_RE } from "../qq/bypass.ts";
 import { ChatsDoc, MemoryPendingDoc, OutboxDoc, WatchDoc } from "../store.ts";
 import { renderTemplate } from "../prompt/index.ts";
-import { MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryInbound, parseMemoryCommand, publicizePatch } from "../memory/index.ts";
+import { MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, findPendingSelection, fingerprintPatch, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryApprovalPreparation, type MemoryInbound, parseMemoryCommand, publicizePatch } from "../memory/index.ts";
 import { memoryKeyOf, pushScope, shiftScope } from "../memory/scope.ts";
 import { OutboundEntry, type OutboundPayload } from "../tools/say-shared.ts";
 import { compactTokenLimitOf, createConfigLoader, engageSettingsOf } from "../fish-config.ts";
@@ -1446,17 +1446,22 @@ async function submitShardRound(chatKey: string, items: readonly EngageShardItem
  * prompt/memory-publicize.md 改写——去掉指向来源群的身份信息，让表述在该人格任何会话
  * 都成立。模型与压缩抽取同源（memoryModel 链：compact.memoryModel ?? 主模型；现配置
  * 未配 memoryModel，实际与抽取同落主模型）。改写输出在 memory.ts 里重过机械过滤并
- * 强制结构同构，通过才写回待审 doc，随后的正式审批应用的就是改写后的文本（回执里的
- * digest 即改写后关键文本）；失败 fail closed，由调用方以错误回执终止，不降级、不原样入库。
- * 日志只带 id 与结果状态，不打印内容。
+ * 强制结构同构。公共化只在内存准备，不写回待审；最终事务重新解析 selector 并核对
+ * 原始 patch fingerprint，再直接应用改写后的 patch。等待期间若子项已被另一请求批准，
+ * fingerprint 变化即 conflict，旧快照不会复活子项或串到另一轨道。失败 fail closed。
+ * 日志只带 selector 与结果状态，不打印内容。
  */
-async function publicizePendingForApproval(id: string): Promise<"ok" | "missing" | "failed"> {
+async function publicizePendingForApproval(
+  selector: string,
+): Promise<{ status: "ok"; preparation: MemoryApprovalPreparation } | { status: "missing" | "failed" }> {
   const views = await fish.pendingMemories();
   const found = views
     .flatMap((view) => view.entries.map((entry) => ({ persona: view.persona, entry })))
-    .find((item) => item.entry.id === id);
-  if (!found) return "missing";
-  const result = await publicizePatch(found.entry.patch, {
+    .map((item) => ({ ...item, selection: findPendingSelection([item.entry], selector) }))
+    .find((item) => item.selection !== undefined);
+  if (!found?.selection) return { status: "missing" };
+  const original = found.selection.patch;
+  const result = await publicizePatch(original, {
     template: fish.prompts.memoryPublicize,
     complete: async (prompt) => {
       const model = models.getModel(mainModel.provider, mainModel.modelId);
@@ -1469,16 +1474,18 @@ async function publicizePendingForApproval(id: string): Promise<"ok" | "missing"
     },
   });
   if (result.status === "failed") {
-    console.log(`[鱼缸] 记忆公共化脱敏 ${id} failed ${result.reason}`);
-    return "failed";
+    console.log(`[鱼缸] 记忆公共化脱敏 ${selector} failed ${result.reason}`);
+    return { status: "failed" };
   }
-  await fish.harness.commit(async (tx) => {
-    const pending = await tx.doc(MemoryPendingDoc, found.persona, found.persona);
-    const entry = pending.entries.find((item) => item.id === id);
-    if (entry) entry.patch = result.patch;
-  }, ctx);
-  console.log(`[鱼缸] 记忆公共化脱敏 ${id} ok`);
-  return "ok";
+  console.log(`[鱼缸] 记忆公共化脱敏 ${selector} ok`);
+  return {
+    status: "ok",
+    preparation: {
+      selector,
+      expectedFingerprint: fingerprintPatch(original),
+      approvedPatch: result.patch,
+    },
+  };
 }
 
 // ── /评 指令（T6，决策 11b）：sentmap 定位、评价包装配与待审管道 ────────────────
@@ -1761,12 +1768,13 @@ async function handleCommand(msg: IncomingMessage): Promise<string | null> {
     text = await runEvalCommand(conv, msg, evalCommand);
   } else if (memoryCommand) {
     // 公共批准先过 AI 脱敏（仅私聊通道；群内 /记忆 无副作用，照旧只回引导语）。
-    // 改写成功写回待审后走原审批（回执展示改写后文本）；失败 fail closed，直接回错误文案
+    // 准备结果不写 pending，随命令进入最终事务；失败 fail closed，直接回错误文案。
     if (memoryCommand.kind === "approve" && memoryCommand.track === "公共" && !msg.chatKey.startsWith("qq:group:")) {
-      if ((await publicizePendingForApproval(memoryCommand.id)) === "failed") {
+      const prepared = await publicizePendingForApproval(memoryCommand.id);
+      if (prepared.status === "failed") {
         text = renderTemplate(fish.prompts.messages["cmd_memory_publicize_failed"] ?? "", { id: memoryCommand.id });
       } else {
-        text = await fish.memoryCommandReply(msg.chatKey, memoryCommand);
+        text = await fish.memoryCommandReply(msg.chatKey, memoryCommand, prepared.status === "ok" ? prepared.preparation : undefined);
       }
     } else {
       text = await fish.memoryCommandReply(msg.chatKey, memoryCommand);

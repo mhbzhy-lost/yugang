@@ -10,19 +10,25 @@ import type { Harness } from "@earendil-works/pi-durable";
 import {
   approvePending,
   deleteFactById,
+  effectivePendingPatch,
+  findPendingSelection,
   formatAgeShort,
   hasFact,
+  MemoryApprovalAbort,
+  pendingItemHasReplacement,
+  pendingItems,
   rejectPending,
   signalsSuffix,
   summarizeFeedback,
   summarizePatch,
+  summarizePendingItem,
   MEMORY_PENDING_CAP,
   MEMORY_ZERO_EXTRACT_PAGES,
+  type MemoryApprovalPreparation,
   type MemoryCommand,
   type PendingMemoryEntry,
 } from "../memory/index.ts";
 import { privateMemoryKeyOf } from "../memory/scope.ts";
-import { missingExpireTargets } from "../memory/index.ts";
 import { renderTemplate } from "../prompt/index.ts";
 import { ChatsDoc, MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc } from "../store.ts";
 import type { FishBase } from "./base.ts";
@@ -30,12 +36,12 @@ import { DEFAULT_PERSONA } from "./types.ts";
 
 export interface MemoryAdminParts {
   pendingMemories(): Promise<{ persona: string; entries: PendingMemoryEntry[] }[]>;
-  approveMemory(id: string, track: "公共" | "私有"): Promise<
-    { status: "ok"; track: "公共" | "私有"; persona: string; originChatKey: string; digest: string }
-      | { status: "missing" | "no_origin" | "expire_mismatch" }
+  approveMemory(id: string, track: "公共" | "私有", preparation?: MemoryApprovalPreparation): Promise<
+    { status: "ok"; track: "公共" | "私有"; persona: string; originChatKey: string; digest: string; remaining: number }
+      | { status: "missing" | "no_origin" | "changed" | "expire_mismatch" | "supersede_mismatch" | "publicize_required" }
   >;
   rejectMemory(id: string | "all"): Promise<number>;
-  memoryCommandReply(chatKey: string, command: MemoryCommand): Promise<string>;
+  memoryCommandReply(chatKey: string, command: MemoryCommand, preparation?: MemoryApprovalPreparation): Promise<string>;
 }
 
 export function installMemoryAdmin(state: FishBase & { harness: Harness }): MemoryAdminParts {
@@ -52,37 +58,30 @@ export function installMemoryAdmin(state: FishBase & { harness: Harness }): Memo
     return views;
   }
 
-  async function approveMemoryLocal(id: string, track: "公共" | "私有") {
+  async function approveMemoryLocal(id: string, track: "公共" | "私有", preparation?: MemoryApprovalPreparation) {
+    if (preparation !== undefined && preparation.selector !== id) return { status: "changed" as const };
     for (const persona of personaKeys) {
       const snapshot = await harness.snapshot(MemoryPendingDoc, persona, ctx);
-      const entry = snapshot?.entries.find((item) => item.id === id);
-      if (!entry) continue;
-      if (track === "私有" && !entry.originChatKey) return { status: "no_origin" as const };
-      const targetKey = track === "私有" ? privateMemoryKeyOf(persona, entry.originChatKey) : persona;
-      // EXPIRE 双轨预检（D9）：known 是公共+当前私有的合并视图，但这次批准只写一个 doc。
-      // 目标 doc 里找不到（或已失效 / subject 不符）就先失败并保留待审——否则 applyPatch
-      // 静默 no-op，待审却被删掉，主人会以为「已并入」。
-      if ((entry.patch.expire?.length ?? 0) > 0) {
-        const targetSnapshot = await harness.snapshot(track === "私有" ? MemoryPrivateDoc : MemoryDoc, targetKey, ctx);
-        if (missingExpireTargets(targetSnapshot, entry.patch).length > 0) {
-          return { status: "expire_mismatch" as const };
-        }
-      }
-      const digest = summarizePatch(entry.patch);
-      const originChatKey = entry.originChatKey;
+      const selection = snapshot ? findPendingSelection(snapshot.entries, id) : undefined;
+      if (!selection) continue;
+      if (track === "公共" && preparation === undefined) return { status: "publicize_required" as const };
+      const originChatKey = selection.entry.originChatKey;
+      if (track === "私有" && !originChatKey) return { status: "no_origin" as const };
+      const targetKey = track === "私有" ? privateMemoryKeyOf(persona, originChatKey) : persona;
       try {
-        await harness.commit(async (tx) => {
+        const result = await harness.commit(async (tx) => {
           const pending = await tx.doc(MemoryPendingDoc, persona, persona);
           const target = await tx.doc(track === "私有" ? MemoryPrivateDoc : MemoryDoc, targetKey, targetKey);
-          const result = approvePending(pending, id, target, now());
-          if (result.status === "missing") throw new Error("memory_pending_missing");
+          // fingerprint、EXPIRE/SUPERSEDE 预检、apply 与 pending 删除必须同成同败。
+          const approval = approvePending(pending, id, target, now(), preparation);
+          if (approval.status !== "ok") throw new MemoryApprovalAbort(approval.status);
+          return approval;
         }, ctx);
+        return { status: "ok" as const, track, persona, originChatKey, digest: result.digest, remaining: result.remaining };
       } catch (error) {
-        // 并发下条目刚好被批掉：回 missing；其它错误照实抛给宿主日志
-        if (error instanceof Error && error.message === "memory_pending_missing") return { status: "missing" as const };
+        if (error instanceof MemoryApprovalAbort) return { status: error.status };
         throw error;
       }
-      return { status: "ok" as const, track, persona, originChatKey, digest };
     }
     return { status: "missing" as const };
   }
@@ -150,19 +149,89 @@ export function installMemoryAdmin(state: FishBase & { harness: Harness }): Memo
     return { status: "missing" };
   }
 
-  async function memoryCommandReply(chatKey: string, command: MemoryCommand): Promise<string> {
+  async function memoryCommandReply(chatKey: string, command: MemoryCommand, preparation?: MemoryApprovalPreparation): Promise<string> {
     const messages = prompts.messages;
     // 群内 /记忆 一律只回引导语：无任何副作用（不预选、不过滤、不列部分内容）
     if (chatKey.startsWith("qq:group:")) return messages["cmd_memory_group"] ?? "";
     if (command.kind === "usage") return messages["cmd_memory_usage"] ?? "";
+
+    // fact id → 原文：公共 doc + 该人格全部私有 doc；详情和总览共用一次请求内缓存。
+    const factTexts = new Map<string, Map<string, string>>();
+    const factTextOf = async (persona: string, id: string): Promise<string> => {
+      let table = factTexts.get(persona);
+      if (!table) {
+        table = new Map(
+          Object.values((await harness.snapshot(MemoryDoc, persona, ctx))?.people ?? {}).flatMap((person) =>
+            person.facts.map((fact) => [fact.id, fact.text] as const),
+          ),
+        );
+        const privateKeys = new Set(await privateKeysOf(persona));
+        const pending = await harness.snapshot(MemoryPendingDoc, persona, ctx);
+        for (const pendingEntry of pending?.entries ?? []) {
+          if (pendingEntry.originChatKey) privateKeys.add(privateMemoryKeyOf(persona, pendingEntry.originChatKey));
+        }
+        for (const privKey of privateKeys) {
+          const priv = await harness.snapshot(MemoryPrivateDoc, privKey, ctx);
+          for (const person of Object.values(priv?.people ?? {})) {
+            for (const fact of person.facts) if (!table.has(fact.id)) table.set(fact.id, fact.text);
+          }
+        }
+        factTexts.set(persona, table);
+      }
+      return table.get(id) ?? "";
+    };
+
+    if (command.kind === "view") {
+      const views = await pendingMemoriesLocal();
+      const found = views.flatMap((view) => view.entries.map((entry) => ({ entry, persona: view.persona })))
+        .find(({ entry }) => entry.id === command.id);
+      if (!found) return renderTemplate(messages["cmd_memory_missing"] ?? "", { id: command.id });
+      const items = pendingItems(found.entry);
+      const lines = [renderTemplate(messages["cmd_memory_detail_header"] ?? "", {
+        id: found.entry.id,
+        persona: found.persona,
+        origin: found.entry.originChatKey || "-",
+        count: String(items.length),
+      })];
+      for (const item of items) {
+        lines.push(renderTemplate(messages["cmd_memory_item"] ?? "", { id: item.id, digest: summarizePendingItem(item) }));
+        for (const note of item.patch.supersede ?? []) {
+          for (const id of note.ids) {
+            const text = await factTextOf(found.persona, id);
+            if (pendingItemHasReplacement(item)) {
+              lines.push(renderTemplate(messages["cmd_memory_supersede_item_note"] ?? "", { id, text: text || "-" }));
+            } else {
+              lines.push(renderTemplate(messages["cmd_memory_supersede_only_note"] ?? "", { id, text: text || "-" }));
+            }
+          }
+        }
+        for (const note of item.patch.expire ?? []) {
+          const text = await factTextOf(found.persona, note.id);
+          lines.push(renderTemplate(messages["cmd_memory_expire_note"] ?? "", { id: note.id, text: text || "-", quote: note.quote }));
+        }
+      }
+      return lines.join("\n");
+    }
     if (command.kind === "approve") {
-      const result = await approveMemoryLocal(command.id, command.track);
+      const result = await approveMemoryLocal(command.id, command.track, preparation);
       if (result.status === "missing") return renderTemplate(messages["cmd_memory_missing"] ?? "", { id: command.id });
       if (result.status === "no_origin") return renderTemplate(messages["cmd_memory_no_origin"] ?? "", { id: command.id });
+      if (result.status === "changed") return renderTemplate(messages["cmd_memory_changed"] ?? "", { id: command.id });
       if (result.status === "expire_mismatch") {
         return renderTemplate(messages["cmd_memory_expire_mismatch"] ?? "", { id: command.id, track: command.track });
       }
-      return renderTemplate(messages["cmd_memory_ok"] ?? "", { track: result.track, digest: result.digest });
+      if (result.status === "supersede_mismatch") {
+        return renderTemplate(messages["cmd_memory_supersede_mismatch"] ?? "", { id: command.id, track: command.track });
+      }
+      if (result.status === "publicize_required") {
+        return renderTemplate(messages["cmd_memory_publicize_failed"] ?? "", { id: command.id });
+      }
+      return renderTemplate(messages["cmd_memory_ok"] ?? "", {
+        id: command.id,
+        track: result.track,
+        digest: result.digest,
+        count: String(result.remaining),
+      });
     }
     if (command.kind === "reject") {
       const removed = await rejectMemoryLocal(command.id);
@@ -202,26 +271,6 @@ export function installMemoryAdmin(state: FishBase & { harness: Harness }): Memo
       count: String(entries.length),
       age: formatAgeShort(now() - entries[0].entry.at),
     });
-    // fact id → 原文：公共 doc + 该人格全部私有 doc（ChatsDoc 映射键推导 persona@chatKey）
-    const factTexts = new Map<string, Map<string, string>>();
-    const factTextOf = async (persona: string, id: string): Promise<string> => {
-      let table = factTexts.get(persona);
-      if (!table) {
-        table = new Map(
-          Object.values((await harness.snapshot(MemoryDoc, persona, ctx))?.people ?? {}).flatMap((person) =>
-            person.facts.map((fact) => [fact.id, fact.text] as const),
-          ),
-        );
-        for (const privKey of await privateKeysOf(persona)) {
-          const priv = await harness.snapshot(MemoryPrivateDoc, privKey, ctx);
-          for (const person of Object.values(priv?.people ?? {})) {
-            for (const fact of person.facts) if (!table.has(fact.id)) table.set(fact.id, fact.text);
-          }
-        }
-        factTexts.set(persona, table);
-      }
-      return table.get(id) ?? "";
-    };
     const shown = entries.slice(0, 30);
     const lines: string[] = [];
     for (const { entry, persona } of shown) {
@@ -237,17 +286,18 @@ export function installMemoryAdmin(state: FishBase & { harness: Harness }): Memo
           digest: (entry.feedback
             ? summarizeFeedback(entry.feedback)
               + (entry.feedback.quotedFromMissing === true ? messages["memory_feedback_missing_quote"] ?? "" : "")
-            : summarizePatch(entry.patch)) + signalsSuffix(entry.signals),
+            : summarizePatch(effectivePendingPatch(entry))) + signalsSuffix(entry.signals),
+          count: String(pendingItems(entry).length),
         }),
       );
-      for (const note of entry.patch.supersede ?? []) {
+      for (const note of effectivePendingPatch(entry).supersede ?? []) {
         for (const id of note.ids) {
           const text = await factTextOf(persona, id);
           lines.push(renderTemplate(messages["cmd_memory_supersede_note"] ?? "", { id, text: text || "-" }));
         }
       }
       // EXPIRE 的审计展示：原事实 + 依据原话（主人靠这两样判断语义相关性）
-      for (const note of entry.patch.expire ?? []) {
+      for (const note of effectivePendingPatch(entry).expire ?? []) {
         const text = await factTextOf(persona, note.id);
         lines.push(renderTemplate(messages["cmd_memory_expire_note"] ?? "", { id: note.id, text: text || "-", quote: note.quote }));
       }

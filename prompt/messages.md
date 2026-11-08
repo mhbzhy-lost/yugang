@@ -164,18 +164,24 @@ memory_cards_header: 你还记得
 
 # /记忆 审批指令（闸前机械通道，主人私聊；群内只回引导语）的文案；缺省轨道=私有
 cmd_memory_group: 记忆审批在私聊里做，单独发我 /记忆 就行
-cmd_memory_usage: 用法：/记忆 看待审；/记忆 同意 <id> [公共|私有]；/记忆 拒绝 <id|全部>；/记忆 删除 <fact-id>
+cmd_memory_usage: 用法：/记忆 看待审；/记忆 查看 <父id>；/记忆 同意 <父id|子项id> [公共|私有]；/记忆 拒绝 <父id|全部>；/记忆 删除 <fact-id>
 cmd_memory_empty: 现在没有待审的记忆
-cmd_memory_list_header: 待审 {{count}} 条 / 最早 {{age}}前（同意缺省并入私有；公共=该人格全部会话可见）
+cmd_memory_list_header: 待审 {{count}} 批 / 最早 {{age}}前（同意缺省并入私有；公共=该人格全部会话可见）
 cmd_memory_zero_extract: 近 {{pages}} 页压缩零提取（{{persona}}），值得看看是不是漏记了
-cmd_memory_entry: [{{id}}] {{persona}} · {{origin}} · {{age}}前 · {{digest}}
+cmd_memory_entry: [{{id}}] {{persona}} · {{origin}} · {{age}}前 · 剩余 {{count}} 项 · {{digest}}
+cmd_memory_detail_header: [{{id}}] {{persona}} · {{origin}} · 剩余 {{count}} 项
+cmd_memory_item: [{{id}}] {{digest}}
 cmd_memory_supersede_note:   将失效：{{id}} {{text}}
+cmd_memory_supersede_item_note:   将随本项失效：{{id}} {{text}}
+cmd_memory_supersede_only_note:   仅失效、无替代：{{id}} {{text}}
 cmd_memory_expire_note:   淘汰：{{id}} {{text}}（依据「{{quote}}」）
 cmd_memory_expire_mismatch: 这条淘汰的目标事实不在{{track}}层（或已失效），没有做任何改动：{{id}}；换另一个轨道再批
+cmd_memory_supersede_mismatch: 这条取代的目标事实不在{{track}}层（或已失效），没有做任何改动：{{id}}；换另一个轨道再批
+cmd_memory_changed: 这批待审在脱敏期间发生了变化，没有做任何改动：{{id}}；请重新查看后再批准
 # 评价类待审的引用链缺失标注（终审 #6）：/记忆 列表行尾追加，紧跟 summarizeFeedback 的摘要
 memory_feedback_missing_quote: （被引消息不可回溯）
 cmd_memory_more: 还有 {{count}} 条更新的没显示，先处理完这些再列
-cmd_memory_ok: 已并入{{track}}记忆：{{digest}}
+cmd_memory_ok: 已批准 {{id}} 并入{{track}}记忆：{{digest}}；剩余 {{count}} 项（0 即本批已审完）
 cmd_memory_publicize_failed: 这条公共记忆的 AI 脱敏没有通过，没有入库：可以重发一次 /记忆 同意 {{id}} 公共，或改批私有
 cmd_memory_missing: 没有这条待审：{{id}}
 cmd_memory_no_origin: 这条没有来源会话，落不了私有，显式选公共再试：{{id}}

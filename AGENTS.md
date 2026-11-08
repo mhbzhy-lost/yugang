@@ -353,19 +353,22 @@ fallback 模式保留 inbound 路径由 look 转述。
   在场/关键词门槛照常生效
 - **压缩只入待审（审批闸）**：写入入口只有压缩链路（`compact.ts` 的 `savePendingMemories`，
   同一 commit 内读改，同一人格多个会话并发压缩不会互相覆盖），且只写进待审库
-  `fish.memory.pending`（key=人格名；条目 `{id, patch, originChatKey, at}`，id 由代码生成、
-  跨人格唯一）。**未批准的 patch 永不进任何记忆 doc、永不注入 section、永不被模型看见**。
+  `fish.memory.pending`（key=人格名；条目 `{id, patch, items, originChatKey, at}`，id 由代码生成、
+  跨人格唯一）。一次压缩的 patch 拆成稳定子项 `父id#NN`：人物资料/单条事实/说法/卡片/评价
+  各自独立；supersede 绑定同 subject 首个新事实，expire 独立。父 patch 始终是剩余 items
+  的聚合，旧无 items 条目读取时确定性派生。**未批准的 patch 永不进任何记忆 doc、永不注入 section、永不被模型看见**。
   待审上限 `MEMORY_PENDING_CAP`（观察期 2026-11 暂不设限，改小常量即恢复淘汰，
   淘汰时打 `[鱼缸] 记忆待审淘汰 <id> <人格名>`，内容不进日志）；每次成功压缩都推进
   `lastExtractAt`（待审写入即推进，空 patch 不进待审但也推进）；抽取失败不阻塞换页。
   没有 `remember` 工具、没有定时任务、没有主动回忆
 - **批准双轨（写通道只有两处）**：主人私聊的 `/记忆` 机械指令（闸前通道，不进模型）与
   `scripts/memory.ts` 的 `--approve` / `--reject` / `--delete`。私聊 `/记忆` 是**全局单视图**：列出所有
-  人格的待审（不按当前会话人格过滤），每条标签含来源人格 + 来源会话，最旧在前，
-  头部带 `待审 N 条 / 最早 Xh Ym前` 汇总；`/记忆 同意 <id> [公共|私有]`（**缺省=私有**，
-  最小可见面是默认，公开是主动决定；私有=AI 不经手、原样并入来源会话私有 doc，
-  公共=AI 脱敏后并入人格公共 doc，见下条）；
-  `/记忆 拒绝 <id|全部>`；id 不存在回错误。**群内 `/记忆` 只回引导语，无任何副作用**
+  人格的待审（不按当前会话人格过滤），每批标签含来源人格 + 来源会话 + 剩余子项数，最旧在前，
+  头部带 `待审 N 批 / 最早 Xh Ym前` 汇总；`/记忆 查看 <父id>` 展开全部剩余子项的 id、原文与
+  失效影响；`/记忆 同意 <父id|子项id> [公共|私有]`（**缺省=私有**，最小可见面是默认，
+  公开是主动决定；私有=AI 不经手、原样并入来源会话私有 doc，公共=AI 脱敏后并入人格公共 doc）。
+  批准子项只应用该项，其余子项保留原 id；父 id 批准 = 采纳全部剩余项，父 id 拒绝 = 清除全部剩余项。
+  `/记忆 拒绝 <父id|全部>`；selector 不存在回错误。**群内 `/记忆` 只回引导语，无任何副作用**
   （不按群预选/过滤）。批准时两层 doc 各自独立执行上限与淘汰（`applyPatch`，两个 doc 分别 apply）
 - **外部写库必须重启鱼**（2026-11-05 搬史群事故）：pi-durable 的 id 计数器是**进程内存值**，
   只在启动时从库读一次。脚本/CLI 写完同一个 `var/fish.db` 后，线上进程的计数器就过期，
@@ -378,9 +381,12 @@ fallback 模式保留 inbound 路径由 look 转述。
   交给便宜模型按 `prompt/memory-publicize.md` 改写——去掉指向来源群的身份信息，让表述在该
   人格任何会话都成立；模型与压缩抽取同源（memoryModel 链，缺省同主模型）。模型输出全部当
   不可信数据：改写必须重过 `sanitizePatch` 同款机械过滤并保持结构同构（文本外的字段一律以原
-  patch 为准重建）才允许 apply；改写失败该次公共批准以错误回执终止（fail closed，不降级、
-  不原样入库），可重试或改批私有。回执展示改写后的关键文本供过目；误伤可用 `/记忆 删除`
-  兜底。日志只带 id 与结果状态（`[鱼缸] 记忆公共化脱敏 <id> ok|failed <reason>`），不打印内容
+  patch 为准重建）才允许 apply。**公共化只在内存 prepare，不写回待审**：最终事务重新解析
+  selector、校验原始选择 patch 的 canonical SHA-256 fingerprint，再直接应用脱敏 patch；
+  等待期间其它请求改变了剩余子项就返回 changed，旧快照不得复活子项或串入另一轨道。
+  改写失败该次公共批准以错误回执终止（fail closed，不降级、不原样入库），可重试或改批私有。
+  missing/changed/失效预检失败都回滚整个事务，连空目标 doc 也不创建。回执展示改写后的关键文本；
+  误伤可用 `/记忆 删除` 兜底。日志只带 id 与结果状态（`[鱼缸] 记忆公共化脱敏 <id> ok|failed <reason>`），不打印内容
 - **只经 system section 注入**：记忆文本只从 `memory` section 进模型，**绝不允许拼进 user
   message**；当前会话可见 = 公共 doc + 本会话私有 doc 现算 key 后合并渲染
   （`mergeMemoryStates`，总预算 ≤900 字；块序 = 机械优先级：主人评价 → 在场画像 →
@@ -422,8 +428,9 @@ fallback 模式保留 inbound 路径由 look 转述。
   outbound 与主人评价，否则等于允许「自己的推测」自证。防误杀：`EXPIRE` 恒 `high`-only
   （复查轮也不放宽）、每页 ≤ `MEMORY_EXPIRE_PER_PAGE`（5）、同 factId 去重、一条 quote
   只支持一条失效；有替代品的仍走 SUPERSEDE（整批解析完用最终 supersededIds 过滤掉
-  EXPIRE，不看候选顺序）。批准前还要做**双轨预检**：目标 doc 必须包含该有效 fact 且
-  subject 相符，否则报错并保留待审（不然 applyPatch 静默不命中、待审却被删）。失效只置
+  EXPIRE，不看候选顺序）。EXPIRE 与 SUPERSEDE 都在**最终批准事务内**做双轨预检：目标 doc
+  必须包含该有效 fact 且 subject 相符，否则回滚并保留待审（早期预检不能代替事务内重读，
+  否则目标已变化时 applyPatch 静默不命中、待审却被删）。失效只置
   `invalidAt` + `expiredReason`，**不写** `supersededBy`，条目保留可追溯（没有一键恢复）。
 - **上限写死在 `src/memory/model.ts` 的 `MEMORY_CAPS`**：人 ≤12、每人事实 ≤8 且总字数 ≤320、
   names ≤5、style ≤120 字、口头禅 ≤8 条且每条 ≤24 字、lore ≤40（key ≤5 个且每个 ≤10 字、
@@ -436,8 +443,9 @@ fallback 模式保留 inbound 路径由 look 转述。
 - **fact 溯源**：每条 fact 带可选 `fromChat`（来源 chatKey），由宿主在批准路径注入
   （待审条目的 `originChatKey` → `applyPatch` 写进新 fact），不由模型决定；
   `npm run memory -- --persona` 详情里逐条可见（「来自 …」），/记忆 待审列表的来源会话照旧展示。
-  待审列表里含 supersede 的条目附「将失效：<fact-id> <原文>」标注（原文从该人格公共 doc 现查，
-  供主人审批时直接看到取代影响，文案 key 在 `prompt/messages.md`）
+  待审列表和子项详情里含 supersede 的条目附「将失效：<fact-id> <原文>」标注（原文从该人格
+  公共 doc 与相关私有 doc 现查）；绑定替代事实的子项明确写「将随本项失效」，供主人直接看到
+  原子取代影响，文案 key 在 `prompt/messages.md`）
 - **删除通道（真删，区别于 supersede 的失效）**：主人私聊 `/记忆 删除 <fact-id>`（群内只回引导语）
   与 `npm run memory -- --delete <fact-id>`：按全局唯一 fact id 在该人格公共层与全部私有层 doc
   里定位并从数组真删除；日志只打 id 与所在 doc（`[鱼缸] 记忆删除 <id> <doc>`），不打印内容；
@@ -450,9 +458,9 @@ fallback 模式保留 inbound 路径由 look 转述。
   npm run memory -- --persona 长征机                # 该人格公共 doc 详情（含私有层列表）
   npm run memory -- --persona 长征机 --json         # 原始 JSON（含 memoryKey 与私有层）
   npm run memory -- --chat qq:group:659976571       # 便捷入口：解析该会话当前人格再查
-  npm run memory -- --pending [--json]              # 待审队列（全人格，最旧在前，含来源与建议轨道）
-  npm run memory -- --approve <id> [公共|私有]       # 同意（缺省私有；写库）
-  npm run memory -- --reject <id|全部>               # 拒绝（写库）
+  npm run memory -- --pending [--json]              # 待审队列（逐批展开稳定子项与失效影响）
+  npm run memory -- --approve <父id|子项id> [公共|私有] # 批准全部剩余项或单个子项（缺省私有；写库）
+  npm run memory -- --reject <父id|全部>             # 拒绝一批全部剩余项或全部待审（写库）
   npm run memory -- --delete <fact-id>               # 真删除一条已入库 fact（写库）
   ```
   查看走只读连接；`--approve` / `--reject` / `--delete` 经 pi-durable `createSession` 在同一 `var/fish.db`

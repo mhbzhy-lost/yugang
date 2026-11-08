@@ -114,7 +114,7 @@ export const MemoryPrivateDoc = defineDocFamily<MemoryState, string>({
 
 /**
  * 记忆待审库：session 级 keyed family，key = 人格名。压缩链路抽出的 patch 只进这里
- * （条目 {id, patch, originChatKey, at}），主人不批准就永不进公共/私有 doc、永不注入
+ * （条目 {id, patch, items, originChatKey, at}；patch 聚合剩余 items），主人不批准就永不进公共/私有 doc、永不注入
  * section。上限 MEMORY_PENDING_CAP（观察期暂不设限，改小即恢复淘汰并打日志）。
  */
 export const MemoryPendingDoc = defineDocFamily<PendingMemoryState, string>({

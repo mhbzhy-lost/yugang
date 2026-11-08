@@ -6,7 +6,7 @@
  */
 import type { Harness } from "@earendil-works/pi-durable";
 import { createCompactor, MemoryExtractError, type Compactor } from "../compact.ts";
-import { isPatchEmpty, mergeMemoryStates, monthAnchor, newPendingId, MEMORY_CAPS, MEMORY_PENDING_CAP } from "../memory/index.ts";
+import { aggregatePendingItems, isPatchEmpty, mergeMemoryStates, monthAnchor, newPendingId, splitPendingPatch, MEMORY_CAPS, MEMORY_PENDING_CAP } from "../memory/index.ts";
 import { privateMemoryKeyOf } from "../memory/scope.ts";
 import { MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc } from "../store.ts";
 import type { FishBase } from "./base.ts";
@@ -72,9 +72,12 @@ export function installCompactor(
         const extractedAt = now();
         if (outcome.status === "ok" && !isPatchEmpty(outcome.patch)) {
           const pending = await tx.doc(MemoryPendingDoc, memoryKey, memoryKey);
+          const id = newPendingId();
+          const items = splitPendingPatch(id, outcome.patch);
           pending.entries.push({
-            id: newPendingId(),
-            patch: outcome.patch,
+            id,
+            patch: aggregatePendingItems(items),
+            items,
             originChatKey,
             at: extractedAt,
             // 抽取信号（T11）：机械重算的计数，只进待审列表展示；两类都为零时不占字段

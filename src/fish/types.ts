@@ -18,7 +18,7 @@ import type { PromptSet } from "../prompt/index.ts";
 import type { OutboundPayload } from "../tools/say-shared.ts";
 import type { RoundKind, RoundTrigger, ToolPackageDeps } from "../tools/types.ts";
 import type { CompactResult } from "../compact.ts";
-import type { MemoryCommand, PendingMemoryEntry } from "../memory/index.ts";
+import type { MemoryApprovalPreparation, MemoryCommand, PendingMemoryEntry } from "../memory/index.ts";
 import type { WatchedPerson } from "../store.ts";
 import type { TtsConfig } from "../tts.ts";
 
@@ -169,15 +169,15 @@ export interface Fish {
   compact(conversation: Conversation, force?: boolean): Promise<CompactResult>;
   /** 待审记忆一览（全局单视图）：按人格分组，组内最旧在前；不含没注册人格的残留 doc。 */
   pendingMemories(): Promise<{ persona: string; entries: PendingMemoryEntry[] }[]>;
-  /** 同意一条待审：公共=并入人格公共 doc；私有=并入该人格在来源会话的私有 doc。 */
-  approveMemory(id: string, track: "公共" | "私有"): Promise<
-    { status: "ok"; track: "公共" | "私有"; persona: string; originChatKey: string; digest: string }
-      | { status: "missing" | "no_origin" }
+  /** 同意父条目或一个子项：公共必须携带内存公共化准备；私有并入来源会话。 */
+  approveMemory(id: string, track: "公共" | "私有", preparation?: MemoryApprovalPreparation): Promise<
+    { status: "ok"; track: "公共" | "私有"; persona: string; originChatKey: string; digest: string; remaining: number }
+      | { status: "missing" | "no_origin" | "changed" | "expire_mismatch" | "supersede_mismatch" | "publicize_required" }
   >;
   /** 拒绝待审：单条 id 或 "all"（全部人格的全部待审）；返回删掉的条数。 */
   rejectMemory(id: string | "all"): Promise<number>;
   /** /记忆 指令的机械回复（闸前通道，不进模型）：群内只回引导语，私聊里执行列表/同意/拒绝/删除。 */
-  memoryCommandReply(chatKey: string, command: MemoryCommand): Promise<string>;
+  memoryCommandReply(chatKey: string, command: MemoryCommand, preparation?: MemoryApprovalPreparation): Promise<string>;
   /** 取（或创建）某个群在指定人格下的会话；映射持久化，重启后还是同一个会话。未注册人格回退默认。 */
   group(groupKey: string, profile?: GroupProfile, persona?: string): Promise<Conversation>;
   /** 把 outbox 里排队的消息发出去；返回实际发了几条。队首卡在 sending 的会话会被跳过（不重发）。 */

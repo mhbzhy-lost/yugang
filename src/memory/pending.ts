@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   FEEDBACK_MASTER_TEXT_CHARS,
   FEEDBACK_TARGET_SUMMARY_CHARS,
@@ -11,11 +12,22 @@ import {
 } from "./model.ts";
 import { applyPatch } from "./patch.ts";
 
+export interface PendingMemoryItem {
+  /** 完整子项选择器：`${父条目id}#${两位起序号}`；首次分配后永不复用。 */
+  id: string;
+  /** 拆分时的全局顺序；聚合只按它排序，不按 subject 合并或猜测。 */
+  order: number;
+  /** 可独立 apply 的最小 patch；替代事实的 supersede 与它绑定在同一项。 */
+  patch: MemoryPatch;
+}
+
 export interface PendingMemoryEntry {
   /** 代码生成的待审 id（p- + 18 位十六进制）：跨人格唯一，/记忆 同意/拒绝按它全局定位。 */
   id: string;
-  /** 已 sanitize 的 patch 本体。 */
+  /** 已 sanitize 的 patch 本体；有 items 时必须是全部剩余 items 的聚合。 */
   patch: MemoryPatch;
+  /** 可独立审批的候选；旧条目缺省，读取时从 effective patch 确定性派生。 */
+  items?: PendingMemoryItem[];
   /** 来源会话的原始 chatKey（批准为「私有」时并入 人格名@该 chatKey 的私有 doc）。 */
   originChatKey: string;
   at: number;
@@ -31,6 +43,24 @@ export interface PendingMemoryEntry {
 export interface PendingMemoryState {
   version: 1;
   entries: PendingMemoryEntry[];
+}
+
+/** 公共化只在内存准备；最终事务按 selector + 原始 patch 指纹校验后直接应用。 */
+export interface MemoryApprovalPreparation {
+  selector: string;
+  expectedFingerprint: string;
+  approvedPatch: MemoryPatch;
+}
+
+export type MemoryApprovalFailureStatus = "missing" | "changed" | "expire_mismatch" | "supersede_mismatch";
+
+/** 非 ok 批准必须回滚：tx.doc 即使只读 initial，也可能在 commit 时创建空目标 doc。 */
+export class MemoryApprovalAbort extends Error {
+  readonly status: MemoryApprovalFailureStatus;
+  constructor(status: MemoryApprovalFailureStatus) {
+    super(`memory_approval:${status}`);
+    this.status = status;
+  }
 }
 
 /**
@@ -57,23 +87,27 @@ export function buildFeedbackPending(input: {
 }): PendingMemoryEntry {
   const clip = (text: string, max: number): string => text.replace(/[\u0000-\u001F\u007F]/g, "").trim().slice(0, max);
   const quoted = input.quotedFrom !== undefined ? clip(input.quotedFrom, 40) : undefined;
-  return {
-    id: newPendingId(),
-    // patch 的 feedback 通道（T7）：批准 apply 时结构字段进 fact 的 kind/meta；
-    // 20 条上下文只留在 feedbackContext，永不进长期 doc（决策 12）
-    patch: {
-      feedback: [
-        {
-          text: clip(input.masterText, FEEDBACK_MASTER_TEXT_CHARS),
-          meta: {
-            direction: input.direction,
-            targetSummary: clip(input.targetSummary, FEEDBACK_TARGET_SUMMARY_CHARS),
-            statsLine: clip(input.statsLine, 120),
-            day: input.day,
-          },
+  const id = newPendingId();
+  // patch 的 feedback 通道（T7）：批准 apply 时结构字段进 fact 的 kind/meta；
+  // 20 条上下文只留在 feedbackContext，永不进长期 doc（决策 12）
+  const patch: MemoryPatch = {
+    feedback: [
+      {
+        text: clip(input.masterText, FEEDBACK_MASTER_TEXT_CHARS),
+        meta: {
+          direction: input.direction,
+          targetSummary: clip(input.targetSummary, FEEDBACK_TARGET_SUMMARY_CHARS),
+          statsLine: clip(input.statsLine, 120),
+          day: input.day,
         },
-      ],
-    },
+      },
+    ],
+  };
+  const items = splitPendingPatch(id, patch);
+  return {
+    id,
+    patch: aggregatePendingItems(items),
+    items,
     originChatKey: input.originChatKey,
     at: input.at,
     feedback: {
@@ -117,6 +151,124 @@ export function emptyPendingMemory(): PendingMemoryState {
   return { version: 1, entries: [] };
 }
 
+/**
+ * 旧 T6 条目的 entry.feedback 只在这里映射一次；含 items 的新条目以 items 为事实源。
+ * 所有展示、公共化与批准都从这里取 patch，避免两条入口对旧格式各写一套兼容逻辑。
+ */
+export function effectivePendingPatch(entry: PendingMemoryEntry): MemoryPatch {
+  if (entry.items !== undefined) return aggregatePendingItems(entry.items);
+  return entry.feedback !== undefined && (entry.patch.feedback?.length ?? 0) === 0
+    ? { ...entry.patch, feedback: [feedbackItemFromMeta(entry.feedback)] }
+    : entry.patch;
+}
+
+/** 把一次压缩的 patch 拆成可独立批准的最小项；同 subject 的取代绑定首个新事实。 */
+export function splitPendingPatch(entryId: string, patch: MemoryPatch): PendingMemoryItem[] {
+  const items: PendingMemoryItem[] = [];
+  const add = (itemPatch: MemoryPatch): void => {
+    const order = items.length;
+    items.push({
+      id: `${entryId}#${String(order + 1).padStart(2, "0")}`,
+      order,
+      patch: cloneJson(itemPatch),
+    });
+  };
+  const notesBySubject = new Map<string, NonNullable<MemoryPatch["supersede"]>[number][]>();
+  for (const note of patch.supersede ?? []) {
+    const notes = notesBySubject.get(note.subject) ?? [];
+    notes.push(note);
+    notesBySubject.set(note.subject, notes);
+  }
+  const bound = new Set<NonNullable<MemoryPatch["supersede"]>[number]>();
+  for (const person of patch.people ?? []) {
+    if ((person.names?.length ?? 0) > 0 || (person.style?.length ?? 0) > 0 || (person.catchphrases?.length ?? 0) > 0) {
+      add({
+        people: [{
+          subject: person.subject,
+          ...(person.names !== undefined && person.names.length > 0 ? { names: person.names } : {}),
+          ...(person.style !== undefined && person.style.length > 0 ? { style: person.style } : {}),
+          ...(person.catchphrases !== undefined && person.catchphrases.length > 0 ? { catchphrases: person.catchphrases } : {}),
+        }],
+      });
+    }
+    let firstFact = true;
+    for (const fact of person.facts ?? []) {
+      const notes = firstFact ? (notesBySubject.get(person.subject) ?? []).filter((note) => !bound.has(note)) : [];
+      for (const note of notes) bound.add(note);
+      add({ people: [{ subject: person.subject, facts: [fact] }], ...(notes.length > 0 ? { supersede: notes } : {}) });
+      firstFact = false;
+    }
+  }
+  for (const item of patch.lore ?? []) add({ lore: [item] });
+  for (const item of patch.cards ?? []) add({ cards: [item] });
+  for (const note of patch.supersede ?? []) if (!bound.has(note)) add({ supersede: [note] });
+  for (const item of patch.expire ?? []) add({ expire: [item] });
+  for (const item of patch.feedback ?? []) add({ feedback: [item] });
+  return items;
+}
+
+/** durable draft 可能是 Proxy，structuredClone 会拒绝；显式转成普通 JSON 值再聚合。 */
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** 唯一聚合规则：按拆分顺序拼接，不按 subject 合并，兼容旧数据里的重复 people。 */
+export function aggregatePendingItems(items: PendingMemoryItem[]): MemoryPatch {
+  const patch: MemoryPatch = {};
+  for (const item of [...items].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))) {
+    for (const value of item.patch.people ?? []) (patch.people ??= []).push(cloneJson(value));
+    for (const value of item.patch.lore ?? []) (patch.lore ??= []).push(cloneJson(value));
+    for (const value of item.patch.cards ?? []) (patch.cards ??= []).push(cloneJson(value));
+    for (const value of item.patch.supersede ?? []) (patch.supersede ??= []).push(cloneJson(value));
+    for (const value of item.patch.expire ?? []) (patch.expire ??= []).push(cloneJson(value));
+    for (const value of item.patch.feedback ?? []) (patch.feedback ??= []).push(cloneJson(value));
+  }
+  return patch;
+}
+
+export function pendingItems(entry: PendingMemoryEntry): PendingMemoryItem[] {
+  return entry.items ?? splitPendingPatch(entry.id, effectivePendingPatch(entry));
+}
+
+/** 绑定替代事实的 supersede 与独立纯失效在审批详情中使用不同文案。 */
+export function pendingItemHasReplacement(item: PendingMemoryItem): boolean {
+  return (item.patch.people ?? []).some((person) => (person.facts?.length ?? 0) > 0);
+}
+
+/** 旧无 items 条目也可直接选择派生子项；完整父 id 始终选择全部剩余项。 */
+export function findPendingSelection(
+  entries: PendingMemoryEntry[],
+  selector: string,
+): { entry: PendingMemoryEntry; item: PendingMemoryItem | undefined; patch: MemoryPatch } | undefined {
+  const mark = selector.lastIndexOf("#");
+  const parentId = mark < 0 ? selector : selector.slice(0, mark);
+  const suffix = mark < 0 ? undefined : selector.slice(mark + 1);
+  if (suffix !== undefined && !/^\d{2,}$/.test(suffix)) return undefined;
+  const entry = entries.find((candidate) => candidate.id === parentId);
+  if (!entry) return undefined;
+  if (suffix === undefined) return { entry, item: undefined, patch: effectivePendingPatch(entry) };
+  const item = pendingItems(entry).find((candidate) => candidate.id === selector);
+  return item ? { entry, item, patch: item.patch } : undefined;
+}
+
+/** 公共化 prepare 与最终 commit 的乐观锁：对象 key 排序，数组顺序保留。 */
+export function fingerprintPatch(patch: MemoryPatch): string {
+  return createHash("sha256").update(JSON.stringify(canonicalValue(patch))).digest("hex");
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, child]) => child !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, child]) => [key, canonicalValue(child)]),
+    );
+  }
+  return value;
+}
+
 /** 四个候选数组全空 = 空 patch：不进待审库，但 lastExtractAt 照样推进。 */
 export function isPatchEmpty(patch: MemoryPatch): boolean {
   return (
@@ -139,6 +291,19 @@ export function missingExpireTargets(state: MemoryState | undefined, patch: Memo
     const person = state?.people[note.subject];
     const hit = person?.facts.some((fact) => fact.id === note.id && fact.invalidAt === undefined) === true;
     if (!hit) missing.push(note.id);
+  }
+  return missing;
+}
+
+/** SUPERSEDE 同样禁止静默 no-op；目标缺失/已失效时整次批准失败并保留待审。 */
+export function missingSupersedeTargets(state: MemoryState | undefined, patch: MemoryPatch): string[] {
+  const missing: string[] = [];
+  for (const note of patch.supersede ?? []) {
+    const person = state?.people[note.subject];
+    for (const id of note.ids) {
+      const hit = person?.facts.some((fact) => fact.id === id && fact.invalidAt === undefined) === true;
+      if (!hit) missing.push(id);
+    }
   }
   return missing;
 }
@@ -170,6 +335,24 @@ export function summarizePatch(patch: MemoryPatch): string {
   return parts.length > 0 ? parts.join("；") : "空";
 }
 
+/** 单个子项的完整资料摘要；事实/说法/卡片等复用 summarizePatch 的原文口径。 */
+export function summarizePendingItem(item: PendingMemoryItem): string {
+  const people = item.patch.people ?? [];
+  const hasFacts = people.some((person) => (person.facts?.length ?? 0) > 0);
+  if (people.length > 0 && !hasFacts) {
+    return people.map((person) => [
+      person.subject,
+      person.names?.join("/"),
+      person.style,
+      person.catchphrases?.join("/"),
+    ].filter((value) => value !== undefined && value.length > 0).join(" · ")).join("；");
+  }
+  if ((item.patch.feedback?.length ?? 0) > 0) {
+    return item.patch.feedback!.map((feedback) => `${summarizePatch({ feedback: [feedback] })} · ${feedback.text}`).join("；");
+  }
+  return summarizePatch(item.patch);
+}
+
 /** 年龄短格式（Xh Ym / Xd Yh / Xm）：/记忆 头部汇总与脚本 --pending 共用。 */
 export function formatAgeShort(ms: number): string {
   const minutes = Math.max(0, Math.floor(ms / 60_000));
@@ -182,32 +365,53 @@ export function formatAgeShort(ms: number): string {
 }
 
 /**
- * 同意一条待审：从待审 doc 摘掉该条，把 patch apply 进目标 doc（公共或私有）。
- * 来源会话（entry.originChatKey）作为 fromChat 注入，写进新 fact——溯源字段不由模型决定。
- * 评价类条目（/评）：patch.feedback 通道在 apply 时落成 kind="feedback" 的 fact；
- * T6 存量待审（patch 为空、结构在 entry.feedback 上）在这里映射进去。
- * 直接改写两个 draft（pi-durable 的 tx.doc 返回值就是可写 draft）；找不到该 id 返回 missing。
+ * 在同一 writable transaction 内批准父条目或一个子项。
+ * 公共化结果只通过 approvedPatch 传入，不写回 pending；expectedFingerprint 防止等待期间
+ * 选择集合变化后应用旧脱敏快照。失效预检、apply 与 pending 删除同成同败。
+ * 返回值只含纯值，调用方不得在 commit 外读取 draft。
  */
 export function approvePending(
   pending: PendingMemoryState,
-  id: string,
+  selector: string,
   target: MemoryState,
   at: number,
-): { status: "ok"; entry: PendingMemoryEntry } | { status: "missing" } {
-  const index = pending.entries.findIndex((entry) => entry.id === id);
-  if (index < 0) return { status: "missing" };
-  const [entry] = pending.entries.splice(index, 1);
-  // T6 存量评价待审：patch 为空、评价包在 entry.feedback 上——映射进 patch 的
-  // feedback 通道再 apply；新装配（buildFeedbackPending）已直接写进 patch.feedback
-  const patch = entry.feedback !== undefined && (entry.patch.feedback?.length ?? 0) === 0
-    ? { ...entry.patch, feedback: [feedbackItemFromMeta(entry.feedback)] }
-    : entry.patch;
-  const next = applyPatch(target, patch, at, entry.originChatKey || undefined);
+  options?: { expectedFingerprint?: string; approvedPatch?: MemoryPatch },
+): { status: "ok"; digest: string; remaining: number; originChatKey: string }
+  | { status: "missing" | "changed" | "expire_mismatch" | "supersede_mismatch" } {
+  const selection = findPendingSelection(pending.entries, selector);
+  if (!selection) return { status: "missing" };
+  const { entry, item, patch } = selection;
+  if (options?.expectedFingerprint !== undefined && fingerprintPatch(patch) !== options.expectedFingerprint) {
+    return { status: "changed" };
+  }
+  if (missingExpireTargets(target, patch).length > 0) return { status: "expire_mismatch" };
+  if (missingSupersedeTargets(target, patch).length > 0) return { status: "supersede_mismatch" };
+  const appliedPatch = options?.approvedPatch ?? patch;
+  const next = applyPatch(target, appliedPatch, at, entry.originChatKey || undefined);
   target.people = next.people;
   target.lore = next.lore;
   target.cards = next.cards;
   if (next.feedback !== undefined) target.feedback = next.feedback;
-  return { status: "ok", entry };
+
+  const index = pending.entries.findIndex((candidate) => candidate.id === entry.id);
+  let remaining = 0;
+  if (item === undefined) {
+    pending.entries.splice(index, 1);
+  } else {
+    const remainingItems = pendingItems(entry).filter((candidate) => candidate.id !== item.id);
+    remaining = remainingItems.length;
+    if (remainingItems.length === 0) pending.entries.splice(index, 1);
+    else {
+      entry.items = remainingItems;
+      entry.patch = aggregatePendingItems(remainingItems);
+    }
+  }
+  return {
+    status: "ok",
+    digest: summarizePatch(appliedPatch),
+    remaining,
+    originChatKey: entry.originChatKey,
+  };
 }
 
 /** T6 存量待审条目（feedback 在条目上、patch 为空）→ patch.feedback 通道的映射。 */

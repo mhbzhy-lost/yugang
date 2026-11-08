@@ -6,10 +6,10 @@
  *   npm run memory -- --persona 长征机 --json
  *   npm run memory -- --chat qq:group:659976571     # 便捷入口：经 fish.chats 的
  *                                                    # personas 解析该会话当前人格再查
- *   npm run memory -- --pending [--json]            # 待审队列（全人格，最旧在前）
- *   npm run memory -- --approve <id> [公共|私有]     # 同意一条（缺省私有；写库）；公共先经
- *                                                    # AI 脱敏（prompt/memory-publicize.md）
- *   npm run memory -- --reject <id|全部>             # 拒绝（写库）
+ *   npm run memory -- --pending [--json]            # 待审队列（逐批展开稳定子项）
+ *   npm run memory -- --approve <父id|子项id> [公共|私有] # 批准全部剩余项或单个子项（缺省私有；写库）
+ *                                                    # 公共先经 AI 脱敏（prompt/memory-publicize.md）
+ *   npm run memory -- --reject <父id|全部>           # 拒绝一批剩余项或全部待审（写库）
  *   npm run memory -- --delete <fact-id>              # 真删除一条已入库 fact（写库）
  *   # 以上三个写操作在有活鱼时会被拒绝，必须加 --force 且写完重启鱼（见下）
  *
@@ -31,6 +31,7 @@
  * prompt/memory-publicize.md 做 AI 脱敏（模型与压缩抽取同源，脚本同用主模型，参照
  * scripts/compact-all.ts 先例 loadFishModels + createFishModels）；改写输出重过机械过滤并
  * 强制结构同构，失败 fail closed——该次批准以错误退出终止，不降级、不原样入库；
+ * 脱敏只在内存 prepare，最终事务校验原始 patch fingerprint 后直接应用，不写回待审；
  * 日志只带 id 与结果状态，不打印内容。私有批准不经脱敏。
  */
 import { DATA_HOME as HOME, PROMPT_ROOT } from "../src/paths.ts";
@@ -46,7 +47,7 @@ import { loadFishModels } from "../src/model/config.ts";
 import { createFishModels } from "../src/model/models.ts";
 import { loadPrompts } from "../src/prompt/index.ts";
 import { DEFAULT_PERSONA_KEY, memoryKeyOf, privateMemoryKeyOf } from "../src/memory/scope.ts";
-import { approvePending, rejectPending, deleteFactById, hasFact, summarizePatch, formatAgeShort, signalsSuffix, MEMORY_ZERO_EXTRACT_PAGES, publicizePatch, type MemoryPatch, type MemoryState, type PendingMemoryEntry, type PendingMemoryState } from "../src/memory/index.ts";
+import { approvePending, rejectPending, deleteFactById, effectivePendingPatch, findPendingSelection, fingerprintPatch, hasFact, MemoryApprovalAbort, pendingItemHasReplacement, pendingItems, summarizePatch, summarizePendingItem, formatAgeShort, signalsSuffix, MEMORY_ZERO_EXTRACT_PAGES, publicizePatch, type MemoryApprovalPreparation, type MemoryState, type PendingMemoryState } from "../src/memory/index.ts";
 import { MemoryDoc, MemoryPendingDoc, MemoryPrivateDoc } from "../src/store.ts";
 
 
@@ -178,16 +179,18 @@ const baseChatKeyOf = (mappingKey: string): string => {
 async function runApproval(): Promise<void> {
   const db = readDb();
   let persona: string | undefined;
-  let pendingEntry: PendingMemoryEntry | undefined;
+  let pendingSelection: NonNullable<ReturnType<typeof findPendingSelection>> | undefined;
   try {
     const docs = sessionDocs(db, "fish.memory.pending", 1) as { key: string; value: PendingMemoryState }[];
     const id = rawApproveId ?? rawRejectId;
     if (rawRejectId === "全部") {
       persona = docs.find((doc) => doc.value.entries.length > 0)?.key;
-    } else {
-      const hostDoc = docs.find((doc) => doc.value.entries.some((entry) => entry.id === id));
+    } else if (rawApproveId !== undefined) {
+      const hostDoc = docs.find((doc) => findPendingSelection(doc.value.entries, id) !== undefined);
       persona = hostDoc?.key;
-      pendingEntry = hostDoc?.value.entries.find((entry) => entry.id === id);
+      pendingSelection = hostDoc ? findPendingSelection(hostDoc.value.entries, id) : undefined;
+    } else {
+      persona = docs.find((doc) => doc.value.entries.some((entry) => entry.id === id))?.key;
     }
   } finally {
     db.close();
@@ -197,14 +200,16 @@ async function runApproval(): Promise<void> {
   // 强制结构同构才放行；模型或输出不合格一律 fail closed——不降级、不原样入库。
   // 模型与压缩抽取同源（memoryModel 链；脚本同用主模型，参照 compact-all 先例）。
   // 日志只带 id 与结果状态。放在开写会话之前：失败时不碰 fish.db。
-  let publicized: MemoryPatch | undefined;
-  if (rawApproveId !== undefined && approveTrack === "公共" && pendingEntry) {
+  let preparation: MemoryApprovalPreparation | undefined;
+  if (rawApproveId !== undefined && approveTrack === "公共" && pendingSelection) {
     const prompts = loadPrompts(PROMPT_ROOT);
-    const mainConfig = loadFishModels().main;
-    let modelInstance: Models | undefined; // lazy：patch 没有可改写文本时不去碰 models.json
-    const result = await publicizePatch(pendingEntry.patch, {
+    let mainConfig: ReturnType<typeof loadFishModels>["main"] | undefined;
+    let modelInstance: Models | undefined; // lazy：patch 没有可改写文本时不读模型配置
+    const original = pendingSelection.patch;
+    const result = await publicizePatch(original, {
       template: prompts.memoryPublicize,
       complete: async (prompt) => {
+        mainConfig ??= loadFishModels().main;
         modelInstance ??= createFishModels(mainConfig);
         const model = modelInstance.getModel(mainConfig.providerId, mainConfig.modelId);
         if (!model) throw new Error(`model_not_found:${mainConfig.providerId}/${mainConfig.modelId}`);
@@ -220,7 +225,7 @@ async function runApproval(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    publicized = result.patch;
+    preparation = { selector: rawApproveId, expectedFingerprint: fingerprintPatch(original), approvedPatch: result.patch };
     console.log(`[鱼缸] 记忆公共化脱敏 ${rawApproveId} ok`);
   }
 
@@ -229,31 +234,42 @@ async function runApproval(): Promise<void> {
   const context = BACKGROUND_CONTEXT;
   try {
     if (rawApproveId !== undefined) {
-      const target = persona === undefined
-        ? { status: "missing" as const }
-        : await session.commit(async (tx) => {
-            const pendingDoc = await tx.doc(MemoryPendingDoc, persona, persona);
-            const entry = pendingDoc.entries.find((item) => item.id === rawApproveId);
-            if (!entry) return { status: "missing" as const };
-            if (approveTrack === "私有" && !entry.originChatKey) return { status: "no_origin" as const, id: rawApproveId };
-            // 公共轨道：把脱敏后的 patch 写回待审条目（同一 commit 内），approvePending 应用的就是改写后文本
-            if (publicized) entry.patch = publicized;
-            const targetKey = approveTrack === "私有" ? privateMemoryKeyOf(persona, entry.originChatKey) : persona;
-            const targetDoc = await tx.doc(approveTrack === "私有" ? MemoryPrivateDoc : MemoryDoc, targetKey, targetKey);
-            const applied = approvePending(pendingDoc, rawApproveId, targetDoc, Date.now());
-            if (applied.status === "missing") return { status: "missing" as const };
-            // draft 代理在事务 settle 后不可读：要带出事务的数据先拷成纯值
-            return { status: "ok" as const, originChatKey: String(applied.entry.originChatKey), digest: summarizePatch(applied.entry.patch) };
-          }, context);
+      let target: ReturnType<typeof approvePending> | { status: "no_origin" };
+      try {
+        target = persona === undefined
+          ? { status: "missing" as const }
+          : await session.commit(async (tx) => {
+              const pendingDoc = await tx.doc(MemoryPendingDoc, persona, persona);
+              const selection = findPendingSelection(pendingDoc.entries, rawApproveId);
+              if (!selection) throw new MemoryApprovalAbort("missing");
+              const originChatKey = selection.entry.originChatKey;
+              if (approveTrack === "私有" && !originChatKey) return { status: "no_origin" as const };
+              const targetKey = approveTrack === "私有" ? privateMemoryKeyOf(persona, originChatKey) : persona;
+              const targetDoc = await tx.doc(approveTrack === "私有" ? MemoryPrivateDoc : MemoryDoc, targetKey, targetKey);
+              // 公共化不写回 pending；最终事务重新解析并核对 fingerprint、失效目标后再 apply。
+              const approval = approvePending(pendingDoc, rawApproveId, targetDoc, Date.now(), preparation);
+              if (approval.status !== "ok") throw new MemoryApprovalAbort(approval.status);
+              return approval;
+            }, context);
+      } catch (error) {
+        if (error instanceof MemoryApprovalAbort) target = { status: error.status };
+        else throw error;
+      }
       if (target.status === "missing") {
         console.error(`没有这条待审：${rawApproveId}`);
         process.exitCode = 1;
       } else if (target.status === "no_origin") {
-        console.error(`这条没有来源会话，落不了私有，显式加「公共」再试：${target.id}`);
+        console.error(`这条没有来源会话，落不了私有，显式加「公共」再试：${rawApproveId}`);
+        process.exitCode = 1;
+      } else if (target.status === "changed") {
+        console.error(`待审在脱敏期间已变化，未写库，请重新查看后批准：${rawApproveId}`);
+        process.exitCode = 1;
+      } else if (target.status === "expire_mismatch" || target.status === "supersede_mismatch") {
+        console.error(`失效目标不在${approveTrack}层或已失效，未写库并保留待审：${rawApproveId}`);
         process.exitCode = 1;
       } else {
         const where = approveTrack === "私有" ? `私有 ${privateMemoryKeyOf(persona!, target.originChatKey)}` : `公共 ${persona}`;
-        console.log(`已并入${approveTrack}记忆（${where}）：${target.digest}`);
+        console.log(`已批准 ${rawApproveId} 并入${approveTrack}记忆（${where}）：${target.digest}；剩余 ${target.remaining} 项`);
       }
       return;
     }
@@ -423,10 +439,18 @@ if (rawDeleteId !== undefined) {
           // 建议轨道只看来源：私聊来的最小可见面默认私有，群聊来的公共也合理（最终由主人定）；
           // signal 标签（T11）是机械重算的计数：已知人物/事实冲突
           const suggest = entry.originChatKey.startsWith("qq:private:") ? "私有" : "公共或私有";
-          console.log(`  [${entry.id}] ${entry.originChatKey || "（无来源）"} · ${formatAgeShort(Date.now() - entry.at)}前 · ${summarizePatch(entry.patch)}${signalsSuffix(entry.signals)} · 建议 ${suggest}`);
-          // 淘汰条目必须带原事实与依据原话：主人靠这两样判断语义相关性
-          for (const note of entry.patch.expire ?? []) {
-            console.log(`     淘汰：${note.id} ${factTextById.get(note.id) ?? "-"}（依据「${note.quote}」）`);
+          const items = pendingItems(entry);
+          console.log(`  [${entry.id}] ${entry.originChatKey || "（无来源）"} · ${formatAgeShort(Date.now() - entry.at)}前 · 剩余 ${items.length} 项 · ${summarizePatch(effectivePendingPatch(entry))}${signalsSuffix(entry.signals)} · 建议 ${suggest}`);
+          for (const item of items) {
+            console.log(`    [${item.id}] ${summarizePendingItem(item)}`);
+            for (const note of item.patch.supersede ?? []) {
+              const label = pendingItemHasReplacement(item) ? "将随本项失效" : "仅失效、无替代";
+              for (const id of note.ids) console.log(`       ${label}：${id} ${factTextById.get(id) ?? "-"}`);
+            }
+            // 淘汰子项必须带原事实与依据原话：主人靠这两样判断语义相关性
+            for (const note of item.patch.expire ?? []) {
+              console.log(`       淘汰：${note.id} ${factTextById.get(note.id) ?? "-"}（依据「${note.quote}」）`);
+            }
           }
         }
       }
