@@ -403,7 +403,7 @@ function makeMultiStageTracker(promptId: string, onStage: (stage: DrawStage) => 
   };
 }
 
-export async function runMulti(url: string, args: MultiDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void, shape: MaskShape = "region"): Promise<Buffer> {
+export async function runMulti(url: string, args: MultiDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void, shape: MaskShape = "silhouette"): Promise<Buffer> {
   if (busy) throw new ComfyBusy("ComfyUI busy");
   busy = true;
   try { return await runMultiJob(url, args, onSubmitted, onStage, shape); }
