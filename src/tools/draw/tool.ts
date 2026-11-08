@@ -14,6 +14,7 @@ interface DrawArgs {
   prompt: string;
   preset?: "default" | "hsr" | "secret";
   ratio?: keyof typeof RATIO_SIZES;
+  hand_repair?: boolean;
   ref?: string;
 }
 
@@ -60,6 +61,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const positive = args.prompt.trim();
       if (!positive || positive.length > 1000) throw new Error(deps.prompts.messages["draw_prompt"] ?? "draw_prompt");
       if (!deps.comfyUrl) throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
+      if (args.hand_repair !== undefined && typeof args.hand_repair !== "boolean") throw new Error(deps.prompts.messages["draw_hand_repair"] ?? "draw_hand_repair");
       const ratio = args.ratio ?? "3:4";
       if (typeof ratio !== "string" || !Object.hasOwn(RATIO_SIZES, ratio)) throw new Error(deps.prompts.messages["draw_ratio"] ?? "draw_ratio");
       const [width, height] = RATIO_SIZES[ratio];
@@ -72,7 +74,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const state: RoundState = { round, pending: true, submitted: false, used: false };
       rounds.set(api.conversationId, state);
       try {
-        const png = await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, width, height, ref, bypass: deps.bypassOf?.(round) }, () => { state.submitted = true; });
+        const png = await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, width, height, handRepair: args.hand_repair, ref, bypass: deps.bypassOf?.(round) }, () => { state.submitted = true; });
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
         const file = `${Date.now()}-${randomUUID()}.png`;

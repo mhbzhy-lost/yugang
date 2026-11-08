@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 type Node = { class_type: string; inputs: Record<string, unknown> };
 type Graph = Record<string, Node>;
 
-const WORKFLOW_HASH = "1b59f0b20d2ddc7652ded03ae998eea84120978bcde6f272276e17d034637cda";
+const WORKFLOW_HASH = "46f7422104466da08950c0766de5d709db146ce2fdafa185dcad0b8451dd45f8";
 const GRAPH_BYTES = readFileSync(new URL("./workflow.json", import.meta.url));
 if (createHash("sha256").update(GRAPH_BYTES).digest("hex") !== WORKFLOW_HASH) throw new Error("draw workflow hash mismatch");
 const TEMPLATE = JSON.parse(GRAPH_BYTES.toString("utf8")) as Graph;
@@ -18,6 +18,7 @@ export interface ComfyDraw {
   height?: number;
   cfg?: number;
   seed?: number;
+  handRepair?: boolean;
   ref?: { png: Buffer; strength: number };
 }
 
@@ -49,7 +50,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     delete graph["6"];
   }
   graph["90"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "RealESRGAN_x4plus_anime_6B.pth" } };
-  graph["91"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["90", 0], image: ["42", 0] } };
+  graph["91"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["90", 0], image: [args.handRepair === false ? "43" : "42", 0] } };
   graph["92"] = { class_type: "ImageScaleBy", inputs: { image: ["91", 0], upscale_method: "lanczos", scale_by: 0.5 } };
   graph["44"].inputs.pixels = ["92", 0];
   graph["13"].inputs.scale_by = 1;
