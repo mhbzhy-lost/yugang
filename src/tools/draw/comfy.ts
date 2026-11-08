@@ -132,7 +132,7 @@ export function makeMultiSceneGraph(args: MultiDraw): Graph {
     "2": structuredClone(MULTI_TEMPLATE["2"]),
     "3": structuredClone(MULTI_TEMPLATE["3"]),
     "30": { class_type: "EmptySD3LatentImage", inputs: { width: args.width, height: args.height, batch_size: 1 } },
-    "31": { class_type: "CLIPTextEncode", inputs: { text: prefix + "2girls, on the left side: " + args.parts[0].text + ", on the right side: " + args.parts[1].text + ", " + args.prompt, clip: ["2", 0] } },
+    "31": { class_type: "CLIPTextEncode", inputs: { text: prefix + "2girls, on the left side: " + args.parts[0].text + ", on the right side: " + args.parts[1].text + ", " + args.prompt + (args.bypass ? ", " + args.bypass : ""), clip: ["2", 0] } },
     "32": { class_type: "CLIPTextEncode", inputs: { text: String(TEMPLATE["5"].inputs.text), clip: ["2", 0] } },
     "33": { class_type: "KSampler", inputs: { seed, steps: 30, cfg: 4.5, sampler_name: "dpmpp_2m", scheduler: "sgm_uniform", denoise: 1, model: ["1", 0], positive: ["31", 0], negative: ["32", 0], latent_image: ["30", 0] } },
     "34": { class_type: "VAEDecode", inputs: { samples: ["33", 0], vae: ["3", 0] } },
@@ -484,7 +484,30 @@ async function runMultiJob(url: string, args: MultiDraw, onSubmitted: () => void
       binaries = bins;
       break;
     } catch (error) {
-      if (!(error instanceof ComfyExecutionFailed) || retries >= 2 || Date.now() > deadline - 240_000) throw error;
+      if (!(error instanceof ComfyExecutionFailed) || retries >= 2 || Date.now() > deadline - 240_000) {
+        // 分割三连败的降级：直线对半切（两人紧挨同姿导致 segm 合 blob 的场景，
+        // 构图段方位句式已把左右定住，直线切是唯一可行方案），不再无限重构图。
+        if (error instanceof ComfyExecutionFailed && (error.message === "multi segmentation quality" || error.message === "multi segmentation insufficient")) {
+          console.error("[fish] multi segmentation degraded: split by center line");
+          const comp2 = await submitAndWait(base, makeMultiSceneGraph(retries === 0 ? args : { ...args, seed: (args.seed ?? 0) + 1 + randomBytes(2).readUInt16BE() }), sceneId, clientId, deadline - 240_000);
+          composition = await fetchOutputImage(base, comp2, "208");
+          // 直线 mask：左半全重绘 / 右半全重绘（宿主直接构造，不走分割链）
+          const left = new Uint8Array(args.width * args.height);
+          const right = new Uint8Array(args.width * args.height);
+          for (let y = 0; y < args.height; y++) {
+            for (let x = 0; x < args.width; x++) {
+              if (x < args.width / 2) left[y * args.width + x] = 1;
+              else right[y * args.width + x] = 1;
+            }
+          }
+          binaries = [
+            { bin: left, area: args.width * args.height / 2, centroidX: args.width * 0.25, centroidY: args.height / 2 },
+            { bin: right, area: args.width * args.height / 2, centroidX: args.width * 0.75, centroidY: args.height / 2 },
+          ];
+          break;
+        }
+        throw error;
+      }
       retries += 1;
       console.error(`[fish] multi scene retry #${retries}: segmentation failed/bad, re-compose`);
       sceneId = randomUUID();
