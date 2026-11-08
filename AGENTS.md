@@ -349,7 +349,7 @@ fallback 模式保留 inbound 路径由 look 转述。
 
 - 日志统一带 `HH:MM:SS` 前缀（`src/index.ts` 启动时包一层 console），排查按时间对齐
 - 单次工具调用超时 30 秒（`fish.config` 的 `toolTimeoutSeconds`），个别重耗时工具按 `toolTimeoutOverrides`
-  单独放宽（say_voice 250s / video 90s / gpt_image 210s），超时以 tool 错误返回，
+  单独放宽（代码内置：say_voice 250s / video 90s / gpt_image 210s / draw 360s——分辨率档位提升后全管线约 3 分钟），超时以 tool 错误返回，
   **没有整轮超时**
 
 ### 16. 长期记忆（审批闸 + 公共/私有双轨）
