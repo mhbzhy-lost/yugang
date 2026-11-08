@@ -131,7 +131,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       try {
         const stageCb = deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined;
         const png = multiParts
-          ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts }, () => { state.submitted = true; }, stageCb)
+          ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts, handRepair: args.hand_repair }, () => { state.submitted = true; }, stageCb)
           : await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, width, height, handRepair: args.hand_repair, ref, lora, bypass: deps.bypassOf?.(round) }, () => { state.submitted = true; }, stageCb);
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });

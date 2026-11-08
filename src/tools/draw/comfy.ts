@@ -12,7 +12,7 @@ const TEMPLATE = JSON.parse(GRAPH_BYTES.toString("utf8")) as Graph;
 if (TEMPLATE["1"]?.inputs.unet_name !== "DeltaMix 3.8B V8.safetensors" || TEMPLATE["9"]?.class_type !== "PreviewImage") throw new Error("draw workflow contract mismatch");
 
 // ── 多角色管线（独立模板，与单管线互不影响）──
-const MULTI_WORKFLOW_HASH = "ee3630b3bdacfaf959e186fb6e0b15c0816101780d25812a1f0d0c22f3fe5b0c";
+const MULTI_WORKFLOW_HASH = "063b26fd81727bf478293220949ac97807613cf948aefc82a88345cb7d494924";
 const MULTI_BYTES = readFileSync(new URL("./workflow-multi.json", import.meta.url));
 if (createHash("sha256").update(MULTI_BYTES).digest("hex") !== MULTI_WORKFLOW_HASH) throw new Error("draw multi workflow hash mismatch");
 const MULTI_TEMPLATE = JSON.parse(MULTI_BYTES.toString("utf8")) as Graph;
@@ -87,6 +87,8 @@ export interface MultiDraw {
   height: number;
   seed?: number;
   parts: MultiPart[];
+  /** 手修可选（脸修常开）：false 跳过手部段，语义与单管线 hand_repair 一致。 */
+  handRepair?: boolean;
 }
 
 /** 多角色段的 LoRA 注入位固定用 70-73（v3 窄幅拼贴拓扑，段节点 80-99）。 */
@@ -152,8 +154,14 @@ export function makeMultiGraph(args: MultiDraw, inputs: { image: string; maskLef
   delete g["30"];
   delete g["33"];
   delete g["34"];
-  g["31"].inputs.text = prefix + `2girls, ${args.parts.map((p) => p.text).join(" and ")}, ${args.prompt}`;
-  for (const id of ["82", "92", "64"]) g[id].inputs.seed = seed;
+  g["31"].inputs.text = prefix + "2girls, " + args.parts.map((p) => p.text).join(" and ") + ", " + args.prompt;
+  for (const id of ["82", "92", "64", "101", "103"]) g[id].inputs.seed = seed;
+  // 脸修常开；手修可选（false 时 Preview 直接接脸修输出、手修段不进执行链）
+  if (args.handRepair === false) {
+    g["66"].inputs.images = ["101", 0];
+    delete g["102"];
+    delete g["103"];
+  }
   g["78"].inputs.image = inputs.image;
   g["86"].inputs.image = inputs.maskLeft;   // 左区 mask（A）
   g["97"].inputs.image = inputs.maskRight;  // 右区 mask（B）
@@ -162,7 +170,7 @@ export function makeMultiGraph(args: MultiDraw, inputs: { image: string; maskLef
   const segs: Array<[string, string]> = [["81", "82"], ["91", "92"]];
   segs.forEach(([encId, ksId], i) => {
     const part = args.parts[i];
-    g[encId].inputs.text = prefix + (part.role ? `${part.role.tags}, ` : "") + part.text + `, ${args.prompt}`;
+    g[encId].inputs.text = prefix + (part.role ? part.role.tags + ", " : "") + part.text + ", " + args.prompt;
     if (part.role) {
       const loraId = String(70 + i);
       g[loraId] = multiLoraNode(part.role.file, part.role.weight);
@@ -171,7 +179,7 @@ export function makeMultiGraph(args: MultiDraw, inputs: { image: string; maskLef
     }
   });
   // 收尾：人数学语义（2girls 融合 + 接缝过渡）
-  g["67"] = { class_type: "CLIPTextEncode", inputs: { text: prefix + `2girls, ${args.prompt}`, clip: ["2", 0] } };
+  g["67"] = { class_type: "CLIPTextEncode", inputs: { text: prefix + "2girls, " + args.prompt, clip: ["2", 0] } };
   g["64"].inputs.positive = ["67", 0];
   return g;
 }
@@ -256,8 +264,14 @@ export function buildMultiMasks(left: Uint8Array, right: Uint8Array, width: numb
     const dr = dilateSquare(right, width, height, 24);
     return [encodeMaskPng(width, height, (x, y) => dl[y * width + x] === 1), encodeMaskPng(width, height, (x, y) => dr[y * width + x] === 1)];
   }
+  // region: guard 硬排除对方实例（膨胀后），防分界曲线异常侵入对方
   const curve = boundaryCurve(left, right, width, height);
-  return [encodeMaskPng(width, height, (x, y) => x < curve[y]), encodeMaskPng(width, height, (x, y) => x >= curve[y])];
+  const guardL = dilateSquare(right, width, height, 24); // 右实例膨胀，从 maskA 里排除
+  const guardR = dilateSquare(left, width, height, 24);  // 左实例膨胀，从 maskB 里排除
+  return [
+    encodeMaskPng(width, height, (x, y) => x < curve[y] && guardL[y * width + x] === 0),
+    encodeMaskPng(width, height, (x, y) => x >= curve[y] && guardR[y * width + x] === 0),
+  ];
 }
 
 
