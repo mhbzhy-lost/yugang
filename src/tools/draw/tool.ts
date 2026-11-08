@@ -8,7 +8,7 @@ import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-d
 import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { ComfyBusy, ComfyExecutionFailed, runComfy, type ComfyDraw, type DrawStage } from "./comfy.ts";
+import { ComfyBusy, ComfyExecutionFailed, runComfy, runMulti, type ComfyDraw, type DrawStage, type MultiPart } from "./comfy.ts";
 
 interface DrawArgs {
   prompt: string;
@@ -18,6 +18,9 @@ interface DrawArgs {
   ref?: string;
   character?: string;
   lora_weight?: number;
+  characters?: string[];
+  left?: string;
+  right?: string;
 }
 
 const RATIO_SIZES = {
@@ -42,10 +45,13 @@ const REF_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".he
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
 export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration {
-  // 启动一致性校验：schema 的 character 枚举与 CHARACTERS 键集必须严格一致，漂移直接起不来。
-  const enumValues = (manifest.parameters as { properties?: Record<string, { enum?: unknown[] }> } | undefined)?.properties?.character?.enum;
+  // 启动一致性校验：schema 的 character 枚举（含 characters.items.enum）与 CHARACTERS 键集必须严格一致，漂移直接起不来。
+  const properties = (manifest.parameters as { properties?: Record<string, { enum?: unknown[]; items?: { enum?: unknown[] } }> } | undefined)?.properties;
+  const enumValues = properties?.character?.enum;
+  const itemValues = properties?.characters?.items?.enum;
   const keys = Object.keys(CHARACTERS);
-  if (!Array.isArray(enumValues) || enumValues.length !== keys.length || enumValues.some((v) => !Object.hasOwn(CHARACTERS, v as string))) throw new Error("draw character enum mismatch");
+  const same = (list: unknown) => Array.isArray(list) && list.length === keys.length && list.every((v) => Object.hasOwn(CHARACTERS, v as string));
+  if (!same(enumValues) || !same(itemValues)) throw new Error("draw character enum mismatch");
   const root = resolve(deps.mediaRoot);
   const realRoot = (() => { try { return realpathSync(root); } catch { return root; } })();
   const prepareRef = (raw: string): { png: Buffer; strength: number } => {
@@ -91,6 +97,29 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         if (typeof weight !== "number" || !Number.isFinite(weight) || weight < LORA_WEIGHT_RANGE[0] || weight > LORA_WEIGHT_RANGE[1]) throw new Error(deps.prompts.messages["draw_lora_weight"] ?? "draw_lora_weight");
         lora = { file: book.lora, weight, tags: book.tags };
       }
+      // ── 多角色分支：characters（AI 娘双人）或 left/right（自由双区）──
+      const wantsMulti = args.characters !== undefined || args.left !== undefined || args.right !== undefined;
+      let multiParts: MultiPart[] | undefined;
+      if (wantsMulti) {
+        if (args.character !== undefined) throw new Error(deps.prompts.messages["draw_characters_conflict"] ?? "draw_characters_conflict");
+        if (args.preset !== undefined || args.ref !== undefined) throw new Error(deps.prompts.messages["draw_multi_unsupported"] ?? "draw_multi_unsupported");
+        if (!args.left?.trim() || !args.right?.trim()) throw new Error(deps.prompts.messages["draw_multi_sides"] ?? "draw_multi_sides");
+        let roles: (typeof CHARACTERS)[keyof typeof CHARACTERS] | undefined[] = [];
+        if (args.characters !== undefined) {
+          if (!Array.isArray(args.characters) || args.characters.length !== 2) throw new Error(deps.prompts.messages["draw_characters_count"] ?? "draw_characters_count");
+          roles = args.characters.map((name) => {
+            const book = CHARACTERS[name as keyof typeof CHARACTERS];
+            if (!book) throw new Error(renderTemplate(deps.prompts.messages["draw_character"] ?? "{{list}}", { list: keys.join("、") }));
+            return book;
+          });
+        }
+        const weight = args.lora_weight ?? 0.8;
+        if (typeof weight !== "number" || !Number.isFinite(weight) || weight < LORA_WEIGHT_RANGE[0] || weight > LORA_WEIGHT_RANGE[1]) throw new Error(deps.prompts.messages["draw_lora_weight"] ?? "draw_lora_weight");
+        multiParts = [0, 1].map((i) => ({
+          text: (i === 0 ? args.left : args.right)!.trim(),
+          ...(roles[i] ? { role: { file: (roles[i] as { lora: string }).lora, weight, tags: (roles[i] as { tags: string }).tags } } : {}),
+        }));
+      }
       if (round === undefined) throw new Error(deps.prompts.messages["draw_round_missing"] ?? "draw_round_missing");
       const previous = rounds.get(api.conversationId);
       if (previous?.pending) throw new Error(deps.prompts.messages["draw_inflight"] ?? "draw_inflight");
@@ -100,7 +129,10 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const state: RoundState = { round, pending: true, submitted: false, used: false };
       rounds.set(api.conversationId, state);
       try {
-        const png = await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, width, height, handRepair: args.hand_repair, ref, lora, bypass: deps.bypassOf?.(round) }, () => { state.submitted = true; }, deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined);
+        const stageCb = deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined;
+        const png = multiParts
+          ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts }, () => { state.submitted = true; }, stageCb)
+          : await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, width, height, handRepair: args.hand_repair, ref, lora, bypass: deps.bypassOf?.(round) }, () => { state.submitted = true; }, stageCb);
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
         const file = `${Date.now()}-${randomUUID()}.png`;

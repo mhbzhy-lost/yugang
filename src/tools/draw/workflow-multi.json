@@ -1,0 +1,383 @@
+{
+ "1": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "DeltaMix 3.8B V8.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "2": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen_3_06b_base.safetensors",
+   "type": "stable_diffusion",
+   "device": "default"
+  }
+ },
+ "3": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "qwen_image_vae.safetensors"
+  }
+ },
+ "30": {
+  "class_type": "EmptySD3LatentImage",
+  "inputs": {
+   "width": 912,
+   "height": 1216,
+   "batch_size": 1
+  }
+ },
+ "31": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "scene",
+   "clip": [
+    "2",
+    0
+   ]
+  }
+ },
+ "32": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "negative",
+   "clip": [
+    "2",
+    0
+   ]
+  }
+ },
+ "33": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": 1,
+   "steps": 30,
+   "cfg": 4.5,
+   "sampler_name": "dpmpp_2m",
+   "scheduler": "sgm_uniform",
+   "denoise": 1,
+   "model": [
+    "1",
+    0
+   ],
+   "positive": [
+    "31",
+    0
+   ],
+   "negative": [
+    "32",
+    0
+   ],
+   "latent_image": [
+    "30",
+    0
+   ]
+  }
+ },
+ "34": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "33",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  }
+ },
+ "80": {
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "34",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  }
+ },
+ "81": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "left",
+   "clip": [
+    "2",
+    0
+   ]
+  }
+ },
+ "86": {
+  "class_type": "SolidMask",
+  "inputs": {
+   "value": 1,
+   "width": 912,
+   "height": 1216
+  }
+ },
+ "87": {
+  "class_type": "SolidMask",
+  "inputs": {
+   "value": 1,
+   "width": 456,
+   "height": 1216
+  }
+ },
+ "88": {
+  "class_type": "MaskComposite",
+  "inputs": {
+   "destination": [
+    "86",
+    0
+   ],
+   "source": [
+    "87",
+    0
+   ],
+   "x": 456,
+   "y": 0,
+   "operation": "subtract"
+  }
+ },
+ "89": {
+  "class_type": "SetLatentNoiseMask",
+  "inputs": {
+   "samples": [
+    "80",
+    0
+   ],
+   "mask": [
+    "88",
+    0
+   ]
+  }
+ },
+ "82": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": 1,
+   "steps": 25,
+   "cfg": 4.5,
+   "sampler_name": "dpmpp_2m",
+   "scheduler": "sgm_uniform",
+   "denoise": 0.65,
+   "model": [
+    "1",
+    0
+   ],
+   "positive": [
+    "81",
+    0
+   ],
+   "negative": [
+    "32",
+    0
+   ],
+   "latent_image": [
+    "89",
+    0
+   ]
+  }
+ },
+ "83": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "82",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  }
+ },
+ "90": {
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "83",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  }
+ },
+ "91": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "right",
+   "clip": [
+    "2",
+    0
+   ]
+  }
+ },
+ "97": {
+  "class_type": "MaskComposite",
+  "inputs": {
+   "destination": [
+    "86",
+    0
+   ],
+   "source": [
+    "87",
+    0
+   ],
+   "x": 0,
+   "y": 0,
+   "operation": "subtract"
+  }
+ },
+ "99": {
+  "class_type": "SetLatentNoiseMask",
+  "inputs": {
+   "samples": [
+    "90",
+    0
+   ],
+   "mask": [
+    "97",
+    0
+   ]
+  }
+ },
+ "92": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": 1,
+   "steps": 25,
+   "cfg": 4.5,
+   "sampler_name": "dpmpp_2m",
+   "scheduler": "sgm_uniform",
+   "denoise": 0.65,
+   "model": [
+    "1",
+    0
+   ],
+   "positive": [
+    "91",
+    0
+   ],
+   "negative": [
+    "32",
+    0
+   ],
+   "latent_image": [
+    "99",
+    0
+   ]
+  }
+ },
+ "93": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "92",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  }
+ },
+ "60": {
+  "class_type": "UpscaleModelLoader",
+  "inputs": {
+   "model_name": "4x-AnimeSharp.safetensors"
+  }
+ },
+ "61": {
+  "class_type": "ImageUpscaleWithModel",
+  "inputs": {
+   "upscale_model": [
+    "60",
+    0
+   ],
+   "image": [
+    "93",
+    0
+   ]
+  }
+ },
+ "62": {
+  "class_type": "ImageScaleBy",
+  "inputs": {
+   "image": [
+    "61",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "scale_by": 0.5
+  }
+ },
+ "63": {
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "62",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  }
+ },
+ "64": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": 1,
+   "steps": 16,
+   "cfg": 3,
+   "sampler_name": "dpmpp_2m",
+   "scheduler": "sgm_uniform",
+   "denoise": 0.3,
+   "model": [
+    "1",
+    0
+   ],
+   "positive": [
+    "31",
+    0
+   ],
+   "negative": [
+    "32",
+    0
+   ],
+   "latent_image": [
+    "63",
+    0
+   ]
+  }
+ },
+ "65": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "64",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  }
+ },
+ "66": {
+  "class_type": "PreviewImage",
+  "inputs": {
+   "images": [
+    "65",
+    0
+   ]
+  }
+ }
+}

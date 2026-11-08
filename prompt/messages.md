@@ -105,6 +105,9 @@ working_meme_add: 正在把新表情收进柜子，一张张来
 working_restart: 我去重启一下，马上回来
 draw_stage_sketch: 线稿画好了，正在精修和放大，别急
 draw_stage_refine: 放大重绘完成，最后收拾一下细节
+draw_stage_multi_scene: 背景铺好了，开始画第一位
+draw_stage_multi_first: 第一位画好了，换下一位
+draw_stage_multi_second: 人都画齐了，最后润色
 
 # 工具目录 section（tool_catalog）的渲染文案；行为说明在 prompt/runtime.md，这里只留标签与行格式
 tool_catalog_header: 当前可用的能力目录（按名字排序）：

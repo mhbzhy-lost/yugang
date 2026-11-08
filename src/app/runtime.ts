@@ -395,8 +395,8 @@ const roundConv = new Map<string, Conversation>();
 // 轮内去重：roundId → 本轮已发过提示的工具集合，「同轮同工具只发一次」在这里保证；
 // 与 roundConv 同生命周期，settle 的 finally 里整份删。
 const workingSent = new Map<string, Set<string>>();
-/** draw 阶段进度机械提示的去重表：round → 已发阶段（sketch/refine）。 */
-const drawStageSent = new Map<string, Set<"sketch" | "refine">>();
+/** draw 阶段进度机械提示的去重表：round → 已发阶段（单/多管线全部阶段）。 */
+const drawStageSent = new Map<string, Set<"sketch" | "refine" | "multi-scene" | "multi-first" | "multi-second">>();
 // 窗口键（chatKey\0发送者）→ 本组是否有「必答」放行（private/mentioned）。
 // gate 逐条放行时累积，flushBurst 整组消费并清掉：正文兜底只补必答轮——环境轮（free_pass）
 // 零 say_* 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
@@ -452,7 +452,7 @@ export async function bootRuntime(): Promise<void> {
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
   // 重耗时工具单独放宽：say_voice 要等 GPT-SoVITS 合成（默认超时 120s，覆盖 250s 含空响应重试一次的最坏 240s），
   // video 要下视频、抽帧、逐帧过视觉模型；全局 toolTimeoutSeconds 保持 30 不动
-  toolTimeoutOverrides: { say_voice: 250, video: 90, gpt_image: 210, draw: 360 },
+  toolTimeoutOverrides: { say_voice: 250, video: 90, gpt_image: 210, draw: 600 },
   // codex 订阅走 WebSocket（Node 的 WS 不吃 --use-env-proxy），过代理时在 main provider 写 transport: "sse"
   ...(modelSelection.transport ? { streamTransport: modelSelection.transport } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时
@@ -576,7 +576,13 @@ export async function bootRuntime(): Promise<void> {
     const conv = round === undefined || round === null ? undefined : roundConv.get(key);
     const text = stage === "sketch"
       ? (fish.prompts.messages["draw_stage_sketch"] ?? "")
-      : (fish.prompts.messages["draw_stage_refine"] ?? "");
+      : stage === "refine"
+        ? (fish.prompts.messages["draw_stage_refine"] ?? "")
+        : stage === "multi-scene"
+          ? (fish.prompts.messages["draw_stage_multi_scene"] ?? "")
+          : stage === "multi-first"
+            ? (fish.prompts.messages["draw_stage_multi_first"] ?? "")
+            : (fish.prompts.messages["draw_stage_multi_second"] ?? "");
     if (!key || conv === undefined || !text) return;
     if (!shouldSendWorkingReceipt(triggerOf.get(key)?.kind, "draw")) return;
     const sent = drawStageSent.get(key);

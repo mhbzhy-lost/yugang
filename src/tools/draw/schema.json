@@ -29,7 +29,25 @@
         "type": "number",
         "minimum": 0.4,
         "maximum": 1.1,
-        "description": "角色 LoRA 强度：0.4–1.1，默认 0.8。角色不够像就调高，脸崩或画面被污染就调低；只在传了 character 时有意义"
+        "description": "角色 LoRA 强度：0.4–1.1，默认 0.8。角色不够像就调高，脸崩或画面被污染就调低；只在传了 character/characters 时有意义"
+      },
+      "left": {
+        "type": "string",
+        "description": "双角色同框时左侧角色的描述（danbooru tags：服装/发型/动作）；与 right 一起传才走双角色管线，AI 娘可再传 characters 自动挂官方外观"
+      },
+      "right": {
+        "type": "string",
+        "description": "双角色同框时右侧角色的描述；与 left 一起传才生效"
+      },
+      "characters": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["claude", "deepseek", "qwen", "glm", "kimi", "gpt", "gemini", "grok"]
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "description": "AI 娘双人同框：恰好两人，数组顺序=左右，官方触发词/外观/头饰自动挂到对应侧；与 character 互斥，双角色不支持 preset 和改图"
       },
       "hand_repair": {
         "type": "boolean",
