@@ -24,6 +24,16 @@ interface Row {
   aliases: string;
 }
 
+/** AI 娘角色官方 tag 词表（本包 ai-girls.json，来自 LoRA 作者的 civitai 发布页）；损坏即启动失败，不做静默降级。 */
+interface AiGirl {
+  key: string;
+  name: string;
+  source: string;
+  match: string[];
+  sections: { title: string; tags: string }[];
+}
+const AI_GIRLS: AiGirl[] = JSON.parse(readFileSync(new URL("./ai-girls.json", import.meta.url), "utf8"));
+
 const CATEGORY: Record<number, string> = { 0: "通用", 1: "画师", 3: "作品", 4: "角色", 5: "风格" };
 let cache: Row[] | null = null;
 
@@ -58,6 +68,15 @@ export function createTagsTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       }
       const kw = args.keyword.trim().toLowerCase().replace(/\s+/g, "_");
       if (!kw) throw new Error(deps.prompts.messages["tags_empty"] ?? "tags_empty");
+      // AI 娘角色命中优先：返回 LoRA 作者提供的官方 tag 全套，danbooru 词表其次。
+      const raw = args.keyword.trim().toLowerCase();
+      const girl = AI_GIRLS.find((g) => g.key === raw || g.match.some((m) => m.toLowerCase() === raw));
+      if (girl) {
+        const lines = girl.sections.map((s) => `[${s.title}] ${s.tags.replace(/,\s*$/, "")}`);
+        const head = renderTemplate(deps.prompts.messages["tags_ai_girls"] ?? "{{key}}", { name: girl.name, key: girl.key, source: girl.source });
+        const hint = renderTemplate(deps.prompts.messages["tags_ai_girls_hint"] ?? "", { key: girl.key });
+        return { output: [{ type: "text", text: `${head}\n${lines.join("\n")}\n${hint}` }] };
+      }
 
       const nameHits: Row[] = [];
       const aliasHits: Row[] = [];

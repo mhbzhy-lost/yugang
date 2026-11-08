@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 type Node = { class_type: string; inputs: Record<string, unknown> };
 type Graph = Record<string, Node>;
 
-const WORKFLOW_HASH = "46f7422104466da08950c0766de5d709db146ce2fdafa185dcad0b8451dd45f8";
+const WORKFLOW_HASH = "ed876bce768d016dab0e64827f5d7e2c243daa16ed83825a29d49ebbc17a4342";
 const GRAPH_BYTES = readFileSync(new URL("./workflow.json", import.meta.url));
 if (createHash("sha256").update(GRAPH_BYTES).digest("hex") !== WORKFLOW_HASH) throw new Error("draw workflow hash mismatch");
 const TEMPLATE = JSON.parse(GRAPH_BYTES.toString("utf8")) as Graph;
@@ -19,6 +19,8 @@ export interface ComfyDraw {
   cfg?: number;
   seed?: number;
   handRepair?: boolean;
+  /** 角色 LoRA：file/tags 来自 tool 层的 CHARACTERS 白名单，这里只做形态校验与注入。 */
+  lora?: { file: string; weight: number; tags: string };
   ref?: { png: Buffer; strength: number };
 }
 
@@ -33,13 +35,21 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   const seed = args.seed ?? randomBytes(4).readUInt32BE();
   for (const id of ["7", "11", "14", "42"]) graph[id].inputs.seed = seed;
   graph["7"].inputs.cfg = args.cfg ?? 4.5;
-  graph["6"].inputs.width = args.width ?? 768;
-  graph["6"].inputs.height = args.height ?? 1024;
-  graph["4"].inputs.text = String(graph["4"].inputs.text) + args.prompt + (args.preset === "secret" ? ", completely nude" : "") + (args.bypass ? `, ${args.bypass}` : "");
+  graph["6"].inputs.width = args.width ?? 912;
+  graph["6"].inputs.height = args.height ?? 1216;
+  graph["4"].inputs.text = String(graph["4"].inputs.text) + (args.lora ? `${args.lora.tags}, ` : "") + args.prompt + (args.preset === "secret" ? ", completely nude" : "") + (args.bypass ? `, ${args.bypass}` : "");
   if (args.preset === "hsr") {
     graph["88"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: ["1", 0], clip: ["2", 0], text: "<lora:HSR Anima:0.7>", default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
     for (const id of ["7", "11", "14", "42"]) graph[id].inputs.model = ["88", 0];
     for (const id of ["4", "5", "11", "42"]) graph[id].inputs.clip = ["88", 1];
+  }
+  if (args.lora) {
+    // 角色 LoRA 走与 hsr 相同的注入模式：节点链在 88 之后（hsr 在场时），消费方统一改接 93。
+    if (!/^[\w .@()-]+\.safetensors$/.test(args.lora.file) || !Number.isFinite(args.lora.weight) || args.lora.weight < 0.4 || args.lora.weight > 1.1) throw new Error("invalid draw lora");
+    const upstream = args.preset === "hsr" ? { model: ["88", 0], clip: ["88", 1] } : { model: ["1", 0], clip: ["2", 0] };
+    graph["93"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: upstream.model, clip: upstream.clip, text: `<lora:${args.lora.file}:${args.lora.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
+    for (const id of ["7", "11", "14", "42"]) graph[id].inputs.model = ["93", 0];
+    for (const id of ["4", "5", "11", "42"]) graph[id].inputs.clip = ["93", 1];
   }
   if (args.ref) {
     if (!inputName || !/^yugang-ref-[a-f0-9-]{36}\.png$/.test(inputName)) throw new Error("invalid draw input name");
@@ -49,7 +59,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     graph["7"].inputs.denoise = args.ref.strength;
     delete graph["6"];
   }
-  graph["90"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "RealESRGAN_x4plus_anime_6B.pth" } };
+  graph["90"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
   graph["91"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["90", 0], image: [args.handRepair === false ? "43" : "42", 0] } };
   graph["92"] = { class_type: "ImageScaleBy", inputs: { image: ["91", 0], upscale_method: "lanczos", scale_by: 0.5 } };
   graph["44"].inputs.pixels = ["92", 0];

@@ -1,4 +1,6 @@
 {
   "tags_empty": "词表还没就绪或关键词为空",
-  "tags_none": "词表里没有「{{keyword}}」，换英文关键词试试"
+  "tags_none": "词表里没有「{{keyword}}」，换英文关键词试试",
+  "tags_ai_girls": "【AI 娘】{{name}} · draw 传 character={{key}} · LoRA: {{source}}",
+  "tags_ai_girls_hint": "draw 传 character={{key}} 会自动注入触发词和基础外观；服装段想用就抄进 prompt"
 }
