@@ -102,7 +102,8 @@ const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** 多角色 mask 形状模式：region=三直边+曲分界线（人物完整归属+自侧背景过渡）；silhouette=仅人物形状膨胀 24px。 */
-export type MaskShape = "region" | "silhouette";
+/** 重绘 mask 形状：silhouette=实例形状膨胀 24px（region 曲分界方案实测有 bug 已移除）。 */
+export type MaskShape = "silhouette";
 
 function validateMulti(args: MultiDraw): void {
   const n = args.parts.length;
@@ -203,31 +204,7 @@ function instanceBinary(buf: Buffer, width: number, height: number): { bin: Uint
   return { bin, area, centroidX: area > 0 ? sx / area : 0 };
 }
 
-/** 曲分界线：对每行取左实例最右白像素 xL 与右实例最左白像素 xR，分界点=(xL+xR)/2；
- *  单侧有人贴该侧边缘；两侧都无人沿用上一行；7 行中值滤波平滑。 */
-function boundaryCurve(left: Uint8Array, right: Uint8Array, width: number, height: number): Float64Array {
-  const raw = new Float64Array(height);
-  let prev = width / 2;
-  for (let y = 0; y < height; y++) {
-    const row = y * width;
-    let xl = -1;
-    let xr = -1;
-    for (let x = 0; x < width; x++) if (left[row + x]) xl = x;
-    for (let x = width - 1; x >= 0; x--) if (right[row + x]) { xr = x; break; }
-    const b = xl >= 0 && xr >= 0 ? (xl + xr) / 2 : xl >= 0 ? xl + 1 : xr >= 0 ? xr : prev;
-    raw[y] = b;
-    prev = b;
-  }
-  const out = new Float64Array(height);
-  const win: number[] = [];
-  for (let y = 0; y < height; y++) {
-    win.length = 0;
-    for (let k = Math.max(0, y - 3); k <= Math.min(height - 1, y + 3); k++) win.push(raw[k]);
-    win.sort((a, b) => a - b);
-    out[y] = win[win.length >> 1];
-  }
-  return out;
-}
+
 
 /** 方形膨胀（行+列两趟 max 滤波）：给人物边缘留过渡带。 */
 function dilateSquare(bin: Uint8Array, width: number, height: number, radius: number): Uint8Array {
@@ -257,21 +234,12 @@ function dilateSquare(bin: Uint8Array, width: number, height: number, radius: nu
   return out;
 }
 
-/** 由左右实例二值图构造两张重绘 mask PNG（顺序 [左A, 右B]，与 parts 对应）。 */
-export function buildMultiMasks(left: Uint8Array, right: Uint8Array, width: number, height: number, shape: MaskShape): [Buffer, Buffer] {
-  if (shape === "silhouette") {
-    const dl = dilateSquare(left, width, height, 24);
-    const dr = dilateSquare(right, width, height, 24);
-    return [encodeMaskPng(width, height, (x, y) => dl[y * width + x] === 1), encodeMaskPng(width, height, (x, y) => dr[y * width + x] === 1)];
-  }
-  // region: guard 硬排除对方实例（膨胀后），防分界曲线异常侵入对方
-  const curve = boundaryCurve(left, right, width, height);
-  const guardL = dilateSquare(right, width, height, 24); // 右实例膨胀，从 maskA 里排除
-  const guardR = dilateSquare(left, width, height, 24);  // 左实例膨胀，从 maskB 里排除
-  return [
-    encodeMaskPng(width, height, (x, y) => x < curve[y] && guardL[y * width + x] === 0),
-    encodeMaskPng(width, height, (x, y) => x >= curve[y] && guardR[y * width + x] === 0),
-  ];
+/** 由左右实例二值图构造两张重绘 mask PNG（顺序 [左A, 右B]，与 parts 对应）：
+ *  实例形状膨胀 24px（给人物边缘留背景过渡带）。 */
+export function buildMultiMasks(left: Uint8Array, right: Uint8Array, width: number, height: number, _shape?: MaskShape): [Buffer, Buffer] {
+  const dl = dilateSquare(left, width, height, 24);
+  const dr = dilateSquare(right, width, height, 24);
+  return [encodeMaskPng(width, height, (x, y) => dl[y * width + x] === 1), encodeMaskPng(width, height, (x, y) => dr[y * width + x] === 1)];
 }
 
 
@@ -465,7 +433,7 @@ async function uploadInput(base: string, png: Buffer): Promise<string> {
   return name;
 }
 
-async function runMultiJob(url: string, args: MultiDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void, shape: MaskShape = "region"): Promise<Buffer> {
+async function runMultiJob(url: string, args: MultiDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void, shape?: MaskShape): Promise<Buffer> {
   const base = comfyUrl(url);
   // busy 与队列校验只做一次：两阶段是一个占用，阶段间不释放
   const queue = await (await request(`${base}/queue`)).json() as { queue_running?: unknown[]; queue_pending?: unknown[] };
