@@ -21,6 +21,8 @@ if (MULTI_TEMPLATE["89"]?.class_type !== "SetLatentNoiseMask" || MULTI_TEMPLATE[
 export interface ComfyDraw {
   prompt: string;
   bypass?: string;
+  /** 人物级 bypass（pbypass: 段）：单角色无分区概念，追加在 bypass 之后（同一正向末尾）。 */
+  bypassP?: string;
   preset?: "default" | "hsr" | "secret";
   width?: number;
   height?: number;
@@ -45,7 +47,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   graph["7"].inputs.cfg = args.cfg ?? 4.5;
   graph["6"].inputs.width = args.width ?? 912;
   graph["6"].inputs.height = args.height ?? 1216;
-  graph["4"].inputs.text = String(graph["4"].inputs.text) + (args.lora ? `${args.lora.tags}, ` : "") + args.prompt + (args.preset === "secret" ? ", completely nude" : "") + (args.bypass ? `, ${args.bypass}` : "");
+  graph["4"].inputs.text = String(graph["4"].inputs.text) + (args.lora ? `${args.lora.tags}, ` : "") + args.prompt + (args.preset === "secret" ? ", completely nude" : "") + (args.bypass ? `, ${args.bypass}` : "") + (args.bypassP ? `, ${args.bypassP}` : "");
   if (args.preset === "hsr") {
     graph["88"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: ["1", 0], clip: ["2", 0], text: "<lora:HSR Anima:0.7>", default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
     for (const id of ["7", "11", "14", "42"]) graph[id].inputs.model = ["88", 0];
@@ -89,6 +91,10 @@ export interface MultiDraw {
   parts: MultiPart[];
   /** 手修可选（脸修常开）：false 跳过手部段，语义与单管线 hand_repair 一致。 */
   handRepair?: boolean;
+  /** 场景级 bypass（bypass: 段）：附加到构图与收尾段末尾。 */
+  bypass?: string;
+  /** 人物级 bypass（pbypass: 段）：附加到左右分区精修段末尾。 */
+  pbypass?: string;
 }
 
 /** 多角色段的 LoRA 注入位固定用 70-73（v3 窄幅拼贴拓扑，段节点 80-99）。 */
@@ -155,7 +161,7 @@ export function makeMultiGraph(args: MultiDraw, inputs: { image: string; maskLef
   delete g["30"];
   delete g["33"];
   delete g["34"];
-  g["31"].inputs.text = prefix + "2girls, on the left side: " + args.parts[0].text + ", on the right side: " + args.parts[1].text + ", " + args.prompt;
+  g["31"].inputs.text = prefix + "2girls, on the left side: " + args.parts[0].text + ", on the right side: " + args.parts[1].text + ", " + args.prompt + (args.bypass ? ", " + args.bypass : "");
   for (const id of ["82", "92", "64", "101", "103"]) g[id].inputs.seed = seed;
   // 脸修常开；手修可选（false 时 Preview 直接接脸修输出、手修段不进执行链）
   if (args.handRepair === false) {
@@ -171,7 +177,7 @@ export function makeMultiGraph(args: MultiDraw, inputs: { image: string; maskLef
   const segs: Array<[string, string]> = [["81", "82"], ["91", "92"]];
   segs.forEach(([encId, ksId], i) => {
     const part = args.parts[i];
-    g[encId].inputs.text = prefix + (part.role ? part.role.tags + ", " : "") + part.text + ", " + args.prompt;
+    g[encId].inputs.text = prefix + (part.role ? part.role.tags + ", " : "") + part.text + ", " + args.prompt + (args.pbypass ? ", " + args.pbypass : "");
     if (part.role) {
       const loraId = String(70 + i);
       g[loraId] = multiLoraNode(part.role.file, part.role.weight);

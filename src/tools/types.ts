@@ -142,7 +142,7 @@ export interface ToolPackageDeps {
   /** submissionId → 本轮触发消息（轮类型 + quoteIds 窗口）；出口工具的引用绑定与各工具身份闸同源。 */
   triggerOf?: (roundId: unknown) => RoundTrigger | undefined;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费。 */
-  bypassOf?: (roundId: unknown) => string | undefined;
+  bypassOf?: (roundId: unknown) => { bypass?: string; pbypass?: string } | undefined;
   /** 贴表情实现；react 必需，缺省时 factory 返回 undefined。 */
   react?: (conversationId: ConversationId, emoji: string, messageId?: number | string) => void | Promise<void>;
   /** 出口工具主动 @ 用的群成员名单（宿主从当前群现拉）；与 watch 的 groupMembersOf 同源，字段名保持原样。 */

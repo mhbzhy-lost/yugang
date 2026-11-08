@@ -130,9 +130,10 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       rounds.set(api.conversationId, state);
       try {
         const stageCb = deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined;
+        const bp = deps.bypassOf?.(round);
         const png = multiParts
-          ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts, handRepair: args.hand_repair ?? true }, () => { state.submitted = true; }, stageCb)
-          : await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, width, height, handRepair: args.hand_repair ?? true, ref, lora, bypass: deps.bypassOf?.(round) }, () => { state.submitted = true; }, stageCb);
+          ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts, handRepair: args.hand_repair ?? true, bypass: bp?.bypass, pbypass: bp?.pbypass }, () => { state.submitted = true; }, stageCb)
+          : await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, width, height, handRepair: args.hand_repair ?? true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, () => { state.submitted = true; }, stageCb);
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
         const file = `${Date.now()}-${randomUUID()}.png`;

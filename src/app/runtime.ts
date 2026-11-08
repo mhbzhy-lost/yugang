@@ -54,7 +54,7 @@ import { createChatlog } from "../records/chatlog.ts";
 import { localDay } from "../records/usage.ts";
 import { weeklyStats, renderWeekly } from "../records/stats.ts";
 import { createUsageLedger, sumUsage } from "../records/usage.ts";
-import { bypassAllowed, splitBypass, BYPASS_RE } from "../qq/bypass.ts";
+import { bypassAllowed, splitBypass, BYPASS_RE, PBYPASS_RE } from "../qq/bypass.ts";
 import { ChatsDoc, MemoryPendingDoc, OutboxDoc, WatchDoc } from "../store.ts";
 import { renderTemplate } from "../prompt/index.ts";
 import { MEMORY_INBOUND_KIND, MEMORY_PENDING_CAP, MemoryEvalEntry, buildFeedbackPending, findPendingSelection, fingerprintPatch, type EvalEventData, type EvalTargetSnapshot, type FeedbackContextItem, type MemoryApprovalPreparation, type MemoryInbound, parseMemoryCommand, publicizePatch } from "../memory/index.ts";
@@ -92,8 +92,11 @@ const rawMemoryText = new WeakMap<IncomingMessage, string>();
 /** 记忆用原始文本：去掉 [卡片#N] 占位与 bypass 指令，只留普通群友原话。 */
 function memoryTextOf(text: string): string {
   const noCards = text.replace(/\[卡片#\d+\]/g, "");
-  const m = BYPASS_RE.exec(noCards);
-  return (m ? noCards.slice(0, m.index) : noCards).trim();
+  const pb = PBYPASS_RE.exec(noCards);
+  const scope = pb ? noCards.slice(0, pb.index) : noCards;
+  const m = BYPASS_RE.exec(scope);
+  const cut = Math.min(...[m?.index ?? Infinity, pb?.index ?? Infinity].filter((v) => v !== Infinity));
+  return (Number.isFinite(cut) ? noCards.slice(0, cut) : noCards).trim();
 }
 
 // chatKey → 昵称 → QQ 号：memory scope 要把背景里最近发言的人映射成 subject。
@@ -383,7 +386,7 @@ const lastReply = new Map<string, boolean>(); // 最近一次触发是否@了鱼
 // settle 的 finally 里随轮清除。
 const triggerOf = new Map<string, RoundTrigger>();
 // submissionId → 本轮触发消息自带的 bypass 段；仅该轮 draw 可见，轮 settle 即删
-const bypassOf = new Map<string, string>();
+const bypassOf = new Map<string, { bypass?: string; pbypass?: string }>();
 // submissionId → 本轮 say_* 被调用的次数：识别「零出口轮」（模型裸文本回复，正文不出境，聊天对象零输出）。
 // 与 triggerOf 同生命周期：submit 后置 0，settle 的 finally 里删，成功/失败/抛错都不泄漏；
 // 只累计已登记的轮，收图轮等不经 submitRound 的提交不会留下孤儿条目。
@@ -1060,7 +1063,7 @@ export async function submitRound(input: {
       });
       // 重耗时工具的机械提示要落回本轮会话：登记轮的会话，settle 的 finally 里删
       roundConv.set(String(submission.id), conv);
-      if (input.bypass !== undefined) bypassOf.set(String(submission.id), input.bypass);
+      if (input.bypass !== undefined) bypassOf.set(String(submission.id), { bypass: input.bypass.stash || undefined, pbypass: input.bypass.pstash });
       // 零出口轮观测：本轮出口计数清零登记，与 triggerOf 同生命周期（见下方 finally）
       sayCalled.set(String(submission.id), 0);
 
