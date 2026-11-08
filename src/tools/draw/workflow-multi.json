@@ -88,11 +88,18 @@
    ]
   }
  },
+ "78": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "placeholder.png",
+   "upload": "image"
+  }
+ },
  "80": {
   "class_type": "VAEEncode",
   "inputs": {
    "pixels": [
-    "34",
+    "78",
     0
    ],
    "vae": [
@@ -112,35 +119,10 @@
   }
  },
  "86": {
-  "class_type": "SolidMask",
+  "class_type": "LoadImage",
   "inputs": {
-   "value": 1,
-   "width": 912,
-   "height": 1216
-  }
- },
- "87": {
-  "class_type": "SolidMask",
-  "inputs": {
-   "value": 1,
-   "width": 456,
-   "height": 1216
-  }
- },
- "88": {
-  "class_type": "MaskComposite",
-  "inputs": {
-   "destination": [
-    "86",
-    0
-   ],
-   "source": [
-    "87",
-    0
-   ],
-   "x": 456,
-   "y": 0,
-   "operation": "subtract"
+   "image": "mask-left.png",
+   "upload": "image"
   }
  },
  "89": {
@@ -151,8 +133,8 @@
     0
    ],
    "mask": [
-    "88",
-    0
+    "86",
+    1
    ]
   }
  },
@@ -220,19 +202,10 @@
   }
  },
  "97": {
-  "class_type": "MaskComposite",
+  "class_type": "LoadImage",
   "inputs": {
-   "destination": [
-    "86",
-    0
-   ],
-   "source": [
-    "87",
-    0
-   ],
-   "x": 0,
-   "y": 0,
-   "operation": "subtract"
+   "image": "mask-right.png",
+   "upload": "image"
   }
  },
  "99": {
@@ -244,7 +217,7 @@
    ],
    "mask": [
     "97",
-    0
+    1
    ]
   }
  },
