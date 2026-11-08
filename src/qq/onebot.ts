@@ -14,10 +14,13 @@ export interface OneBotSegment {
 
 export interface OneBotEvent {
   post_type?: string;
+  notice_type?: string;
+  sub_type?: string;
   message_type?: "group" | "private";
   self_id?: number;
   user_id?: number;
   group_id?: number;
+  target_id?: number;
   message_id?: number | string;
   raw_message?: string;
   message?: string | OneBotSegment[];
@@ -111,6 +114,8 @@ export interface OneBotOptions {
    *  （决策 24 的置位锚点从「整个 emit 完成」下沉到「每条消息实际发送成功」，部分成功
    *  语义 = 任一条成功即置位）。 */
   onSent?: (chatKey: string) => void;
+  /** 戳一戳鱼的群事件回调；客户端会在回调前延迟 1 秒，宿主负责校验群域并执行回戳。 */
+  onPoke?: (event: { groupId: number; userId: number }) => void | Promise<void>;
 }
 
 interface Pending {
@@ -147,6 +152,10 @@ export class OneBot {
   #pacingSeconds?: number | (() => number);
   /** 逐条物理消息发送成功回调；缺省无。 */
   #onSent?: (chatKey: string) => void;
+  /** 戳一戳事件回调；缺省无。 */
+  #onPoke?: OneBotOptions["onPoke"];
+  /** 尚未执行的回戳定时器，优雅退出时取消，避免断开后再发协议请求。 */
+  #pokeTimers = new Set<ReturnType<typeof setTimeout>>();
   /** 会话键 → 上一条物理消息实际发送成功的时刻：配速按它算等待（内存态，重启归零，首条不等待）。 */
   #lastSentAt = new Map<string, number>();
 
@@ -156,6 +165,7 @@ export class OneBot {
     this.#mediaRoot = mediaRoot;
     this.#pacingSeconds = options.pacingSeconds;
     this.#onSent = options.onSent;
+    this.#onPoke = options.onPoke;
   }
 
   get selfId(): number {
@@ -197,6 +207,10 @@ export class OneBot {
     }
     if (frame.post_type === "meta_event") {
       if (frame.self_id) this.#selfId = frame.self_id;
+      return;
+    }
+    if (frame.post_type === "notice") {
+      this.#schedulePokeReply(frame);
       return;
     }
     if (frame.post_type !== "message") return;
@@ -334,6 +348,24 @@ export class OneBot {
 
     if (!parsed.text.trim() && parsed.replyIds.length === 0 && (parsed.forwardIds?.length ?? 0) === 0) return;
     for (const h of this.#handlers) h(parsed);
+  }
+
+  /** 戳一戳只走协议动作，不进入消息链、outbox 或模型；延迟 1 秒再回戳降低机械感。 */
+  #schedulePokeReply(frame: OneBotEvent): void {
+    const self = frame.self_id || this.#selfId;
+    if (frame.notice_type !== "notify" || frame.sub_type !== "poke"
+      || !frame.group_id || !frame.user_id || !frame.target_id
+      || frame.target_id !== self || frame.user_id === self) return;
+    if (!this.#onPoke) return;
+
+    const timer = setTimeout(() => {
+      this.#pokeTimers.delete(timer);
+      void Promise.resolve(this.#onPoke?.({ groupId: frame.group_id!, userId: frame.user_id! })).catch((error: unknown) => {
+        console.error("[鱼缸] 回戳处理失败", error instanceof Error ? error.message : error);
+      });
+    }, 1_000);
+    timer.unref?.();
+    this.#pokeTimers.add(timer);
   }
 
   /** 每个群最近一条「没展开」的合集：@ 鱼问「上面的合集」时补展开用。只存 id，不预拉内容。 */
@@ -476,6 +508,11 @@ export class OneBot {
   /** 贴表情回应（NapCat 扩展）。 */
   async react(messageId: number | string, emoji: string): Promise<void> {
     await this.call("set_msg_emoji_like", { message_id: messageId, emoji_id: emoji, set: true });
+  }
+
+  /** 回应群里的戳一戳（NapCat/OneBot 扩展）。 */
+  async sendPoke(groupId: number, userId: number): Promise<void> {
+    await this.call("send_poke", { group_id: groupId, user_id: userId });
   }
 
   async groupInfo(groupId: number): Promise<{ name: string; count: number; owner: string } | null> {
@@ -685,6 +722,8 @@ export class OneBot {
 
   /** 优雅退出用：显式断开 WS，让协议端立即感知重连，不等它自己的超时。 */
   close(): void {
+    for (const timer of this.#pokeTimers) clearTimeout(timer);
+    this.#pokeTimers.clear();
     try {
       this.#ws?.close();
     } catch {

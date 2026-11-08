@@ -235,6 +235,13 @@ export const onebot = new OneBot(config.onebotUrl, config.onebotToken, config.me
   // 末条自言标记（决策 24，终验 #7）的置位错点 = 每条物理消息实际发送成功（不是整个 emit
   // 完成）：部分成功（文本发了、图挂了）也置 true——任一条成功即置位，末条至少有一条是鱼的话
   onSent: (chatKey) => lastWasFish.add(chatKey),
+  // 戳一戳是协议层机械互动：只认 GROUPS 白名单群，不进模型、不进 outbox。
+  onPoke: ({ groupId, userId }) => {
+    if (!config.groups.includes(String(groupId))) return;
+    void onebot.sendPoke(groupId, userId).catch((error: unknown) => {
+      console.error(`[鱼缸] 回戳失败 ${groupId}/${userId}`, error instanceof Error ? error.message : error);
+    });
+  },
 });
 const chatlog = createChatlog(join(HOME, "chatlog"));
 const usage = createUsageLedger(join(HOME, "usage"));
