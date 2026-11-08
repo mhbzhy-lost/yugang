@@ -91,19 +91,36 @@ export function decodePngRgba(buf: Buffer): { width: number; height: number; dat
   return { width, height, data: out };
 }
 
-/** 生成 mask 专用 RGBA PNG：isRedraw 为真的像素是重绘区（alpha=0、RGB=0 便于预览），否则保护区（全 255）。 */
+/** 生成 mask 专用 RGBA PNG：isRedraw 为真的像素是重绘区（alpha=0），否则保护区（全 255）。
+ *  边缘羽化：alpha 通道过两轮 3x3 均值滤波，边界出现 0-255 渐变（重绘与保护过渡自然，
+ *  SetLatentNoiseMask 支持软 mask；大片内部区域不受影响）。 */
 export function encodeMaskPng(width: number, height: number, isRedraw: (x: number, y: number) => boolean): Buffer {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 || width > 4096 || height > 4096) throw new Error("png: invalid mask size");
   const stride = width * 4;
   const raw = Buffer.alloc((stride + 1) * height);
+  const alpha = new Uint8Array(width * height).fill(255);
   for (let y = 0; y < height; y++) {
     const row = y * (stride + 1);
     raw[row] = 0; // filter None
     for (let x = 0; x < width; x++) {
       const d = row + 1 + x * 4;
-      if (isRedraw(x, y)) continue; // 重绘区：0000（Buffer 默认 0）
-      raw[d] = raw[d + 1] = raw[d + 2] = raw[d + 3] = 255;
+      if (isRedraw(x, y)) { alpha[y * width + x] = 0; continue; } // 重绘区：0000（Buffer 默认 0），alpha 保持 0
+      raw[d] = raw[d + 1] = raw[d + 2] = 255;
     }
+  }
+  // 两轮 3x3 均值滤波（只对 alpha；隔行采样跳过 filter 字节）
+  for (let round = 0; round < 2; round++) {
+    const src = Uint8Array.from(alpha);
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        let sum = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) sum += src[(y + dy) * width + x + dx];
+        alpha[y * width + x] = Math.round(sum / 9);
+      }
+    }
+  }
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) raw[y * (stride + 1) + 1 + x * 4 + 3] = alpha[y * width + x];
   }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
@@ -112,17 +129,15 @@ export function encodeMaskPng(width: number, height: number, isRedraw: (x: numbe
   return Buffer.concat([SIG, chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw, { level: 6 })), chunk("IEND", Buffer.alloc(0))]);
 }
 
-// 模块自证（实现自证，非新增测试）：encode → decode 回读一致，不一致启动即失败
+// 模块自证（实现自证，非新增测试）：encode → decode 回读一致；羽化后边缘为渐变值，
+// 断言内部区域二值正确、边界存在中间值（羽化生效的证据）。
 {
-  const w = 9, h = 5;
-  const png = encodeMaskPng(w, h, (x, y) => x < (y % 2 === 0 ? 3 : 5));
+  const w = 16, h = 16;
+  const png = encodeMaskPng(w, h, (x) => x < 8); // 左半重绘
   const back = decodePngRgba(png);
   if (back.width !== w || back.height !== h) throw new Error("png self-check: size mismatch");
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const expect = x < (y % 2 === 0 ? 3 : 5);
-      const a = back.data[(y * w + x) * 4 + 3];
-      if (a !== (expect ? 0 : 255)) throw new Error("png self-check: pixel mismatch");
-    }
-  }
+  const a = (x: number, y: number) => back.data[(y * w + x) * 4 + 3];
+  if (a(1, 8) !== 0 || a(14, 8) !== 255) throw new Error("png self-check: interior mismatch"); // 内部二值
+  const mid = a(8, 8);
+  if (mid === 0 || mid === 255) throw new Error("png self-check: feather missing"); // 边界渐变存在
 }

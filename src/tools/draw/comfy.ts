@@ -12,7 +12,7 @@ const TEMPLATE = JSON.parse(GRAPH_BYTES.toString("utf8")) as Graph;
 if (TEMPLATE["1"]?.inputs.unet_name !== "DeltaMix 3.8B V8.safetensors" || TEMPLATE["9"]?.class_type !== "PreviewImage") throw new Error("draw workflow contract mismatch");
 
 // ── 多角色管线（独立模板，与单管线互不影响）──
-const MULTI_WORKFLOW_HASH = "063b26fd81727bf478293220949ac97807613cf948aefc82a88345cb7d494924";
+const MULTI_WORKFLOW_HASH = "5c43c48e3a431c0591735e572dda1a2a719e95f1bd930505906566215aa119c5";
 const MULTI_BYTES = readFileSync(new URL("./workflow-multi.json", import.meta.url));
 if (createHash("sha256").update(MULTI_BYTES).digest("hex") !== MULTI_WORKFLOW_HASH) throw new Error("draw multi workflow hash mismatch");
 const MULTI_TEMPLATE = JSON.parse(MULTI_BYTES.toString("utf8")) as Graph;
@@ -133,7 +133,7 @@ export function makeMultiSceneGraph(args: MultiDraw): Graph {
     // 构图预览：阶段二上传的底图从这取回
     "208": { class_type: "PreviewImage", inputs: { images: ["34", 0] } },
     // 分割链：YOLO 检测 → SEGS 裁切 → SAM 分实例
-    "200": { class_type: "UltralyticsDetectorProvider", inputs: { model_name: "segm/yolov8m-seg.pt" } },
+    "200": { class_type: "UltralyticsDetectorProvider", inputs: { model_name: "segm/yolov8x-seg.pt" } },
     "201": { class_type: "SAMLoader", inputs: { model_name: "sam_vit_b_01ec64.pth", device_mode: "AUTO" } },
     "202": { class_type: "SegmDetectorSEGS", inputs: { segm_detector: ["200", 1], image: ["34", 0], threshold: 0.35, dilation: 10, crop_factor: 3, drop_size: 10, labels: "" } },
     "203": { class_type: "SAMDetectorSegmented", inputs: { sam_model: ["201", 0], segs: ["202", 0], image: ["34", 0], detection_hint: "center-1", dilation: 0, threshold: 0.93, bbox_expansion: 0, mask_hint_threshold: 0.7, mask_hint_use_negative: "False" } },
@@ -451,31 +451,40 @@ async function runMultiJob(url: string, args: MultiDraw, onSubmitted: () => void
   onSubmitted();
   let sceneJob;
   let retries = 0;
+  let composition: Buffer | undefined;
+  let binaries: ReturnType<typeof instanceBinary>[] = [];
+  // 阶段一循环：构图 + 分割 + 实例 decode + 质量校验，任何一环不达标都换 seed 重构图（最多 2 次）。
+  // 质量校验（2026-11-09 躺草地事故）：合并 blob（>40% 画布）/ 两人面积悬殊（>3 倍）/
+  // 质心不分立（<0.15 画宽）说明实例划分崩坏（COCO 模型对二次元躺姿域差距），重掷构图大概率恢复。
   for (;;) {
     try {
       sceneJob = await submitAndWait(base, makeMultiSceneGraph(retries === 0 ? args : { ...args, seed: (args.seed ?? 0) + 1 + randomBytes(2).readUInt16BE() }), sceneId, clientId, deadline - 240_000);
       const batch = sceneJob.outputs?.["207"]?.images;
-      if (Array.isArray(batch) && batch.length >= 2) break;
-      throw new ComfyExecutionFailed("multi segmentation insufficient");
+      if (!Array.isArray(batch) || batch.length < 2) throw new ComfyExecutionFailed("multi segmentation insufficient");
+      const comp = await fetchOutputImage(base, sceneJob, "208");
+      const decoded: Buffer[] = [];
+      for (const image of batch) {
+        if (image.type !== "temp" || !image.filename || !/^[A-Za-z0-9_.-]+\.png$/.test(image.filename) || image.subfolder) throw new Error("invalid ComfyUI output path");
+        const query = new URLSearchParams({ filename: image.filename, type: "temp", subfolder: "" });
+        decoded.push(await imageBytes(await request(`${base}/view?${query}`, {}, 30_000)));
+      }
+      const bins = decoded.map((buf) => instanceBinary(buf, args.width, args.height)).sort((a, b) => b.area - a.area);
+      const total = args.width * args.height;
+      const separation = Math.abs(bins[0].centroidX - bins[1].centroidX) / args.width;
+      if (bins[0].area > total * 0.4 || bins[0].area > bins[1].area * 3 || separation < 0.15) {
+        throw new ComfyExecutionFailed("multi segmentation quality");
+      }
+      composition = comp;
+      binaries = bins;
+      break;
     } catch (error) {
       if (!(error instanceof ComfyExecutionFailed) || retries >= 2 || Date.now() > deadline - 240_000) throw error;
       retries += 1;
-      console.error(`[fish] multi scene retry #${retries}: segmentation insufficient, re-compose`);
+      console.error(`[fish] multi scene retry #${retries}: segmentation failed/bad, re-compose`);
       sceneId = randomUUID();
     }
   }
-  const composition = await fetchOutputImage(base, sceneJob, "208");
-  const batchImages = sceneJob.outputs?.["207"]?.images;
-  if (!Array.isArray(batchImages) || batchImages.length < 1) throw new ComfyExecutionFailed("multi segmentation failed");
-  const instanceMasks = await Promise.all(batchImages.map(async (image) => {
-    if (image.type !== "temp" || !image.filename || !/^[A-Za-z0-9_.-]+\.png$/.test(image.filename) || image.subfolder) throw new Error("invalid ComfyUI output path");
-    const query = new URLSearchParams({ filename: image.filename, type: "temp", subfolder: "" });
-    return imageBytes(await request(`${base}/view?${query}`, {}, 30_000));
-  }));
-  // ── 宿主 mask 构造：白区面积最大的两张实例 mask，按质心 x 分左右（<2 张=构图失败，走 v7 失败路径）──
-  const binaries = instanceMasks.map((buf) => instanceBinary(buf, args.width, args.height));
-  binaries.sort((a, b) => b.area - a.area);
-  if (binaries.length < 2 || binaries[1].area <= 0) throw new ComfyExecutionFailed("multi segmentation failed");
+  if (!composition || binaries.length < 2) throw new ComfyExecutionFailed("multi segmentation failed");
   const [first, second] = binaries;
   const leftBin = first.centroidX <= second.centroidX ? first.bin : second.bin;
   const rightBin = first.centroidX <= second.centroidX ? second.bin : first.bin;

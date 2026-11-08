@@ -9,20 +9,35 @@
       "preset": {
         "type": "string",
         "enum": [
-          "default",
-          "hsr",
+          "default",          "hsr",
           "secret"
         ],
         "description": "画风预设：default=通用动漫（默认）；hsr=崩坏星穹铁道画风"
       },
       "ratio": {
         "type": "string",
-        "enum": ["1:1", "3:4", "4:3", "2:3", "3:2", "9:16", "16:9"],
+        "enum": ["1:1",
+          "3:4",
+          "4:3",
+          "2:3",
+          "3:2",
+          "9:16",
+          "16:9"
+        ],
         "description": "从零画的画面宽高比：方图 1:1、竖图 3:4/2:3/9:16、横图 4:3/3:2/16:9；不填默认 3:4。改图忽略，沿用参考图比例（尺寸对齐可能略有偏差）"
       },
       "character": {
         "type": "string",
-        "enum": ["claude", "deepseek", "qwen", "glm", "kimi", "gpt", "gemini", "grok"],
+        "enum": [
+          "claude",
+          "deepseek",
+          "qwen",
+          "glm",
+          "kimi",
+          "gpt",
+          "gemini",
+          "grok"
+        ],
         "description": "AI 娘角色：画 AI 拟人角色（克劳德/大肥鱼/白龙娘/Gemini 猫娘/Grok 大小姐/Kimi/千问/智谱狐娘）时传对应键，自动挂角色 LoRA 并注入官方触发词、基础外观与头饰；不填不挂。服装不自动注入，官方套装用 tags 工具查角色名后自己写进 prompt"
       },
       "lora_weight": {
@@ -43,7 +58,16 @@
         "type": "array",
         "items": {
           "type": "string",
-          "enum": ["claude", "deepseek", "qwen", "glm", "kimi", "gpt", "gemini", "grok"]
+          "enum": [
+            "claude",
+            "deepseek",
+            "qwen",
+            "glm",
+            "kimi",
+            "gpt",
+            "gemini",
+            "grok"
+          ]
         },
         "minItems": 2,
         "maxItems": 2,
@@ -51,7 +75,7 @@
       },
       "hand_repair": {
         "type": "boolean",
-        "description": "是否自动修复检测到的手，默认 true；用户要求不修手时传 false。关闭只跳过手部重绘，人脸修复与超分不变"
+        "description": "是否自动修复检测到的手，默认 false（不修）；用户明确要求修手时传 true。开启只跳过手部重绘，人脸修复与超分不变"
       },
       "ref": {
         "type": "string",
