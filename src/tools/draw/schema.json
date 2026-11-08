@@ -17,7 +17,23 @@
       },
       "highres": {
         "type": "boolean",
-        "description": "用户明确要高清/大图/精细超分时传 true（RealESRGAN 2 倍超分）；默认自带轻量超分（4x-AnimeSharp 1.5 倍）不用传。只对从零画生效，带 ref 时忽略"
+        "description": "兼容旧调用：从零画和改图默认均使用 RealESRGAN 2 倍超分，传 true 不再额外放大"
+      },
+      "width": {
+        "type": "integer",
+        "description": "初图宽度，512–1536 且为 16 的倍数，与高度乘积不超过 1048576；默认 768。改图时忽略"
+      },
+      "height": {
+        "type": "integer",
+        "description": "初图高度，512–1536 且为 16 的倍数，与宽度乘积不超过 1048576；默认 1024。改图时忽略"
+      },
+      "cfg": {
+        "type": "number",
+        "description": "主采样 CFG，1–7，默认 4.5"
+      },
+      "seed": {
+        "type": "integer",
+        "description": "随机种子，0–4294967295；不填随机"
       },
       "ref": {
         "type": "string",

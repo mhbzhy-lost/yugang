@@ -135,8 +135,8 @@ export interface ToolPackageDeps {
     /** 官方 API 根地址覆盖（测试/代理用）。 */
     apiBaseUrl?: string;
   };
-  /** SD WebUI 的 baseUrl；给了才有本地画图。 */
-  sdUrl?: string;
+  /** ComfyUI 环回隧道地址；给了才有本地画图。 */
+  comfyUrl?: string;
   /** danbooru.csv 路径；给了才能查 tag 词表。 */
   tagsCsv?: string;
   /** submissionId → 本轮触发消息（轮类型 + quoteIds 窗口）；出口工具的引用绑定与各工具身份闸同源。 */

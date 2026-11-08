@@ -37,7 +37,7 @@
  *     stage 宽查询经 tool_search 加载的工具回到 deferred，后续 stage 的精确
  *     搜索从干净候选开始，不被残留加载状态污染。只重置工具选择状态，不删
  *     数据或 transcript。
- *   - R5 环境预检：SD_WEBUI_URL（draw）、danbooru 词表（tags）、帧描述依赖
+ *   - R5 环境预检：COMFYUI_URL（draw）、danbooru 词表（tags）、帧描述依赖
  *     python venv + ffmpeg（video）在装配期零流量探测，缺失直接标 blocked:
  *     env-blocked 并跳过该阶段（不烧流量），不把配置错误路径当正常通过。
  *
@@ -223,7 +223,7 @@ try {
   let ffmpegOk = false;
   try { ffmpegOk = spawnSync("ffmpeg", ["-version"], { timeout: 5000 }).status === 0; } catch {}
   const videoFramesReady = existsSync(videoPython) && existsSync(join(ROOT, "scripts", "video-frames.py")) && ffmpegOk;
-  const sdConfigured = Boolean(process.env.SD_WEBUI_URL);
+  const sdConfigured = Boolean(process.env.COMFYUI_URL);
   const tagsCsvPath = process.env.TAGS_CSV ?? join(DATA_HOME, "danbooru.csv");
   const tagsReady = existsSync(tagsCsvPath);
   ev({
@@ -320,7 +320,7 @@ try {
     gptImage: selection.image
       ? { authPath: selection.main.credentialsPath, provider: selection.image.provider, model: selection.image.modelId, ...(selection.image.proxy ? { proxy: selection.image.proxy } : {}) }
       : undefined,
-    sdUrl: process.env.SD_WEBUI_URL,
+    comfyUrl: process.env.COMFYUI_URL,
     tagsCsv: tagsCsvPath,
     toolTimeoutOverrides: { video: 90, gpt_image: 210 },
     triggerOf: (roundId) => currentTrigger,
@@ -735,7 +735,7 @@ try {
             });
             return;
           }
-          // ── S12 draw（SD_WEBUI_URL 缺失在装配期已 blocked，不跑配置错路径）──
+          // ── S12 draw（COMFYUI_URL 缺失在装配期已 blocked，不跑配置错路径）──
           case "s12": {
             const r = await round("s12-draw", hostLine("小明", "100001", "用本地 SD 画一只猫，画完发出来。", { messageId: 5012 }), member(100001, 5012));
             const drawRes = r.toolResults.find((x) => x.name === "draw");
@@ -789,7 +789,7 @@ try {
               gptImage: selection.image
                 ? { authPath: selection.main.credentialsPath, provider: selection.image.provider, model: selection.image.modelId, ...(selection.image.proxy ? { proxy: selection.image.proxy } : {}) }
                 : undefined,
-              sdUrl: process.env.SD_WEBUI_URL,
+              comfyUrl: process.env.COMFYUI_URL,
               tagsCsv: tagsCsvPath,
               triggerOf: (roundId) => currentTrigger,
               groupMembersOf: async () => MEMBERS,
@@ -863,7 +863,7 @@ try {
     if (stage === "s11" && !videoFramesReady) {
       return `env-blocked：帧描述依赖缺失（python=${existsSync(videoPython)} script=${existsSync(join(ROOT, "scripts", "video-frames.py"))} ffmpeg=${ffmpegOk}）`;
     }
-    if (stage === "s12" && !sdConfigured) return "env-blocked：未配置 SD_WEBUI_URL（draw 正常路径不可验收，不跑配置错误路径）";
+    if (stage === "s12" && !sdConfigured) return "env-blocked：未配置 COMFYUI_URL（draw 正常路径不可验收，不跑配置错误路径）";
     if (stage === "s13" && !tagsReady) return "env-blocked：danbooru 词表缺失（tags 正常路径不可验收，不跑配置错误路径）";
     return undefined;
   }

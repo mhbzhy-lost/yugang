@@ -450,7 +450,7 @@ export async function bootRuntime(): Promise<void> {
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
   // 重耗时工具单独放宽：say_voice 要等 GPT-SoVITS 合成（默认超时 120s，覆盖 250s 含空响应重试一次的最坏 240s），
   // video 要下视频、抽帧、逐帧过视觉模型；全局 toolTimeoutSeconds 保持 30 不动
-  toolTimeoutOverrides: { say_voice: 250, video: 90, gpt_image: 210 },
+  toolTimeoutOverrides: { say_voice: 250, video: 90, gpt_image: 210, draw: 360 },
   // codex 订阅走 WebSocket（Node 的 WS 不吃 --use-env-proxy），过代理时在 main provider 写 transport: "sse"
   ...(modelSelection.transport ? { streamTransport: modelSelection.transport } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时
@@ -503,8 +503,7 @@ export async function bootRuntime(): Promise<void> {
       userId: onebot.selfId > 0 ? String(onebot.selfId) : "",
     };
   },
-  sdUrl: process.env.SD_WEBUI_URL,
-  // （sdUrl 存在时见启动处的邻居保温定时器）
+  comfyUrl: process.env.COMFYUI_URL,
   tagsCsv: join(HOME, "danbooru.csv"),
   master: config.master,
   // 定时任务底座：fish.reminder durable task（pi-durable 的 sleepUntil 定时唤醒，

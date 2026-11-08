@@ -65,8 +65,8 @@ export interface FishOptions {
   };
   /** config/models.json 路径；config 工具写回 models 角色表时用。 */
   modelsPath?: string;
-  /** SD WebUI（Windows 宿主机）的 baseUrl；给了才有本地画图。 */
-  sdUrl?: string;
+  /** ComfyUI 环回隧道地址；给了才有本地画图。 */
+  comfyUrl?: string;
   /** danbooru.csv 路径；给了才能查 tag 词表。 */
   tagsCsv?: string;
   /** 主人 QQ：fs/config/restart 自改工具的身份闸，给了才注册这些工具。 */

@@ -23,6 +23,16 @@
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
 
+`draw` 使用 Windows ComfyUI 的固定 V8 API 工作流（`src/tools/draw/workflow.json`，SHA-256 固定校验），
+通过 `COMFYUI_URL` 指向 macmini 的 `127.0.0.1:18190` SSH 隧道；不接受模型传入工作流、节点、模型名或地址。
+文生图按初采样 → 手部修复 → RealESRGAN anime_6B 2 倍超分 → 二次采样 → 人脸修复 → `PreviewImage` 输出；
+`highres` 为兼容旧调用保留，文生图和改图默认已是 2 倍。`hsr` 用固定 LoRA 权重 0.7 经 28→52 层映射，
+效果需人工确认；`ref` 是整图重绘，不是蒙版局部编辑，同样默认使用 RealESRGAN 2 倍超分与二次采样。图片通过 `type=temp` 取回本地 `gen/`，
+Windows 输入上传限定 `yugang-ref-<uuid>.png`；计划任务 `Yugang-ComfyUI-RefCleanup` 使用
+`scripts/comfy-ref-cleanup.ps1` 的对应副本，每小时在登录用户会话中尝试清理 24 小时以上专用文件，
+ComfyUI 忙或队列状态不可用时不删除，不触碰其他 input。部署前须核对该任务与脚本已安装且可运行。
+提交状态不明的画图在当前轮禁止重试，避免网络超时造成重复任务。
+
 **入口只注册**（2026-11-05）：`src/index.ts` 不写任何业务逻辑，只有 `app.use(...)`
 （消息链顺序）、`app.onFlush(...)`（debounce 整组提交）、`app.onStart/onStop(...)`
 （启动/退出）和最后的 `bootRuntime()` / `app.start()`。实现都在 `src/app/runtime.ts`；
