@@ -312,7 +312,7 @@
    "cfg": 3,
    "sampler_name": "dpmpp_2m",
    "scheduler": "sgm_uniform",
-   "denoise": 0.3,
+   "denoise": 0.2,
    "model": [
     "1",
     0
