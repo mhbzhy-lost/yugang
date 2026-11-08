@@ -146,7 +146,7 @@
    "cfg": 4.5,
    "sampler_name": "dpmpp_2m",
    "scheduler": "sgm_uniform",
-   "denoise": 0.4,
+   "denoise": 0.6,
    "model": [
     "1",
     0
@@ -229,7 +229,7 @@
    "cfg": 4.5,
    "sampler_name": "dpmpp_2m",
    "scheduler": "sgm_uniform",
-   "denoise": 0.4,
+   "denoise": 0.6,
    "model": [
     "1",
     0
@@ -312,7 +312,7 @@
    "cfg": 3,
    "sampler_name": "dpmpp_2m",
    "scheduler": "sgm_uniform",
-   "denoise": 0.2,
+   "denoise": 0.45,
    "model": [
     "1",
     0
@@ -437,7 +437,7 @@
    "cfg": 3,
    "sampler_name": "euler",
    "scheduler": "simple",
-   "denoise": 0.25,
+   "denoise": 0.45,
    "feather": 10,
    "noise_mask": true,
    "force_inpaint": true,

@@ -12,7 +12,7 @@ const TEMPLATE = JSON.parse(GRAPH_BYTES.toString("utf8")) as Graph;
 if (TEMPLATE["1"]?.inputs.unet_name !== "DeltaMix 3.8B V8.safetensors" || TEMPLATE["9"]?.class_type !== "PreviewImage") throw new Error("draw workflow contract mismatch");
 
 // ── 多角色管线（独立模板，与单管线互不影响）──
-const MULTI_WORKFLOW_HASH = "5c43c48e3a431c0591735e572dda1a2a719e95f1bd930505906566215aa119c5";
+const MULTI_WORKFLOW_HASH = "410761727d3643b10190119fb4a5d8e86446ba91091dcfda7bbaecf974df5596";
 const MULTI_BYTES = readFileSync(new URL("./workflow-multi.json", import.meta.url));
 if (createHash("sha256").update(MULTI_BYTES).digest("hex") !== MULTI_WORKFLOW_HASH) throw new Error("draw multi workflow hash mismatch");
 const MULTI_TEMPLATE = JSON.parse(MULTI_BYTES.toString("utf8")) as Graph;
@@ -126,7 +126,7 @@ export function makeMultiSceneGraph(args: MultiDraw): Graph {
     "2": structuredClone(MULTI_TEMPLATE["2"]),
     "3": structuredClone(MULTI_TEMPLATE["3"]),
     "30": { class_type: "EmptySD3LatentImage", inputs: { width: args.width, height: args.height, batch_size: 1 } },
-    "31": { class_type: "CLIPTextEncode", inputs: { text: prefix + `2girls, ${args.parts.map((p) => p.text).join(" and ")}, ${args.prompt}`, clip: ["2", 0] } },
+    "31": { class_type: "CLIPTextEncode", inputs: { text: prefix + "2girls, on the left side: " + args.parts[0].text + ", on the right side: " + args.parts[1].text + ", " + args.prompt, clip: ["2", 0] } },
     "32": { class_type: "CLIPTextEncode", inputs: { text: String(TEMPLATE["5"].inputs.text), clip: ["2", 0] } },
     "33": { class_type: "KSampler", inputs: { seed, steps: 30, cfg: 4.5, sampler_name: "dpmpp_2m", scheduler: "sgm_uniform", denoise: 1, model: ["1", 0], positive: ["31", 0], negative: ["32", 0], latent_image: ["30", 0] } },
     "34": { class_type: "VAEDecode", inputs: { samples: ["33", 0], vae: ["3", 0] } },
@@ -155,7 +155,7 @@ export function makeMultiGraph(args: MultiDraw, inputs: { image: string; maskLef
   delete g["30"];
   delete g["33"];
   delete g["34"];
-  g["31"].inputs.text = prefix + "2girls, " + args.parts.map((p) => p.text).join(" and ") + ", " + args.prompt;
+  g["31"].inputs.text = prefix + "2girls, on the left side: " + args.parts[0].text + ", on the right side: " + args.parts[1].text + ", " + args.prompt;
   for (const id of ["82", "92", "64", "101", "103"]) g[id].inputs.seed = seed;
   // 脸修常开；手修可选（false 时 Preview 直接接脸修输出、手修段不进执行链）
   if (args.handRepair === false) {
