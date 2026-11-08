@@ -13,15 +13,14 @@ import { ComfyBusy, ComfyExecutionFailed, runComfy } from "./comfy.ts";
 interface DrawArgs {
   prompt: string;
   preset?: "default" | "hsr" | "secret";
-  highres?: boolean;
-  width?: number;
-  height?: number;
-  cfg?: number;
-  seed?: number;
+  ratio?: keyof typeof RATIO_SIZES;
   ref?: string;
-  strength?: number;
 }
 
+const RATIO_SIZES = {
+  "1:1": [896, 896], "3:4": [768, 1024], "4:3": [1024, 768],
+  "2:3": [768, 1152], "3:2": [1152, 768], "9:16": [576, 1024], "16:9": [1024, 576],
+} as const;
 type RoundState = { round: unknown; pending: boolean; submitted: boolean; used: boolean };
 const rounds = new Map<string, RoundState>();
 const REF_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic", ".heif"]);
@@ -30,7 +29,7 @@ const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration {
   const root = resolve(deps.mediaRoot);
   const realRoot = (() => { try { return realpathSync(root); } catch { return root; } })();
-  const prepareRef = (raw: string, requested?: number): { png: Buffer; strength: number } => {
+  const prepareRef = (raw: string): { png: Buffer; strength: number } => {
     const ref = raw.trim().replace(/^\[|\]$/g, "");
     const full = resolve(root, ref);
     const rel = relative(root, full).split(sep).join("/");
@@ -44,11 +43,9 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
     if (!st.isFile()) throw err(deps.prompts.messages["draw_ref_missing"]);
     if (!REF_EXTS.has(extname(full).toLowerCase())) throw err(deps.prompts.messages["draw_ref_type"]);
     if (st.size > 20 * 1024 * 1024) throw err(deps.prompts.messages["draw_ref_big"]);
-    const strength = requested ?? 0.45;
-    if (!Number.isFinite(strength) || strength < 0.1 || strength > 0.9) throw new Error(deps.prompts.messages["draw_strength"] ?? "draw_strength");
     const png = normalizeInitImage(real);
     if (!png) throw err(deps.prompts.messages["draw_ref_broken"]);
-    return { png, strength };
+    return { png, strength: 0.45 };
   };
 
   return defineTool({
@@ -63,20 +60,19 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const positive = args.prompt.trim();
       if (!positive || positive.length > 1000) throw new Error(deps.prompts.messages["draw_prompt"] ?? "draw_prompt");
       if (!deps.comfyUrl) throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
-      const width = args.width ?? 768;
-      const height = args.height ?? 1024;
-      const validSide = (n: number) => Number.isInteger(n) && n >= 512 && n <= 1536 && n % 16 === 0;
-      if (!validSide(width) || !validSide(height) || width * height > 1024 * 1024 || (args.cfg !== undefined && (!Number.isFinite(args.cfg) || args.cfg < 1 || args.cfg > 7)) || (args.seed !== undefined && (!Number.isInteger(args.seed) || args.seed < 0 || args.seed > 0xffffffff))) throw new Error(deps.prompts.messages["draw_parameters"] ?? "draw_parameters");
+      const ratio = args.ratio ?? "3:4";
+      if (typeof ratio !== "string" || !Object.hasOwn(RATIO_SIZES, ratio)) throw new Error(deps.prompts.messages["draw_ratio"] ?? "draw_ratio");
+      const [width, height] = RATIO_SIZES[ratio];
       if (round === undefined) throw new Error(deps.prompts.messages["draw_round_missing"] ?? "draw_round_missing");
       const previous = rounds.get(api.conversationId);
       if (previous?.pending) throw new Error(deps.prompts.messages["draw_inflight"] ?? "draw_inflight");
       if (previous?.round === round && previous.used) throw new Error(deps.prompts.messages["draw_used"] ?? "draw_used");
       if (previous?.round === round && previous.submitted) throw new Error(deps.prompts.messages["draw_uncertain"] ?? "draw_uncertain");
-      const ref = args.ref !== undefined ? prepareRef(args.ref, args.strength) : undefined;
+      const ref = args.ref !== undefined ? prepareRef(args.ref) : undefined;
       const state: RoundState = { round, pending: true, submitted: false, used: false };
       rounds.set(api.conversationId, state);
       try {
-        const png = await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, highres: args.highres, width, height, cfg: args.cfg, seed: args.seed, ref, bypass: deps.bypassOf?.(round) }, () => { state.submitted = true; });
+        const png = await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, width, height, ref, bypass: deps.bypassOf?.(round) }, () => { state.submitted = true; });
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
         const file = `${Date.now()}-${randomUUID()}.png`;

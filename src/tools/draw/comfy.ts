@@ -14,7 +14,6 @@ export interface ComfyDraw {
   prompt: string;
   bypass?: string;
   preset?: "default" | "hsr" | "secret";
-  highres?: boolean;
   width?: number;
   height?: number;
   cfg?: number;

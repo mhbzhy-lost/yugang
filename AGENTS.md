@@ -26,7 +26,7 @@
 `draw` 使用 Windows ComfyUI 的固定 V8 API 工作流（`src/tools/draw/workflow.json`，SHA-256 固定校验），
 通过 `COMFYUI_URL` 指向 macmini 的 `127.0.0.1:18190` SSH 隧道；不接受模型传入工作流、节点、模型名或地址。
 文生图按初采样 → 手部修复 → RealESRGAN anime_6B 2 倍超分 → 二次采样 → 人脸修复 → `PreviewImage` 输出；
-`highres` 为兼容旧调用保留，文生图和改图默认已是 2 倍。`hsr` 用固定 LoRA 权重 0.7 经 28→52 层映射，
+文生图可选受控 `ratio`，默认 3:4；改图沿用参考图比例（尺寸对齐可能略有偏差）。文生图和改图默认均为 2 倍。`hsr` 用固定 LoRA 权重 0.7 经 28→52 层映射，
 效果需人工确认；`ref` 是整图重绘，不是蒙版局部编辑，同样默认使用 RealESRGAN 2 倍超分与二次采样。图片通过 `type=temp` 取回本地 `gen/`，
 Windows 输入上传限定 `yugang-ref-<uuid>.png`；计划任务 `Yugang-ComfyUI-RefCleanup` 使用
 `scripts/comfy-ref-cleanup.ps1` 的对应副本，每小时在登录用户会话中尝试清理 24 小时以上专用文件，
