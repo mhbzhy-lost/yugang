@@ -52,8 +52,8 @@ export interface RecentChatMessage {
 export interface BurstMessage extends RecentChatMessage {
   mentionsBot: boolean;
   replyIds: readonly string[];
-  /** 宿主绑在这一条上的 opaque 载荷（例如 bypass 段），flush 时取锚点那份。 */
-  payload?: string;
+  /** 宿主绑在这一条上的 opaque 载荷（bypass 段剥离结果对象，含 stash/pstash），flush 时取锚点那份。 */
+  payload?: { stash: string; pstash?: string } | string;
 }
 
 export type DebounceTimer = ReturnType<typeof setTimeout>;
@@ -303,10 +303,10 @@ export function backgroundFor(
  * 整组里最近一条非空载荷（bypass 段）：它可能落在中间（画图指令后面又跟了两句普通闲聊），
  * 只取最后一条会当成没有指令，整个 draw 就静默失效了。
  */
-export function lastPayload(burst: readonly BurstMessage[]): string | undefined {
+export function lastPayload(burst: readonly BurstMessage[]): { stash: string; pstash?: string } | string | undefined {
   for (let index = burst.length - 1; index >= 0; index -= 1) {
     const payload = burst[index].payload;
-    if (payload !== undefined && payload.length > 0) return payload;
+    if (payload !== undefined && (typeof payload === "string" ? payload.length > 0 : payload.stash.length > 0)) return payload;
   }
   return undefined;
 }

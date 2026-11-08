@@ -1063,7 +1063,11 @@ export async function submitRound(input: {
       });
       // 重耗时工具的机械提示要落回本轮会话：登记轮的会话，settle 的 finally 里删
       roundConv.set(String(submission.id), conv);
-      if (input.bypass !== undefined) bypassOf.set(String(submission.id), { bypass: input.bypass.stash || undefined, pbypass: input.bypass.pstash });
+      if (input.bypass !== undefined) {
+        // 三条提交路径可能传 string（旧形态）或对象（含 stash/pstash），统一归一
+        const bp = typeof input.bypass === "string" ? { stash: input.bypass } : input.bypass;
+        bypassOf.set(String(submission.id), { bypass: bp.stash || undefined, pbypass: bp.pstash });
+      }
       // 零出口轮观测：本轮出口计数清零登记，与 triggerOf 同生命周期（见下方 finally）
       sayCalled.set(String(submission.id), 0);
 
@@ -2455,7 +2459,7 @@ export const privateChatStage: Middleware<MessageCtx> = async (ctx, next) => {
     // 回复链：本轮触发本身是在回复某条消息，鱼的回应应引用触发那条
     reply: (msg.replyIds?.length ?? 0) > 0,
     mustAnswer: MUST_ANSWER_REASONS.has(ctx.decision!.reason),
-    ...(ctx.bypass ? { bypass: ctx.bypass.stash } : {}),
+    ...(ctx.bypass ? { bypass: ctx.bypass } : {}),
     memory: { inbound: memoryInbound, speakers },
   });
 };
