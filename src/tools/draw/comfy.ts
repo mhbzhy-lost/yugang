@@ -134,7 +134,7 @@ export function makeMultiSceneGraph(args: MultiDraw): Graph {
     // 分割链：YOLO 检测 → SEGS 裁切 → SAM 分实例
     "200": { class_type: "UltralyticsDetectorProvider", inputs: { model_name: "bbox/person_yolov8m.pt" } },
     "201": { class_type: "SAMLoader", inputs: { model_name: "sam_vit_b_01ec64.pth", device_mode: "AUTO" } },
-    "202": { class_type: "BboxDetectorSEGS", inputs: { bbox_detector: ["200", 0], image: ["34", 0], threshold: 0.5, dilation: 10, crop_factor: 3, drop_size: 10, labels: "" } },
+    "202": { class_type: "BboxDetectorSEGS", inputs: { bbox_detector: ["200", 0], image: ["34", 0], threshold: 0.35, dilation: 10, crop_factor: 3, drop_size: 10, labels: "" } },
     "203": { class_type: "SAMDetectorSegmented", inputs: { sam_model: ["201", 0], segs: ["202", 0], image: ["34", 0], detection_hint: "center-1", dilation: 0, threshold: 0.93, bbox_expansion: 0, mask_hint_threshold: 0.7, mask_hint_use_negative: "False" } },
     "204": { class_type: "MaskToImage", inputs: { mask: ["203", 0] } },
     "205": { class_type: "PreviewImage", inputs: { images: ["204", 0] } }, // combined mask（调试用，不消费）
@@ -474,9 +474,19 @@ async function runMultiJob(url: string, args: MultiDraw, onSubmitted: () => void
   const clientId = randomUUID();
   const deadline = Date.now() + 560_000;
   // ── 阶段一：构图 + 分实例分割，取回构图底图与逐实例 mask ──
-  const sceneId = randomUUID();
+  // 空检测兑底：构图未画出可检出人形时 SAM 节点会 None 崩（Impact 对 0 SEGS 的缺陷），
+  // 换 seed 重构图一次（2026-11-09 线上事故修复；仍失败则按失败路径返回）。
+  let sceneId = randomUUID();
   onSubmitted();
-  const sceneJob = await submitAndWait(base, makeMultiSceneGraph(args), sceneId, clientId, deadline - 240_000);
+  let sceneJob;
+  try {
+    sceneJob = await submitAndWait(base, makeMultiSceneGraph(args), sceneId, clientId, deadline - 240_000);
+  } catch (error) {
+    if (!(error instanceof ComfyExecutionFailed)) throw error;
+    console.error("[fish] multi scene retry: no detectable person, re-compose");
+    sceneId = randomUUID();
+    sceneJob = await submitAndWait(base, makeMultiSceneGraph({ ...args, seed: (args.seed ?? 0) + 1 + randomBytes(2).readUInt16BE() }), sceneId, clientId, deadline - 240_000);
+  }
   const composition = await fetchOutputImage(base, sceneJob, "208");
   const batchImages = sceneJob.outputs?.["207"]?.images;
   if (!Array.isArray(batchImages) || batchImages.length < 1) throw new ComfyExecutionFailed("multi segmentation failed");
