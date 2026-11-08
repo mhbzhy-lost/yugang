@@ -179,8 +179,9 @@ export function makeMultiGraph(args: MultiDraw, inputs: { image: string; maskLef
       g[encId].inputs.clip = [loraId, 1];
     }
   });
-  // 收尾：人数学语义（2girls 融合 + 接缝过渡）
-  g["67"] = { class_type: "CLIPTextEncode", inputs: { text: prefix + "2girls, " + args.prompt, clip: ["2", 0] } };
+  // 收尾段：与构图段同款正向（2girls+两人描述+场景）——特征锚点天然在，
+  // 收尾重绘不漂移；上游按 TOOL.md 规范写 prompt（场景不含人物词），无需去重技巧。
+  g["67"] = { class_type: "CLIPTextEncode", inputs: { text: String(g["31"].inputs.text), clip: ["2", 0] } };
   g["64"].inputs.positive = ["67", 0];
   return g;
 }
