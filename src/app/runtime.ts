@@ -395,6 +395,8 @@ const roundConv = new Map<string, Conversation>();
 // 轮内去重：roundId → 本轮已发过提示的工具集合，「同轮同工具只发一次」在这里保证；
 // 与 roundConv 同生命周期，settle 的 finally 里整份删。
 const workingSent = new Map<string, Set<string>>();
+/** draw 阶段进度机械提示的去重表：round → 已发阶段（sketch/refine）。 */
+const drawStageSent = new Map<string, Set<"sketch" | "refine">>();
 // 窗口键（chatKey\0发送者）→ 本组是否有「必答」放行（private/mentioned）。
 // gate 逐条放行时累积，flushBurst 整组消费并清掉：正文兜底只补必答轮——环境轮（free_pass）
 // 零 say_* 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
@@ -565,6 +567,25 @@ export async function bootRuntime(): Promise<void> {
     void fish.enqueue(conv.id, payload)
       .then(() => drainLoop())
       .catch((error: unknown) => console.error("[fish] working drain failed", error instanceof Error ? error.message : error));
+  },
+  // draw 阶段进度机械提示（不过模型）：comfy ws 的阶段事件回调，sketch=初采样完成、
+  // refine=二次采样完成。与 onLongWork 同款：轮类型闸、同轮同阶段只发一次、
+  // 幂等键 stage:draw:<round>:<stage>、入队后立即冲 outbox；失败只打日志不影响出图。
+  onDrawStage: (round, stage) => {
+    const key = String(round);
+    const conv = round === undefined || round === null ? undefined : roundConv.get(key);
+    const text = stage === "sketch"
+      ? (fish.prompts.messages["draw_stage_sketch"] ?? "")
+      : (fish.prompts.messages["draw_stage_refine"] ?? "");
+    if (!key || conv === undefined || !text) return;
+    if (!shouldSendWorkingReceipt(triggerOf.get(key)?.kind, "draw")) return;
+    const sent = drawStageSent.get(key);
+    if (sent?.has(stage)) return;
+    if (sent) sent.add(stage);
+    else drawStageSent.set(key, new Set([stage]));
+    void fish.enqueue(conv.id, { items: [text], at: Date.now(), key: `stage:draw:${key}:${stage}` })
+      .then(() => drainLoop())
+      .catch((error: unknown) => console.error("[fish] draw stage send failed", error instanceof Error ? error.message : error));
   },
   // watch 的号码校验：从会话映射回群号，再拉全量成员（不要 limit，要能校验到每个人）
   onWatchChanged: (conversationId, people) => {

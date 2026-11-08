@@ -176,6 +176,10 @@ export interface ToolPackageDeps {
    * restart 会 await 返回的 Promise，保证提示在进程退出前先入队并冲一次 outbox。
    */
   onLongWork?: (tool: string, submissionId: unknown) => void | Promise<void>;
+  /** draw 阶段进度机械提示（不过模型）：初采样完成（sketch）与二次采样完成（refine）两个节点回调，
+   *  宿主经 outbox 发拟人文案（prompt/messages.md 的 draw_stage_*），幂等键 stage:draw:<round>:<stage>；
+   *  缺省时不发（ws 不可用/测试环境），不影响出图。 */
+  onDrawStage?: (roundId: unknown, stage: "sketch" | "refine") => void;
   /** 表情包跨轮冷却（毫秒）；给函数是每次现取。 */
   memeCooldownMs?: number | (() => number);
   /** fish.reminder 任务定义（宿主装配时注入）：remind 工具 add 时建任务用；缺省不注册该工具。 */

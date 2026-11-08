@@ -53,6 +53,7 @@ export async function installToolSurface(base: FishBase): Promise<ToolSurfacePar
     ...(options.silentOf ? { silentOf: options.silentOf } : {}),
     ...(options.onSayCall ? { onSayCall: options.onSayCall } : {}),
     ...(options.onLongWork ? { onLongWork: options.onLongWork } : {}),
+    ...(options.onDrawStage ? { onDrawStage: options.onDrawStage } : {}),
     ...(options.memeCooldownMs !== undefined ? { memeCooldownMs: options.memeCooldownMs } : {}),
     ...(options.reminderTask ? { reminderTask: options.reminderTask } : {}),
     ...(options.inlineVisionOn ? { inlineVisionOn: options.inlineVisionOn } : {}),

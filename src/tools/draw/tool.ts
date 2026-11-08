@@ -8,7 +8,7 @@ import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-d
 import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { ComfyBusy, ComfyExecutionFailed, runComfy, type ComfyDraw } from "./comfy.ts";
+import { ComfyBusy, ComfyExecutionFailed, runComfy, type ComfyDraw, type DrawStage } from "./comfy.ts";
 
 interface DrawArgs {
   prompt: string;
@@ -100,7 +100,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const state: RoundState = { round, pending: true, submitted: false, used: false };
       rounds.set(api.conversationId, state);
       try {
-        const png = await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, width, height, handRepair: args.hand_repair, ref, lora, bypass: deps.bypassOf?.(round) }, () => { state.submitted = true; });
+        const png = await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, width, height, handRepair: args.hand_repair, ref, lora, bypass: deps.bypassOf?.(round) }, () => { state.submitted = true; }, deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined);
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
         const file = `${Date.now()}-${randomUUID()}.png`;

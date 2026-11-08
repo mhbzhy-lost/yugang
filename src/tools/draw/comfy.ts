@@ -74,6 +74,46 @@ export class ComfyExecutionFailed extends Error {}
 export class ComfyBusy extends Error {}
 let busy = false;
 
+/** draw 阶段进度（不过模型）：sketch=初采样完成、refine=二次采样完成；由 comfy ws 的 executing 事件驱动。 */
+export type DrawStage = "sketch" | "refine";
+
+/** 阶段状态机：实测事件序列（2026-11-08）——"7"初采样 → "43"/"42"手修（hand_repair=false 时直接"91"超分）
+ *  → "91"/"92"/"44"/"13" → "14"二次采样 → "8"/"11"脸修 → "9"输出。
+ *  进入初采样后首批节点（sketch）与二次采样后首批节点（refine）时各汇报一次；乱序/未知节点忽略。 */
+function makeStageTracker(promptId: string, onStage: (stage: DrawStage) => void): (message: unknown) => void {
+  let stage = 0;
+  return (message) => {
+    if (typeof message !== "string") return; // 二进制预览帧忽略
+    try {
+      const event = JSON.parse(message) as { type?: string; data?: { node?: string | null; prompt_id?: string } };
+      if (event.type !== "executing" || event.data?.prompt_id !== promptId) return;
+      const node = event.data?.node;
+      if (typeof node !== "string") return;
+      if (stage < 1 && (node === "43" || node === "42" || node === "91")) {
+        stage = 1;
+        onStage("sketch");
+      } else if (stage < 2 && (node === "8" || node === "11")) {
+        stage = 2;
+        onStage("refine");
+      }
+    } catch { /* 非 JSON 帧忽略 */ }
+  };
+}
+
+/** 连 comfy ws 订阅本任务事件；开不了/断了都静默降级（进度提示可选，不影响出图）。 */
+function openStageSocket(base: string, clientId: string, promptId: string, onStage: (stage: DrawStage) => void): { close: () => void } {
+  try {
+    const ws = new WebSocket(`${base.replace("http", "ws")}/ws?clientId=${clientId}`);
+    ws.binaryType = "arraybuffer";
+    const onMessage = makeStageTracker(promptId, onStage);
+    ws.addEventListener("message", (event) => onMessage((event as MessageEvent).data));
+    ws.addEventListener("error", () => {});
+    return { close: () => { try { ws.close(); } catch { /* already closed */ } } };
+  } catch {
+    return { close: () => {} };
+  }
+}
+
 async function request(url: string, init: RequestInit = {}, timeout = 10_000): Promise<Response> {
   const res = await fetch(url, { ...init, redirect: "error", signal: AbortSignal.timeout(timeout) });
   if (!res.ok) throw new Error(`ComfyUI HTTP ${res.status}`);
@@ -101,14 +141,14 @@ async function imageBytes(response: Response): Promise<Buffer> {
 }
 
 /** onSubmitted is called before the POST: a network failure cannot prove it was not accepted. */
-export async function runComfy(url: string, args: ComfyDraw, onSubmitted: () => void): Promise<Buffer> {
+export async function runComfy(url: string, args: ComfyDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void): Promise<Buffer> {
   if (busy) throw new ComfyBusy("ComfyUI busy");
   busy = true;
-  try { return await runComfyJob(url, args, onSubmitted); }
+  try { return await runComfyJob(url, args, onSubmitted, onStage); }
   finally { busy = false; }
 }
 
-async function runComfyJob(url: string, args: ComfyDraw, onSubmitted: () => void): Promise<Buffer> {
+async function runComfyJob(url: string, args: ComfyDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void): Promise<Buffer> {
   const base = comfyUrl(url);
   const queue = await (await request(`${base}/queue`)).json() as { queue_running?: unknown[]; queue_pending?: unknown[] };
   if (!Array.isArray(queue.queue_running) || !Array.isArray(queue.queue_pending)) throw new Error("invalid ComfyUI queue");
@@ -125,8 +165,11 @@ async function runComfyJob(url: string, args: ComfyDraw, onSubmitted: () => void
   }
   const graph = makeGraph(args, name);
   const id = randomUUID();
+  const clientId = randomUUID();
+  const stageSocket = onStage ? openStageSocket(base, clientId, id, onStage) : undefined;
+  try {
   onSubmitted();
-  const response = await fetch(`${base}/prompt`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt: graph, prompt_id: id, client_id: randomUUID() }), redirect: "error", signal: AbortSignal.timeout(15_000) });
+  const response = await fetch(`${base}/prompt`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt: graph, prompt_id: id, client_id: clientId }), redirect: "error", signal: AbortSignal.timeout(15_000) });
   if (response.status >= 400 && response.status < 500) throw new ComfyExecutionFailed(`ComfyUI rejected request (HTTP ${response.status})`);
   if (!response.ok) throw new Error(`ComfyUI HTTP ${response.status}`);
   const submitted = await response.json() as { prompt_id?: string };
@@ -147,4 +190,7 @@ async function runComfyJob(url: string, args: ComfyDraw, onSubmitted: () => void
     await pause(1500);
   }
   throw new Error("ComfyUI history timeout");
+  } finally {
+    stageSocket?.close();
+  }
 }

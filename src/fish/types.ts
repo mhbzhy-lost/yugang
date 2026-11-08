@@ -130,6 +130,8 @@ export interface FishOptions {
   onSayCall?: (roundId: unknown) => void;
   /** 重耗时工具 execute 入口的宿主回调：本轮第一次调用时发「正在执行」机械提示；restart 会 await 返回的 Promise。 */
   onLongWork?: (tool: string, submissionId: unknown) => void | Promise<void>;
+  /** draw 阶段进度机械提示（不过模型）：sketch=初采样完成、refine=二次采样完成；宿主经 outbox 立即发出。 */
+  onDrawStage?: (roundId: unknown, stage: "sketch" | "refine") => void;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费，轮结束失效。 */
   bypassOf?: (roundId: unknown) => string | undefined;
   /** 每个群的工作目录根；实际 cwd 是 <workspaceRoot>/<groupKey>。 */
