@@ -19,6 +19,6 @@
   "draw_lora_weight": "LoRA 强度要在 0.4–1.1 之间（默认 0.8）；调到范围内再试",
   "draw_characters_conflict": "character 和 characters 只能传一个：单角色用 character，双人用 characters",
   "draw_characters_count": "characters 必须恰好两项（数组顺序=左右）；调整人数后重试",
-  "draw_multi_unsupported": "双人同框不支持画风预设（preset）、改图（ref）和角色 LoRA（character/lora_weight）；去掉后再试",
+  "draw_multi_unsupported": "双人同框不支持画风预设（preset）和改图（ref）；去掉后再试",
   "draw_multi_sides": "双角色同框要在 characters 的两项里分别写 description"
 }

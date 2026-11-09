@@ -46,16 +46,21 @@
         "type": "number",
         "minimum": 0.4,
         "maximum": 1.1,
-        "description": "角色 LoRA 强度：0.4–1.1，默认 0.8。角色不够像就调高，脸崩或画面被污染就调低；只在单人传了 character 时有意义"
+        "description": "角色 LoRA 强度：0.4–1.1，默认 0.8。角色不够像就调高，脸崩或画面被污染就调低；传了 character 或 characters[].character 时有意义"
       },
       "characters": {
         "type": "array",
         "items": {
           "type": "object",
           "properties": {
+            "character": {
+              "type": "string",
+              "enum": ["claude", "deepseek", "qwen", "glm", "kimi", "gpt", "gemini", "grok"],
+              "description": "AI 娘角色；填了自动挂该角色的 RS 区域 LoRA 并注入官方外观，不填表示普通人物"
+            },
             "description": {
               "type": "string",
-              "description": "此人的外貌、动作、表情和服装；两人各写一项，顺序为左、右"
+              "description": "此人的动作、表情和服装；普通人物还需描述外貌"
             }
           },
           "required": ["description"],
@@ -63,7 +68,7 @@
         },
         "minItems": 2,
         "maxItems": 2,
-        "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项，顺序为左、右；每项只写 description。双人固定走 RS 区域生成，不挂角色 LoRA，宿主自动保证公共提示以 2girls 开头。与单人 character 互斥，双人不支持 preset 和改图"
+        "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项，顺序为左、右；每项写 description，可选 character 自动挂 AI 娘 LoRA。双人固定走 RS 区域生成，宿主自动保证公共提示以 2girls 开头。与单人 character 互斥，双人不支持 preset 和改图"
       },
       "hand_repair": {
         "type": "boolean",

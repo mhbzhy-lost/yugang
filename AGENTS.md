@@ -37,7 +37,8 @@ ComfyUI 忙或队列状态不可用时不删除，不触碰其他 input。部署
 （0.4/0.6, 0.5）给两人独立提示，公共提示机械保证以 `2girls` 开头，`RSMultiCharacterSampler`
 一次完成 30 步初始生成（seed 每次提交前随机），
 之后 AnimeSharp 2 倍超分、低强度全图采样（16 步 / 0.30）与脸修（20 步 / 0.25）；**不做手修**。
-双人请求不挂角色 LoRA、不做 YOLO/SAM 分割、没有 Impact 回退分支；`characters` 每项只有 description。
+双人请求可在 `characters[].character` 挂各自的角色 LoRA（映射到 `RSMultiCharacterPrompts` 的
+`characterN_lora` 字段），不做 YOLO/SAM 分割、没有 Impact 回退分支。
 `hand_repair` 只作用于单人图。
 
 **入口只注册**（2026-11-05）：`src/index.ts` 不写任何业务逻辑，只有 `app.use(...)`

@@ -11,7 +11,7 @@ const TEMPLATE = JSON.parse(GRAPH_BYTES.toString("utf8")) as Graph;
 if (TEMPLATE["1"]?.inputs.unet_name !== "DeltaMix 3.8B V8.safetensors" || TEMPLATE["9"]?.class_type !== "PreviewImage") throw new Error("draw workflow contract mismatch");
 
 // ── 双人管线（独立模板，与单人管线互不影响）──
-const RS_WORKFLOW_HASH = "439c5e77ade8ffa5a824908aefe7a6560b2429611ddb4d804e81419616742e8a";
+const RS_WORKFLOW_HASH = "fcbd6e8011b7721753a487a49116075f10db72eb92b62d53208a0a697b13682a";
 const RS_BYTES = readFileSync(new URL("./workflow-rs.json", import.meta.url));
 if (createHash("sha256").update(RS_BYTES).digest("hex") !== RS_WORKFLOW_HASH) throw new Error("draw RS workflow hash mismatch");
 const RS_TEMPLATE = JSON.parse(RS_BYTES.toString("utf8")) as Graph;
@@ -80,6 +80,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
 
 export interface MultiPart {
   text: string;
+  role?: { file: string; weight: number; tags: string };
 }
 export interface MultiDraw {
   prompt: string;
@@ -104,18 +105,30 @@ function validateMulti(args: MultiDraw): void {
   if (!args.prompt || args.prompt.length > 1000) throw new Error("invalid multi prompt");
   for (const p of args.parts) {
     if (!p.text || p.text.length > 800) throw new Error("invalid multi part text");
+    if (p.role !== undefined && (!/^[\w .@()-]+\.safetensors$/.test(p.role.file) || !Number.isFinite(p.role.weight) || p.role.weight < 0.4 || p.role.weight > 1.1)) throw new Error("invalid multi role");
   }
 }
 
+function multiRoleTags(part: MultiPart): string {
+  return (part.role?.tags ?? "").split(",").map((tag) => tag.trim()).filter((tag) => tag && !/^(?:1girl|solo)$/i.test(tag)).join(", ");
+}
+
 function multiSceneText(args: MultiDraw): string {
-  return String(TEMPLATE["4"].inputs.text) + "2girls, on the left side: " + args.parts[0].text + ", on the right side: " + args.parts[1].text + ", " + args.prompt + (args.bypass ? ", " + args.bypass : "");
+  const describe = (part: MultiPart) => [multiRoleTags(part), part.text].filter(Boolean).join(", ");
+  return String(TEMPLATE["4"].inputs.text) + "2girls, on the left side: " + describe(args.parts[0]) + ", on the right side: " + describe(args.parts[1]) + ", " + args.prompt + (args.bypass ? ", " + args.bypass : "");
 }
 
 /** 双人唯一管线：RS 点位独立提示 → AnimeSharp → 低强度二次采样 → 脸修。 */
 export function makeRsGraph(args: MultiDraw): Graph {
   validateMulti(args);
   const g = structuredClone(RS_TEMPLATE);
-  for (let i = 0; i < 2; i++) g["4"].inputs[`character${i + 1}`] = [args.parts[i].text, args.pbypass].filter(Boolean).join(", ");
+  for (let i = 0; i < 2; i++) {
+    const part = args.parts[i];
+    g["4"].inputs[`character${i + 1}`] = [multiRoleTags(part), part.text, args.pbypass].filter(Boolean).join(", ");
+    g["4"].inputs[`character${i + 1}_lora`] = part.role?.file ?? "None";
+    g["4"].inputs[`character${i + 1}_lora_strength`] = part.role?.weight ?? 1;
+    g["4"].inputs[`character${i + 1}_lora_clip_strength`] = part.role?.weight ?? 1;
+  }
   const seed = args.seed ?? randomBytes(4).readUInt32BE();
   const postSeed = randomBytes(4).readUInt32BE();
   const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;
