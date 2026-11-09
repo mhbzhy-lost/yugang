@@ -17,6 +17,11 @@ const MULTI_BYTES = readFileSync(new URL("./workflow-multi.json", import.meta.ur
 if (createHash("sha256").update(MULTI_BYTES).digest("hex") !== MULTI_WORKFLOW_HASH) throw new Error("draw multi workflow hash mismatch");
 const MULTI_TEMPLATE = JSON.parse(MULTI_BYTES.toString("utf8")) as Graph;
 if (MULTI_TEMPLATE["89"]?.class_type !== "SetLatentNoiseMask" || MULTI_TEMPLATE["82"]?.class_type !== "KSampler" || MULTI_TEMPLATE["61"]?.class_type !== "ImageUpscaleWithModel" || MULTI_TEMPLATE["86"]?.class_type !== "LoadImage" || MULTI_TEMPLATE["97"]?.class_type !== "LoadImage" || MULTI_TEMPLATE["78"]?.class_type !== "LoadImage") throw new Error("draw multi workflow contract mismatch");
+const IMPACT_WORKFLOW_HASH = "f35a6aa42a32ece9eaf9e1ad2ba47a65605b8a6ceda0cc992238152dbb04fc18";
+const IMPACT_BYTES = readFileSync(new URL("./workflow-impact.json", import.meta.url));
+if (createHash("sha256").update(IMPACT_BYTES).digest("hex") !== IMPACT_WORKFLOW_HASH) throw new Error("draw impact workflow hash mismatch");
+const IMPACT_TEMPLATE = JSON.parse(IMPACT_BYTES.toString("utf8")) as Graph;
+if (IMPACT_TEMPLATE["75"]?.class_type !== "RegionalSampler" || IMPACT_TEMPLATE["66"]?.class_type !== "PreviewImage" || IMPACT_TEMPLATE["101"]?.class_type !== "FaceDetailer") throw new Error("draw impact workflow contract mismatch");
 
 export interface ComfyDraw {
   prompt: string;
@@ -89,7 +94,7 @@ export interface MultiDraw {
   height: number;
   seed?: number;
   parts: MultiPart[];
-  /** 手修可选（脸修常开）：false 跳过手部段，语义与单管线 hand_repair 一致。 */
+  /** 双人区域采样不执行手修；保留字段以兼容调用方。 */
   handRepair?: boolean;
   /** 场景级 bypass（bypass: 段）：附加到构图与收尾段末尾。 */
   bypass?: string;
@@ -97,7 +102,7 @@ export interface MultiDraw {
   pbypass?: string;
 }
 
-/** 多角色段的 LoRA 注入位固定用 70-73（v3 窄幅拼贴拓扑，段节点 80-99）。 */
+/** 角色 LoRA 始终从同一个基础模型分叉。 */
 
 function multiLoraNode(file: string, weight: number): Node {
   return { class_type: "AnimaLoRARemapTagLoader", inputs: { model: ["1", 0], clip: ["2", 0], text: `<lora:${file}:${weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
@@ -107,7 +112,6 @@ const MAX_IMAGE = 25 * 1024 * 1024;
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** 多角色 mask 形状模式：region=三直边+曲分界线（人物完整归属+自侧背景过渡）；silhouette=仅人物形状膨胀 24px。 */
 /** 重绘 mask 形状：silhouette=实例形状膨胀 24px（region 曲分界方案实测有 bug 已移除）。 */
 export type MaskShape = "silhouette";
 
@@ -122,17 +126,25 @@ function validateMulti(args: MultiDraw): void {
   }
 }
 
-/** 阶段一 graph：2girls 构图 30 步 + person YOLO + SAM 分实例分割（拓扑 2026-11 真机验证）。 */
+function multiRoleTags(part: MultiPart): string {
+  return (part.role?.tags ?? "").split(",").map((tag) => tag.trim()).filter((tag) => tag && !/^(?:1girl|solo)$/i.test(tag)).join(", ");
+}
+
+function multiSceneText(args: MultiDraw): string {
+  const describe = (part: MultiPart) => [multiRoleTags(part), part.text].filter(Boolean).join(", ");
+  return String(TEMPLATE["4"].inputs.text) + "2girls, on the left side: " + describe(args.parts[0]) + ", on the right side: " + describe(args.parts[1]) + ", " + args.prompt + (args.bypass ? ", " + args.bypass : "");
+}
+
+/** 阶段一 graph：构图 30 步 + YOLO + SAM 分实例。 */
 export function makeMultiSceneGraph(args: MultiDraw): Graph {
   validateMulti(args);
   const seed = args.seed ?? randomBytes(4).readUInt32BE();
-  const prefix = String(TEMPLATE["4"].inputs.text);
   return {
     "1": structuredClone(MULTI_TEMPLATE["1"]),
     "2": structuredClone(MULTI_TEMPLATE["2"]),
     "3": structuredClone(MULTI_TEMPLATE["3"]),
     "30": { class_type: "EmptySD3LatentImage", inputs: { width: args.width, height: args.height, batch_size: 1 } },
-    "31": { class_type: "CLIPTextEncode", inputs: { text: prefix + "2girls, on the left side: " + args.parts[0].text + ", on the right side: " + args.parts[1].text + ", " + args.prompt + (args.bypass ? ", " + args.bypass : ""), clip: ["2", 0] } },
+    "31": { class_type: "CLIPTextEncode", inputs: { text: multiSceneText(args), clip: ["2", 0] } },
     "32": { class_type: "CLIPTextEncode", inputs: { text: String(TEMPLATE["5"].inputs.text), clip: ["2", 0] } },
     "33": { class_type: "KSampler", inputs: { seed, steps: 30, cfg: 4.5, sampler_name: "dpmpp_2m", scheduler: "sgm_uniform", denoise: 1, model: ["1", 0], positive: ["31", 0], negative: ["32", 0], latent_image: ["30", 0] } },
     "34": { class_type: "VAEDecode", inputs: { samples: ["33", 0], vae: ["3", 0] } },
@@ -150,45 +162,30 @@ export function makeMultiSceneGraph(args: MultiDraw): Graph {
   };
 }
 
-/** 阶段二 graph：上传底图 + 双 mask 回注（LoadImage MASK=1-alpha，mask 由宿主生成）。 */
+/** 阶段二 graph：独立 LoRA 区域采样、超分与脸修。 */
 export function makeMultiGraph(args: MultiDraw, inputs: { image: string; maskLeft: string; maskRight: string }): Graph {
   validateMulti(args);
   if (!/^yugang-ref-[a-f0-9-]{36}\.png$/.test(inputs.image) || !/^yugang-ref-[a-f0-9-]{36}\.png$/.test(inputs.maskLeft) || !/^yugang-ref-[a-f0-9-]{36}\.png$/.test(inputs.maskRight)) throw new Error("invalid multi input name");
-  const g = structuredClone(MULTI_TEMPLATE);
+  const g = structuredClone(IMPACT_TEMPLATE);
   const seed = args.seed ?? randomBytes(4).readUInt32BE();
   const prefix = String(TEMPLATE["4"].inputs.text);
-  // 阶段一独立提交，构图节点 30/33/34 不在阶段二执行链上——直接删除免得被预拉取
-  delete g["30"];
-  delete g["33"];
-  delete g["34"];
-  g["31"].inputs.text = prefix + "2girls, on the left side: " + args.parts[0].text + ", on the right side: " + args.parts[1].text + ", " + args.prompt + (args.bypass ? ", " + args.bypass : "");
-  for (const id of ["82", "92", "64", "101", "103"]) g[id].inputs.seed = seed;
-  // 脸修常开；手修可选（false 时 Preview 直接接脸修输出、手修段不进执行链）
-  if (args.handRepair === false) {
-    g["66"].inputs.images = ["101", 0];
-    delete g["102"];
-    delete g["103"];
-  }
-  g["78"].inputs.image = inputs.image;
-  g["86"].inputs.image = inputs.maskLeft;   // 左区 mask（A）
-  g["97"].inputs.image = inputs.maskRight;  // 右区 mask（B）
-  // 两个分区段：局部重绘各自半区，人数词用 1girl（局部对象明确；另一人已由构图轮定位、
-  // mask 冻结保护，不构成语义冲突）、LoRA 条件注入
-  const segs: Array<[string, string]> = [["81", "82"], ["91", "92"]];
-  segs.forEach(([encId, ksId], i) => {
+  for (const id of ["75", "64", "101"]) g[id].inputs.seed = seed;
+  g["30"].inputs.image = inputs.image;
+  g["70"].inputs.image = inputs.maskLeft;
+  g["71"].inputs.image = inputs.maskRight;
+  g["32"].inputs.text = String(TEMPLATE["5"].inputs.text);
+  g["40"].inputs.text = multiSceneText(args);
+  const segs: Array<[string, string, string]> = [["41", "53", "50"], ["42", "54", "51"]];
+  segs.forEach(([encId, pipeId, loraId], i) => {
     const part = args.parts[i];
-    g[encId].inputs.text = prefix + (part.role ? part.role.tags + ", " : "") + part.text + ", " + args.prompt + (args.pbypass ? ", " + args.pbypass : "");
+    g[encId].inputs.text = prefix + [multiRoleTags(part), part.text, "2girls", args.prompt, args.bypass, args.pbypass].filter(Boolean).join(", ");
     if (part.role) {
-      const loraId = String(70 + i);
       g[loraId] = multiLoraNode(part.role.file, part.role.weight);
-      g[ksId].inputs.model = [loraId, 0];
       g[encId].inputs.clip = [loraId, 1];
+      g[pipeId].inputs.model = [loraId, 0];
+      g[pipeId].inputs.clip = [loraId, 1];
     }
   });
-  // 收尾段：与构图段同款正向（2girls+两人描述+场景）——特征锚点天然在，
-  // 收尾重绘不漂移；上游按 TOOL.md 规范写 prompt（场景不含人物词），无需去重技巧。
-  g["67"] = { class_type: "CLIPTextEncode", inputs: { text: String(g["31"].inputs.text), clip: ["2", 0] } };
-  g["64"].inputs.positive = ["67", 0];
   return g;
 }
 
@@ -375,7 +372,7 @@ async function runComfyJob(url: string, args: ComfyDraw, onSubmitted: () => void
   }
 }
 
-/** 多角色阶段追踪（v6 真局部重绘）：场景完成="34"、角色1完成=进入段B"90"/"91"、收尾融合="60"/"61"。 */
+/** 多角色阶段追踪：区域采样完成后进入超分，再进入脸修。 */
 function makeMultiStageTracker(promptId: string, onStage: (stage: DrawStage) => void): (message: unknown) => void {
   let stage = 0;
   return (message) => {
@@ -385,9 +382,8 @@ function makeMultiStageTracker(promptId: string, onStage: (stage: DrawStage) => 
       if (event.type !== "executing" || event.data?.prompt_id !== promptId) return;
       const node = event.data?.node;
       if (typeof node !== "string") return;
-      if (stage < 1 && node === "34") { stage = 1; onStage("multi-scene"); }
-      else if (stage < 2 && (node === "90" || node === "91")) { stage = 2; onStage("multi-first"); }
-      else if (stage < 3 && (node === "60" || node === "61")) { stage = 3; onStage("multi-second"); }
+      if (stage < 1 && node === "61") { stage = 1; onStage("multi-first"); }
+      else if (stage < 2 && node === "101") { stage = 2; onStage("multi-second"); }
     } catch { /* ignore */ }
   };
 }
@@ -406,6 +402,8 @@ async function submitAndWait(base: string, graph: Graph, promptId: string, clien
   const response = await fetch(`${base}/prompt`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt: graph, prompt_id: promptId, client_id: clientId }), redirect: "error", signal: AbortSignal.timeout(15_000) });
   if (response.status >= 400 && response.status < 500) throw new ComfyExecutionFailed(`ComfyUI rejected request (HTTP ${response.status})`);
   if (!response.ok) throw new Error(`ComfyUI HTTP ${response.status}`);
+  const submitted = await response.json() as { prompt_id?: string };
+  if (submitted.prompt_id !== promptId) throw new Error("unexpected ComfyUI prompt id");
   while (Date.now() < deadline) {
     const history = await (await request(`${base}/history/${promptId}`)).json() as Record<string, ComfyHistoryJob>;
     const job = history[promptId];
@@ -448,81 +446,39 @@ async function runMultiJob(url: string, args: MultiDraw, onSubmitted: () => void
   if (queue.queue_running.length || queue.queue_pending.length) throw new ComfyBusy("ComfyUI busy");
   const clientId = randomUUID();
   const deadline = Date.now() + 560_000;
-  // ── 阶段一：构图 + 分实例分割，取回构图底图与逐实例 mask ──
-  // 空检测兑底：构图未画出可检出人形时 SAM 节点会 None 崩（Impact 对 0 SEGS 的缺陷），
-  // 换 seed 重构图一次（2026-11-09 线上事故修复；仍失败则按失败路径返回）。
-  // 两类概率性失败都纳入重试：graph 执行错（空检测节点崩）与「执行成功但实例<2」
-  // （构图未画出可分两人——躺姿/交叠场景检出不稳，重构图大概率改善）。
-  let sceneId = randomUUID();
+  const runArgs = { ...args, seed: args.seed ?? randomBytes(4).readUInt32BE() };
+  const sceneId = randomUUID();
   onSubmitted();
-  let sceneJob;
-  let retries = 0;
-  let composition: Buffer | undefined;
-  let binaries: ReturnType<typeof instanceBinary>[] = [];
-  // 阶段一循环：构图 + 分割 + 实例 decode + 质量校验，任何一环不达标都换 seed 重构图（最多 2 次）。
-  // 质量校验（2026-11-09 躺草地事故）：合并 blob（>40% 画布）/ 两人面积悬殊（>3 倍）/
-  // 质心不分立（<0.15 画宽）说明实例划分崩坏（COCO 模型对二次元躺姿域差距），重掷构图大概率恢复。
-  for (;;) {
-    try {
-      sceneJob = await submitAndWait(base, makeMultiSceneGraph(retries === 0 ? args : { ...args, seed: (args.seed ?? 0) + 1 + randomBytes(2).readUInt16BE() }), sceneId, clientId, deadline - 240_000);
-      const batch = sceneJob.outputs?.["207"]?.images;
-      if (!Array.isArray(batch) || batch.length < 2) throw new ComfyExecutionFailed("multi segmentation insufficient");
-      const comp = await fetchOutputImage(base, sceneJob, "208");
-      const decoded: Buffer[] = [];
-      for (const image of batch) {
-        if (image.type !== "temp" || !image.filename || !/^[A-Za-z0-9_.-]+\.png$/.test(image.filename) || image.subfolder) throw new Error("invalid ComfyUI output path");
-        const query = new URLSearchParams({ filename: image.filename, type: "temp", subfolder: "" });
-        decoded.push(await imageBytes(await request(`${base}/view?${query}`, {}, 30_000)));
-      }
-      const bins = decoded.map((buf) => instanceBinary(buf, args.width, args.height)).sort((a, b) => b.area - a.area);
-      const total = args.width * args.height;
-      const separation = Math.abs(bins[0].centroidX - bins[1].centroidX) / args.width;
-      if (bins[0].area > total * 0.4 || bins[0].area > bins[1].area * 3 || separation < 0.15) {
-        throw new ComfyExecutionFailed("multi segmentation quality");
-      }
-      composition = comp;
-      binaries = bins;
-      break;
-    } catch (error) {
-      if (!(error instanceof ComfyExecutionFailed) || retries >= 2 || Date.now() > deadline - 240_000) {
-        // 分割三连败的降级：直线对半切（两人紧挨同姿导致 segm 合 blob 的场景，
-        // 构图段方位句式已把左右定住，直线切是唯一可行方案），不再无限重构图。
-        if (error instanceof ComfyExecutionFailed && (error.message === "multi segmentation quality" || error.message === "multi segmentation insufficient")) {
-          console.error("[fish] multi segmentation degraded: split by center line");
-          const comp2 = await submitAndWait(base, makeMultiSceneGraph(retries === 0 ? args : { ...args, seed: (args.seed ?? 0) + 1 + randomBytes(2).readUInt16BE() }), sceneId, clientId, deadline - 240_000);
-          composition = await fetchOutputImage(base, comp2, "208");
-          // 直线 mask：左半全重绘 / 右半全重绘（宿主直接构造，不走分割链）
-          const left = new Uint8Array(args.width * args.height);
-          const right = new Uint8Array(args.width * args.height);
-          for (let y = 0; y < args.height; y++) {
-            for (let x = 0; x < args.width; x++) {
-              if (x < args.width / 2) left[y * args.width + x] = 1;
-              else right[y * args.width + x] = 1;
-            }
-          }
-          binaries = [
-            { bin: left, area: args.width * args.height / 2, centroidX: args.width * 0.25, centroidY: args.height / 2 },
-            { bin: right, area: args.width * args.height / 2, centroidX: args.width * 0.75, centroidY: args.height / 2 },
-          ];
-          break;
-        }
-        throw error;
-      }
-      retries += 1;
-      console.error(`[fish] multi scene retry #${retries}: segmentation failed/bad, re-compose`);
-      sceneId = randomUUID();
-    }
+  const sceneJob = await submitAndWait(base, makeMultiSceneGraph(runArgs), sceneId, clientId, deadline - 240_000);
+  const batch = sceneJob.outputs?.["207"]?.images;
+  if (!Array.isArray(batch) || batch.length < 2 || batch.length > 32) throw new ComfyExecutionFailed("multi segmentation insufficient");
+  const composition = await fetchOutputImage(base, sceneJob, "208");
+  const decoded: Buffer[] = [];
+  for (const image of batch) {
+    if (image.type !== "temp" || !image.filename || !/^[A-Za-z0-9_.-]+\.png$/.test(image.filename) || image.subfolder) throw new Error("invalid ComfyUI output path");
+    const query = new URLSearchParams({ filename: image.filename, type: "temp", subfolder: "" });
+    decoded.push(await imageBytes(await request(`${base}/view?${query}`, {}, 30_000)));
   }
-  if (!composition || binaries.length < 2) throw new ComfyExecutionFailed("multi segmentation failed");
-  const [first, second] = binaries;
+  const total = args.width * args.height;
+  const bins = decoded.map((buf) => instanceBinary(buf, args.width, args.height)).filter((item) => item.area >= total * 0.01 && item.area <= total * 0.4);
+  const pairs: Array<[ReturnType<typeof instanceBinary>, ReturnType<typeof instanceBinary>]> = [];
+  for (let i = 0; i < bins.length && pairs.length < 2; i++) for (let j = i + 1; j < bins.length && pairs.length < 2; j++) {
+    const a = bins[i], b = bins[j];
+    if (Math.max(a.area, b.area) > Math.min(a.area, b.area) * 3 || Math.abs(a.centroidX - b.centroidX) / args.width < 0.15) continue;
+    let overlap = 0;
+    for (let k = 0; k < total; k++) if (a.bin[k] && b.bin[k]) overlap++;
+    if (overlap <= Math.min(a.area, b.area) * 0.5) pairs.push([a, b]);
+  }
+  if (pairs.length !== 1) throw new ComfyExecutionFailed("multi segmentation ambiguous");
+  const [first, second] = pairs[0];
   const leftBin = first.centroidX <= second.centroidX ? first.bin : second.bin;
   const rightBin = first.centroidX <= second.centroidX ? second.bin : first.bin;
   const masks = buildMultiMasks(leftBin, rightBin, args.width, args.height, shape);
-  // ── 阶段二：上传底图 + 双 mask，分区精修 + 收尾超分 ──
+  // ── 阶段二：上传底图 + 双 mask，区域采样 + 收尾超分 ──
   const [imageName, maskLeft, maskRight] = await Promise.all([uploadInput(base, composition), uploadInput(base, masks[0]), uploadInput(base, masks[1])]);
   onStage?.("multi-scene");
   const refineId = randomUUID();
-  const graph = makeMultiGraph(args, { image: imageName, maskLeft, maskRight });
+  const graph = makeMultiGraph(runArgs, { image: imageName, maskLeft, maskRight });
   let stageSocket: { close: () => void } | undefined;
   if (onStage) {
     try {

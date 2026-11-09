@@ -48,36 +48,31 @@
         "maximum": 1.1,
         "description": "角色 LoRA 强度：0.4–1.1，默认 0.8。角色不够像就调高，脸崩或画面被污染就调低；只在传了 character/characters 时有意义"
       },
-      "left": {
-        "type": "string",
-        "description": "双角色同框时左侧角色的描述（danbooru tags：服装/发型/动作）；与 right 一起传才走双角色管线，AI 娘可再传 characters 自动挂官方外观"
-      },
-      "right": {
-        "type": "string",
-        "description": "双角色同框时右侧角色的描述；与 left 一起传才生效"
-      },
       "characters": {
         "type": "array",
         "items": {
-          "type": "string",
-          "enum": [
-            "claude",
-            "deepseek",
-            "qwen",
-            "glm",
-            "kimi",
-            "gpt",
-            "gemini",
-            "grok"
-          ]
+          "type": "object",
+          "properties": {
+            "character": {
+              "type": "string",
+              "enum": ["claude", "deepseek", "qwen", "glm", "kimi", "gpt", "gemini", "grok"],
+              "description": "AI 娘角色；不填表示普通人物"
+            },
+            "description": {
+              "type": "string",
+              "description": "此人的动作、表情和服装；普通人物还需描述外貌"
+            }
+          },
+          "required": ["description"],
+          "additionalProperties": false
         },
         "minItems": 2,
         "maxItems": 2,
-        "description": "AI 娘双人同框：恰好两人，数组顺序=左右，官方触发词/外观/头饰自动挂到对应侧；与 character 互斥，双角色不支持 preset 和改图"
+        "description": "双人同框：恰好两项，顺序为左、右；每项写 description，可选 character 自动挂 AI 娘 LoRA。与单人 character 互斥，双人不支持 preset 和改图"
       },
       "hand_repair": {
         "type": "boolean",
-        "description": "是否自动修复检测到的手，默认 true（开）；多角色场景手部易崩建议保持开启。用户明确要求不修时传 false，人脸修复与超分不变"
+        "description": "单人图是否自动修手，默认 true；双人图暂不进行手修，此参数对双人图不生效。人脸修复与超分不变"
       },
       "ref": {
         "type": "string",
