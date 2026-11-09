@@ -399,7 +399,7 @@ const roundConv = new Map<string, Conversation>();
 // 与 roundConv 同生命周期，settle 的 finally 里整份删。
 const workingSent = new Map<string, Set<string>>();
 /** draw 阶段进度机械提示的去重表：round → 已发阶段（单/多管线全部阶段）。 */
-const drawStageSent = new Map<string, Set<"sketch" | "refine" | "multi-scene" | "multi-first" | "multi-second">>();
+const drawStageSent = new Map<string, Set<"sketch" | "refine" | "multi-first" | "multi-second">>();
 // 窗口键（chatKey\0发送者）→ 本组是否有「必答」放行（private/mentioned）。
 // gate 逐条放行时累积，flushBurst 整组消费并清掉：正文兜底只补必答轮——环境轮（free_pass）
 // 零 say_* 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
@@ -581,11 +581,9 @@ export async function bootRuntime(): Promise<void> {
       ? (fish.prompts.messages["draw_stage_sketch"] ?? "")
       : stage === "refine"
         ? (fish.prompts.messages["draw_stage_refine"] ?? "")
-        : stage === "multi-scene"
-          ? (fish.prompts.messages["draw_stage_multi_scene"] ?? "")
-          : stage === "multi-first"
-            ? (fish.prompts.messages["draw_stage_multi_first"] ?? "")
-            : (fish.prompts.messages["draw_stage_multi_second"] ?? "");
+        : stage === "multi-first"
+          ? (fish.prompts.messages["draw_stage_multi_first"] ?? "")
+          : (fish.prompts.messages["draw_stage_multi_second"] ?? "");
     if (!key || conv === undefined || !text) return;
     if (!shouldSendWorkingReceipt(triggerOf.get(key)?.kind, "draw")) return;
     const sent = drawStageSent.get(key);

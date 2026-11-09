@@ -38,12 +38,10 @@ Kimi、千问、智谱狐娘这些 AI 拟人角色）时优先传 character 键�
 角色不够像用 lora_weight
 调高，脸崩或污染画面就调低（0.4–1.1，默认 0.8）。character 与 hsr 预设、改图
 ref 可以组合使用。
-双角色同框：prompt 写场景与全局氛围；characters 写恰好两项，顺序是左、右。
-每项的 description 写这个人的动作、表情和服装；普通人物还要描述外貌。AI 娘可在对应项
-填写 character，自动注入该角色的 LoRA 和基础外观。两人互动动作可以写在各人的描述或 prompt。
-例如：`characters: [{character: "deepseek", description: "sitting sideways, teasing a cat"}, {character: "claude", description: "holding cat food, looking at her"}]`。
-双角色不支持 preset 与 ref，耗时也更长（约两分钟），会分阶段播报进度。
-两个普通人物使用 RS 按左右区域生成；互动动作可同时写在 prompt 和各人的 description。复杂重叠可能出现人物重复或串色。
-含 AI 娘的双人图仍需从构图中可靠区分两人；遮挡严重或分割不明确时可能失败，不会自动把画面切半充当两个人物。
+双角色同框：prompt 写场景与全局氛围；characters 写恰好两项，每项只有 description，顺序是左、右。
+description 写此人的外貌、动作、表情和服装；两人互动动作可以写在各人的描述或 prompt。
+双人固定走 RS 区域生成，不挂角色 LoRA；要画 AI 娘同框，先用 tags 查官方 tag 和外观，把要点写进各自的 description，
+不要再传 character。双人不支持 preset 与 ref，耗时也更长（约两分钟），会分阶段播报进度。
+复杂重叠可能出现人物重复或串色。
 拿到 gen/ 引用后必须立刻把图发出去，只画不发等于白干。
 一轮最多画一次；确认提交失败不消耗次数，提交状态不明时本轮不能重试。

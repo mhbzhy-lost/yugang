@@ -1,6 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { decodePngRgba, encodeMaskPng } from "./png.ts";
 
 type Node = { class_type: string; inputs: Record<string, unknown> };
 type Graph = Record<string, Node>;
@@ -11,22 +10,12 @@ if (createHash("sha256").update(GRAPH_BYTES).digest("hex") !== WORKFLOW_HASH) th
 const TEMPLATE = JSON.parse(GRAPH_BYTES.toString("utf8")) as Graph;
 if (TEMPLATE["1"]?.inputs.unet_name !== "DeltaMix 3.8B V8.safetensors" || TEMPLATE["9"]?.class_type !== "PreviewImage") throw new Error("draw workflow contract mismatch");
 
-// ── 多角色管线（独立模板，与单管线互不影响）──
-const MULTI_WORKFLOW_HASH = "410761727d3643b10190119fb4a5d8e86446ba91091dcfda7bbaecf974df5596";
-const MULTI_BYTES = readFileSync(new URL("./workflow-multi.json", import.meta.url));
-if (createHash("sha256").update(MULTI_BYTES).digest("hex") !== MULTI_WORKFLOW_HASH) throw new Error("draw multi workflow hash mismatch");
-const MULTI_TEMPLATE = JSON.parse(MULTI_BYTES.toString("utf8")) as Graph;
-if (MULTI_TEMPLATE["89"]?.class_type !== "SetLatentNoiseMask" || MULTI_TEMPLATE["82"]?.class_type !== "KSampler" || MULTI_TEMPLATE["61"]?.class_type !== "ImageUpscaleWithModel" || MULTI_TEMPLATE["86"]?.class_type !== "LoadImage" || MULTI_TEMPLATE["97"]?.class_type !== "LoadImage" || MULTI_TEMPLATE["78"]?.class_type !== "LoadImage") throw new Error("draw multi workflow contract mismatch");
-const IMPACT_WORKFLOW_HASH = "f35a6aa42a32ece9eaf9e1ad2ba47a65605b8a6ceda0cc992238152dbb04fc18";
-const IMPACT_BYTES = readFileSync(new URL("./workflow-impact.json", import.meta.url));
-if (createHash("sha256").update(IMPACT_BYTES).digest("hex") !== IMPACT_WORKFLOW_HASH) throw new Error("draw impact workflow hash mismatch");
-const IMPACT_TEMPLATE = JSON.parse(IMPACT_BYTES.toString("utf8")) as Graph;
-if (IMPACT_TEMPLATE["75"]?.class_type !== "RegionalSampler" || IMPACT_TEMPLATE["66"]?.class_type !== "PreviewImage" || IMPACT_TEMPLATE["101"]?.class_type !== "FaceDetailer") throw new Error("draw impact workflow contract mismatch");
-const RS_WORKFLOW_HASH = "8e27a91aec756451a317d62b48f75ec20ad8c8f07b2737a7f798f623d9d7a18a";
+// ── 双人管线（独立模板，与单人管线互不影响）──
+const RS_WORKFLOW_HASH = "439c5e77ade8ffa5a824908aefe7a6560b2429611ddb4d804e81419616742e8a";
 const RS_BYTES = readFileSync(new URL("./workflow-rs.json", import.meta.url));
 if (createHash("sha256").update(RS_BYTES).digest("hex") !== RS_WORKFLOW_HASH) throw new Error("draw RS workflow hash mismatch");
 const RS_TEMPLATE = JSON.parse(RS_BYTES.toString("utf8")) as Graph;
-if (RS_TEMPLATE["4"]?.class_type !== "RSMultiCharacterPrompts" || RS_TEMPLATE["5"]?.class_type !== "RSMultiCharacterSampler") throw new Error("draw RS workflow contract mismatch");
+if (RS_TEMPLATE["4"]?.class_type !== "RSMultiCharacterPrompts" || RS_TEMPLATE["5"]?.class_type !== "RSMultiCharacterSampler" || RS_TEMPLATE["61"]?.class_type !== "ImageUpscaleWithModel" || RS_TEMPLATE["64"]?.class_type !== "KSampler" || RS_TEMPLATE["66"]?.class_type !== "PreviewImage" || RS_TEMPLATE["101"]?.class_type !== "FaceDetailer") throw new Error("draw RS workflow contract mismatch");
 
 export interface ComfyDraw {
   prompt: string;
@@ -87,11 +76,10 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   return graph;
 }
 
-// ── 多角色管线：分区重绘 + 像素合成（拓扑见 /tmp/draw-multi-survey.md，实测 2026-11-08）──
+// ── 双人管线：RS 点位分区一次成型，后接超分、二次采样和脸修 ──
 
 export interface MultiPart {
   text: string;
-  role?: { file: string; weight: number; tags: string };
 }
 export interface MultiDraw {
   prompt: string;
@@ -99,55 +87,34 @@ export interface MultiDraw {
   height: number;
   seed?: number;
   parts: MultiPart[];
-  /** 双人区域采样不执行手修；保留字段以兼容调用方。 */
-  handRepair?: boolean;
-  /** 场景级 bypass（bypass: 段）：附加到构图与收尾段末尾。 */
+  /** 场景级 bypass（bypass: 段）：附加到初始生成与收尾段末尾。 */
   bypass?: string;
-  /** 人物级 bypass（pbypass: 段）：附加到左右分区精修段末尾。 */
+  /** 人物级 bypass（pbypass: 段）：附加到两个人物的区域提示末尾。 */
   pbypass?: string;
-}
-
-/** 角色 LoRA 始终从同一个基础模型分叉。 */
-
-function multiLoraNode(file: string, weight: number): Node {
-  return { class_type: "AnimaLoRARemapTagLoader", inputs: { model: ["1", 0], clip: ["2", 0], text: `<lora:${file}:${weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
 }
 
 const MAX_IMAGE = 25 * 1024 * 1024;
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** 重绘 mask 形状：silhouette=实例形状膨胀 24px（region 曲分界方案实测有 bug 已移除）。 */
-export type MaskShape = "silhouette";
-
 function validateMulti(args: MultiDraw): void {
   const n = args.parts.length;
-  if (n !== 2) throw new Error("invalid multi parts count"); // 工具层限双人；N>2 分区克隆预留
+  if (n !== 2) throw new Error("invalid multi parts count");
   if (args.width < 512 || args.width > 1536 || args.height < 512 || args.height > 1536 || args.width % 2 !== 0) throw new Error("invalid multi size");
   if (!args.prompt || args.prompt.length > 1000) throw new Error("invalid multi prompt");
   for (const p of args.parts) {
     if (!p.text || p.text.length > 800) throw new Error("invalid multi part text");
-    if (p.role !== undefined && (!/^[\w .@()-]+\.safetensors$/.test(p.role.file) || !Number.isFinite(p.role.weight) || p.role.weight < 0.4 || p.role.weight > 1.1)) throw new Error("invalid multi role");
   }
 }
 
-function multiRoleTags(part: MultiPart): string {
-  return (part.role?.tags ?? "").split(",").map((tag) => tag.trim()).filter((tag) => tag && !/^(?:1girl|solo)$/i.test(tag)).join(", ");
-}
-
 function multiSceneText(args: MultiDraw): string {
-  const describe = (part: MultiPart) => [multiRoleTags(part), part.text].filter(Boolean).join(", ");
-  return String(TEMPLATE["4"].inputs.text) + "2girls, on the left side: " + describe(args.parts[0]) + ", on the right side: " + describe(args.parts[1]) + ", " + args.prompt + (args.bypass ? ", " + args.bypass : "");
+  return String(TEMPLATE["4"].inputs.text) + "2girls, on the left side: " + args.parts[0].text + ", on the right side: " + args.parts[1].text + ", " + args.prompt + (args.bypass ? ", " + args.bypass : "");
 }
 
-/** RS 双人纯 tag：点位区域独立提示，后接既有超分、二次采样和脸修。 */
+/** 双人唯一管线：RS 点位独立提示 → AnimeSharp → 低强度二次采样 → 脸修。 */
 export function makeRsGraph(args: MultiDraw): Graph {
   validateMulti(args);
-  if (args.parts.some((part) => part.role)) throw new Error("RS role LoRA not verified");
-  const g: Graph = {};
-  for (const id of ["1", "2", "3", "32", "40", "60", "61", "62", "63", "64", "65", "66", "100", "101"]) g[id] = structuredClone(IMPACT_TEMPLATE[id]);
-  g["4"] = structuredClone(RS_TEMPLATE["4"]);
-  g["5"] = structuredClone(RS_TEMPLATE["5"]);
+  const g = structuredClone(RS_TEMPLATE);
   for (let i = 0; i < 2; i++) g["4"].inputs[`character${i + 1}`] = [args.parts[i].text, args.pbypass].filter(Boolean).join(", ");
   const seed = args.seed ?? randomBytes(4).readUInt32BE();
   const postSeed = randomBytes(4).readUInt32BE();
@@ -160,124 +127,12 @@ export function makeRsGraph(args: MultiDraw): Graph {
   return g;
 }
 
-/** 阶段一 graph：构图 30 步 + YOLO + SAM 分实例。 */
-export function makeMultiSceneGraph(args: MultiDraw): Graph {
-  validateMulti(args);
-  const seed = args.seed ?? randomBytes(4).readUInt32BE();
-  return {
-    "1": structuredClone(MULTI_TEMPLATE["1"]),
-    "2": structuredClone(MULTI_TEMPLATE["2"]),
-    "3": structuredClone(MULTI_TEMPLATE["3"]),
-    "30": { class_type: "EmptySD3LatentImage", inputs: { width: args.width, height: args.height, batch_size: 1 } },
-    "31": { class_type: "CLIPTextEncode", inputs: { text: multiSceneText(args), clip: ["2", 0] } },
-    "32": { class_type: "CLIPTextEncode", inputs: { text: String(TEMPLATE["5"].inputs.text), clip: ["2", 0] } },
-    "33": { class_type: "KSampler", inputs: { seed, steps: 30, cfg: 4.5, sampler_name: "dpmpp_2m", scheduler: "sgm_uniform", denoise: 1, model: ["1", 0], positive: ["31", 0], negative: ["32", 0], latent_image: ["30", 0] } },
-    "34": { class_type: "VAEDecode", inputs: { samples: ["33", 0], vae: ["3", 0] } },
-    // 构图预览：阶段二上传的底图从这取回
-    "208": { class_type: "PreviewImage", inputs: { images: ["34", 0] } },
-    // 分割链：YOLO 检测 → SEGS 裁切 → SAM 分实例
-    "200": { class_type: "UltralyticsDetectorProvider", inputs: { model_name: "segm/yolov8x-seg.pt" } },
-    "201": { class_type: "SAMLoader", inputs: { model_name: "sam_vit_b_01ec64.pth", device_mode: "AUTO" } },
-    "202": { class_type: "SegmDetectorSEGS", inputs: { segm_detector: ["200", 1], image: ["34", 0], threshold: 0.35, dilation: 10, crop_factor: 3, drop_size: 10, labels: "" } },
-    "203": { class_type: "SAMDetectorSegmented", inputs: { sam_model: ["201", 0], segs: ["202", 0], image: ["34", 0], detection_hint: "center-1", dilation: 0, threshold: 0.93, bbox_expansion: 0, mask_hint_threshold: 0.7, mask_hint_use_negative: "False" } },
-    "204": { class_type: "MaskToImage", inputs: { mask: ["203", 0] } },
-    "205": { class_type: "PreviewImage", inputs: { images: ["204", 0] } }, // combined mask（调试用，不消费）
-    "206": { class_type: "MaskToImage", inputs: { mask: ["203", 1] } },
-    "207": { class_type: "PreviewImage", inputs: { images: ["206", 0] } }, // batch 每实例一张
-  };
-}
-
-/** 阶段二 graph：独立 LoRA 区域采样、超分与脸修。 */
-export function makeMultiGraph(args: MultiDraw, inputs: { image: string; maskLeft: string; maskRight: string }): Graph {
-  validateMulti(args);
-  if (!/^yugang-ref-[a-f0-9-]{36}\.png$/.test(inputs.image) || !/^yugang-ref-[a-f0-9-]{36}\.png$/.test(inputs.maskLeft) || !/^yugang-ref-[a-f0-9-]{36}\.png$/.test(inputs.maskRight)) throw new Error("invalid multi input name");
-  const g = structuredClone(IMPACT_TEMPLATE);
-  const seed = args.seed ?? randomBytes(4).readUInt32BE();
-  const prefix = String(TEMPLATE["4"].inputs.text);
-  for (const id of ["75", "64", "101"]) g[id].inputs.seed = seed;
-  g["30"].inputs.image = inputs.image;
-  g["70"].inputs.image = inputs.maskLeft;
-  g["71"].inputs.image = inputs.maskRight;
-  g["32"].inputs.text = String(TEMPLATE["5"].inputs.text);
-  g["40"].inputs.text = multiSceneText(args);
-  const segs: Array<[string, string, string]> = [["41", "53", "50"], ["42", "54", "51"]];
-  segs.forEach(([encId, pipeId, loraId], i) => {
-    const part = args.parts[i];
-    g[encId].inputs.text = prefix + [multiRoleTags(part), part.text, "2girls", args.prompt, args.bypass, args.pbypass].filter(Boolean).join(", ");
-    if (part.role) {
-      g[loraId] = multiLoraNode(part.role.file, part.role.weight);
-      g[encId].inputs.clip = [loraId, 1];
-      g[pipeId].inputs.model = [loraId, 0];
-      g[pipeId].inputs.clip = [loraId, 1];
-    }
-  });
-  return g;
-}
-
-// ── 宿主侧 mask 构造（v8：人物边界精确 mask）──
-
-/** 解码实例 mask 预览 PNG 为二值图（R 通道>127 为白），并算面积与质心 x。 */
-function instanceBinary(buf: Buffer, width: number, height: number): { bin: Uint8Array; area: number; centroidX: number } {
-  const img = decodePngRgba(buf);
-  if (img.width !== width || img.height !== height) throw new ComfyExecutionFailed("multi mask size mismatch");
-  const bin = new Uint8Array(width * height);
-  let area = 0;
-  let sx = 0;
-  for (let i = 0; i < width * height; i++) {
-    if (img.data[i * 4] > 127) {
-      bin[i] = 1;
-      area++;
-      sx += i % width;
-    }
-  }
-  return { bin, area, centroidX: area > 0 ? sx / area : 0 };
-}
-
-
-
-/** 方形膨胀（行+列两趟 max 滤波）：给人物边缘留过渡带。 */
-function dilateSquare(bin: Uint8Array, width: number, height: number, radius: number): Uint8Array {
-  const tmp = new Uint8Array(width * height);
-  for (let y = 0; y < height; y++) {
-    const row = y * width;
-    for (let x = 0; x < width; x++) {
-      if (tmp[row + x]) continue;
-      const lo = Math.max(0, x - radius);
-      const hi = Math.min(width - 1, x + radius);
-      let hit = 0;
-      for (let k = lo; k <= hi; k++) if (bin[row + k]) { hit = 1; break; }
-      if (hit) for (let k = lo; k <= hi; k++) tmp[row + k] = 1;
-    }
-  }
-  const out = new Uint8Array(width * height);
-  for (let x = 0; x < width; x++) {
-    for (let y = 0; y < height; y++) {
-      if (out[y * width + x]) continue;
-      const lo = Math.max(0, y - radius);
-      const hi = Math.min(height - 1, y + radius);
-      let hit = 0;
-      for (let k = lo; k <= hi; k++) if (tmp[k * width + x]) { hit = 1; break; }
-      if (hit) for (let k = lo; k <= hi; k++) out[k * width + x] = 1;
-    }
-  }
-  return out;
-}
-
-/** 由左右实例二值图构造两张重绘 mask PNG（顺序 [左A, 右B]，与 parts 对应）：
- *  实例形状膨胀 24px（给人物边缘留背景过渡带）。 */
-export function buildMultiMasks(left: Uint8Array, right: Uint8Array, width: number, height: number, _shape?: MaskShape): [Buffer, Buffer] {
-  const dl = dilateSquare(left, width, height, 24);
-  const dr = dilateSquare(right, width, height, 24);
-  return [encodeMaskPng(width, height, (x, y) => dl[y * width + x] === 1), encodeMaskPng(width, height, (x, y) => dr[y * width + x] === 1)];
-}
-
-
 export class ComfyExecutionFailed extends Error {}
 export class ComfyBusy extends Error {}
 let busy = false;
 
-/** draw 阶段进度（不过模型）：sketch/refine=单管线；multi-*=多角色管线三段。 */
-export type DrawStage = "sketch" | "refine" | "multi-scene" | "multi-first" | "multi-second";
+/** draw 阶段进度（不过模型）：sketch/refine=单管线；multi-*=双人 RS 管线两段。 */
+export type DrawStage = "sketch" | "refine" | "multi-first" | "multi-second";
 
 /** 阶段状态机：实测事件序列（2026-11-08）——"7"初采样 → "43"/"42"手修（hand_repair=false 时直接"91"超分）
  *  → "91"/"92"/"44"/"13" → "14"二次采样 → "8"/"11"脸修 → "9"输出。
@@ -424,16 +279,16 @@ function openMultiStageSocket(base: string, clientId: string, promptId: string, 
   } catch { return { close: () => {} }; }
 }
 
-export async function runMulti(url: string, args: MultiDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void, shape: MaskShape = "silhouette"): Promise<Buffer> {
+export async function runMulti(url: string, args: MultiDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void): Promise<Buffer> {
   if (busy) throw new ComfyBusy("ComfyUI busy");
   busy = true;
-  try { return await runMultiJob(url, args, onSubmitted, onStage, shape); }
+  try { return await runMultiJob(url, args, onSubmitted, onStage); }
   finally { busy = false; }
 }
 
 type ComfyHistoryJob = { status?: { status_str?: string; completed?: boolean }; outputs?: Record<string, { images?: Array<{ filename?: string; subfolder?: string; type?: string }> }> };
 
-/** 提交一个 graph 并轮询到成功（失败/超时抛错）；阶段一/二共用。 */
+/** 提交一个 graph 并轮询到成功（失败/超时抛错）。 */
 async function submitAndWait(base: string, graph: Graph, promptId: string, clientId: string, deadline: number): Promise<ComfyHistoryJob> {
   const response = await fetch(`${base}/prompt`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt: graph, prompt_id: promptId, client_id: clientId }), redirect: "error", signal: AbortSignal.timeout(15_000) });
   if (response.status >= 400 && response.status < 500) throw new ComfyExecutionFailed(`ComfyUI rejected request (HTTP ${response.status})`);
@@ -462,84 +317,18 @@ async function fetchOutputImage(base: string, job: ComfyHistoryJob, nodeId: stri
   return imageBytes(await request(`${base}/view?${query}`, {}, 30_000));
 }
 
-/** 上传一张 PNG 到 ComfyUI input 区（yugang-ref 前缀交给清理任务收尾）。 */
-async function uploadInput(base: string, png: Buffer): Promise<string> {
-  const name = `yugang-ref-${randomUUID()}.png`;
-  const form = new FormData();
-  form.set("image", new Blob([new Uint8Array(png)], { type: "image/png" }), name);
-  form.set("type", "input");
-  form.set("overwrite", "false");
-  const upload = await (await request(`${base}/upload/image`, { method: "POST", body: form }, 30_000)).json() as { name?: string; subfolder?: string; type?: string };
-  if (upload.name !== name || upload.subfolder || upload.type !== "input") throw new Error("unexpected ComfyUI upload path");
-  return name;
-}
-
-async function runMultiJob(url: string, args: MultiDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void, shape?: MaskShape): Promise<Buffer> {
+async function runMultiJob(url: string, args: MultiDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void): Promise<Buffer> {
   const base = comfyUrl(url);
-  // busy 与队列校验只做一次：两阶段是一个占用，阶段间不释放
   const queue = await (await request(`${base}/queue`)).json() as { queue_running?: unknown[]; queue_pending?: unknown[] };
   if (!Array.isArray(queue.queue_running) || !Array.isArray(queue.queue_pending)) throw new Error("invalid ComfyUI queue");
   if (queue.queue_running.length || queue.queue_pending.length) throw new ComfyBusy("ComfyUI busy");
+  const id = randomUUID();
   const clientId = randomUUID();
-  const deadline = Date.now() + 560_000;
-  if (args.parts.every((part) => !part.role)) {
-    const id = randomUUID();
-    const graph = makeRsGraph(args);
-    const socket = onStage ? openMultiStageSocket(base, clientId, id, onStage) : undefined;
-    try {
-      onSubmitted();
-      const job = await submitAndWait(base, graph, id, clientId, deadline);
-      return await fetchOutputImage(base, job, "66");
-    } finally { socket?.close(); }
-  }
-  const runArgs = { ...args, seed: args.seed ?? randomBytes(4).readUInt32BE() };
-  const sceneId = randomUUID();
-  onSubmitted();
-  const sceneJob = await submitAndWait(base, makeMultiSceneGraph(runArgs), sceneId, clientId, deadline - 240_000);
-  const batch = sceneJob.outputs?.["207"]?.images;
-  if (!Array.isArray(batch) || batch.length < 2 || batch.length > 32) throw new ComfyExecutionFailed("multi segmentation insufficient");
-  const composition = await fetchOutputImage(base, sceneJob, "208");
-  const decoded: Buffer[] = [];
-  for (const image of batch) {
-    if (image.type !== "temp" || !image.filename || !/^[A-Za-z0-9_.-]+\.png$/.test(image.filename) || image.subfolder) throw new Error("invalid ComfyUI output path");
-    const query = new URLSearchParams({ filename: image.filename, type: "temp", subfolder: "" });
-    decoded.push(await imageBytes(await request(`${base}/view?${query}`, {}, 30_000)));
-  }
-  const total = args.width * args.height;
-  const bins = decoded.map((buf) => instanceBinary(buf, args.width, args.height)).filter((item) => item.area >= total * 0.01 && item.area <= total * 0.4);
-  const pairs: Array<[ReturnType<typeof instanceBinary>, ReturnType<typeof instanceBinary>]> = [];
-  for (let i = 0; i < bins.length && pairs.length < 2; i++) for (let j = i + 1; j < bins.length && pairs.length < 2; j++) {
-    const a = bins[i], b = bins[j];
-    if (Math.max(a.area, b.area) > Math.min(a.area, b.area) * 3 || Math.abs(a.centroidX - b.centroidX) / args.width < 0.15) continue;
-    let overlap = 0;
-    for (let k = 0; k < total; k++) if (a.bin[k] && b.bin[k]) overlap++;
-    if (overlap <= Math.min(a.area, b.area) * 0.5) pairs.push([a, b]);
-  }
-  if (pairs.length !== 1) throw new ComfyExecutionFailed("multi segmentation ambiguous");
-  const [first, second] = pairs[0];
-  const leftBin = first.centroidX <= second.centroidX ? first.bin : second.bin;
-  const rightBin = first.centroidX <= second.centroidX ? second.bin : first.bin;
-  const masks = buildMultiMasks(leftBin, rightBin, args.width, args.height, shape);
-  // ── 阶段二：上传底图 + 双 mask，区域采样 + 收尾超分 ──
-  const [imageName, maskLeft, maskRight] = await Promise.all([uploadInput(base, composition), uploadInput(base, masks[0]), uploadInput(base, masks[1])]);
-  onStage?.("multi-scene");
-  const refineId = randomUUID();
-  const graph = makeMultiGraph(runArgs, { image: imageName, maskLeft, maskRight });
-  let stageSocket: { close: () => void } | undefined;
-  if (onStage) {
-    try {
-      const ws = new WebSocket(`${base.replace("http", "ws")}/ws?clientId=${clientId}`);
-      ws.binaryType = "arraybuffer";
-      const onMessage = makeMultiStageTracker(refineId, onStage);
-      ws.addEventListener("message", (event) => onMessage((event as MessageEvent).data));
-      ws.addEventListener("error", () => {});
-      stageSocket = { close: () => { try { ws.close(); } catch { /* already closed */ } } };
-    } catch { stageSocket = { close: () => {} }; }
-  }
+  const graph = makeRsGraph(args);
+  const socket = onStage ? openMultiStageSocket(base, clientId, id, onStage) : undefined;
   try {
-    const refineJob = await submitAndWait(base, graph, refineId, clientId, deadline);
-    return await fetchOutputImage(base, refineJob, "66");
-  } finally {
-    stageSocket?.close();
-  }
+    onSubmitted();
+    const job = await submitAndWait(base, graph, id, clientId, Date.now() + 560_000);
+    return await fetchOutputImage(base, job, "66");
+  } finally { socket?.close(); }
 }

@@ -105,7 +105,6 @@ working_meme_add: 正在把新表情收进柜子，一张张来
 working_restart: 我去重启一下，马上回来
 draw_stage_sketch: 线稿画好了，正在精修和放大，别急
 draw_stage_refine: 放大重绘完成，最后收拾一下细节
-draw_stage_multi_scene: 构图好了，开始一起画两个人
 draw_stage_multi_first: 人物画好了，开始放大细化
 draw_stage_multi_second: 放大细化好了，最后修一下脸
 
