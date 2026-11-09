@@ -15,6 +15,11 @@
       "eden (honkai impact)",
       "edenhi3"
     ],
+    "danbooru": [
+      "eden (golden diva) (honkai impact)",
+      "eden (honkai impact)",
+      "eden (golden diva)"
+    ],
     "sections": [
       {
         "title": "触发词 / 基础外观",
@@ -46,6 +51,14 @@
       "爱莉",
       "elysia (honkai impact)",
       "elysiahi3"
+    ],
+    "danbooru": [
+      "elysia (herrscher of human: ego) (honkai impact)",
+      "elysia (summer miss elf) (honkai impact)",
+      "elysia (hi love elf) (honkai impact)",
+      "elysia (herrscher of human: ego)",
+      "elysia (honkai impact)",
+      "elysia (hi love elf)"
     ],
     "sections": [
       {
@@ -98,6 +111,11 @@
       "cyrene (demiurge) (honkai: star rail)",
       "德谬歌"
     ],
+    "danbooru": [
+      "cyrene (demiurge) (honkai: star rail)",
+      "cyrene (honkai: star rail)",
+      "cyrene (demiurge)"
+    ],
     "sections": [
       {
         "title": "触发词 / 基础外观",
@@ -124,6 +142,10 @@
       "ripples of past reverie",
       "cyrene (ripples of past reverie)",
       "cyrene (ripples of past reverie) (honkai: star rail)"
+    ],
+    "danbooru": [
+      "cyrene (ripples of past reverie) (honkai: star rail)",
+      "cyrene (ripples of past reverie)"
     ],
     "sections": [
       {

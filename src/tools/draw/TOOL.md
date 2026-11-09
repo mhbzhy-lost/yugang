@@ -13,25 +13,33 @@ description: 本地 Stable Diffusion 画图/改图，快且免费；出图后必
 看不到图的内容就别猜原图长什么样。失败时把错误告诉用户、可以改描述重试，
 不要换别的工具、也不要假装画好了。用户点名云端/在线画图时不在此处。
 
-prompt 写画面本身。动漫图先查 tags 词表再拼；有官方设定的角色，先查官方 tag
-和变体 tag，选定后不要再手写该角色官方已有的发色、服装、体型，避免和设定
-打架；词表查不到就 search 该角色的人设，把要点拼进 prompt，不要凭印象编。
+## 先定角色，再写画面
+
+要画作品里的角色时，先查 tags（不传关键词会拿到平铺总表），把返回的 key 填进
+character；双人填 characters[].character。本工具不列角色清单，也不要自己拼 key。
+
+- 挂了 character：LoRA 和角色外观由工具注入。prompt 只写动作、表情、构图、场景和服装，
+  不要再写发色、瞳色、耳朵、头饰这些官方特征；也不要把角色 tag（比如
+  elysia_(honkai_impact)）写进 prompt —— 写了会被打回，要求你改用 key。
+- 没挂 character：画面里的人就是普通人，外貌要在 prompt 里写清楚。
+- 角色不在表里：别 search 人设硬凑成「某个角色」，按普通人物画，并告诉用户没有这个 LoRA。
+
+官方服装不会自动注入。想要某套衣服，查该角色的条目，把服装段抄进 prompt；想随便穿就不抄。
+
+## 画面与风格
+
+prompt 写画面本身，用 danbooru tag 为主；普通 tag（cat_ears 之类）查 tags 词表拿准写法和热度。
 负向词是内置的，别写「不要出现什么」。
 
-角色和画风都只走 tags：先用 tags 查（不传关键词会拿到平铺总表），
-拿到 key 再填。本工具不列角色/风格清单。
+style=<风格 key> 挂全局画风 LoRA，不改 prompt，可与 character、ref 组合；
+风格权重由词表定，lora_weight 只影响角色 LoRA（0.4–1.1，默认 0.8）。
 
-- character=<角色 key>：挂角色 LoRA，并自动注入该角色的触发词与基础外观。
-  画角色时只描述动作、表情、构图和服装，不要再写官方已有的外貌特征。
-  想要官方套装就先查 tags 抄服装段，想随便穿就不抄。lora_weight 调相似度：
-  不够像调高，脸崩或污染画面调低（0.4–1.1，默认 0.8）。
-- style=<风格 key>：挂全局风格 LoRA，不改 prompt；可与 character、ref 组合。
+## 双人
 
 双人同框必须传 characters，恰好两项，顺序左、右。每项写 description：
-普通人物写清外貌；有角色 key 的只写动作、表情、服装并可传 character。互动写在
-各自 description 或 prompt；prompt 只写场景和全局氛围，人数不用写。
-双人不能用顶层 character、style、ref，耗时约两分钟；复杂重叠可能出现
-人物重复或串色。
+挂了角色的只写动作、表情、服装；普通人写清外貌。互动写在各自 description 或 prompt；
+prompt 只写场景和全局氛围，人数不用写。双人不能用顶层 character、style、ref，
+耗时约两分钟；复杂重叠可能出现人物重复或串色。
 
 hand_repair 只对单人有效，默认关；用户明确要修手才传 true。双人固定不修手。
 

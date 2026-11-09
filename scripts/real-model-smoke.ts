@@ -761,16 +761,17 @@ try {
           }
           // ── S21 LoRA 词表 → draw 挂载（角色 key 必须来自 tags，不靠模型记忆）──
           case "s21": {
-            const r = await round("s21-lora", hostLine("小明", "100001", "想画一张爱莉希雅站在玫瑰园里。先把该查的查清楚，再画出来发出去。", { messageId: 5021 }), member(100001, 5021));
+            const r = await round("s21-lora", hostLine("小明", "100001", "画一张爱莉希雅站在玫瑰园里，画完发出来。", { messageId: 5021 }), member(100001, 5021));
             const tagsCalls = r.toolCalls.filter((c) => c.name === "tags");
             const drawCall = r.toolCalls.find((c) => c.name === "draw");
             const drawRes = r.toolResults.find((x) => x.name === "draw");
             const usesKey = drawCall ? /"character"\s*:\s*"elysia"/.test(drawCall.args) : false;
-            const ok = tagsCalls.length > 0 && usesKey && drawRes?.ok === true && r.newOutbox.length > 0;
+            const tagsInPrompt = drawCall ? /elysia[ _]?\\?\(/.test(drawCall.args) : false;
+            const ok = tagsCalls.length > 0 && usesKey && !tagsInPrompt && drawRes?.ok === true && r.newOutbox.length > 0;
             mark("s21", {
               status: ok ? "pass" : "fail",
               expected: "tags 查到角色 key → draw 传 character=elysia → 出图并发出",
-              observed: `seq=${seqOf(r)} tags=${tagsCalls.length} usesKey=${usesKey} drawOk=${drawRes?.ok} outbox=${r.newOutbox.length} drawArgs=${drawCall?.args.slice(0, 120) ?? ""}`,
+              observed: `seq=${seqOf(r)} tags=${tagsCalls.length} usesKey=${usesKey} tagsInPrompt=${tagsInPrompt} drawOk=${drawRes?.ok} outbox=${r.newOutbox.length} drawArgs=${drawCall?.args.slice(0, 120) ?? ""}`,
             });
             return;
           }

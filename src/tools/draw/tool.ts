@@ -8,7 +8,7 @@ import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-d
 import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { loraBook, styleBook } from "../characters.ts";
+import { detectCharacterTag, loraBook, styleBook } from "../characters.ts";
 import { ComfyBusy, ComfyExecutionFailed, runComfy, runMulti, type ComfyDraw, type DrawStage, type MultiPart } from "./comfy.ts";
 
 interface DrawArgs {
@@ -70,6 +70,13 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const ratio = args.ratio ?? "3:4";
       if (typeof ratio !== "string" || !Object.hasOwn(RATIO_SIZES, ratio)) throw new Error(deps.prompts.messages["draw_ratio"] ?? "draw_ratio");
       const [width, height] = RATIO_SIZES[ratio];
+      // 机械闸：画面里手写了表内角色 tag 却没挂对应 key，直接打回，避免出「不是这个 LoRA」的图。
+      if (args.character === undefined && args.characters === undefined) {
+        const hit = detectCharacterTag(positive);
+        if (hit) {
+          throw new Error(renderTemplate(deps.prompts.messages["draw_character_needed"] ?? "{{key}}", { name: hit.name, key: hit.key }));
+        }
+      }
       let lora: ComfyDraw["lora"];
       if (args.character !== undefined) {
         const book = loraBook(args.character);
@@ -93,9 +100,19 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         if (args.characters.some((part) => !part || typeof part !== "object" || typeof part.description !== "string" || !part.description.trim())) throw new Error(deps.prompts.messages["draw_multi_sides"] ?? "draw_multi_sides");
         const weight = args.lora_weight ?? 0.8;
         if (typeof weight !== "number" || !Number.isFinite(weight) || weight < LORA_WEIGHT_RANGE[0] || weight > LORA_WEIGHT_RANGE[1]) throw new Error(deps.prompts.messages["draw_lora_weight"] ?? "draw_lora_weight");
-        multiParts = args.characters.map((part) => {
+        multiParts = args.characters.map((part, index) => {
           const book = part.character === undefined ? undefined : loraBook(part.character);
           if (part.character !== undefined && !book) throw new Error(renderTemplate(deps.prompts.messages["draw_character"] ?? "{{key}}", { key: part.character }));
+          if (part.character === undefined) {
+            const hit = detectCharacterTag(part.description);
+            if (hit) {
+              throw new Error(renderTemplate(deps.prompts.messages["draw_character_needed_side"] ?? "{{key}}", {
+                side: index === 0 ? "左边" : "右边",
+                name: hit.name,
+                key: hit.key,
+              }));
+            }
+          }
           return { text: part.description.trim(), ...(book ? { role: { file: book.file, weight, inject: book.inject } } : {}) };
         });
       }

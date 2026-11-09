@@ -17,6 +17,15 @@ if (createHash("sha256").update(RS_BYTES).digest("hex") !== RS_WORKFLOW_HASH) th
 const RS_TEMPLATE = JSON.parse(RS_BYTES.toString("utf8")) as Graph;
 if (RS_TEMPLATE["4"]?.class_type !== "RSMultiCharacterPrompts" || RS_TEMPLATE["5"]?.class_type !== "RSMultiCharacterSampler" || RS_TEMPLATE["61"]?.class_type !== "ImageUpscaleWithModel" || RS_TEMPLATE["64"]?.class_type !== "KSampler" || RS_TEMPLATE["66"]?.class_type !== "PreviewImage" || RS_TEMPLATE["101"]?.class_type !== "FaceDetailer") throw new Error("draw RS workflow contract mismatch");
 
+/**
+ * ComfyUI 的 CLIPTextEncode 把半角括号当权重语法（`(xxx)` = 1.1）；
+ * 词表里的 danbooru tag 本身带括号（`elysia (honkai impact)`），注入前必须转义成 `\( \)`，
+ * 否则角色名会被拆成「带权重的短语」而不是字面 tag。只转义我们注入的部分，用户 prompt 不动。
+ */
+function escapeInjected(text: string): string {
+  return text.replace(/([()])/g, "\\$1");
+}
+
 export interface ComfyDraw {
   prompt: string;
   bypass?: string;
@@ -47,7 +56,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   graph["7"].inputs.cfg = args.cfg ?? 4.5;
   graph["6"].inputs.width = args.width ?? 912;
   graph["6"].inputs.height = args.height ?? 1216;
-  graph["4"].inputs.text = String(graph["4"].inputs.text) + (args.lora ? `${args.lora.inject}, ` : "") + args.prompt + (args.bypass ? `, ${args.bypass}` : "") + (args.bypassP ? `, ${args.bypassP}` : "");
+  graph["4"].inputs.text = String(graph["4"].inputs.text) + (args.lora ? `${escapeInjected(args.lora.inject)}, ` : "") + args.prompt + (args.bypass ? `, ${args.bypass}` : "") + (args.bypassP ? `, ${args.bypassP}` : "");
   if (args.style) {
     // 风格 LoRA：全局画风，挂在底模之后、角色 LoRA 之前（节点 88）。
     if (!/^[\w .@()-]+\.safetensors$/.test(args.style.file) || !Number.isFinite(args.style.weight) || args.style.weight < 0.4 || args.style.weight > 1.1) throw new Error("invalid draw style");
@@ -117,7 +126,7 @@ function multiRoleTags(part: MultiPart): string {
 }
 
 function multiSceneText(args: MultiDraw): string {
-  const describe = (part: MultiPart) => [multiRoleTags(part), part.text].filter(Boolean).join(", ");
+  const describe = (part: MultiPart) => [escapeInjected(multiRoleTags(part)), part.text].filter(Boolean).join(", ");
   return String(TEMPLATE["4"].inputs.text) + "2girls, on the left side: " + describe(args.parts[0]) + ", on the right side: " + describe(args.parts[1]) + ", " + args.prompt + (args.bypass ? ", " + args.bypass : "");
 }
 
@@ -127,7 +136,7 @@ export function makeRsGraph(args: MultiDraw): Graph {
   const g = structuredClone(RS_TEMPLATE);
   for (let i = 0; i < 2; i++) {
     const part = args.parts[i];
-    g["4"].inputs[`character${i + 1}`] = [multiRoleTags(part), part.text, args.pbypass].filter(Boolean).join(", ");
+    g["4"].inputs[`character${i + 1}`] = [escapeInjected(multiRoleTags(part)), part.text, args.pbypass].filter(Boolean).join(", ");
     g["4"].inputs[`character${i + 1}_lora`] = part.role?.file ?? "None";
     g["4"].inputs[`character${i + 1}_lora_strength`] = part.role?.weight ?? 1;
     g["4"].inputs[`character${i + 1}_lora_clip_strength`] = part.role?.weight ?? 1;
