@@ -4,11 +4,8 @@
     "properties": {
       "keyword": {
         "type": "string",
-        "description": "英文关键词或猜的 tag，会自动转下划线匹配"
+        "description": "英文 danbooru tag，或角色/风格名（中英文都行，如 elysia / 爱莉希雅 / 小昔涟 / hsr）。不填或填 lora 时列出全部 LoRA 总表（角色 + 风格混排），要挑 LoRA 就用这种方式"
       }
-    },
-    "required": [
-      "keyword"
-    ]
+    }
   }
 }

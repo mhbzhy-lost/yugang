@@ -18,19 +18,19 @@ prompt 写画面本身。动漫图先查 tags 词表再拼；有官方设定的�
 打架；词表查不到就 search 该角色的人设，把要点拼进 prompt，不要凭印象编。
 负向词是内置的，别写「不要出现什么」。
 
-preset 只有两种：default=通用动漫，hsr=星穹铁道画风。单人 character 可与
-preset、ref 组合。
+角色和画风都只走 tags：先用 tags 查（不传关键词会拿到平铺总表），
+拿到 key 再填。本工具不列角色/风格清单。
 
-画 AI 娘（克劳德、大肥鱼/鲸鱼娘、白龙娘、Gemini 猫娘、Grok 大小姐、
-Kimi、千问、智谱狐娘）传 character，自动注入官方外观；只描述动作、表情、
-构图和服装，不要再写官方已有的外貌特征。想要官方套装就先查 tags 抄服装段，
-想随便穿就不抄。lora_weight 调相似度：不够像调高，脸崩或污染画面调低
-（0.4–1.1，默认 0.8）。
+- character=<角色 key>：挂角色 LoRA，并自动注入该角色的触发词与基础外观。
+  画角色时只描述动作、表情、构图和服装，不要再写官方已有的外貌特征。
+  想要官方套装就先查 tags 抄服装段，想随便穿就不抄。lora_weight 调相似度：
+  不够像调高，脸崩或污染画面调低（0.4–1.1，默认 0.8）。
+- style=<风格 key>：挂全局风格 LoRA，不改 prompt；可与 character、ref 组合。
 
 双人同框必须传 characters，恰好两项，顺序左、右。每项写 description：
-普通人物写清外貌，AI 娘只写动作、表情、服装并可传 character。互动写在
+普通人物写清外貌；有角色 key 的只写动作、表情、服装并可传 character。互动写在
 各自 description 或 prompt；prompt 只写场景和全局氛围，人数不用写。
-双人不能用顶层 character、preset、ref，耗时约两分钟；复杂重叠可能出现
+双人不能用顶层 character、style、ref，耗时约两分钟；复杂重叠可能出现
 人物重复或串色。
 
 hand_repair 只对单人有效，默认关；用户明确要修手才传 true。双人固定不修手。

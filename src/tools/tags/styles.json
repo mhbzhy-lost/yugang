@@ -1,0 +1,23 @@
+[
+  {
+    "key": "hsr",
+    "group": "style",
+    "name": "崩坏星穹铁道画风",
+    "lora": "HSR Anima.safetensors",
+    "inject": "",
+    "weight": 0.7,
+    "base": "Anima",
+    "source": "",
+    "match": [
+      "hsr",
+      "崩铁",
+      "星铁",
+      "崩铁画风",
+      "星穹铁道",
+      "崩坏星穹铁道",
+      "honkai star rail",
+      "star rail style"
+    ],
+    "sections": []
+  }
+]

@@ -1,287 +1,296 @@
 [
- {
-  "key": "claude",
-  "name": "克劳德小姐（Claude 娘）",
-  "source": "claude_girl_anima_lora_clean",
-  "match": [
-   "claude",
-   "克劳德",
-   "claude girl",
-   "claude_girl"
-  ],
-  "sections": [
-   {
-    "title": "[Identity / 正面或三分之四视角]",
-    "tags": "claude_girl, orange hair, very long hair, wavy hair, bangs, orange eyes, hair flower, hair bow, black bow"
-   },
-   {
-    "title": "[Main outfit / 正面全身]",
-    "tags": "white dress, long dress, frills, long sleeves, puffy sleeves, capelet, corset, brooch, chain, tassel, white boots, lace-up boots"
-   },
-   {
-    "title": "[Main outfit / 正面腰上]",
-    "tags": "white dress, frills, long sleeves, puffy sleeves, capelet, corset, brooch, chain"
-   },
-   {
-    "title": "[Main outfit / 纯背面]",
-    "tags": "white dress, long dress, frills, long sleeves, puffy sleeves, capelet, tassel, white boots"
-   }
-  ]
- },
- {
-  "key": "deepseek",
-  "name": "鲸鱼娘（DeepSeek 娘）",
-  "source": "aigrilsV1.0",
-  "match": [
-   "deepseek",
-   "鲸鱼娘"
-  ],
-  "sections": [
-   {
-    "title": "触发词",
-    "tags": "aigirls, aigirls（deepseek）,"
-   },
-   {
-    "title": "基础外观（常规）",
-    "tags": "1girl, solo, blue hair, gradient hair, very long hair, wavy hair, ahoge, blue eyes, fins, cetacean tail, medium breasts,"
-   },
-   {
-    "title": "日常女仆装·头饰",
-    "tags": "maid headdress, blue ribbon,"
-   },
-   {
-    "title": "基础外观（Q版）",
-    "tags": "white blouse, frilled collar, black bowtie, blue gem, blue corset, buttons, white detached sleeves, maid apron, whale,"
-   },
-   {
-    "title": "Q版冬装·耳罩·头饰",
-    "tags": "earmuffs, snowflake hair ornament, blue ribbon hair bow,"
-   },
-   {
-    "title": "Q版冬装·鲸鱼帽·头饰",
-    "tags": "whale hood, whale, stuffed toy, fur trim,"
-   },
-   {
-    "title": "Q版冬装·鲸鱼帽·上身服装",
-    "tags": "striped scarf, winter dress, snowflakes, whale, pom pom (clothes),"
-   }
-  ]
- },
- {
-  "key": "qwen",
-  "name": "千问娘（Qwen 娘）",
-  "source": "aigrilsV1.0",
-  "match": [
-   "qwen",
-   "千问娘"
-  ],
-  "sections": [
-   {
-    "title": "触发词",
-    "tags": "aigirls, aigirls（qwen）,"
-   },
-   {
-    "title": "基础外观",
-    "tags": "1girl, solo, blue hair, purple hair, gradient hair, very long hair, single braid, purple eyes, medium breasts,"
-   },
-   {
-    "title": "头饰",
-    "tags": "mini hat, hat ornament, braid bow, blue tassel, gold earrings,"
-   },
-   {
-    "title": "上身服装",
-    "tags": "white mandarin collar shirt, china dress, chinese knot, blue purple shawl, wide sleeves, blue gem pendant, white gloves,"
-   },
-   {
-    "title": "下身服装",
-    "tags": "white long skirt, blue purple overskirt,"
-   }
-  ]
- },
- {
-  "key": "glm",
-  "name": "智谱娘（GLM 狐娘）",
-  "source": "aigrilsV1.0",
-  "match": [
-   "glm",
-   "智谱娘"
-  ],
-  "sections": [
-   {
-    "title": "触发词",
-    "tags": "aigirls, aigirls（glm）,"
-   },
-   {
-    "title": "基础外观",
-    "tags": "1girl, solo, black hair, very long hair, black eyes, fox ears, fox tail, small breasts,"
-   },
-   {
-    "title": "头饰",
-    "tags": "sleep mask, Z hair ornament, hair bell, white lace headdress, tassel,"
-   },
-   {
-    "title": "上身服装",
-    "tags": "white blouse, frilled sleeves, frilled collar, black ribbon, black corset, white gem, chain,"
-   },
-   {
-    "title": "下身服装",
-    "tags": "black long skirt, frills, white pleated skirt,"
-   }
-  ]
- },
- {
-  "key": "kimi",
-  "name": "月之暗面娘（Kimi 娘）",
-  "source": "aigrilsV1.0",
-  "match": [
-   "kimi",
-   "月之暗面娘"
-  ],
-  "sections": [
-   {
-    "title": "触发词",
-    "tags": "aigirls, aigirls（kimi）,"
-   },
-   {
-    "title": "基础外观",
-    "tags": "1girl, solo, white hair, light blue hair, gradient hair, very long hair, blue eyes, medium breasts,"
-   },
-   {
-    "title": "头饰",
-    "tags": "white frilled headdress, navy hair bow, silver crescent, rainbow triangle, musical note, K hair ornament,"
-   },
-   {
-    "title": "上身服装",
-    "tags": "white high-collar blouse, collar, K pendant, silver chain,"
-   },
-   {
-    "title": "下身服装",
-    "tags": "star print, cape, frilled skirt, rainbow, book pendant, flute,"
-   }
-  ]
- },
- {
-  "key": "gpt",
-  "name": "白龙娘（GPT 娘）",
-  "source": "aigrilsV1.0",
-  "match": [
-   "gpt",
-   "白龙娘"
-  ],
-  "sections": [
-   {
-    "title": "触发词",
-    "tags": "aigirls, aigirls（gpt）,"
-   },
-   {
-    "title": "基础外观",
-    "tags": "1girl, solo, white hair, very long hair, ahoge, purple eyes, dragon horns, dragon wings, dragon tail, scales, medium breasts,"
-   },
-   {
-    "title": "头饰",
-    "tags": "flower knot, tassel, earrings,"
-   },
-   {
-    "title": "上身服装",
-    "tags": "white dress, off shoulder, bare shoulders, flower knot, gem, detached sleeves,"
-   },
-   {
-    "title": "下身服装",
-    "tags": "long dress, side slit, frills,"
-   }
-  ]
- },
- {
-  "key": "claude_aigirls",
-  "name": "Anthropic 娘（Claude 合集版）",
-  "source": "aigrilsV1.0",
-  "match": [
-   "claude",
-   "Anthropic 娘"
-  ],
-  "sections": [
-   {
-    "title": "触发词",
-    "tags": "aigirls, aigirls（claude）,"
-   },
-   {
-    "title": "基础外观",
-    "tags": "1girl, solo, orange hair, red hair, very long hair, orange eyes, medium breasts,"
-   },
-   {
-    "title": "头饰",
-    "tags": "flower hair ornament, hair ribbon, tassel earrings,"
-   },
-   {
-    "title": "上身服装",
-    "tags": "white frilled blouse, collar, ascot, flower brooch, capelet, belt, gold chain, gold tassel, floral print,"
-   },
-   {
-    "title": "下身服装",
-    "tags": "white long skirt, black overskirt, orange overskirt, embroidery, frills,"
-   }
-  ]
- },
- {
-  "key": "gemini",
-  "name": "四角星猫耳娘（Gemini 娘）",
-  "source": "aigrilsV1.0",
-  "match": [
-   "gemini",
-   "四角星猫耳娘"
-  ],
-  "sections": [
-   {
-    "title": "触发词",
-    "tags": "aigirls, aigirls（gemini）,"
-   },
-   {
-    "title": "基础外观",
-    "tags": "1girl, solo, blue hair, purple hair, gradient hair, very long hair, hair bun, double bun, ahoge, heterochromia, red eyes, yellow eyes, cat ears, cat tail, small breasts,"
-   },
-   {
-    "title": "头饰",
-    "tags": "star hair ornament, star earrings,"
-   },
-   {
-    "title": "上身服装",
-    "tags": "crop top, star ornament, white wide sleeves, purple belt,"
-   },
-   {
-    "title": "下身服装",
-    "tags": "shorts, frills, star thigh strap,"
-   }
-  ]
- },
- {
-  "key": "grok",
-  "name": "吸血鬼大小姐（Grok 娘）",
-  "source": "aigrilsV1.0",
-  "match": [
-   "grok",
-   "吸血鬼大小姐"
-  ],
-  "sections": [
-   {
-    "title": "触发词",
-    "tags": "aigirls, aigirls（grok）,"
-   },
-   {
-    "title": "基础外观",
-    "tags": "1girl, solo, blonde hair, very long hair, twintails, ahoge, blue eyes, slit pupils, pointy ears, fangs, vampire, medium breasts,"
-   },
-   {
-    "title": "头饰",
-    "tags": "black crown, gold crescent, bat wings, black hair bow,"
-   },
-   {
-    "title": "上身服装",
-    "tags": "black dress, wine red high collar, black lace choker, off shoulder, gold chain,"
-   },
-   {
-    "title": "下身服装",
-    "tags": "high-low skirt, red lining, frills, thigh strap,"
-   }
-  ]
- }
+  {
+    "key": "claude",
+    "group": "aigirls",
+    "name": "克劳德小姐（Claude 娘）",
+    "lora": "claude_girl_anima_lora_clean.safetensors",
+    "inject": "claude_girl, orange hair, very long hair, wavy hair, bangs, orange eyes, hair flower, hair bow, black bow",
+    "weight": 0.8,
+    "base": "Anima",
+    "source": "",
+    "match": [
+      "claude",
+      "克劳德",
+      "claude girl",
+      "claude_girl"
+    ],
+    "sections": [
+      {
+        "title": "[Identity / 正面或三分之四视角]",
+        "tags": "claude_girl, orange hair, very long hair, wavy hair, bangs, orange eyes, hair flower, hair bow, black bow"
+      },
+      {
+        "title": "[Main outfit / 正面全身]",
+        "tags": "white dress, long dress, frills, long sleeves, puffy sleeves, capelet, corset, brooch, chain, tassel, white boots, lace-up boots"
+      },
+      {
+        "title": "[Main outfit / 正面腰上]",
+        "tags": "white dress, frills, long sleeves, puffy sleeves, capelet, corset, brooch, chain"
+      },
+      {
+        "title": "[Main outfit / 纯背面]",
+        "tags": "white dress, long dress, frills, long sleeves, puffy sleeves, capelet, tassel, white boots"
+      }
+    ]
+  },
+  {
+    "key": "deepseek",
+    "group": "aigirls",
+    "name": "鲸鱼娘（DeepSeek 娘）",
+    "lora": "aigrilsV1.0.safetensors",
+    "inject": "aigirls, aigirls（deepseek）, 1girl, solo, blue hair, gradient hair, very long hair, wavy hair, ahoge, blue eyes, fins, cetacean tail, maid headdress, blue ribbon",
+    "weight": 0.8,
+    "base": "Anima",
+    "source": "",
+    "match": [
+      "deepseek",
+      "鲸鱼娘"
+    ],
+    "sections": [
+      {
+        "title": "触发词",
+        "tags": "aigirls, aigirls（deepseek）,"
+      },
+      {
+        "title": "基础外观（常规）",
+        "tags": "1girl, solo, blue hair, gradient hair, very long hair, wavy hair, ahoge, blue eyes, fins, cetacean tail, medium breasts,"
+      },
+      {
+        "title": "日常女仆装·头饰",
+        "tags": "maid headdress, blue ribbon,"
+      },
+      {
+        "title": "基础外观（Q版）",
+        "tags": "white blouse, frilled collar, black bowtie, blue gem, blue corset, buttons, white detached sleeves, maid apron, whale,"
+      },
+      {
+        "title": "Q版冬装·耳罩·头饰",
+        "tags": "earmuffs, snowflake hair ornament, blue ribbon hair bow,"
+      },
+      {
+        "title": "Q版冬装·鲸鱼帽·头饰",
+        "tags": "whale hood, whale, stuffed toy, fur trim,"
+      },
+      {
+        "title": "Q版冬装·鲸鱼帽·上身服装",
+        "tags": "striped scarf, winter dress, snowflakes, whale, pom pom (clothes),"
+      }
+    ]
+  },
+  {
+    "key": "qwen",
+    "group": "aigirls",
+    "name": "千问娘（Qwen 娘）",
+    "lora": "aigrilsV1.0.safetensors",
+    "inject": "aigirls, aigirls（qwen）, 1girl, solo, blue hair, purple hair, gradient hair, very long hair, single braid, purple eyes, mini hat, hat ornament, braid bow, blue tassel, gold earrings",
+    "weight": 0.8,
+    "base": "Anima",
+    "source": "",
+    "match": [
+      "qwen",
+      "千问娘"
+    ],
+    "sections": [
+      {
+        "title": "触发词",
+        "tags": "aigirls, aigirls（qwen）,"
+      },
+      {
+        "title": "基础外观",
+        "tags": "1girl, solo, blue hair, purple hair, gradient hair, very long hair, single braid, purple eyes, medium breasts,"
+      },
+      {
+        "title": "头饰",
+        "tags": "mini hat, hat ornament, braid bow, blue tassel, gold earrings,"
+      },
+      {
+        "title": "上身服装",
+        "tags": "white mandarin collar shirt, china dress, chinese knot, blue purple shawl, wide sleeves, blue gem pendant, white gloves,"
+      },
+      {
+        "title": "下身服装",
+        "tags": "white long skirt, blue purple overskirt,"
+      }
+    ]
+  },
+  {
+    "key": "glm",
+    "group": "aigirls",
+    "name": "智谱娘（GLM 狐娘）",
+    "lora": "aigrilsV1.0.safetensors",
+    "inject": "aigirls, aigirls（glm）, 1girl, solo, black hair, very long hair, black eyes, fox ears, fox tail, sleep mask, Z hair ornament, hair bell, white lace headdress, tassel",
+    "weight": 0.8,
+    "base": "Anima",
+    "source": "",
+    "match": [
+      "glm",
+      "智谱娘"
+    ],
+    "sections": [
+      {
+        "title": "触发词",
+        "tags": "aigirls, aigirls（glm）,"
+      },
+      {
+        "title": "基础外观",
+        "tags": "1girl, solo, black hair, very long hair, black eyes, fox ears, fox tail, small breasts,"
+      },
+      {
+        "title": "头饰",
+        "tags": "sleep mask, Z hair ornament, hair bell, white lace headdress, tassel,"
+      },
+      {
+        "title": "上身服装",
+        "tags": "white blouse, frilled sleeves, frilled collar, black ribbon, black corset, white gem, chain,"
+      },
+      {
+        "title": "下身服装",
+        "tags": "black long skirt, frills, white pleated skirt,"
+      }
+    ]
+  },
+  {
+    "key": "kimi",
+    "group": "aigirls",
+    "name": "月之暗面娘（Kimi 娘）",
+    "lora": "aigrilsV1.0.safetensors",
+    "inject": "aigirls, aigirls（kimi）, 1girl, solo, white hair, light blue hair, gradient hair, very long hair, blue eyes, white frilled headdress, navy hair bow, silver crescent, rainbow triangle, musical note, K hair ornament",
+    "weight": 0.8,
+    "base": "Anima",
+    "source": "",
+    "match": [
+      "kimi",
+      "月之暗面娘"
+    ],
+    "sections": [
+      {
+        "title": "触发词",
+        "tags": "aigirls, aigirls（kimi）,"
+      },
+      {
+        "title": "基础外观",
+        "tags": "1girl, solo, white hair, light blue hair, gradient hair, very long hair, blue eyes, medium breasts,"
+      },
+      {
+        "title": "头饰",
+        "tags": "white frilled headdress, navy hair bow, silver crescent, rainbow triangle, musical note, K hair ornament,"
+      },
+      {
+        "title": "上身服装",
+        "tags": "white high-collar blouse, collar, K pendant, silver chain,"
+      },
+      {
+        "title": "下身服装",
+        "tags": "star print, cape, frilled skirt, rainbow, book pendant, flute,"
+      }
+    ]
+  },
+  {
+    "key": "gpt",
+    "group": "aigirls",
+    "name": "白龙娘（GPT 娘）",
+    "lora": "aigrilsV1.0.safetensors",
+    "inject": "aigirls, aigirls（gpt）, 1girl, solo, white hair, very long hair, ahoge, purple eyes, dragon horns, dragon wings, dragon tail, flower knot, tassel, earrings",
+    "weight": 0.8,
+    "base": "Anima",
+    "source": "",
+    "match": [
+      "gpt",
+      "白龙娘"
+    ],
+    "sections": [
+      {
+        "title": "触发词",
+        "tags": "aigirls, aigirls（gpt）,"
+      },
+      {
+        "title": "基础外观",
+        "tags": "1girl, solo, white hair, very long hair, ahoge, purple eyes, dragon horns, dragon wings, dragon tail, scales, medium breasts,"
+      },
+      {
+        "title": "头饰",
+        "tags": "flower knot, tassel, earrings,"
+      },
+      {
+        "title": "上身服装",
+        "tags": "white dress, off shoulder, bare shoulders, flower knot, gem, detached sleeves,"
+      },
+      {
+        "title": "下身服装",
+        "tags": "long dress, side slit, frills,"
+      }
+    ]
+  },
+  {
+    "key": "gemini",
+    "group": "aigirls",
+    "name": "四角星猫耳娘（Gemini 娘）",
+    "lora": "aigrilsV1.0.safetensors",
+    "inject": "aigirls, aigirls（gemini）, 1girl, solo, blue hair, purple hair, gradient hair, very long hair, hair bun, double bun, ahoge, heterochromia, red eyes, yellow eyes, cat ears, cat tail, star hair ornament, star earrings",
+    "weight": 0.8,
+    "base": "Anima",
+    "source": "",
+    "match": [
+      "gemini",
+      "四角星猫耳娘"
+    ],
+    "sections": [
+      {
+        "title": "触发词",
+        "tags": "aigirls, aigirls（gemini）,"
+      },
+      {
+        "title": "基础外观",
+        "tags": "1girl, solo, blue hair, purple hair, gradient hair, very long hair, hair bun, double bun, ahoge, heterochromia, red eyes, yellow eyes, cat ears, cat tail, small breasts,"
+      },
+      {
+        "title": "头饰",
+        "tags": "star hair ornament, star earrings,"
+      },
+      {
+        "title": "上身服装",
+        "tags": "crop top, star ornament, white wide sleeves, purple belt,"
+      },
+      {
+        "title": "下身服装",
+        "tags": "shorts, frills, star thigh strap,"
+      }
+    ]
+  },
+  {
+    "key": "grok",
+    "group": "aigirls",
+    "name": "吸血鬼大小姐（Grok 娘）",
+    "lora": "aigrilsV1.0.safetensors",
+    "inject": "aigirls, aigirls（grok）, 1girl, solo, blonde hair, very long hair, twintails, ahoge, blue eyes, slit pupils, pointy ears, fangs, vampire, black crown, gold crescent, bat wings, black hair bow",
+    "weight": 0.8,
+    "base": "Anima",
+    "source": "",
+    "match": [
+      "grok",
+      "吸血鬼大小姐"
+    ],
+    "sections": [
+      {
+        "title": "触发词",
+        "tags": "aigirls, aigirls（grok）,"
+      },
+      {
+        "title": "基础外观",
+        "tags": "1girl, solo, blonde hair, very long hair, twintails, ahoge, blue eyes, slit pupils, pointy ears, fangs, vampire, medium breasts,"
+      },
+      {
+        "title": "头饰",
+        "tags": "black crown, gold crescent, bat wings, black hair bow,"
+      },
+      {
+        "title": "上身服装",
+        "tags": "black dress, wine red high collar, black lace choker, off shoulder, gold chain,"
+      },
+      {
+        "title": "下身服装",
+        "tags": "high-low skirt, red lining, frills, thigh strap,"
+      }
+    ]
+  }
 ]

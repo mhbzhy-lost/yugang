@@ -1,0 +1,143 @@
+[
+  {
+    "key": "eden",
+    "group": "honkai3rd",
+    "name": "伊甸（崩坏3 · 7 套）",
+    "lora": "Eden_Hi3_Anima-01.safetensors",
+    "inject": "EdenHi3, eden (honkai impact), long brown hair, yellow eyes with white pupils, gold diamond earring, gold hairclip, gold-trimmed dark brown choker",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/550077",
+    "match": [
+      "eden",
+      "エデン",
+      "伊甸",
+      "eden (honkai impact)",
+      "edenhi3"
+    ],
+    "sections": [
+      {
+        "title": "触发词 / 基础外观",
+        "tags": "EdenHi3, eden (honkai impact), long brown hair, yellow eyes with white pupils, gold diamond earring, gold hairclip, gold-trimmed dark brown choker"
+      },
+      {
+        "title": "Golden Diva",
+        "alias": [
+          "golden diva",
+          "edn_1"
+        ],
+        "tags": "EdenHi3, Edn_1, eden (golden diva) (honkai impact), long brown hair, yellow eyes with white pupils, gold diamond earring on left ear, gold hairclip on left side, gold-trimmed dark brown choker, dark brown halterneck straps, gold-trimmed dark brown bowtie with a pink gem…"
+      }
+    ]
+  },
+  {
+    "key": "elysia",
+    "group": "honkai3rd",
+    "name": "爱莉希雅（崩坏3 · 16 套）",
+    "lora": "Elysia_Hi3_Part01_Anima-01.safetensors",
+    "inject": "ElysiaHi3, Ely_One, elysia (honkai impact), blue eyes with pink pupils, long pink hair, low ponytail, pointy elf ears, feather hair ornament",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/570873",
+    "match": [
+      "elysia",
+      "エリシア",
+      "爱莉希雅",
+      "爱莉",
+      "elysia (honkai impact)",
+      "elysiahi3"
+    ],
+    "sections": [
+      {
+        "title": "触发词 / 基础外观",
+        "tags": "ElysiaHi3, Ely_One, elysia (honkai impact), blue eyes with pink pupils, long pink hair, low ponytail, pointy elf ears, feather hair ornament"
+      },
+      {
+        "title": "Miss Pink Elf♪",
+        "alias": [
+          "miss pink elf",
+          "ely_one"
+        ],
+        "tags": "ElysiaHi3, Ely_One, elysia (honkai impact), blue eyes with pink pupils, long pink hair styled in a low ponytail, pointy elf ears, intricate black-to-purple feather hair ornament with a gold metallic feather plate, gold-trimmed dark brown collar neck wrap with an embedded aqua gemstone…"
+      },
+      {
+        "title": "Herrscher of Human: Ego",
+        "alias": [
+          "herrscher of human",
+          "ego",
+          "ely_fiv"
+        ],
+        "tags": "ElysiaHi3, Ely_Fiv, elysia (herrscher of human: ego) (honkai impact), purple eyes with pink diamond-shaped pupils, very long pink hair with white hair streaks, pointy elf ears, white vertical-striped veil cascading on right hair side…"
+      },
+      {
+        "title": "Hi♪ Love Elf♥",
+        "alias": [
+          "hi love elf",
+          "ely_svn"
+        ],
+        "tags": "ElysiaHi3, Ely_Svn, elysia (hi love elf) (honkai impact), purple eyes with pink diamond-shaped pupils, long pink hair with white hair streaks, pointy elf ears hair styled into a low ponytail, single left side braid, white beret hat with pink brim and a white feather…"
+      }
+    ]
+  },
+  {
+    "key": "cyrene",
+    "group": "honkai3rd",
+    "name": "大昔涟（德谬歌）",
+    "lora": "cyrene_anima_v1_29b.safetensors",
+    "inject": "cyrenehsr, very long pink hair, pink hair with blue tips, purple eyes, pointy ears, hair ornament, hair flower, rose, diamond-shaped pupils",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2965801",
+    "match": [
+      "cyrene",
+      "cyrenehsr",
+      "キュレネ",
+      "昔涟",
+      "大昔涟",
+      "cyrene (demiurge)",
+      "cyrene (demiurge) (honkai: star rail)",
+      "德谬歌"
+    ],
+    "sections": [
+      {
+        "title": "触发词 / 基础外观",
+        "tags": "cyrenehsr, very long pink hair, pink hair with blue tips, purple eyes, pointy ears, hair ornament, hair flower, rose, diamond-shaped pupils"
+      },
+      {
+        "title": "默认服装",
+        "tags": "white dress, bare shoulders, jewelry, white leaf hair ornament, blue rose, iridescent heart on chest, detached sleeves, white legwear, high heels"
+      }
+    ]
+  },
+  {
+    "key": "cyrene_small",
+    "group": "honkai3rd",
+    "name": "小昔涟（Ripples of Past Reverie）",
+    "lora": "B0.9-Cyrene(ripple_of_past_reverie).safetensors",
+    "inject": "Cyrene, 1girl, short pink hair, pointy ears, purple eyes, purple jacket, white dress, blue diamond chest ornament",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2798243",
+    "match": [
+      "cyrene_small",
+      "小昔涟",
+      "ripples of past reverie",
+      "cyrene (ripples of past reverie)",
+      "cyrene (ripples of past reverie) (honkai: star rail)"
+    ],
+    "sections": [
+      {
+        "title": "触发词 / 基础外观",
+        "tags": "Cyrene, 1girl, short pink hair, pointy ears, purple eyes, purple jacket, white dress, blue diamond chest ornament"
+      },
+      {
+        "title": "美好假日（需另挂 2817528）",
+        "alias": [
+          "holiday",
+          "美好假日"
+        ],
+        "tags": "Cyrene Holiday Costume, diamond-shaped eyes, blue jacket, white jacket, open jacket, crop top, pleated skirt, gray skirt, blue headwear, hairclip, heart necklace, braid, long braid, shoulder bag, mem keychain"
+      }
+    ]
+  }
+]

@@ -22,14 +22,15 @@ export interface ComfyDraw {
   bypass?: string;
   /** 人物级 bypass（pbypass: 段）：单角色无分区概念，追加在 bypass 之后（同一正向末尾）。 */
   bypassP?: string;
-  preset?: "default" | "hsr" | "secret";
+  /** 风格 LoRA：全局作用于 model/clip，不改 prompt。 */
+  style?: { file: string; weight: number };
   width?: number;
   height?: number;
   cfg?: number;
   seed?: number;
   handRepair?: boolean;
-  /** 角色 LoRA：file/tags 来自 tool 层的 CHARACTERS 白名单，这里只做形态校验与注入。 */
-  lora?: { file: string; weight: number; tags: string };
+  /** 角色 LoRA：file/inject 来自角色词表，这里只做形态校验与机械拼接。 */
+  lora?: { file: string; weight: number; inject: string };
   ref?: { png: Buffer; strength: number };
 }
 
@@ -46,16 +47,18 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   graph["7"].inputs.cfg = args.cfg ?? 4.5;
   graph["6"].inputs.width = args.width ?? 912;
   graph["6"].inputs.height = args.height ?? 1216;
-  graph["4"].inputs.text = String(graph["4"].inputs.text) + (args.lora ? `${args.lora.tags}, ` : "") + args.prompt + (args.preset === "secret" ? ", completely nude" : "") + (args.bypass ? `, ${args.bypass}` : "") + (args.bypassP ? `, ${args.bypassP}` : "");
-  if (args.preset === "hsr") {
-    graph["88"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: ["1", 0], clip: ["2", 0], text: "<lora:HSR Anima:0.7>", default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
+  graph["4"].inputs.text = String(graph["4"].inputs.text) + (args.lora ? `${args.lora.inject}, ` : "") + args.prompt + (args.bypass ? `, ${args.bypass}` : "") + (args.bypassP ? `, ${args.bypassP}` : "");
+  if (args.style) {
+    // 风格 LoRA：全局画风，挂在底模之后、角色 LoRA 之前（节点 88）。
+    if (!/^[\w .@()-]+\.safetensors$/.test(args.style.file) || !Number.isFinite(args.style.weight) || args.style.weight < 0.4 || args.style.weight > 1.1) throw new Error("invalid draw style");
+    graph["88"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: ["1", 0], clip: ["2", 0], text: `<lora:${args.style.file}:${args.style.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
     for (const id of ["7", "11", "14", "42"]) graph[id].inputs.model = ["88", 0];
     for (const id of ["4", "5", "11", "42"]) graph[id].inputs.clip = ["88", 1];
   }
   if (args.lora) {
-    // 角色 LoRA 走与 hsr 相同的注入模式：节点链在 88 之后（hsr 在场时），消费方统一改接 93。
+    // 角色 LoRA 链在风格之后（有风格时接 88），消费方统一改接 93。
     if (!/^[\w .@()-]+\.safetensors$/.test(args.lora.file) || !Number.isFinite(args.lora.weight) || args.lora.weight < 0.4 || args.lora.weight > 1.1) throw new Error("invalid draw lora");
-    const upstream = args.preset === "hsr" ? { model: ["88", 0], clip: ["88", 1] } : { model: ["1", 0], clip: ["2", 0] };
+    const upstream = args.style ? { model: ["88", 0], clip: ["88", 1] } : { model: ["1", 0], clip: ["2", 0] };
     graph["93"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: upstream.model, clip: upstream.clip, text: `<lora:${args.lora.file}:${args.lora.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
     for (const id of ["7", "11", "14", "42"]) graph[id].inputs.model = ["93", 0];
     for (const id of ["4", "5", "11", "42"]) graph[id].inputs.clip = ["93", 1];
@@ -80,7 +83,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
 
 export interface MultiPart {
   text: string;
-  role?: { file: string; weight: number; tags: string };
+  role?: { file: string; weight: number; inject: string };
 }
 export interface MultiDraw {
   prompt: string;
@@ -110,7 +113,7 @@ function validateMulti(args: MultiDraw): void {
 }
 
 function multiRoleTags(part: MultiPart): string {
-  return (part.role?.tags ?? "").split(",").map((tag) => tag.trim()).filter((tag) => tag && !/^(?:1girl|solo)$/i.test(tag)).join(", ");
+  return (part.role?.inject ?? "").split(",").map((tag) => tag.trim()).filter((tag) => tag && !/^(?:1girl|solo)$/i.test(tag)).join(", ");
 }
 
 function multiSceneText(args: MultiDraw): string {

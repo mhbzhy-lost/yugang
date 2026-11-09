@@ -6,14 +6,9 @@
         "type": "string",
         "description": "画面描述。danbooru tag 为主（先查词表拿准词），可混自然语言，逗号分隔；负向词表是内置预设，不要在这里写「不要出现什么」"
       },
-      "preset": {
+      "style": {
         "type": "string",
-        "enum": [
-          "default",
-          "hsr",
-          "secret"
-        ],
-        "description": "画风预设：default=通用动漫（默认）；hsr=崩坏星穹铁道画风"
+        "description": "风格 LoRA 键：用户要某种画风时，先用 tags 查（不传关键词拿总表），把风格条目的 key 填这里；挂在全局、不注入任何 tag。不填不挂"
       },
       "ratio": {
         "type": "string",
@@ -30,23 +25,7 @@
       },
       "character": {
         "type": "string",
-        "enum": [
-          "claude",
-          "deepseek",
-          "qwen",
-          "glm",
-          "kimi",
-          "gpt",
-          "gemini",
-          "grok"
-        ],
-        "description": "AI 娘角色：画 AI 拟人角色（克劳德/大肥鱼/白龙娘/Gemini 猫娘/Grok 大小姐/Kimi/千问/智谱狐娘）时传对应键，自动挂角色 LoRA 并注入官方触发词、基础外观与头饰；不填不挂。服装不自动注入，官方套装用 tags 工具查角色名后自己写进 prompt"
-      },
-      "lora_weight": {
-        "type": "number",
-        "minimum": 0.4,
-        "maximum": 1.1,
-        "description": "角色 LoRA 强度：0.4–1.1，默认 0.8。角色不够像就调高，脸崩或画面被污染就调低；传了 character 或 characters[].character 时有意义"
+        "description": "角色 LoRA 键：先用 tags 查角色（不传关键词拿总表），把角色的 key 填这里；挂 LoRA 并自动注入该角色的触发词与基础外观。不填不挂。角色白名单以 tags 返回为准，本工具不列清单"
       },
       "characters": {
         "type": "array",
@@ -55,20 +34,37 @@
           "properties": {
             "character": {
               "type": "string",
-              "enum": ["claude", "deepseek", "qwen", "glm", "kimi", "gpt", "gemini", "grok"],
-              "description": "AI 娘角色；填了自动注入官方外观，不填表示普通人物"
+              "enum": [
+                "claude",
+                "deepseek",
+                "qwen",
+                "glm",
+                "kimi",
+                "gpt",
+                "gemini",
+                "grok"
+              ],
+              "description": "角色 LoRA 键：先用 tags 查角色拿 key；填了会挂 LoRA 并注入官方外观，不填表示普通人物"
             },
             "description": {
               "type": "string",
               "description": "此人的动作、表情和服装；普通人物还需描述外貌"
             }
           },
-          "required": ["description"],
+          "required": [
+            "description"
+          ],
           "additionalProperties": false
         },
         "minItems": 2,
         "maxItems": 2,
-        "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项，顺序为左、右；每项写 description，可选 character 表示该位是 AI 娘。人数由工具自动处理，不用写 2girls。与单人 character 互斥，双人不支持 preset 和改图"
+        "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项，顺序为左、右；每项写 description，可选 character 表示该位是 AI 娘。人数由工具自动处理，不用写 2girls。与单人 character 互斥，双人不支持 style 和改图"
+      },
+      "lora_weight": {
+        "type": "number",
+        "minimum": 0.4,
+        "maximum": 1.1,
+        "description": "LoRA 强度：0.4–1.1，默认 0.8。不够像就调高，脸崩或画面被污染就调低；传了 character 或 characters[].character 时有意义"
       },
       "hand_repair": {
         "type": "boolean",

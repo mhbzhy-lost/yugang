@@ -120,7 +120,7 @@ function ev(obj: Record<string, unknown>): void {
 type StageStatus = "pass" | "fail" | "blocked" | "not-run";
 interface Verdict { status: StageStatus; expected?: string; observed?: string; reason?: string }
 const verdicts = new Map<string, Verdict>();
-const ORDER_STAGES = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s12", "s13", "s14", "nomaster"] as const;
+const ORDER_STAGES = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s12", "s13", "s21", "s14", "nomaster"] as const;
 const ORDER = [...ORDER_STAGES, "restart-success"] as const;
 const DEPENDS: Record<string, string[]> = { s9: ["s5"], s14: ["s6"] };
 let submitCount = 0;
@@ -322,7 +322,7 @@ try {
       : undefined,
     comfyUrl: process.env.COMFYUI_URL,
     tagsCsv: tagsCsvPath,
-    toolTimeoutOverrides: { video: 90, gpt_image: 210 },
+    toolTimeoutOverrides: { video: 90, gpt_image: 210, draw: 600 },
     triggerOf: (roundId) => currentTrigger,
     mentionPolicyOf: (_cid, uid) => {
       if (uid === undefined) return "not_privileged";
@@ -759,6 +759,21 @@ try {
             });
             return;
           }
+          // ── S21 LoRA 词表 → draw 挂载（角色 key 必须来自 tags，不靠模型记忆）──
+          case "s21": {
+            const r = await round("s21-lora", hostLine("小明", "100001", "想画一张爱莉希雅站在玫瑰园里。先把该查的查清楚，再画出来发出去。", { messageId: 5021 }), member(100001, 5021));
+            const tagsCalls = r.toolCalls.filter((c) => c.name === "tags");
+            const drawCall = r.toolCalls.find((c) => c.name === "draw");
+            const drawRes = r.toolResults.find((x) => x.name === "draw");
+            const usesKey = drawCall ? /"character"\s*:\s*"elysia"/.test(drawCall.args) : false;
+            const ok = tagsCalls.length > 0 && usesKey && drawRes?.ok === true && r.newOutbox.length > 0;
+            mark("s21", {
+              status: ok ? "pass" : "fail",
+              expected: "tags 查到角色 key → draw 传 character=elysia → 出图并发出",
+              observed: `seq=${seqOf(r)} tags=${tagsCalls.length} usesKey=${usesKey} drawOk=${drawRes?.ok} outbox=${r.newOutbox.length} drawArgs=${drawCall?.args.slice(0, 120) ?? ""}`,
+            });
+            return;
+          }
           // ── S14 meme 检索（依赖 S6 的入库结果，磁盘持久） ──────────
           case "s14": {
             const r = await round("s14-meme", hostLine("小明", "100001", "从表情包库里挑一张贴「开心」情绪的图发出来。", { messageId: 5014 }), member(100001, 5014));
@@ -865,6 +880,8 @@ try {
     }
     if (stage === "s12" && !sdConfigured) return "env-blocked：未配置 COMFYUI_URL（draw 正常路径不可验收，不跑配置错误路径）";
     if (stage === "s13" && !tagsReady) return "env-blocked：danbooru 词表缺失（tags 正常路径不可验收，不跑配置错误路径）";
+    if (stage === "s21" && !sdConfigured) return "env-blocked：未配置 COMFYUI_URL（draw 挂载路径不可验收）";
+    if (stage === "s21" && !tagsReady) return "env-blocked：danbooru 词表缺失（tags 正常路径不可验收）";
     return undefined;
   }
 
