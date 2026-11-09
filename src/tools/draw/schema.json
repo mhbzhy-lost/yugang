@@ -63,7 +63,7 @@
         },
         "minItems": 2,
         "maxItems": 2,
-        "description": "双人同框：恰好两项，顺序为左、右；双人固定走 RS 区域生成，不挂角色 LoRA。与单人 character 互斥，双人不支持 preset 和改图"
+        "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项，顺序为左、右；每项只写 description。双人固定走 RS 区域生成，不挂角色 LoRA，宿主自动保证公共提示以 2girls 开头。与单人 character 互斥，双人不支持 preset 和改图"
       },
       "hand_repair": {
         "type": "boolean",

@@ -34,7 +34,8 @@ ComfyUI 忙或队列状态不可用时不删除，不触碰其他 input。部署
 提交状态不明的画图在当前轮禁止重试，避免网络超时造成重复任务。
 
 双人图固定走 `workflow-rs.json`（SHA-256 固定校验）：`RSMultiCharacterPrompts` 以左右点位
-（0.4/0.6, 0.5）给两人独立提示，`RSMultiCharacterSampler` 一次完成 30 步初始生成（seed 每次提交前随机），
+（0.4/0.6, 0.5）给两人独立提示，公共提示机械保证以 `2girls` 开头，`RSMultiCharacterSampler`
+一次完成 30 步初始生成（seed 每次提交前随机），
 之后 AnimeSharp 2 倍超分、低强度全图采样（16 步 / 0.30）与脸修（20 步 / 0.25）；**不做手修**。
 双人请求不挂角色 LoRA、不做 YOLO/SAM 分割、没有 Impact 回退分支；`characters` 每项只有 description。
 `hand_repair` 只作用于单人图。

@@ -118,7 +118,8 @@ export function makeRsGraph(args: MultiDraw): Graph {
   for (let i = 0; i < 2; i++) g["4"].inputs[`character${i + 1}`] = [args.parts[i].text, args.pbypass].filter(Boolean).join(", ");
   const seed = args.seed ?? randomBytes(4).readUInt32BE();
   const postSeed = randomBytes(4).readUInt32BE();
-  Object.assign(g["5"].inputs, { prompt: [args.prompt, args.bypass].filter(Boolean).join(", "), negative_prompt: String(TEMPLATE["5"].inputs.text), width: args.width, height: args.height, seed });
+  const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;
+  Object.assign(g["5"].inputs, { prompt: [commonPrompt, args.bypass].filter(Boolean).join(", "), negative_prompt: String(TEMPLATE["5"].inputs.text), width: args.width, height: args.height, seed });
   g["32"].inputs.text = String(TEMPLATE["5"].inputs.text);
   g["40"].inputs.text = multiSceneText(args);
   g["61"].inputs.image = ["5", 0];

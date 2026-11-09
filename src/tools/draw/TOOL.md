@@ -38,8 +38,10 @@ Kimi、千问、智谱狐娘这些 AI 拟人角色）时优先传 character 键�
 角色不够像用 lora_weight
 调高，脸崩或污染画面就调低（0.4–1.1，默认 0.8）。character 与 hsr 预设、改图
 ref 可以组合使用。
-双角色同框：prompt 写场景与全局氛围；characters 写恰好两项，每项只有 description，顺序是左、右。
-description 写此人的外貌、动作、表情和服装；两人互动动作可以写在各人的描述或 prompt。
+双角色同框：只要画面里要同时出现两个人，就必须传 characters——这是双人唯一入口，
+不许因为描述难写就退成单人 prompt。characters 写恰好两项，每项只有 description，顺序是左、右。
+description 写此人的外貌、动作、表情和服装，两人要写成两个明显不同的人；互动动作可以写在各人的描述或 prompt。
+prompt 写场景与全局氛围；宿主会机械保证 RS 公共提示以 2girls 开头，不用自己补。
 双人固定走 RS 区域生成，不挂角色 LoRA；要画 AI 娘同框，先用 tags 查官方 tag 和外观，把要点写进各自的 description，
 不要再传 character。双人不支持 preset 与 ref，耗时也更长（约两分钟），会分阶段播报进度。
 复杂重叠可能出现人物重复或串色。
