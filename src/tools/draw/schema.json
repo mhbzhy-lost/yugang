@@ -56,7 +56,7 @@
             "character": {
               "type": "string",
               "enum": ["claude", "deepseek", "qwen", "glm", "kimi", "gpt", "gemini", "grok"],
-              "description": "AI 娘角色；填了自动挂该角色的 RS 区域 LoRA 并注入官方外观，不填表示普通人物"
+              "description": "AI 娘角色；填了自动注入官方外观，不填表示普通人物"
             },
             "description": {
               "type": "string",
@@ -68,11 +68,11 @@
         },
         "minItems": 2,
         "maxItems": 2,
-        "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项，顺序为左、右；每项写 description，可选 character 自动挂 AI 娘 LoRA。双人固定走 RS 区域生成，宿主自动保证公共提示以 2girls 开头。与单人 character 互斥，双人不支持 preset 和改图"
+        "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项，顺序为左、右；每项写 description，可选 character 表示该位是 AI 娘。人数由工具自动处理，不用写 2girls。与单人 character 互斥，双人不支持 preset 和改图"
       },
       "hand_repair": {
         "type": "boolean",
-        "description": "单人图是否自动修手，默认 true；双人图暂不进行手修，此参数对双人图不生效。人脸修复与超分不变"
+        "description": "单人图是否自动修手，默认 true；对双人图不生效"
       },
       "ref": {
         "type": "string",
