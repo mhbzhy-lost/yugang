@@ -33,9 +33,12 @@ Windows 输入上传限定 `yugang-ref-<uuid>.png`；计划任务 `Yugang-ComfyU
 ComfyUI 忙或队列状态不可用时不删除，不触碰其他 input。部署前须核对该任务与脚本已安装且可运行。
 提交状态不明的画图在当前轮禁止重试，避免网络超时造成重复任务。
 
-双人图另走 `workflow-impact.json`（SHA-256 固定校验）：先构图和 YOLO/SAM 分实例，唯一可用的左右区域各膨胀 24px；
-区域不可靠或不唯一时直接失败，不静默切半。Impact RegionalSampler 以同一基础模型分叉的独立角色 LoRA 做区域采样，
-之后 AnimeSharp 2 倍超分、低强度全图采样（16 步 / 0.30）与脸修（20 步 / 0.25）；**不做手修**，
+双人纯 tag 图走 `workflow-rs.json`（SHA-256 固定校验）：`RSMultiCharacterPrompts` 以左右点位
+（0.4/0.6, 0.5）给两人独立提示，`RSMultiCharacterSampler` 一次完成 30 步初始生成（seed 每次提交前随机），
+之后共用 AnimeSharp 2 倍超分、低强度全图采样（16 步 / 0.30）与脸修（20 步 / 0.25）；接受复杂互动偶发多人。
+含角色 LoRA 的双人图仍走 `workflow-impact.json`（SHA-256 固定校验）：先构图和 YOLO/SAM 分实例，唯一可用的
+左右区域各膨胀 24px；区域不可靠或不唯一时直接失败，不静默切半。Impact RegionalSampler 以同一基础模型分叉的
+独立角色 LoRA 做区域采样，后处理同上；**不做手修**，
 `hand_repair` 只作用于单人图。严重遮挡时检测可能只有一人，不能将这类失败视为 Impact 已验证支持遮挡。
 
 **入口只注册**（2026-11-05）：`src/index.ts` 不写任何业务逻辑，只有 `app.use(...)`

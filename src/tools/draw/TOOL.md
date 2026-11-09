@@ -43,6 +43,7 @@ ref 可以组合使用。
 填写 character，自动注入该角色的 LoRA 和基础外观。两人互动动作可以写在各人的描述或 prompt。
 例如：`characters: [{character: "deepseek", description: "sitting sideways, teasing a cat"}, {character: "claude", description: "holding cat food, looking at her"}]`。
 双角色不支持 preset 与 ref，耗时也更长（约两分钟），会分阶段播报进度。
-双角色需要从构图中可靠区分两人；遮挡严重或分割不明确时可能失败，不会自动把画面切半充当两个人物。
+两个普通人物使用 RS 按左右区域生成；互动动作可同时写在 prompt 和各人的 description。复杂重叠可能出现人物重复或串色。
+含 AI 娘的双人图仍需从构图中可靠区分两人；遮挡严重或分割不明确时可能失败，不会自动把画面切半充当两个人物。
 拿到 gen/ 引用后必须立刻把图发出去，只画不发等于白干。
 一轮最多画一次；确认提交失败不消耗次数，提交状态不明时本轮不能重试。

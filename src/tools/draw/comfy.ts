@@ -22,6 +22,11 @@ const IMPACT_BYTES = readFileSync(new URL("./workflow-impact.json", import.meta.
 if (createHash("sha256").update(IMPACT_BYTES).digest("hex") !== IMPACT_WORKFLOW_HASH) throw new Error("draw impact workflow hash mismatch");
 const IMPACT_TEMPLATE = JSON.parse(IMPACT_BYTES.toString("utf8")) as Graph;
 if (IMPACT_TEMPLATE["75"]?.class_type !== "RegionalSampler" || IMPACT_TEMPLATE["66"]?.class_type !== "PreviewImage" || IMPACT_TEMPLATE["101"]?.class_type !== "FaceDetailer") throw new Error("draw impact workflow contract mismatch");
+const RS_WORKFLOW_HASH = "8e27a91aec756451a317d62b48f75ec20ad8c8f07b2737a7f798f623d9d7a18a";
+const RS_BYTES = readFileSync(new URL("./workflow-rs.json", import.meta.url));
+if (createHash("sha256").update(RS_BYTES).digest("hex") !== RS_WORKFLOW_HASH) throw new Error("draw RS workflow hash mismatch");
+const RS_TEMPLATE = JSON.parse(RS_BYTES.toString("utf8")) as Graph;
+if (RS_TEMPLATE["4"]?.class_type !== "RSMultiCharacterPrompts" || RS_TEMPLATE["5"]?.class_type !== "RSMultiCharacterSampler") throw new Error("draw RS workflow contract mismatch");
 
 export interface ComfyDraw {
   prompt: string;
@@ -133,6 +138,26 @@ function multiRoleTags(part: MultiPart): string {
 function multiSceneText(args: MultiDraw): string {
   const describe = (part: MultiPart) => [multiRoleTags(part), part.text].filter(Boolean).join(", ");
   return String(TEMPLATE["4"].inputs.text) + "2girls, on the left side: " + describe(args.parts[0]) + ", on the right side: " + describe(args.parts[1]) + ", " + args.prompt + (args.bypass ? ", " + args.bypass : "");
+}
+
+/** RS 双人纯 tag：点位区域独立提示，后接既有超分、二次采样和脸修。 */
+export function makeRsGraph(args: MultiDraw): Graph {
+  validateMulti(args);
+  if (args.parts.some((part) => part.role)) throw new Error("RS role LoRA not verified");
+  const g: Graph = {};
+  for (const id of ["1", "2", "3", "32", "40", "60", "61", "62", "63", "64", "65", "66", "100", "101"]) g[id] = structuredClone(IMPACT_TEMPLATE[id]);
+  g["4"] = structuredClone(RS_TEMPLATE["4"]);
+  g["5"] = structuredClone(RS_TEMPLATE["5"]);
+  for (let i = 0; i < 2; i++) g["4"].inputs[`character${i + 1}`] = [args.parts[i].text, args.pbypass].filter(Boolean).join(", ");
+  const seed = args.seed ?? randomBytes(4).readUInt32BE();
+  const postSeed = randomBytes(4).readUInt32BE();
+  Object.assign(g["5"].inputs, { prompt: [args.prompt, args.bypass].filter(Boolean).join(", "), negative_prompt: String(TEMPLATE["5"].inputs.text), width: args.width, height: args.height, seed });
+  g["32"].inputs.text = String(TEMPLATE["5"].inputs.text);
+  g["40"].inputs.text = multiSceneText(args);
+  g["61"].inputs.image = ["5", 0];
+  g["64"].inputs.seed = postSeed;
+  g["101"].inputs.seed = postSeed;
+  return g;
 }
 
 /** 阶段一 graph：构图 30 步 + YOLO + SAM 分实例。 */
@@ -388,6 +413,17 @@ function makeMultiStageTracker(promptId: string, onStage: (stage: DrawStage) => 
   };
 }
 
+function openMultiStageSocket(base: string, clientId: string, promptId: string, onStage: (stage: DrawStage) => void): { close: () => void } {
+  try {
+    const ws = new WebSocket(`${base.replace("http", "ws")}/ws?clientId=${clientId}`);
+    ws.binaryType = "arraybuffer";
+    const onMessage = makeMultiStageTracker(promptId, onStage);
+    ws.addEventListener("message", (event) => onMessage((event as MessageEvent).data));
+    ws.addEventListener("error", () => {});
+    return { close: () => { try { ws.close(); } catch { /* already closed */ } } };
+  } catch { return { close: () => {} }; }
+}
+
 export async function runMulti(url: string, args: MultiDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void, shape: MaskShape = "silhouette"): Promise<Buffer> {
   if (busy) throw new ComfyBusy("ComfyUI busy");
   busy = true;
@@ -446,6 +482,16 @@ async function runMultiJob(url: string, args: MultiDraw, onSubmitted: () => void
   if (queue.queue_running.length || queue.queue_pending.length) throw new ComfyBusy("ComfyUI busy");
   const clientId = randomUUID();
   const deadline = Date.now() + 560_000;
+  if (args.parts.every((part) => !part.role)) {
+    const id = randomUUID();
+    const graph = makeRsGraph(args);
+    const socket = onStage ? openMultiStageSocket(base, clientId, id, onStage) : undefined;
+    try {
+      onSubmitted();
+      const job = await submitAndWait(base, graph, id, clientId, deadline);
+      return await fetchOutputImage(base, job, "66");
+    } finally { socket?.close(); }
+  }
   const runArgs = { ...args, seed: args.seed ?? randomBytes(4).readUInt32BE() };
   const sceneId = randomUUID();
   onSubmitted();
