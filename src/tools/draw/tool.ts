@@ -125,7 +125,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         const bp = deps.bypassOf?.(round);
         const png = multiParts
           ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts, bypass: bp?.bypass, pbypass: bp?.pbypass }, () => { state.submitted = true; }, stageCb)
-          : await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, width, height, handRepair: args.hand_repair ?? true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, () => { state.submitted = true; }, stageCb);
+          : await runComfy(deps.comfyUrl, { prompt: positive, preset: args.preset, width, height, handRepair: args.hand_repair ?? false, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, () => { state.submitted = true; }, stageCb);
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
         const file = `${Date.now()}-${randomUUID()}.png`;

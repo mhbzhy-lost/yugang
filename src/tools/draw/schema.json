@@ -72,7 +72,7 @@
       },
       "hand_repair": {
         "type": "boolean",
-        "description": "单人图是否自动修手，默认 true；对双人图不生效"
+        "description": "单人图是否自动修手，默认 false；要修手才传 true，对双人图不生效"
       },
       "ref": {
         "type": "string",

@@ -69,7 +69,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     delete graph["6"];
   }
   graph["90"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
-  graph["91"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["90", 0], image: [args.handRepair === false ? "43" : "42", 0] } };
+  graph["91"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["90", 0], image: [args.handRepair === true ? "42" : "43", 0] } };
   graph["92"] = { class_type: "ImageScaleBy", inputs: { image: ["91", 0], upscale_method: "lanczos", scale_by: 0.5 } };
   graph["44"].inputs.pixels = ["92", 0];
   graph["13"].inputs.scale_by = 1;
@@ -148,7 +148,7 @@ let busy = false;
 /** draw 阶段进度（不过模型）：sketch/refine=单管线；multi-*=双人 RS 管线两段。 */
 export type DrawStage = "sketch" | "refine" | "multi-first" | "multi-second";
 
-/** 阶段状态机：实测事件序列（2026-11-08）——"7"初采样 → "43"/"42"手修（hand_repair=false 时直接"91"超分）
+/** 阶段状态机：实测事件序列（2026-11-08）——"7"初采样 → "42"手修（hand_repair=true 时；否则"43"直接"91"超分）
  *  → "91"/"92"/"44"/"13" → "14"二次采样 → "8"/"11"脸修 → "9"输出。
  *  进入初采样后首批节点（sketch）与二次采样后首批节点（refine）时各汇报一次；乱序/未知节点忽略。 */
 function makeStageTracker(promptId: string, onStage: (stage: DrawStage) => void): (message: unknown) => void {
