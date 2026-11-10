@@ -26,12 +26,15 @@
 `draw` 使用 Windows ComfyUI 的固定 V8 API 工作流（`src/tools/draw/workflow.json`，SHA-256 固定校验），
 通过 `COMFYUI_URL` 指向 macmini 的 `127.0.0.1:18190` SSH 隧道；不接受模型传入工作流、节点、模型名或地址。
 文生图按初采样 30 步（cfg 4.5）→ 可选手部修复（`hand_repair`，默认关；hand_yolov8n 检测 + 16 步 / 0.25）
-→ `4x-AnimeSharp` 超分后 lanczos 缩放（缺省 `scale_by 0.5` = 净 2 倍，`hd: true` 时 0.75 = 净 3 倍）
-→ 二次采样 16 步 / 0.30 → 人脸修复（face_yolov8n + 20 步 / 0.25）→ `PreviewImage` 输出；
-基座的 `LatentUpscaleBy`（1.25）被机械置 1 停用，超分只认 AnimeSharp 这一条。
+→ `4x-AnimeSharp` 超分后 lanczos 缩放 0.5（净 2 倍）→ 二次采样 16 步 / 0.30 → 人脸修复（face_yolov8n + 20 步 / 0.25）
+→ `PreviewImage` 输出；基座的 `LatentUpscaleBy`（1.25）被机械置 1 停用，超分只认 AnimeSharp 这一条。
 文生图可选受控 `ratio`（7 档，默认 3:4 = 912×1216，长边 1216/1280 级）；改图沿用参考图比例（尺寸对齐可能略有偏差）。
 `hd` 是文生图与改图共用的高清档（2026-11-10）：只在用户明确要「高清大图 / 超级清楚 / 分辨率大点 / 当壁纸」时开，
-明显更慢，没提就不开。`ref` 是整图重绘，不是蒙版局部编辑，同样走超分与二次采样。图片通过 `type=temp` 取回本地 `gen/`，
+明显更慢，没提就不开。**采样与脸修恒在净 2 倍域内，hd 的第三倍在脸修之后用同一超分模型纯放大补齐**
+（节点 95/96/97，双人同构）——实测把二次采样推到 3 倍 latent（38,988 token ≈ 官方 3:4 档的 6 倍）时 DiT 位置编码超域，
+高频能量被砍到 ×0.55、脸部 ×0.40，线稿断成虚线；2 倍域（17,328 token）只温和损失 ×0.78。
+ESRGAN 放大是全卷积局部推理、无全图位置编码，纯放大不超域。**不要把 hd 改回「先放大到 3 倍再二次采样」**。
+`ref` 是整图重绘，不是蒙版局部编辑，同样走超分与二次采样。图片通过 `type=temp` 取回本地 `gen/`，
 Windows 输入上传限定 `yugang-ref-<uuid>.png`；计划任务 `Yugang-ComfyUI-RefCleanup` 使用
 `scripts/comfy-ref-cleanup.ps1` 的对应副本，每小时在登录用户会话中尝试清理 24 小时以上专用文件，
 ComfyUI 忙或队列状态不可用时不删除，不触碰其他 input。部署前须核对该任务与脚本已安装且可运行。
@@ -54,7 +57,7 @@ draw 的 `character` / `style` / `characters[].character` 在 Schema 里是**普
 双人图固定走 `workflow-rs.json`（SHA-256 固定校验）：`RSMultiCharacterPrompts` 以左右点位
 （0.4/0.6, 0.5）给两人独立提示，公共提示机械保证以 `2girls` 开头，`RSMultiCharacterSampler`
 一次完成 30 步初始生成（seed 每次提交前随机），
-之后 `4x-AnimeSharp` 超分（与单人共用 `hd` 档：缺省净 2 倍，`hd: true` 净 3 倍）、低强度全图采样（16 步 / 0.30）
+之后 `4x-AnimeSharp` 超分（恒净 2 倍）、低强度全图采样（16 步 / 0.30）
 与脸修（20 步 / 0.25）；**不做手修**。二次采样与脸修共用节点 40 的全局提示，那里**只放场景与质量词、绝不放角色描述**：
 脸修按脸 crop 后「左 / 右」方位词失效，合并两人描述会把另一侧的特征（牙、瞳孔、耳朵之类）画到这张脸上（串色）；
 角色身份只由初采样的 RS 区域管线负责，后两道低强度 pass 只按已画好的画面微调。

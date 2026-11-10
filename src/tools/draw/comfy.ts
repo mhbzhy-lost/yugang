@@ -39,7 +39,7 @@ function normalizeTagForm(text: string): string {
 }
 
 export interface ComfyDraw {
-  /** 高清模式：放大系数 2x→3x（AnimeSharp 4x 后缩放 0.75）。 */
+  /** 高清模式：净 3 倍出图；采样与脸修恒在 2 倍域内，第三倍在脸修后纯放大补齐。 */
   hd?: boolean;
   prompt: string;
   bypass?: string;
@@ -96,9 +96,17 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   }
   graph["90"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
   graph["91"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["90", 0], image: [args.handRepair === true ? "42" : "43", 0] } };
-  graph["92"] = { class_type: "ImageScaleBy", inputs: { image: ["91", 0], upscale_method: "lanczos", scale_by: args.hd === true ? 0.75 : 0.5 } };
+  // 二次采样与脸修恒在净 2 倍域内跑：实测 3x 时 node 14 在 ~6x 官方 token 数上把高频能量砍到 ×0.55（脸部 ×0.40，
+  // 线稿断成虚线），2x 时只温和损失 ×0.78。hd 的第三倍改在脸修之后用同一超分模型纯放大补齐，采样不进超域。
+  graph["92"] = { class_type: "ImageScaleBy", inputs: { image: ["91", 0], upscale_method: "lanczos", scale_by: 0.5 } };
   graph["44"].inputs.pixels = ["92", 0];
   graph["13"].inputs.scale_by = 1;
+  if (args.hd === true) {
+    graph["95"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
+    graph["96"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["95", 0], image: ["11", 0] } };
+    graph["97"] = { class_type: "ImageScaleBy", inputs: { image: ["96", 0], upscale_method: "lanczos", scale_by: 0.375 } };
+    graph["9"].inputs.images = ["97", 0];
+  }
   return graph;
 }
 
@@ -110,7 +118,7 @@ export interface MultiPart {
 }
 export interface MultiDraw {
   prompt: string;
-  /** 高清模式：放大系数 2x→3x（AnimeSharp 4x 后缩放 0.75）。 */
+  /** 高清模式：净 3 倍出图；采样与脸修恒在 2 倍域内，第三倍在脸修后纯放大补齐。 */
   hd?: boolean;
   width: number;
   height: number;
@@ -167,11 +175,18 @@ export function makeRsGraph(args: MultiDraw): Graph {
   const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;
   Object.assign(g["5"].inputs, { prompt: [commonPrompt, args.bypass].filter(Boolean).join(", "), negative_prompt: String(TEMPLATE["5"].inputs.text), width: args.width, height: args.height, seed });
   g["32"].inputs.text = String(TEMPLATE["5"].inputs.text);
-  g["62"].inputs.scale_by = args.hd === true ? 0.75 : 0.5;
+  g["62"].inputs.scale_by = 0.5;
   g["40"].inputs.text = multiSceneText(args);
   g["61"].inputs.image = ["5", 0];
   g["64"].inputs.seed = postSeed;
   g["101"].inputs.seed = postSeed;
+  if (args.hd === true) {
+    // 与单人同构：RS 二次采样（node 64）与脸修（node 101）留在 2 倍域，第三倍在脸修后纯放大。
+    g["95"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
+    g["96"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["95", 0], image: ["101", 0] } };
+    g["97"] = { class_type: "ImageScaleBy", inputs: { image: ["96", 0], upscale_method: "lanczos", scale_by: 0.375 } };
+    g["66"].inputs.images = ["97", 0];
+  }
   return g;
 }
 
