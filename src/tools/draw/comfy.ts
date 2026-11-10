@@ -10,12 +10,24 @@ const TEMPLATE = JSON.parse(readFileSync(new URL("./workflow.json", import.meta.
 const TEMPLATE_CONTRACT: Array<[string, string]> = [
   ["1", "UNETLoader"], ["4", "CLIPTextEncode"], ["5", "CLIPTextEncode"], ["6", "EmptySD3LatentImage"],
   ["7", "KSampler"], ["9", "PreviewImage"], ["42", "FaceDetailer"],
+  ["71", "CLIPTextEncode"], ["72", "KSampler"],
   ["91", "ImageUpscaleWithModel"], ["92", "ImageScaleBy"],
 ];
 for (const [id, cls] of TEMPLATE_CONTRACT) {
   if (TEMPLATE[id]?.class_type !== cls) throw new Error(`draw workflow contract mismatch: node ${id} != ${cls}`);
 }
 if (TEMPLATE["1"]?.inputs.unet_name !== "DeltaMix 3.8B V8.safetensors") throw new Error("draw workflow contract mismatch: unet");
+
+// ── RS 区域管线模板（2026-11-10 复活：layout=separate 双人专用；overlap 双人走单人直出）──
+const RS_TEMPLATE = JSON.parse(readFileSync(new URL("./workflow-rs.json", import.meta.url)).toString("utf8")) as Graph;
+const RS_TEMPLATE_CONTRACT: Array<[string, string]> = [
+  ["1", "UNETLoader"], ["4", "RSMultiCharacterPrompts"], ["5", "RSMultiCharacterSampler"],
+  ["61", "ImageUpscaleWithModel"], ["62", "ImageScaleBy"], ["66", "PreviewImage"],
+  ["71", "CLIPTextEncode"], ["72", "KSampler"],
+];
+for (const [id, cls] of RS_TEMPLATE_CONTRACT) {
+  if (RS_TEMPLATE[id]?.class_type !== cls) throw new Error(`draw RS workflow contract mismatch: node ${id} != ${cls}`);
+}
 
 
 /**
@@ -69,7 +81,9 @@ export function comfyUrl(value: string): string {
 export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   const graph = structuredClone(TEMPLATE);
   const seed = args.seed ?? randomBytes(4).readUInt32BE();
+  const passSeed = randomBytes(4).readUInt32BE();
   for (const id of ["7", "42"]) graph[id].inputs.seed = seed;
+  graph["72"].inputs.seed = passSeed;
   graph["7"].inputs.cfg = args.cfg ?? 4.5;
   graph["6"].inputs.width = args.width ?? 912;
   graph["6"].inputs.height = args.height ?? 1216;
@@ -83,20 +97,29 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   } else {
     graph["4"].inputs.text = prefix + (args.lora ? `${escapeInjected(normalizeTagForm(args.lora.inject))}, ` : "") + normalizeTagForm(args.prompt) + suffix;
   }
+  // 质感 pass（M2 定版 2026-11-10）：超分后同域重采样 denoise 0.25。初采样带四轴扁平（node 4），
+  // pass 用裸地板 + 同内容（去轴向自然走，M2 验证）；负向共用 node 5；LoRA 挂链时 pass 采样器同接链尾（R3）。
+  const passFloor = String(graph["71"].inputs.text);
+  if (args.parts !== undefined) {
+    const segments = args.parts.flatMap((part) => [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text)].filter((s) => s));
+    graph["71"].inputs.text = `${passFloor}2girls, ${segments.join(", ")}, ${normalizeTagForm(args.prompt)}${suffix}`;
+  } else {
+    graph["71"].inputs.text = passFloor + (args.lora ? `${escapeInjected(normalizeTagForm(args.lora.inject))}, ` : "") + normalizeTagForm(args.prompt) + suffix;
+  }
   if (args.style) {
     // 风格 LoRA：全局画风，挂在底模之后、角色 LoRA 之前（节点 88）。
     if (!/^[\w .@()-]+\.safetensors$/.test(args.style.file) || !Number.isFinite(args.style.weight) || args.style.weight < 0.4 || args.style.weight > 1.1) throw new Error("invalid draw style");
     graph["88"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: ["1", 0], clip: ["2", 0], text: `<lora:${args.style.file}:${args.style.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
-    for (const id of ["7", "42"]) graph[id].inputs.model = ["88", 0];
-    for (const id of ["4", "5", "42"]) graph[id].inputs.clip = ["88", 1];
+    for (const id of ["7", "42", "72"]) graph[id].inputs.model = ["88", 0];
+    for (const id of ["4", "5", "71"]) graph[id].inputs.clip = ["88", 1];
   }
   if (args.lora) {
     // 角色 LoRA 链在风格之后（有风格时接 88），消费方统一改接 93。
     if (!/^[\w .@()-]+\.safetensors$/.test(args.lora.file) || !Number.isFinite(args.lora.weight) || args.lora.weight < 0.4 || args.lora.weight > 1.1) throw new Error("invalid draw lora");
     const upstream = args.style ? { model: ["88", 0], clip: ["88", 1] } : { model: ["1", 0], clip: ["2", 0] };
     graph["93"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: upstream.model, clip: upstream.clip, text: `<lora:${args.lora.file}:${args.lora.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
-    for (const id of ["7", "42"]) graph[id].inputs.model = ["93", 0];
-    for (const id of ["4", "5", "42"]) graph[id].inputs.clip = ["93", 1];
+    for (const id of ["7", "42", "72"]) graph[id].inputs.model = ["93", 0];
+    for (const id of ["4", "5", "71"]) graph[id].inputs.clip = ["93", 1];
   }
   if (args.parts !== undefined) {
     // 双人直出：角色 LoRA 链 93→94（风格之后），消费方统一改接链尾。
@@ -110,8 +133,8 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
       last = id;
     });
     if (last) {
-      for (const id of ["7", "42"]) graph[id].inputs.model = [last, 0];
-      for (const id of ["4", "5", "42"]) graph[id].inputs.clip = [last, 1];
+      for (const id of ["7", "42", "72"]) graph[id].inputs.model = [last, 0];
+      for (const id of ["4", "5", "71"]) graph[id].inputs.clip = [last, 1];
     }
   }
   if (args.ref) {
@@ -124,12 +147,11 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   }
   // 超分链在模板里（90/91/92）：初采样解码 → AnimeSharp 4x → lanczos 0.5 = 净 2 倍；手修开启时超分输入改接 42。
   if (args.handRepair === true) graph["91"].inputs.image = ["42", 0];
-  // 没有二次采样（2026-11-10 实测后删除）：全图低强度重采样在动漫域超分之后只销毁高频
-  // （单人 2x ×0.78、双人 2x ×0.69、脸部 ×0.62–0.77），旁路对照里看不到任何修复收益；
-  // 双人侧它的全局注意力还会抹平 RS 点位隔离。超分后直接进脸修。
+  // 质感 pass（尾部光照/质感化，M2 定版）：超分后的同域低强度重采样，denoise 0.25、裸地板词，
+  // 负向共用 node 5；AGENTS 约束：禁止把它改回「修复」用途或提高强度越界（M3 实测 0.35 唇形失控）。
   if (args.hd === true) {
     graph["95"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
-    graph["96"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["95", 0], image: ["92", 0] } };
+    graph["96"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["95", 0], image: ["73", 0] } };
     graph["97"] = { class_type: "ImageScaleBy", inputs: { image: ["96", 0], upscale_method: "lanczos", scale_by: 0.375 } };
     graph["9"].inputs.images = ["97", 0];
   }
@@ -140,6 +162,19 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
 export interface MultiPart {
   text: string;
   role?: { file: string; weight: number; inject: string };
+}
+export interface MultiDraw {
+  prompt: string;
+  /** 高清模式：净 3 倍出图；采样与质感 pass 恒在 2 倍域内，第三倍在 pass 后纯放大补齐。 */
+  hd?: boolean;
+  width: number;
+  height: number;
+  seed?: number;
+  parts: MultiPart[];
+  /** 场景级 bypass（bypass: 段）：附加到初采样公共提示与 pass 正向末尾。 */
+  bypass?: string;
+  /** 人物级 bypass（pbypass: 段）：附加到两个人物的区域提示末尾。 */
+  pbypass?: string;
 }
 
 const MAX_IMAGE = 25 * 1024 * 1024;
@@ -156,6 +191,55 @@ function validateParts(parts: MultiPart[]): void {
 
 function multiRoleTags(part: MultiPart): string {
   return (part.role?.inject ?? "").split(",").map((tag) => tag.trim()).filter((tag) => tag && !/^(?:1girl|solo)$/i.test(tag)).join(", ");
+}
+
+/** RS 区域管线：非重叠双人的身份隔离由槽位结构保证；重叠双人走单人直出（床载体复制头实验）。 */
+export function makeRsGraph(args: MultiDraw): Graph {
+  validateParts(args.parts);
+  const g = structuredClone(RS_TEMPLATE);
+  const floor = String(TEMPLATE["71"].inputs.text); // pass 裸地板（node 4 现含四轴，不可取）
+  const neg = String(TEMPLATE["5"].inputs.text);
+  const seed = args.seed ?? randomBytes(4).readUInt32BE();
+  const passSeed = randomBytes(4).readUInt32BE();
+  const suffix = args.bypass ? `, ${args.bypass}` : "";
+  for (let i = 0; i < 2; i++) {
+    const part = args.parts[i];
+    const s = g["4"].inputs;
+    s[`character${i + 1}`] = [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text), args.pbypass].filter(Boolean).join(", ");
+    s[`character${i + 1}_lora`] = part.role?.file ?? "None";
+    s[`character${i + 1}_lora_strength`] = part.role?.weight ?? 1;
+    s[`character${i + 1}_lora_clip_strength`] = part.role?.weight ?? 1;
+  }
+  const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;
+  Object.assign(g["5"].inputs, { prompt: String(RS_TEMPLATE["5"].inputs.prompt) + commonPrompt + suffix, negative_prompt: neg, width: args.width, height: args.height, seed }); // 初采样带四轴扁平前缀（模板 node5.prompt），pass 才裸地板
+  // 质感 pass：裸地板 + 双人合并词（R3 验证：denoise 0.25 低强度增益不融合），负向与初采样同。
+  const passSegments = args.parts.flatMap((part) => [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text)].filter((s) => s));
+  g["71"].inputs.text = `${floor}${commonPrompt}, ${passSegments.join(", ")}${suffix}`;
+  g["74"].inputs.text = neg;
+  g["72"].inputs.seed = passSeed;
+  // pass 的 LoRA 链（链式 93→94；无角色时 pass 直接吃基模）：
+  let up: { model: [string, number]; clip: [string, number] } = { model: ["1", 0], clip: ["2", 0] };
+  let last = "";
+  args.parts.forEach((part, i) => {
+    if (!part.role) return;
+    const id = String(93 + i);
+    g[id] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: up.model, clip: up.clip, text: `<lora:${part.role.file}:${part.role.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
+    up = { model: [id, 0], clip: [id, 1] };
+    last = id;
+  });
+  if (last) {
+    g["72"].inputs.model = [last, 0];
+    g["71"].inputs.clip = [last, 1];
+    g["74"].inputs.clip = [last, 1];
+  }
+  g["62"].inputs.scale_by = 0.5;
+  if (args.hd === true) {
+    g["95"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
+    g["96"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["95", 0], image: ["73", 0] } };
+    g["97"] = { class_type: "ImageScaleBy", inputs: { image: ["96", 0], upscale_method: "lanczos", scale_by: 0.375 } };
+    g["66"].inputs.images = ["97", 0];
+  }
+  return g;
 }
 
 export class ComfyExecutionFailed extends Error {}
@@ -177,7 +261,7 @@ function makeStageTracker(promptId: string, onStage: (stage: DrawStage) => void)
       if (event.type !== "executing" || event.data?.prompt_id !== promptId) return;
       const node = event.data?.node;
       if (typeof node !== "string") return;
-      if (stage < 1 && (node === "43" || node === "42" || node === "91")) {
+      if (stage < 1 && (node === "43" || node === "42" || node === "91" || node === "5" || node === "61")) {
         stage = 1;
         onStage("sketch");
       }
@@ -231,6 +315,24 @@ export async function runComfy(url: string, args: ComfyDraw, onSubmitted: () => 
   busy = true;
   try { return await runComfyJob(url, args, onSubmitted, onStage); }
   finally { busy = false; }
+}
+
+/** RS 区域双管线（layout=separate）：提交 RS 图并轮询到成功，输出取 node 66。 */
+export async function runMulti(url: string, args: MultiDraw, onSubmitted: () => void): Promise<Buffer> {
+  if (busy) throw new ComfyBusy("ComfyUI busy");
+  busy = true;
+  try {
+    const base = comfyUrl(url);
+    const queue = await (await request(`${base}/queue`)).json() as { queue_running?: unknown[]; queue_pending?: unknown[] };
+    if (!Array.isArray(queue.queue_running) || !Array.isArray(queue.queue_pending)) throw new Error("invalid ComfyUI queue");
+    if (queue.queue_running.length || queue.queue_pending.length) throw new ComfyBusy("ComfyUI busy");
+    const id = randomUUID();
+    const clientId = randomUUID();
+    const graph = makeRsGraph(args);
+    onSubmitted();
+    const job = await submitAndWait(base, graph, id, clientId, Date.now() + 400_000);
+    return await fetchOutputImage(base, job, "66");
+  } finally { busy = false; }
 }
 
 async function runComfyJob(url: string, args: ComfyDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void): Promise<Buffer> {

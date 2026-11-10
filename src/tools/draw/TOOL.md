@@ -52,13 +52,17 @@ light particles 会把整图压成 pastel 洗白；detailed skin shading、subtl
 
 ## 双人
 
-双人同框必须传 characters，恰好两项。构图完全由你决定（左右/上下/前后/拥抱重叠都行），
-工具不接受任何位置参数：把构图当自然语言写进 description 与 prompt。每项写 description：
-挂了角色的只写动作、表情、服装；普通人写清外貌。互动（拥抱/倚靠/趴靠等）自由写在
-任一人的 description 或 prompt 里，不需要回避重叠。prompt 只写场景和全局氛围，人数不用写。
-命名角色默认挂角色 LoRA（characters[].character）；仅当用户明确说「不挂 LoRA / 用 tag 直出」
-时才省 character 键、自己在 description 写外观特征。双人不能用顶层 character、style、ref；
-耗时与单人同量级；hd 可用。
+双人同框必须传 characters，恰好两项。每项写 description：挂了角色的只写动作、表情、
+服装；普通人写清外貌。互动自由写在任一人的 description 或 prompt 里。prompt 只写场景和
+全局氛围，人数不用写。命名角色默认挂角色 LoRA（characters[].character）；仅当用户明确说
+「不挂 LoRA / 用 tag 直出」时才省 character 键、自己在 description 写外观特征。
+双人不支持顶层 character、style、ref；hd 可用。
+
+layout 必须按两人的空间关系选：**separate = 两人不重叠**（并排、面对面、坐一起但
+身体不搭叠）；**overlap = 两人贴身交叠**（拥抱、叠靠、趴在身上、共享身体中轴）。
+看 description / prompt 里的互动词判断：贴身、搭叠、拥抱、倚靠、趴 → overlap；
+并肩、对坐、牵手、面对 → separate。两条管线身份隔离机制不同，选错会明显变差
+（重叠走 RS 出多余的人，不重叠走直出容易串特征）——拿不准就 overlap。
 
 hand_repair 只对单人有效，默认关；用户明确要修手才传 true。双人固定不修手。
 

@@ -23,21 +23,22 @@
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
 
-`draw` 使用 Windows ComfyUI 的固定 V8 API 工作流（`src/tools/draw/workflow.json`，单一模板单人双人共用，
-启动时结构契约校验：代码 rewiring 的角色节点缺位即拒启；2026-11-10 起不钉死 hash，模板迭代 = 改文件 + commit + deploy），
+`draw` 使用 Windows ComfyUI 的固定 V8 API 工作流（`src/tools/draw/workflow.json` 单人/直出 + `workflow-rs.json` RS 区域，启动时结构契约校验：代码 rewiring 的角色节点缺位即拒启；不钉死 hash，模板迭代 = 改文件 + commit + deploy），
 通过 `COMFYUI_URL` 指向 macmini 的 `127.0.0.1:18190` SSH 隧道；不接受模型传入工作流、节点、模型名或地址。
-文生图按初采样 30 步（cfg 4.5）→ 可选手部修复（`hand_repair`，默认关；hand_yolov8n 检测 + 16 步 / 0.25）
-→ `4x-AnimeSharp` 超分后 lanczos 缩放 0.5（净 2 倍）→ `PreviewImage` 输出。
-**没有脸修**（2026-11-10 主人裁定退役：一般不需要）、**没有二次采样**（2026-11-10 实测删除：全图低强度重采样在超分之后只销毁高频——
-单人 2x ×0.78、双人 2x ×0.69、脸部 ×0.62–0.77——旁路对照看不到任何修复收益，双人侧它的全图注意力还会抹平
-RS 点位隔离；旧模板的 `LatentUpscaleBy`（1.25）随之一并移除，超分只认 AnimeSharp 这一条）。
-文生图可选受控 `ratio`（7 档，默认 3:4 = 912×1216，长边 1216/1280 级）；改图沿用参考图比例（尺寸对齐可能略有偏差）。
-`hd` 是文生图与改图共用的高清档（2026-11-10）：只在用户明确要「高清大图 / 超级清楚 / 分辨率大点 / 当壁纸」时开，
-明显更慢，没提就不开。**采样与手修恒在净 2 倍域内，hd 的第三倍在超分之后用同一超分模型纯放大补齐**
-（节点 95/96/97，双人同构）——ESRGAN 放大是全卷积局部推理、无全图位置编码，纯放大不超域；
-实测在 3 倍 latent 上跑扩散（旧 hd 的二次采样，38,988 token ≈ 官方 3:4 档 6 倍）会把高频砍到 ×0.55、脸部 ×0.40。
-**不要把 hd 改回「先放大到 3 倍再采样」，也不要把二次采样加回管线**。
-`ref` 是整图重绘，不是蒙版局部编辑，同样走超分。图片通过 `type=temp` 取回本地 `gen/`，
+
+**管线（2026-11-10 晚定版）**：初采样 30 步（cfg 4.5，带轴扁平正向）→ 可选手修（`hand_repair`，默认关）→
+`4x-AnimeSharp` 超分 lanczos 0.5（净 2 倍）→ **质感 pass**（denoise 0.25 同域重采样，裸地板词 + 同内容，
+机械消除过扁平并加回真实感——M 组/L 组/P 组三夜实验定版）→ hd 第三倍纯放大（95/96/97，接 pass 之后）→ 输出。
+**没有脸修**（主人裁定退役）。词表四段式：正向初采样带四轴扁平（模板 node 4），pass 裸地板（node 71）；
+负向两遍同文（地板+monochrome / 防油锁 lips shiny skin abs oily airbrushed ssr / 碎线锁 sketch 系）。
+**约束**：pass 的 denoise 不许超 0.25 越界（M3 实测 0.35 唇形失控）；禁止把它改回超分前「修复」用途；
+禁止在 3 倍 latent 上跑任何扩散（旧 hd 事故：DiT 位置编码超域，高频砍到 ×0.55）。
+
+**双人路由（layout 参数，模型语义声明）**：`separate`（两人不重叠）→ RS 区域管线
+（`workflow-rs.json` + `makeRsGraph`：槽位 LoRA 身份隔离，pass 挂链式 LoRA 93→94，R2/R3 验证不融合）；
+`overlap`（贴身交叠，缺省）→ 单人管线直出（RS 在重叠场景必出复制头，床载体实验）。
+文生图可选受控 `ratio`（7 档，默认 3:4）；改图沿用参考图比例。`hd` 只在用户明确要高清时开。
+`ref` 是整图重绘，同样走超分与质感 pass。图片通过 `type=temp` 取回本地 `gen/`，
 Windows 输入上传限定 `yugang-ref-<uuid>.png`；计划任务 `Yugang-ComfyUI-RefCleanup` 使用
 `scripts/comfy-ref-cleanup.ps1` 的对应副本，每小时在登录用户会话中尝试清理 24 小时以上专用文件，
 ComfyUI 忙或队列状态不可用时不删除，不触碰其他 input。部署前须核对该任务与脚本已安装且可运行。
@@ -57,16 +58,17 @@ draw 的 `character` / `style` / `characters[].character` 在 Schema 里是**普
 输出给 ComfyUI 前统一 danbooru tag 形态（`normalizeTagForm`：`xxx_(yyy_zzz)` → `xxx \(yyy zzz\)`），
 注入串再过幂等括号转义（`escapeInjected`），免得触发词的下划线与括号被 prompt 语义吃掉。
 
-双人图走单人管线直出（RS 区域管线 2026-11-10 退役，`workflow-rs.json` 已删）：
-`characters[]` 恰好两项 → `makeGraph` 的 parts 分支，positive = 质量前缀 + `2girls` + 每人 inject/description + 场景，
-命名角色的 LoRA 走 `AnimaLoRARemapTagLoader` 链 93→94（与单人同款 loader，28→52 remap 原生生效）；
-超分 / hd 尾部与单人同链，**没有脸修、不做手修、没有二次采样**。
-**构图自由原则（主人裁定）**：工具不接受任何控制构图分布的参数；左右 / 上下 / 前后 / 拥抱重叠
-全由模型决定，按自然语言写进 description 与 prompt。风格四轴（线稿/阴影/光影）机械内置在模板质量前缀
-（场景级，单人双人同吃，无 opt-out）；负向轴钉在模板 node 5。退役依据（床载体 A/B）：RS 白盒内「真拥抱」与
-「不复制」互斥（重叠区 = 复制头 spawn 点；分离旋钮靠撬开全部重叠赢、拥抱随之消失），
-直出在人数 / 构图 / 身份三轴全胜（D 组实验，见 docs/plans/2026-11-10-rs-quality-experiment-design.md）。
-历史 RS 槽位 remap 补丁 `scripts/comfy-rs-remap-patch.py` 随 RS 退役仅存档（RS 节点包不再被生产使用）。
+双人按 `layout` 路由（2026-11-10 晚定稿，两路都过真实失败载体验证）：
+- **overlap（缺省）**：两人贴身交叠（拥抱/叠靠/趴身上）→ 单人管线直出（makeGraph 的 parts 分支，
+  positive = 质量地板 + 四轴 + `2girls` + 每人 inject/description + 场景，LoRA 链 93→94）。
+  依据：RS 在重叠场景必出复制头（床载体：重叠区 = 复制头 spawn 点）。
+- **separate**：两人不重叠（并排/对面/有缝）→ **RS 区域管线**（workflow-rs.json + makeRsGraph/runMulti）：
+  槽位结构身份隔离（鲸尾串色免疫，草地载体验证）；初采样带四轴扁平前缀，无脸修无手修。
+  依据：RS 非重叠场景 3/3 全干净，直出在同载体同 seed 下也有串色案底。
+- 两路尾部同链：超分 → 质感 pass（denoise 0.25 裸地板词 + 同套 LoRA，R3 验证不融合）→ [hd 纯放大] → 输出。
+**构图自由原则不变**：工具不接受点位/坐标参数，layout 只是管线选择，具体分布仍由自然语言决定。
+历史 RS 槽位 remap 补丁 `scripts/comfy-rs-remap-patch.py` 随 RS 复活重新生效
+（升级 comfyui-rs-multicharacter-sampler 节点包后必须重跑该脚本）。
 重启 ComfyUI 用 `scripts/comfy-restart-windows.ps1`（Windows 副本 `D:\ComfyUI-Anima\yugang-restart-comfyui.ps1`，
 Start-Process 独立进程树；WSL/ssh 会话里直接跑前台启动链会被会话回收带走）。
 `hand_repair` 只作用于单人图。

@@ -50,6 +50,11 @@
         "maxItems": 2,
         "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项；每项写 description，可选 character 表示该人是命名角色（默认挂角色 LoRA，仅用户明确不挂时省略）。构图（左右/上下/前后/重叠）由你决定并写进 description 与 prompt，工具不接受位置参数。人数由工具自动处理，不用写 2girls。与单人 character 互斥，双人不支持 style 和改图"
       },
+      "layout": {
+        "type": "string",
+        "enum": ["separate", "overlap"],
+        "description": "双人构图分布（仅 characters 时有意义）：separate = 两人不重叠（并排/面对面/中间有缝，含坐一起但身体不搭叠），overlap = 两人贴身交叠（拥抱/叠靠/趴身上/共享中轴）。缺省 overlap。看 description 里的互动词判断：有贴身/搭叠/拥抱类就 overlap，其余 separate"
+      },
       "hand_repair": {
         "type": "boolean",
         "description": "单人图是否自动修手，默认 false；要修手才传 true，对双人图不生效"
