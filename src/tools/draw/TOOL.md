@@ -35,6 +35,9 @@ prompt 写画面本身，用 danbooru tag 为主；普通 tag（cat_ears 之类�
 style=<风格 key> 挂全局画风 LoRA，不改 prompt，可与 character、ref 组合；
 风格权重由词表定，lora_weight 只影响角色 LoRA（0.4–1.1，默认 0.8）。
 
+用户明确要「高清大图 / 超级清楚 / 分辨率大点 / 当壁纸」时传 hd: true（3 倍放大，
+明显更慢）；平时不传，默认 2 倍。单人和双人通用。
+
 ## 双人
 
 双人同框必须传 characters，恰好两项，顺序左、右。每项写 description：

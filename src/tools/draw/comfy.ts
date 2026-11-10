@@ -39,6 +39,8 @@ function normalizeTagForm(text: string): string {
 }
 
 export interface ComfyDraw {
+  /** 高清模式：放大系数 2x→3x（AnimeSharp 4x 后缩放 0.75）。 */
+  hd?: boolean;
   prompt: string;
   bypass?: string;
   /** 人物级 bypass（pbypass: 段）：单角色无分区概念，追加在 bypass 之后（同一正向末尾）。 */
@@ -94,7 +96,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   }
   graph["90"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
   graph["91"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["90", 0], image: [args.handRepair === true ? "42" : "43", 0] } };
-  graph["92"] = { class_type: "ImageScaleBy", inputs: { image: ["91", 0], upscale_method: "lanczos", scale_by: 0.5 } };
+  graph["92"] = { class_type: "ImageScaleBy", inputs: { image: ["91", 0], upscale_method: "lanczos", scale_by: args.hd === true ? 0.75 : 0.5 } };
   graph["44"].inputs.pixels = ["92", 0];
   graph["13"].inputs.scale_by = 1;
   return graph;
@@ -108,6 +110,8 @@ export interface MultiPart {
 }
 export interface MultiDraw {
   prompt: string;
+  /** 高清模式：放大系数 2x→3x（AnimeSharp 4x 后缩放 0.75）。 */
+  hd?: boolean;
   width: number;
   height: number;
   seed?: number;
@@ -163,6 +167,7 @@ export function makeRsGraph(args: MultiDraw): Graph {
   const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;
   Object.assign(g["5"].inputs, { prompt: [commonPrompt, args.bypass].filter(Boolean).join(", "), negative_prompt: String(TEMPLATE["5"].inputs.text), width: args.width, height: args.height, seed });
   g["32"].inputs.text = String(TEMPLATE["5"].inputs.text);
+  g["62"].inputs.scale_by = args.hd === true ? 0.75 : 0.5;
   g["40"].inputs.text = multiSceneText(args);
   g["61"].inputs.image = ["5", 0];
   g["64"].inputs.seed = postSeed;
