@@ -23,7 +23,7 @@
   "4": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "text": "masterpiece, best quality, absurdres, score_7, score_8, score_9, \nnewest, year 2025, detailed, novel illustration, game cg, anime, ",
+      "text": "masterpiece, best quality, absurdres, score_7, score_8, score_9, \nnewest, year 2025, detailed, novel illustration, game cg, anime, clean lineart, thin lines, cel shading, hard-edged shadows, painterly shading, visible brushstrokes, multi-tone shading, cinematic lighting, directional light, strong rim light, dramatic shadows, dappled sunlight, ",
       "clip": [
         "2",
         0

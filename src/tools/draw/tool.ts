@@ -17,6 +17,7 @@ interface DrawArgs {
   ratio?: keyof typeof RATIO_SIZES;
   hand_repair?: boolean;
   hd?: boolean;
+  plain_style?: boolean;
   ref?: string;
   character?: string;
   lora_weight?: number;
@@ -112,7 +113,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       try {
         const stageCb = deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined;
         const bp = deps.bypassOf?.(round);
-        const png = await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, handRepair: args.hand_repair ?? false, hd: args.hd === true, ref, lora, parts: multiParts, bypass: bp?.bypass, bypassP: bp?.pbypass }, () => { state.submitted = true; }, stageCb);
+        const png = await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, handRepair: args.hand_repair ?? false, hd: args.hd === true, ref, lora, parts: multiParts, plainStyle: args.plain_style === true, bypass: bp?.bypass, bypassP: bp?.pbypass }, () => { state.submitted = true; }, stageCb);
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
         const file = `${Date.now()}-${randomUUID()}.png`;

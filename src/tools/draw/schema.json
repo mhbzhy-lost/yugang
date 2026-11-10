@@ -56,6 +56,10 @@
         "maximum": 1.1,
         "description": "LoRA 强度：0.4–1.1，默认 0.8。不够像就调高，脸崩或画面被污染就调低；传了 character 或 characters[].character 时有意义"
       },
+      "plain_style": {
+        "type": "boolean",
+        "description": "关掉机械内置的默认风格四轴（干净细线稿 + cel/硬边阴影/笔触质感/多调/腮红 + 分层光影）：仅当用户明确要纯扁平 / chibi / 水彩 / 素描等其它特定画风时传 true 并自己在 prompt 写风格词；平时不传"
+      },
       "hand_repair": {
         "type": "boolean",
         "description": "单人图是否自动修手，默认 false；要修手才传 true，对双人图不生效"
