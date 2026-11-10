@@ -18,7 +18,7 @@ for (const [id, cls] of TEMPLATE_CONTRACT) {
 }
 if (TEMPLATE["1"]?.inputs.unet_name !== "DeltaMix 3.8B V8.safetensors") throw new Error("draw workflow contract mismatch: unet");
 
-// ── RS 区域管线模板（2026-11-10 复活：layout=separate 双人专用；overlap 双人走单人直出）──
+// ── RS 区域管线模板（2026-11-11 起双人唯一管线：characters 两项一律走 RS，无 layout 路由）──
 const RS_TEMPLATE = JSON.parse(readFileSync(new URL("./workflow-rs.json", import.meta.url)).toString("utf8")) as Graph;
 const RS_TEMPLATE_CONTRACT: Array<[string, string]> = [
   ["1", "UNETLoader"], ["4", "RSMultiCharacterPrompts"], ["5", "RSMultiCharacterSampler"],
@@ -52,7 +52,7 @@ function normalizeTagForm(text: string): string {
 }
 
 export interface ComfyDraw {
-  /** 高清模式：净 3 倍出图；采样与脸修恒在 2 倍域内，第三倍在脸修后纯放大补齐。 */
+  /** 高清模式：净 3 倍出图；采样与质感 pass 恒在 2 倍域内，第三倍在 pass 后纯放大补齐。 */
   hd?: boolean;
   prompt: string;
   bypass?: string;
@@ -127,7 +127,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   return graph;
 }
 
-/** 双人直出的一位：此人的描述 + 可选角色 LoRA（身份锚）。 */
+/** RS 区域管线的一位：此人的描述 + 可选角色 LoRA（身份锚）+ 可选 region 盒（画面份额）。 */
 export interface MultiPart {
   text: string;
   role?: { file: string; weight: number; inject: string };
@@ -171,7 +171,7 @@ function multiRoleTags(part: MultiPart): string {
   return (part.role?.inject ?? "").split(",").map((tag) => tag.trim()).filter((tag) => tag && !/^(?:1girl|solo)$/i.test(tag)).join(", ");
 }
 
-/** RS 区域管线：非重叠双人的身份隔离由槽位结构保证；重叠双人走单人直出（床载体复制头实验）。 */
+/** RS 区域管线（双人唯一路径）：身份隔离由槽位 LoRA + region 盒保证；重叠场景复制头风险已知并接受（主人裁定不做路由分流）。 */
 export function makeRsGraph(args: MultiDraw): Graph {
   validateParts(args.parts);
   const g = structuredClone(RS_TEMPLATE);
@@ -308,7 +308,7 @@ export async function runComfy(url: string, args: ComfyDraw, onSubmitted: () => 
   finally { busy = false; }
 }
 
-/** RS 区域双管线（layout=separate）：提交 RS 图并轮询到成功，输出取 node 66。 */
+/** RS 区域管线（双人唯一路径）：提交 RS 图并轮询到成功，输出取 node 66。 */
 export async function runMulti(url: string, args: MultiDraw, onSubmitted: () => void): Promise<Buffer> {
   if (busy) throw new ComfyBusy("ComfyUI busy");
   busy = true;

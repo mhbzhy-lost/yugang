@@ -63,7 +63,7 @@
                 "height"
               ],
               "additionalProperties": false,
-              "description": "此人在画面里的矩形区域（画布归一化 0-1；x/y 是盒中心，width/height 是尺寸）。区域≈人物的画面份额：远景渺小人物用小盒（如 w0.12 h0.25），全身近景用高盒（如 w0.3 h0.85），拥抱等贴身构图两人的盒大幅重叠。不填走默认分区（人物偏大）"
+              "description": "此人在画面里的矩形区域（画布归一化 0-1；x/y 是盒中心，width/height 是尺寸）。区域≈人物的画面份额：远景渺小人物用小盒（如 w0.12 h0.25），全身近景用高盒（如 w0.3 h0.85）。贴身构图（拥抱/并肩）两人的盒也各自独立、只轻度相邻，别大幅重叠（重叠区会触发复制头/肢体错位），亲密感写进 description。不填走默认分区（人物偏大）"
             }
           },
           "required": [
@@ -73,7 +73,7 @@
         },
         "minItems": 2,
         "maxItems": 2,
-        "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项；每项写 description，可选 character 表示该人是命名角色（默认挂角色 LoRA，仅用户明确不挂时省略）。构图（左右/上下/前后/重叠）由你决定并写进 description 与 prompt，工具不接受位置参数。人数由工具自动处理，不用写 2girls。与单人 character 互斥，双人不支持 style 和改图"
+        "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项；每项写 description，可选 character 表示该人是命名角色（默认挂角色 LoRA，仅用户明确不挂时省略）。每个人在画面的位置与大小用 region 声明（见 region 字段），景别与构图意图同时写进 description 与 prompt。人数由工具自动处理，不用写 2girls。与单人 character 互斥，双人不支持 style 和改图"
       },
       "hand_repair": {
         "type": "boolean",
