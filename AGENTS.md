@@ -39,6 +39,14 @@ ComfyUI 忙或队列状态不可用时不删除，不触碰其他 input。部署
 之后 AnimeSharp 2 倍超分、低强度全图采样（16 步 / 0.30）与脸修（20 步 / 0.25）；**不做手修**。
 双人请求可在 `characters[].character` 挂各自的角色 LoRA（映射到 `RSMultiCharacterPrompts` 的
 `characterN_lora` 字段），不做 YOLO/SAM 分割、没有 Impact 回退分支。
+**槽位 LoRA 的 remap 补丁（2026-11-09）**：槽位在节点内部按文件名原生加载 LoRA（无 remap），
+而角色 LoRA 是 28 块老 Anima、基座是 52 块 DeltaMix 3.8B V8，直挂会错层崩坏；Windows 侧 RS 节点包
+带本仓库补丁 `scripts/comfy-rs-remap-patch.py`（幂等；在槽位加载内按 Anima-Remap manifest 重写块号，
+语义同单人 `AnimaLoRARemapTagLoader` 的 extend off；首跑备份 `regional_lora.py.pre-yugang-remap`）。
+**升级 comfyui-rs-multicharacter-sampler 节点包后必须重跑该脚本**（锚点不匹配会报错拒写，不会静默错patch）。
+重启 ComfyUI 用 `scripts/comfy-restart-windows.ps1`（Windows 副本 `D:\ComfyUI-Anima\yugang-restart-comfyui.ps1`，
+Start-Process 独立进程树；WSL/ssh 会话里直接跑前台启动链会被会话回收带走）。
+生效指纹：`runtime-lan.log` 里 `RS MC character N LoRA <file> remapped 28->52 blocks`。
 `hand_repair` 只作用于单人图。
 
 **入口只注册**（2026-11-05）：`src/index.ts` 不写任何业务逻辑，只有 `app.use(...)`
