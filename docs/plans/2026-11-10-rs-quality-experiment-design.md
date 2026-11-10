@@ -331,3 +331,38 @@ P7c 若胜出 → 进 TOOL.md 双人互动写法守则（互动词只写 common�
 - P8（prior 0 / boost 0.05）：1/2 干净，不稳定。
 - P7c（互动只写 common 一次）：2/2 仍复制 → common 驱动整场含重叠区，写法搬家无效。
 结论：RS 白盒下「真拥抱 + 不复制」不可兼得；要兼得只能走无盒管线 → D 组。
+
+## 15. U 组：动作遵循战役（2026-11-10 立项）
+
+**目标形态**：鱼（LLM）自由设计动作 → 输出确定性姿势产物 → ComfyUI 消费。
+产物选定 **OpenPose COCO-18 JSON**（`people[].pose_keypoints_2d` = 18 点 × (x,y,conf)，
+画布坐标 + canvas 宽高，conf 0 = 缺失关节）——LLM 最好写、机械校验容易（坐标范围/关节顺序/骨架常识）。
+
+**消费机器 = RS 包姿势线**（包在 Windows 上仍装着；我们退役的只是 box 布局用法）：
+- `RSMultiCharacterPoseMasks`：pose_json → 姿势遮罩引导（软条件，遮罩贴解剖形状而非死框）；
+- `RSMultiCharacterPose3D`：MHR scene JSON（相机 + 每人位置/旋转/缩放 + 关节角），
+  `pose_control=auto` 时采样器内挂 pose adapter（可能存在硬姿势条件）——表达强但对 LLM 难，二期再议；
+- 包作者自带 Anima 拥抱示例（`anima-hug-api.json` + `front-hug-frame.json` 关键点），
+  示例负向词含 duplicate character / fused bodies——同款失败他在防。
+
+**关键不确定性**（实验要回答的）：
+1. 姿势遮罩在我们的 DeltaMix 3.8B V8 基座上是否有效（mask-only 软引导的遵循度）；
+2. pose adapter（auto）是否存在/对 Anima 系有效；
+3. RS 的复制头失败在姿势遮罩下会不会复发（拥抱姿势天然重叠——但遮罩贴解剖，与 box 撬缝机制不同）；
+4. 单人姿势控制是否稳定（无重叠 → 无复制头风险面）。
+
+**U 组矩阵**：
+- U0 示例复现：anima-hug-api 原图（基座换 DeltaMix、CLIP/VAE 同款），seed 11/22。
+  判读：拥抱姿势成立？复制头？→ 决定整条线可行性。
+- U0b 遮罩强度扫描：thickness 0.5/1.0/2.0、body_part_strength 0/0.4，同一姿势同一 seed。
+- U1 单人姿势：鱼自写关键点（抱臂 / 挥手），character_count=1，对照直出同 prompt 同 seed。
+- U2 载体验证：床载体（elysia+eden 槽位 LoRA + remap 补丁）+ front-hug-frame 关键点，
+  回答「姿势控制能否修好我们失败最多的拥抱场景且不复制头」。
+- 判读方式：主人肉眼（对照骨架渲染图 vs 成品）；人脸计数做人数下界。
+
+**生产形态（实验胜出后）**：draw 增可选 `pose` 参数（一~两人的 OpenPose JSON），
+带姿势请求 → RS 姿势管线（槽位 LoRA 保身份）；无姿势 → 直出管线。TOOL.md 写关键点语义
+速查表（18 点含义/画布坐标/缺关节写法/常见姿势模板），模型侧自由设计。
+
+**方向备胎**（若 mask-only 遵循度不够且 pose adapter 不存在）：
+pose3d scene JSON 一档；tile LLLite 骨架图锚定一档（未验证，先验低）。
