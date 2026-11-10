@@ -35,6 +35,16 @@ prompt 写画面本身，用 danbooru tag 为主；普通 tag（cat_ears 之类�
 style=<风格 key> 挂全局画风 LoRA，不改 prompt，可与 character、ref 组合；
 风格权重由词表定，lora_weight 只影响角色 LoRA（0.4–1.1，默认 0.8）。
 
+用户要「更有质感 / 光影更好 / 别太纸片」时，在 prompt 末尾补风格四轴词汇：
+- 线稿轴：clean lineart, thin lines
+- 阴影轴：cel shading, hard-edged shadows, painterly shading, visible brushstrokes, multi-tone shading, blush
+- 光影轴：cinematic lighting, directional light, strong rim light, dramatic shadows, dappled sunlight
+负向轴已机械内置在模板（封锁 photorealistic / 油腻皮肤 / 喷枪渐变），不用写也不要写「不要什么」。
+实测反例：soft gradient、soft volumetric lighting、light rays、light particles 会把整图
+压成 pastel 洗白；detailed skin shading、subtle shadow 单独用出喷枪渐变皮肤（欧美油腻感）。
+男性角色或冷调请求可省 blush。用户明确要纯扁平 / chibi 时只留线稿轴，不补阴影轴和光影轴。
+双人：线稿轴与阴影轴写进各自 description，光影轴写进 prompt（全局场景）；构图词与风格轴不冲突。
+
 用户明确要「高清大图 / 超级清楚 / 分辨率大点 / 当壁纸」时传 hd: true（3 倍放大，
 明显更慢）；平时不传，默认 2 倍。单人和双人通用。
 

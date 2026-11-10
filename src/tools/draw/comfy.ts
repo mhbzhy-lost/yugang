@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 type Node = { class_type: string; inputs: Record<string, unknown> };
 type Graph = Record<string, Node>;
 
-const WORKFLOW_HASH = "b2ea5b8e1f46903f0295a2ce355705c15ed263c21c1bf338dc7fd29c058a9e60";
+const WORKFLOW_HASH = "c2128915fbc4a2b46ab33e043fb4dc2b8ded1380ecc3564f8999932eb46619ca";
 const GRAPH_BYTES = readFileSync(new URL("./workflow.json", import.meta.url));
 if (createHash("sha256").update(GRAPH_BYTES).digest("hex") !== WORKFLOW_HASH) throw new Error("draw workflow hash mismatch");
 const TEMPLATE = JSON.parse(GRAPH_BYTES.toString("utf8")) as Graph;
