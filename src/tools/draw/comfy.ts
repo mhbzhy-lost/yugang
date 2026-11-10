@@ -114,8 +114,9 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
       for (const id of ["4", "5", "11", "42"]) graph[id].inputs.clip = [last, 1];
     }
     // 脸修 positive 改场景-only：crop 后位置词失效，全文会把另一人的特征画到这张脸上。
-    graph["41"] = { class_type: "CLIPTextEncode", inputs: { clip: up.clip, text: `${prefix}2girls, ${normalizeTagForm(args.prompt)}${suffix}` } };
-    graph["11"].inputs.positive = ["41", 0];
+    // node 44：二次采样删除后空闲（41 是手部检测器加载器，双人沿用不得占用）。
+    graph["44"] = { class_type: "CLIPTextEncode", inputs: { clip: up.clip, text: `${prefix}2girls, ${normalizeTagForm(args.prompt)}${suffix}` } };
+    graph["11"].inputs.positive = ["44", 0];
   }
   if (args.ref) {
     if (!inputName || !/^yugang-ref-[a-f0-9-]{36}\.png$/.test(inputName)) throw new Error("invalid draw input name");
