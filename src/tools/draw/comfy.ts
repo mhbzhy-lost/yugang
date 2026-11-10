@@ -1,14 +1,21 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 type Node = { class_type: string; inputs: Record<string, unknown> };
 type Graph = Record<string, Node>;
 
-const WORKFLOW_HASH = "77011cb650b9306ff19b59dfd30b048c11ec47d6e78e7962bdeb5c5b9ea54591";
-const GRAPH_BYTES = readFileSync(new URL("./workflow.json", import.meta.url));
-if (createHash("sha256").update(GRAPH_BYTES).digest("hex") !== WORKFLOW_HASH) throw new Error("draw workflow hash mismatch");
-const TEMPLATE = JSON.parse(GRAPH_BYTES.toString("utf8")) as Graph;
-if (TEMPLATE["1"]?.inputs.unet_name !== "DeltaMix 3.8B V8.safetensors" || TEMPLATE["9"]?.class_type !== "PreviewImage") throw new Error("draw workflow contract mismatch");
+const TEMPLATE = JSON.parse(readFileSync(new URL("./workflow.json", import.meta.url)).toString("utf8")) as Graph;
+// 结构契约（2026-11-10 起不钉死 hash，主人裁定：改模板不再同步常量）：代码要 rewiring 的角色节点
+// 必须在场且 class 正确，缺任何一个启动即炸，绝不带病出图。模板迭代 = 改本文件 + commit + deploy。
+const TEMPLATE_CONTRACT: Array<[string, string]> = [
+  ["1", "UNETLoader"], ["4", "CLIPTextEncode"], ["5", "CLIPTextEncode"], ["6", "EmptySD3LatentImage"],
+  ["7", "KSampler"], ["9", "PreviewImage"], ["11", "FaceDetailer"], ["42", "FaceDetailer"],
+  ["91", "ImageUpscaleWithModel"], ["92", "ImageScaleBy"],
+];
+for (const [id, cls] of TEMPLATE_CONTRACT) {
+  if (TEMPLATE[id]?.class_type !== cls) throw new Error(`draw workflow contract mismatch: node ${id} != ${cls}`);
+}
+if (TEMPLATE["1"]?.inputs.unet_name !== "DeltaMix 3.8B V8.safetensors") throw new Error("draw workflow contract mismatch: unet");
 
 
 /**

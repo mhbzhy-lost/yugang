@@ -23,7 +23,8 @@
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
 
-`draw` 使用 Windows ComfyUI 的固定 V8 API 工作流（`src/tools/draw/workflow.json`，SHA-256 固定校验），
+`draw` 使用 Windows ComfyUI 的固定 V8 API 工作流（`src/tools/draw/workflow.json`，单一模板单人双人共用，
+启动时结构契约校验：代码 rewiring 的角色节点缺位即拒启；2026-11-10 起不钉死 hash，模板迭代 = 改文件 + commit + deploy），
 通过 `COMFYUI_URL` 指向 macmini 的 `127.0.0.1:18190` SSH 隧道；不接受模型传入工作流、节点、模型名或地址。
 文生图按初采样 30 步（cfg 4.5）→ 可选手部修复（`hand_repair`，默认关；hand_yolov8n 检测 + 16 步 / 0.25）
 → `4x-AnimeSharp` 超分后 lanczos 缩放 0.5（净 2 倍）→ 人脸修复（face_yolov8n + 20 步 / 0.25）
