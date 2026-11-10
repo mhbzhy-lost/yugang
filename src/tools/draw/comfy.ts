@@ -50,8 +50,6 @@ export interface ComfyDraw {
   lora?: { file: string; weight: number; inject: string };
   /** 双人直出：恰好两位，构图由模型决定；角色 LoRA 走 93/94 链。与 lora 互斥。 */
   parts?: MultiPart[];
-  /** 关掉机械默认风格四轴（用户明确要纯扁平/chibi/其它特定画风时）。 */
-  plainStyle?: boolean;
   ref?: { png: Buffer; strength: number };
 }
 
@@ -68,11 +66,8 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   graph["7"].inputs.cfg = args.cfg ?? 4.5;
   graph["6"].inputs.width = args.width ?? 912;
   graph["6"].inputs.height = args.height ?? 1216;
-  const prefixRaw = String(graph["4"].inputs.text);
+  const prefix = String(graph["4"].inputs.text);
   const suffix = (args.bypass ? `, ${args.bypass}` : "") + (args.bypassP ? `, ${args.bypassP}` : "");
-  // 风格四轴机械内置在模板质量前缀（场景级，单人双人同吃）；plain_style 按精确子串剥离 opt-out。
-  const STYLE_AXES = "clean lineart, thin lines, cel shading, hard-edged shadows, painterly shading, visible brushstrokes, multi-tone shading, cinematic lighting, directional light, strong rim light, dramatic shadows, dappled sunlight, ";
-  const prefix = args.plainStyle === true ? prefixRaw.replace(STYLE_AXES, "") : prefixRaw;
   if (args.parts !== undefined) {
     validateParts(args.parts);
     if (args.lora) throw new Error("invalid draw parts with lora");

@@ -234,11 +234,11 @@ export function findSection(entry: CharacterEntry, raw: string): CharacterSectio
   return bestHits > 0 && !tie ? best : undefined;
 }
 
-/** draw 用：角色 LoRA 的文件名与机械注入串；style 组不可当角色挂。 */
-export function loraBook(key: string): { file: string; inject: string } | undefined {
+/** draw 用：角色 LoRA 的文件名、机械注入串与表内预设权重；style 组不可当角色挂。 */
+export function loraBook(key: string): { file: string; inject: string; weight: number } | undefined {
   const entry = byKey(key);
   if (!entry || entry.group === "style") return undefined;
-  return { file: entry.lora, inject: entry.inject };
+  return { file: entry.lora, inject: entry.inject, weight: typeof entry.weight === "number" ? entry.weight : 0.8 };
 }
 
 /** draw 用：风格 LoRA 的文件名与表内权重；角色组不可当风格挂。 */

@@ -17,10 +17,8 @@ interface DrawArgs {
   ratio?: keyof typeof RATIO_SIZES;
   hand_repair?: boolean;
   hd?: boolean;
-  plain_style?: boolean;
   ref?: string;
   character?: string;
-  lora_weight?: number;
   characters?: Array<{ character?: string; description: string }>;
 }
 
@@ -28,7 +26,6 @@ const RATIO_SIZES = {
   "1:1": [1056, 1056], "3:4": [912, 1216], "4:3": [1216, 912],
   "2:3": [832, 1248], "3:2": [1248, 832], "9:16": [720, 1280], "16:9": [1280, 720],
 } as const;
-const LORA_WEIGHT_RANGE = [0.4, 1.1] as const;
 type RoundState = { round: unknown; pending: boolean; submitted: boolean; used: boolean };
 const rounds = new Map<string, RoundState>();
 const REF_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic", ".heif"]);
@@ -77,9 +74,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       if (args.character !== undefined) {
         const book = loraBook(args.character);
         if (!book) throw new Error(renderTemplate(deps.prompts.messages["draw_character"] ?? "{{key}}", { key: args.character }));
-        const weight = args.lora_weight ?? 0.8;
-        if (typeof weight !== "number" || !Number.isFinite(weight) || weight < LORA_WEIGHT_RANGE[0] || weight > LORA_WEIGHT_RANGE[1]) throw new Error(deps.prompts.messages["draw_lora_weight"] ?? "draw_lora_weight");
-        lora = { file: book.file, weight, inject: book.inject };
+        lora = { file: book.file, weight: book.weight, inject: book.inject };
       }
       let style: ComfyDraw["style"];
       if (args.style !== undefined) {
@@ -94,12 +89,10 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         if (args.style !== undefined || args.ref !== undefined) throw new Error(deps.prompts.messages["draw_multi_unsupported"] ?? "draw_multi_unsupported");
         if (!Array.isArray(args.characters) || args.characters.length !== 2) throw new Error(deps.prompts.messages["draw_characters_count"] ?? "draw_characters_count");
         if (args.characters.some((part) => !part || typeof part !== "object" || typeof part.description !== "string" || !part.description.trim())) throw new Error(deps.prompts.messages["draw_multi_sides"] ?? "draw_multi_sides");
-        const weight = args.lora_weight ?? 0.8;
-        if (typeof weight !== "number" || !Number.isFinite(weight) || weight < LORA_WEIGHT_RANGE[0] || weight > LORA_WEIGHT_RANGE[1]) throw new Error(deps.prompts.messages["draw_lora_weight"] ?? "draw_lora_weight");
         multiParts = args.characters.map((part, index) => {
           const book = part.character === undefined ? undefined : loraBook(part.character);
           if (part.character !== undefined && !book) throw new Error(renderTemplate(deps.prompts.messages["draw_character"] ?? "{{key}}", { key: part.character }));
-          return { text: part.description.trim(), ...(book ? { role: { file: book.file, weight, inject: book.inject } } : {}) };
+          return { text: part.description.trim(), ...(book ? { role: { file: book.file, weight: book.weight, inject: book.inject } } : {}) };
         });
       }
       if (round === undefined) throw new Error(deps.prompts.messages["draw_round_missing"] ?? "draw_round_missing");
@@ -113,7 +106,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       try {
         const stageCb = deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined;
         const bp = deps.bypassOf?.(round);
-        const png = await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, handRepair: args.hand_repair ?? false, hd: args.hd === true, ref, lora, parts: multiParts, plainStyle: args.plain_style === true, bypass: bp?.bypass, bypassP: bp?.pbypass }, () => { state.submitted = true; }, stageCb);
+        const png = await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, handRepair: args.hand_repair ?? false, hd: args.hd === true, ref, lora, parts: multiParts, bypass: bp?.bypass, bypassP: bp?.pbypass }, () => { state.submitted = true; }, stageCb);
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
         const file = `${Date.now()}-${randomUUID()}.png`;

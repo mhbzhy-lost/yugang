@@ -63,7 +63,7 @@ draw 的 `character` / `style` / `characters[].character` 在 Schema 里是**普
 （牙、瞳孔、耳朵之类）画到这张脸上（串色）；超分 / 脸修 / hd 尾部与单人同链，**不做手修、没有二次采样**。
 **构图自由原则（主人裁定）**：工具不接受任何控制构图分布的参数；左右 / 上下 / 前后 / 拥抱重叠
 全由模型决定，按自然语言写进 description 与 prompt。风格四轴（线稿/阴影/光影）机械内置在模板质量前缀
-（场景级，单人双人同吃），`plain_style` 在装配期按精确子串剥离 opt-out；负向轴钉在模板 node 5。退役依据（床载体 A/B）：RS 白盒内「真拥抱」与
+（场景级，单人双人同吃，无 opt-out）；负向轴钉在模板 node 5。退役依据（床载体 A/B）：RS 白盒内「真拥抱」与
 「不复制」互斥（重叠区 = 复制头 spawn 点；分离旋钮靠撬开全部重叠赢、拥抱随之消失），
 直出在人数 / 构图 / 身份三轴全胜（D 组实验，见 docs/plans/2026-11-10-rs-quality-experiment-design.md）。
 历史 RS 槽位 remap 补丁 `scripts/comfy-rs-remap-patch.py` 随 RS 退役仅存档（RS 节点包不再被生产使用）。
