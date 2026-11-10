@@ -137,9 +137,14 @@ function multiRoleTags(part: MultiPart): string {
   return (part.role?.inject ?? "").split(",").map((tag) => tag.trim()).filter((tag) => tag && !/^(?:1girl|solo)$/i.test(tag)).join(", ");
 }
 
+/**
+ * 二次采样（denoise 0.30 全图）与脸修（denoise 0.25 按脸 crop）共用 node 40 的全局提示。
+ * 这里绝不能放角色描述：脸修 crop 后「左/右」位置词失效，合并提示会把另一侧的特征
+ * （牙、瞳孔、耳朵之类）画到这张脸上。角色身份由初采样的 RS 区域管线负责，
+ * 后两道低强度 pass 只按已画好的画面微调，只保留质量前缀与场景。
+ */
 function multiSceneText(args: MultiDraw): string {
-  const describe = (part: MultiPart) => [escapeInjected(normalizeTagForm(multiRoleTags(part))), normalizeTagForm(part.text)].filter(Boolean).join(", ");
-  return String(TEMPLATE["4"].inputs.text) + "2girls, on the left side: " + describe(args.parts[0]) + ", on the right side: " + describe(args.parts[1]) + ", " + args.prompt + (args.bypass ? ", " + args.bypass : "");
+  return String(TEMPLATE["4"].inputs.text) + (/^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`) + (args.bypass ? ", " + args.bypass : "");
 }
 
 /** 双人唯一管线：RS 点位独立提示 → AnimeSharp → 低强度二次采样 → 脸修。 */
