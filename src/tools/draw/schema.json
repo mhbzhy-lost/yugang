@@ -34,17 +34,7 @@
           "properties": {
             "character": {
               "type": "string",
-              "enum": [
-                "claude",
-                "deepseek",
-                "qwen",
-                "glm",
-                "kimi",
-                "gpt",
-                "gemini",
-                "grok"
-              ],
-              "description": "角色 LoRA 键：先用 tags 查角色拿 key；填了会挂 LoRA 并注入官方外观，不填表示普通人物"
+              "description": "该位的角色 LoRA 键：先用 tags 查角色拿 key；填了挂 LoRA 并注入官方外观，不填表示普通人物"
             },
             "description": {
               "type": "string",

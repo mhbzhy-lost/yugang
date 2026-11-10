@@ -32,8 +32,6 @@ export interface CharacterEntry {
   readonly base: string;
   readonly source: string;
   readonly match: readonly string[];
-  /** 该角色在 danbooru 的规范 tag 形式；用于检测「模型把角色 tag 手写进 prompt 却没传 key」。 */
-  readonly danbooru: readonly string[];
   readonly sections: readonly CharacterSection[];
 }
 
@@ -89,11 +87,6 @@ function parseEntry(raw: unknown, where: string): CharacterEntry {
   if (!Array.isArray(match) || match.length === 0 || match.some((m) => typeof m !== "string" || !m.trim())) {
     fail(`${where} match 必须是非空字符串数组`);
   }
-  const danbooruRaw = raw["danbooru"];
-  if (danbooruRaw !== undefined && (!Array.isArray(danbooruRaw) || danbooruRaw.some((t) => typeof t !== "string" || !t.trim()))) {
-    fail(`${where} danbooru 必须是非空字符串数组`);
-  }
-  const danbooru = Array.isArray(danbooruRaw) ? (danbooruRaw as string[]) : [];
   const sectionsRaw = raw["sections"];
   if (!Array.isArray(sectionsRaw)) fail(`${where} sections 必须是数组`);
   if (group !== "style" && sectionsRaw.length === 0) fail(`${where} 角色条目 sections 不能为空`);
@@ -121,7 +114,6 @@ function parseEntry(raw: unknown, where: string): CharacterEntry {
     base,
     source,
     match: match as string[],
-    danbooru,
     sections,
   };
   return entry;
@@ -259,26 +251,6 @@ export function styleBook(key: string): { file: string; weight: number } | undef
 /** tags 用：总表（可只列一组），顺序固定为 ai-girls → honkai3rd → styles。 */
 export function listCharacters(group?: EntryGroup): readonly CharacterEntry[] {
   return group === undefined ? CHARACTERS : CHARACTERS.filter((entry) => entry.group === group);
-}
-
-/** 提示词归一化：去转义反斜杠、下划线当空格，供角色 tag 检测用。 */
-function normalizePrompt(text: string): string {
-  return text.normalize("NFKC").toLowerCase().replace(/\\/g, "").replace(/\s*\(/g, " (").replace(/_+/g, " ").replace(/\s+/g, " ").trim();
-}
-
-const DANBOORU_INDEX: ReadonlyArray<{ alias: string; entry: CharacterEntry }> = CHARACTERS
-  .flatMap((entry) => entry.danbooru.map((alias) => ({ alias: normalizePrompt(alias), entry })))
-  .filter((row) => row.alias.length >= 8)
-  .sort((a, b) => b.alias.length - a.alias.length);
-
-/**
- * 检测一段提示词里手写的角色 danbooru tag。
- * 只认表内显式登记的形式（长别名优先），命中即返回条目；用于「没传 key 就打回」的机械闸。
- */
-export function detectCharacterTag(text: string): CharacterEntry | undefined {
-  const normalized = normalizePrompt(text);
-  if (!normalized) return undefined;
-  return DANBOORU_INDEX.find((row) => normalized.includes(row.alias))?.entry;
 }
 
 export function characterKeys(): readonly string[] {
