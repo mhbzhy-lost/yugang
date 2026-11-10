@@ -180,6 +180,8 @@ export function makeRsGraph(args: MultiDraw): Graph {
   const seed = args.seed ?? randomBytes(4).readUInt32BE();
   const passSeed = randomBytes(4).readUInt32BE();
   const suffix = args.bypass ? `, ${args.bypass}` : "";
+  const anyRegion = args.parts.some((part) => part.region !== undefined);
+  if (anyRegion) g["4"].inputs.layout_mode = "mixed"; // 有 region 才进 mixed，否则保持模板 points 默认（旧布局行为）
   for (let i = 0; i < 2; i++) {
     const part = args.parts[i];
     const s = g["4"].inputs;
@@ -187,18 +189,16 @@ export function makeRsGraph(args: MultiDraw): Graph {
     s[`character${i + 1}_lora`] = part.role?.file ?? "None";
     s[`character${i + 1}_lora_strength`] = part.role?.weight ?? 1;
     s[`character${i + 1}_lora_clip_strength`] = part.role?.weight ?? 1;
-    // Position 节点（6）：声明了区域用 box，否则 point 缺省（同旧布局行为）
-    const pos = g["6"].inputs;
+    // 几何直接写 node 4（RSMultiCharacterPrompts 自带 x/y/width/height/geometry，无需 Position 节点）：
+    // 声明了 region 用 box，否则 point（mixed 模式下 point 槽位走自动划分，同旧布局）。
     if (part.region !== undefined) {
-      pos[`character${i + 1}_geometry`] = "box";
-      pos[`character${i + 1}_x`] = part.region.x;
-      pos[`character${i + 1}_y`] = part.region.y;
-      pos[`character${i + 1}_width`] = part.region.width;
-      pos[`character${i + 1}_height`] = part.region.height;
-    } else {
-      pos[`character${i + 1}_geometry`] = "point";
-      pos[`character${i + 1}_x`] = 0.5;
-      pos[`character${i + 1}_y`] = 0.5;
+      s[`character${i + 1}_geometry`] = "box";
+      s[`character${i + 1}_x`] = part.region.x;
+      s[`character${i + 1}_y`] = part.region.y;
+      s[`character${i + 1}_width`] = part.region.width;
+      s[`character${i + 1}_height`] = part.region.height;
+    } else if (anyRegion) {
+      s[`character${i + 1}_geometry`] = "point";
     }
   }
   const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;

@@ -98,7 +98,7 @@
         0
       ],
       "character_pipe": [
-        "6",
+        "4",
         0
       ],
       "prompt": "clean lineart, thin lines, cel shading, hard-edged shadows, painterly shading, visible brushstrokes, multi-tone shading, cinematic lighting, directional light, strong rim light, dramatic shadows, dappled sunlight, ",
@@ -223,16 +223,6 @@
       ],
       "vae": [
         "3",
-        0
-      ]
-    }
-  },
-  "6": {
-    "class_type": "RSMultiCharacterPosition",
-    "inputs": {
-      "character_count": 2,
-      "building_pipe": [
-        "4",
         0
       ]
     }
