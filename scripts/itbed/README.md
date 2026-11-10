@@ -29,7 +29,7 @@ IT bed 的口径是「与生产上层能力一致」，一致性靠**清单 + �
 node scripts/itbed/parity/pull-parity.ts
 ```
 
-前置：home-mac-connect skill 的凭据在位（`~/.agents/skills/home-mac-connect/`，可用 `ITBED_CONNECT_SH` 换路径）。
+前置：`home-connect` 的入口和凭据在位（`~/.agents/skills/home-connect/`）。`ITBED_CONNECT_SH` 可覆盖为直接接受 `--` 参数的 Mac 连接脚本。
 远程只有三条只读命令：`echo $HOME`、`git rev-parse HEAD`、`cat fish.config.json`、`cat .env`（经 connect.sh，不写 macmini 任何文件）。
 
 拉完后 **先 `git diff scripts/itbed/parity/parity-manifest.json` 人看一眼再入库**——manifest 是生产快照，它的每次变化都意味着线上参数变了，IT 场景基线要跟着确认。

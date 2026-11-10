@@ -172,7 +172,7 @@ T1 (弹药补货制：fish-config + index 触发器) ──> T2 (legacy 下线�
 - `docs/plans/2026-11-04-engage-next-only-ammo-refill.run.md`（运行记录：部署横幅、三群启动行、news 验证原文与时间戳——F2/F4 的证据位置）
 - （远程）mini `~/yugang/.env`、`~/yugang/fish.config.json`
 
-**Resources：** mini SSH 连接（`/Users/mhbzhy/.agents/skills/home-mac-connect/SKILL.md`，执行前必须先 read 该 skill 并用 `scripts/connect.sh --` 执行远程命令；禁止自拼 ssh）；部署窗口避开整点新闻播报（10:30 触发前后 10 分钟不部署）。
+**Resources：** mini SSH 连接（`/Users/mhbzhy/.agents/skills/home-connect/SKILL.md`，执行前必须先 read 该 skill 并用 `scripts/connect.sh --` 执行远程命令；禁止自拼 ssh）；部署窗口避开整点新闻播报（10:30 触发前后 10 分钟不部署）。
 
 **接口契约：**
 - Consumes：T1+T2 代码（已 push 到 main）。
@@ -203,7 +203,7 @@ T1 (弹药补货制：fish-config + index 触发器) ──> T2 (legacy 下线�
     "模型可见文字只来自 prompt/ 与工具包四件套；src/ 内不得出现 ≥12 汉字 prompt 字面量",
     "未经用户明确授权不新增测试文件；既有测试可随生产改动同步调整",
     "不默认 git commit；提交仅在用户授权时按 git-commit-convention 执行",
-    "mini 操作必须经 home-mac-connect skill 的 scripts/connect.sh，禁止自拼 ssh",
+    "mini 操作必须经 home-connect skill 的 scripts/connect.sh，禁止自拼 ssh",
     "engage 配置块保留时序字段（closedMinutes/openMinutes/shardSeconds 等），只删 groups"
   ],
   "resources": [],
@@ -246,7 +246,7 @@ T1 (弹药补货制：fish-config + index 触发器) ──> T2 (legacy 下线�
         "executable": "bash",
         "args": [
           "-lc",
-          "S=/Users/mhbzhy/.agents/skills/home-mac-connect; $S/scripts/connect.sh -- 'cd ~/yugang && grep \"搭话开窗 next 启动\" var/fish-console.log | tail -5' | grep -v -E 'WARNING|post-quantum|decrypt|upgraded' | { ok=1; for g in 659976571 184875934 174408629; do grep -q \"$g\" || ok=0; done; [ \"$ok\" = 1 ]; }"
+          "S=/Users/mhbzhy/.agents/skills/home-connect; $S/scripts/connect.sh mac -- 'cd ~/yugang && grep \"搭话开窗 next 启动\" var/fish-console.log | tail -5' | grep -v -E 'WARNING|post-quantum|decrypt|upgraded' | { ok=1; for g in 659976571 184875934 174408629; do grep -q \"$g\" || ok=0; done; [ \"$ok\" = 1 ]; }"
         ],
         "timeoutSeconds": 120
       },
@@ -261,7 +261,7 @@ T1 (弹药补货制：fish-config + index 触发器) ──> T2 (legacy 下线�
         "executable": "bash",
         "args": [
           "-lc",
-          "S=/Users/mhbzhy/.agents/skills/home-mac-connect; $S/scripts/connect.sh -- 'cd ~/yugang && python3 -c \"import json;print(json.load(open(\\\"fish.config.json\\\"))[\\\"news\\\"][\\\"targetGroup\\\"] )\"' | grep -v -E 'WARNING|post-quantum|decrypt|upgraded' | grep -q 659976571"
+          "S=/Users/mhbzhy/.agents/skills/home-connect; $S/scripts/connect.sh mac -- 'cd ~/yugang && python3 -c \"import json;print(json.load(open(\\\"fish.config.json\\\"))[\\\"news\\\"][\\\"targetGroup\\\"] )\"' | grep -v -E 'WARNING|post-quantum|decrypt|upgraded' | grep -q 659976571"
         ],
         "timeoutSeconds": 120
       },
@@ -337,7 +337,7 @@ T1 (弹药补货制：fish-config + index 触发器) ──> T2 (legacy 下线�
     {
       "id": "T3",
       "agent": "delegate",
-      "task": "依据 docs/plans/2026-11-04-engage-next-only-ammo-refill.md 的 Task T3 完成 mini 配置迁移与部署验证。必须先 read /Users/mhbzhy/.agents/skills/home-mac-connect/SKILL.md 并只用其 scripts/connect.sh -- 执行远程命令：备份后改 ~/yugang/.env 的 GROUPS=659976571,184875934,174408629 与 fish.config.json（删 engagement/engage.groups/ambientMinIntervalSeconds/watchAmbientChance、ammo.slots=[]，engage 块以 T2 实际保留的时序字段为准），然后 npm run deploy（PATH 加 /opt/homebrew/bin），验证部署横幅、三群「搭话开窗 next 启动」行、news.targetGroup=659976571。部署窗口避开 10:30 前后 10 分钟。横幅 8 秒未出或三群缺一或 loader 告警异常即停止上报，恢复 *.bak 配置备份即止，不动 main 分支不自行 revert/push，回滚等用户决策。F5（空库补货触发）为部署后观察项：弹药空时日志出现「补货逛轮」行，不阻塞终态。T1/T2 的 commit 需用户授权后按 git-commit-convention 提交并 push，再部署。 产物：把部署横幅、三群启动行、news 验证原文与时间戳写入 docs/plans/2026-11-04-engage-next-only-ammo-refill.run.md（运行记录，F2/F4 的证据位置）。",
+      "task": "依据 docs/plans/2026-11-04-engage-next-only-ammo-refill.md 的 Task T3 完成 mini 配置迁移与部署验证。必须先 read /Users/mhbzhy/.agents/skills/home-connect/SKILL.md 并只用其 scripts/connect.sh -- 执行远程命令：备份后改 ~/yugang/.env 的 GROUPS=659976571,184875934,174408629 与 fish.config.json（删 engagement/engage.groups/ambientMinIntervalSeconds/watchAmbientChance、ammo.slots=[]，engage 块以 T2 实际保留的时序字段为准），然后 npm run deploy（PATH 加 /opt/homebrew/bin），验证部署横幅、三群「搭话开窗 next 启动」行、news.targetGroup=659976571。部署窗口避开 10:30 前后 10 分钟。横幅 8 秒未出或三群缺一或 loader 告警异常即停止上报，恢复 *.bak 配置备份即止，不动 main 分支不自行 revert/push，回滚等用户决策。F5（空库补货触发）为部署后观察项：弹药空时日志出现「补货逛轮」行，不阻塞终态。T1/T2 的 commit 需用户授权后按 git-commit-convention 提交并 push，再部署。 产物：把部署横幅、三群启动行、news 验证原文与时间戳写入 docs/plans/2026-11-04-engage-next-only-ammo-refill.run.md（运行记录，F2/F4 的证据位置）。",
       "deps": [
         "T1",
         "T2"

@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "generatedAt": "2026-11-03T03:47:48.275Z",
   "source": {
-    "host": "home-mac（zhanghaiyang-nas.local，经 home-mac-connect 中继）",
+    "host": "home-mac（zhanghaiyang-nas.local，经 home-connect 中继）",
     "fishConfigPath": "/Users/zhanghaiyang/yugang/fish.config.json",
     "envPath": "/Users/zhanghaiyang/yugang/.env",
     "transport": "connect.sh -- （ssh/scp 只读：echo $HOME / git rev-parse HEAD / cat ×2）",

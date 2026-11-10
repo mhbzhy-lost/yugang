@@ -65,7 +65,7 @@ T1 (真机探索: mask 通道 + inpaint 调优 + 链式拓扑实测)
 
 **WritePaths：** 无仓库写入。产出在 `/tmp/draw-multi-survey.md` 与临时脚本 `/tmp/draw-multi-*.ts`。
 
-**Resources：** Windows ComfyUI 在线（SSH 隧道，1 个并发）；通道：先 read `/Users/mhbzhy/.agents/skills/home-windows-connect/SKILL.md` 再按其 `scripts/connect.sh` 用（禁止自动杭州中继）。
+**Resources：** Windows ComfyUI 在线（SSH 隧道，1 个并发）；通道：先 read `/Users/mhbzhy/.agents/skills/home-connect/SKILL.md` 再按其 `scripts/connect.sh windows` 用（禁止隐式切换中继）。
 
 **Files：**
 - Create：`/tmp/draw-multi-survey.md`、`/tmp/draw-multi-probe.ts`（探索脚本，不进仓库）
@@ -191,7 +191,7 @@ T1 (真机探索: mask 通道 + inpaint 调优 + 链式拓扑实测)
 
 **WritePaths：** `/tmp/draw-multi-e2e.ts`（验收脚本，仓库外）、`/tmp/draw-multi-e2e.png`。
 
-**Resources：** Windows ComfyUI 在线（SSH 隧道，1 个并发）；通道同 T1（先 read `/Users/mhbzhy/.agents/skills/home-windows-connect/SKILL.md`）。
+**Resources：** Windows ComfyUI 在线（SSH 隧道，1 个并发）；通道同 T1（先 read `/Users/mhbzhy/.agents/skills/home-connect/SKILL.md`）。
 
 **Files：**
 - Create：`/tmp/draw-multi-e2e.ts`（验收脚本，仓库外）、`/tmp/draw-multi-e2e.png`、`/tmp/draw-multi-e2e.log`（阶段时序与耗时日志）

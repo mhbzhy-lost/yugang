@@ -6,7 +6,7 @@ description: 维护「鱼缸」这个 QQ 群机器人时使用：查状态、看
 # 鱼缸运维
 
 **生产现场在 macmini**（macmini，仓库 `~/yugang`）；数据默认在仓库 `var/`（迁移期间一度在 `~/鱼缸/var`，现已回归），
-本地开发机仓库里的 `var/` 是迁移前旧副本，与新默认并存，**不要在本地起鱼**。日常运维一律用本 skill 的 `scripts/fish.sh`（内部经 home-mac-connect 的 connect.sh 在 macmini 上执行）：
+本地开发机仓库里的 `var/` 是迁移前旧副本，与新默认并存，**不要在本地起鱼**。日常运维一律用本 skill 的 `scripts/fish.sh`（内部经 `home-connect` 的 Mac 兼容入口在 macmini 上执行）：
 
 ```bash
 scripts/fish.sh status               # 数据目录 / 幂等表 / 原话簿概况
@@ -22,7 +22,7 @@ scripts/fish.sh help                 # 全部子命令（其它命令原样透�
 部署流程（见仓库 AGENTS.md「部署」）：本地开发 + `npm test` → commit/push → `fish.sh deploy`。
 
 **`fish.sh` 只能在本地开发机跑**：它内部经 connect.sh ssh 到 macmini，macmini 上并没有
-`home-mac-connect` 这个 skill（在 mini 上直接跑会报「找不到 connect.sh」）。
+`home-connect` 的本机凭据（在 mini 上直接跑会报「找不到 connect.sh」）。
 
 `deploy` 单次约 15–20 秒（优雅停机最多 16s + pull + 启动 + 等横幅），**用后台异步方式跑**，
 不要和 npm test / git push 串在一条阻塞命令里干等；完成后再读日志确认横幅。

@@ -2,22 +2,36 @@
 # 远程操作 macmini（macmini）上的鱼 —— 鱼的唯一生产现场。
 # 本地 var/ 是迁移前旧副本，不要在本地起鱼；一切运维走本脚本。
 set -euo pipefail
-CONNECT="${HOME_MAC_CONNECT:-$HOME/.agents/skills/home-mac-connect/scripts/connect.sh}"
-[ -x "$CONNECT" ] || { echo "找不到 home-mac-connect 的 connect.sh：$CONNECT"; exit 1; }
+if [ -n "${HOME_CONNECT:-}" ]; then
+  CONNECT="$HOME_CONNECT"
+  CONNECT_MODE=unified
+elif [ -n "${HOME_MAC_CONNECT:-}" ]; then
+  # 历史覆盖入口直接接受 --；不把统一入口的 mac 子命令加给它。
+  CONNECT="$HOME_MAC_CONNECT"
+  CONNECT_MODE=direct
+else
+  CONNECT="$HOME/.agents/skills/home-connect/scripts/connect.sh"
+  CONNECT_MODE=unified
+fi
+[ -x "$CONNECT" ] || { echo "找不到 home-connect 的 connect.sh：$CONNECT"; exit 1; }
+remote() {
+  if [ "$CONNECT_MODE" = direct ]; then exec "$CONNECT" -- "$@"; fi
+  exec "$CONNECT" mac -- "$@"
+}
 PREFIX='export PATH=/opt/homebrew/bin:$PATH; cd ~/yugang &&'
 CMD="${1:-status}"
 [ $# -gt 0 ] && shift || true
 
 case "$CMD" in
-  status)            exec "$CONNECT" -- "$PREFIX npm run ops status 2>&1" ;;
-  digest)            exec "$CONNECT" -- "$PREFIX node scripts/ops.ts digest $* 2>&1" ;;
-  usage)             exec "$CONNECT" -- "$PREFIX node scripts/ops.ts usage $* 2>&1" ;;
-  probe)             exec "$CONNECT" -- "$PREFIX npm run probe 2>&1" ;;
-  ping)              exec "$CONNECT" -- "$PREFIX npm run ping 2>&1" ;;
-  log)               N="${1:-40}"; exec "$CONNECT" -- "cd ~/yugang && tail -n $N var/fish-console.log 2>&1" ;;
-  ps)                exec "$CONNECT" -- 'ps aux | grep -E "src/index.ts|memes.ts" | grep -v grep' ;;
-  deploy)            exec "$CONNECT" -- "$PREFIX npm run deploy 2>&1" ;;
-  memes)             exec "$CONNECT" -- "$PREFIX npm run memes status 2>&1" ;;
+  status)            remote "$PREFIX npm run ops status 2>&1" ;;
+  digest)            remote "$PREFIX node scripts/ops.ts digest $* 2>&1" ;;
+  usage)             remote "$PREFIX node scripts/ops.ts usage $* 2>&1" ;;
+  probe)             remote "$PREFIX npm run probe 2>&1" ;;
+  ping)              remote "$PREFIX npm run ping 2>&1" ;;
+  log)               N="${1:-40}"; remote "cd ~/yugang && tail -n $N var/fish-console.log 2>&1" ;;
+  ps)                remote 'ps aux | grep -E "src/index.ts|memes.ts" | grep -v grep' ;;
+  deploy)            remote "$PREFIX npm run deploy 2>&1" ;;
+  memes)             remote "$PREFIX npm run memes status 2>&1" ;;
   help|--help|-h)
     cat <<'EOF'
 用法：fish.sh <子命令> [参数]   —— 全部在 macmini 的 ~/yugang 下执行
@@ -33,5 +47,5 @@ case "$CMD" in
   其它任意命令原样透传，如：fish.sh npm test
 EOF
     ;;
-  *)                 exec "$CONNECT" -- "$PREFIX $CMD $* 2>&1" ;;
+  *)                 remote "$PREFIX $CMD $* 2>&1" ;;
 esac

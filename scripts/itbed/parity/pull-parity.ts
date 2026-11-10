@@ -8,7 +8,7 @@
  *   3. macmini ~/yugang/.env 的键清单与值（token 类脱敏为长度占位；MASTER_QQ/GROUPS 等保留）
  *
  * 只读保证：全部远程命令只有 `echo $HOME`、`git rev-parse HEAD`、`cat <文件>`，
- * 统一走 home-mac-connect skill 的 connect.sh（禁止自行拼 ssh/scp）。
+ * 统一走 home-connect skill 的 connect.sh（禁止自行拼 ssh/scp）。
  * 脱敏约定（与任务口径一致）：
  *   - 真正脱敏的只有 token/密钥类：键名命中 /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|KEY/i
  *     → 值替换为 `<redacted:len=N>`（长度占位，便于核对长度没有误伤）。
@@ -49,16 +49,18 @@ function fail(msg: string, code: number): never {
 function connectShPath(): string {
   const p =
     process.env.ITBED_CONNECT_SH ??
-    join(process.env.HOME ?? "", ".agents/skills/home-mac-connect/scripts/connect.sh");
+    join(process.env.HOME ?? "", ".agents/skills/home-connect/scripts/connect.sh");
   if (!existsSync(p)) {
-    fail(`找不到 home-mac-connect 的 connect.sh（${p}）；可用环境变量 ITBED_CONNECT_SH 指定路径`, 2);
+    fail(`找不到 home-connect 的 connect.sh（${p}）；可用环境变量 ITBED_CONNECT_SH 指定路径`, 2);
   }
   return p;
 }
 
 /** 经 connect.sh 执行一条只读远程命令，返回 stdout。绝不打印 .env 原文（cat 的 stdout 只在内存流转）。 */
 function runRemote(args: string[], label: string): string {
-  const r = spawnSync(connectShPath(), ["--", ...args], {
+  // 历史覆盖脚本直接接受 --；默认统一入口需要 mac 子命令。
+  const prefix = process.env.ITBED_CONNECT_SH ? ["--"] : ["mac", "--"];
+  const r = spawnSync(connectShPath(), [...prefix, ...args], {
     encoding: "utf8",
     timeout: 60_000,
     maxBuffer: 10 * 1024 * 1024,
@@ -115,7 +117,7 @@ function main(): void {
   const outArgIdx = process.argv.indexOf("--out");
   const outPath = outArgIdx !== -1 && process.argv[outArgIdx + 1] ? resolve(process.argv[outArgIdx + 1]) : DEFAULT_OUT;
 
-  console.log("[pull-parity] 经 home-mac-connect 只读拉取 macmini parity 基准…");
+  console.log("[pull-parity] 经 home-connect 只读拉取 macmini parity 基准…");
 
   // 1. 远端 HOME（用于 manifest 记录绝对路径；只读）
   const remoteHome = runRemote(["echo", "$HOME"], "echo $HOME").trim();
@@ -148,7 +150,7 @@ function main(): void {
     manifestVersion: 1,
     generatedAt: new Date().toISOString(),
     source: {
-      host: "home-mac（zhanghaiyang-nas.local，经 home-mac-connect 中继）",
+      host: "home-mac（zhanghaiyang-nas.local，经 home-connect 中继）",
       fishConfigPath: `${remoteHome}/yugang/fish.config.json`,
       envPath: `${remoteHome}/yugang/.env`,
       transport: "connect.sh -- （ssh/scp 只读：echo $HOME / git rev-parse HEAD / cat ×2）",

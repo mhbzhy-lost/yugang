@@ -14,7 +14,7 @@
 - **workflow.json 与 `WORKFLOW_HASH` 不变**：角色 LoRA 走动态注入（"93" 节点模板硬编码在 comfy.ts），与既有 "88"（hsr）、"19"/"20"（ref）、"90"–"92"（超分）同一模式。
 - **迁移语义 = 拷贝**：WebUI 侧原件不动；只把确认名单里的文件拷入 ComfyUI 的 `models/loras/`。
 - **初期只收 AI 娘系角色**（大肥鱼/克劳德/GPT 娘/Gemini 娘等社区 AI 拟人），其他题材后续另行计划；最终名单以 T1 报告 + 主人确认为准。
-- **Windows 操作只经 `/Users/mhbzhy/.agents/skills/home-windows-connect/SKILL.md` 描述的 `scripts/connect.sh windows -- <cmd>`**（LAN 优先→Tailscale，禁止自动走杭州中继）；不重启 Windows/WSL、不动防火墙/Tailscale/OpenSSH。
+- **Windows 操作只经 `/Users/mhbzhy/.agents/skills/home-connect/SKILL.md` 描述的 `scripts/connect.sh windows -- <cmd>`**（仅家庭 LAN，WSL 中继需显式选择）；不重启 Windows/WSL、不动防火墙/OpenSSH。
 - `comfyUrl()` 的 `127.0.0.1` 强约束不放宽；联调脚本可直连 Windows 的 ComfyUI 临时地址（仅验证，不进生产路径）。
 - 不 commit、不 push、不部署（主人已明确「不急部署」）。
 - 新增测试仅作为「建议（待用户授权）」；既有断言可随本变更最小同步（需在任务报告中说明每一处）。
@@ -75,7 +75,7 @@ T1 (侦察: WebUI LoRA 清单 + ComfyUI 现状 + 主人确认名单)
 - Suggested Test（待用户授权）：无
 
 **接口契约：**
-- Consumes：`/Users/mhbzhy/.agents/skills/home-windows-connect/SKILL.md`（先 read 再用，`scripts/connect.sh windows -- <cmd>`；SD WebUI 可能跑在 WSL，必要时 `connect.sh wsl -- <cmd>`）
+- Consumes：`/Users/mhbzhy/.agents/skills/home-connect/SKILL.md`（先 read 再用，`scripts/connect.sh windows -- <cmd>`；SD WebUI 可能跑在 WSL，必要时 `connect.sh wsl -- <cmd>`）
 - Produces：`/tmp/draw-lora-survey.md`，必须含两章——①「候选清单」每行四元组 `角色键名建议 | lora 文件名 | 触发词线索 | 特征 tags 建议`（触发词线索来自 `.civitai.info`/`.json` 旁文件、文件名、训练集备注；找不到就写「无旁文件，需人工定」）+ 文件字节数 + 主题判断依据；②「环境事实」：SD WebUI 与 ComfyUI 各自安装路径（Windows 原生还是 WSL）、ComfyUI 监听端口、`models/loras/` 现有文件清单、ComfyUI 是否在线（`curl /system_stats` 结果）
 
 **终态关联：** `F1`（本任务产出名单与环境事实，是全计划的数据源）。
@@ -84,7 +84,7 @@ T1 (侦察: WebUI LoRA 清单 + ComfyUI 现状 + 主人确认名单)
 
 - [ ] **步骤 1：通读 skill 并连通 Windows**
 
-先 read `/Users/mhbzhy/.agents/skills/home-windows-connect/SKILL.md`，按其路由用 `scripts/connect.sh windows-check` 确认通道，再定位 SD WebUI 安装（典型 `models/Lora/` 或 WSL 内路径）与 ComfyUI 安装。禁止自动 fallback 杭州中继。
+先 read `/Users/mhbzhy/.agents/skills/home-connect/SKILL.md`，按其路由用 `scripts/connect.sh windows-check` 确认通道，再定位 SD WebUI 安装（典型 `models/Lora/` 或 WSL 内路径）与 ComfyUI 安装。禁止自动 fallback 杭州中继。
 
 - [ ] **步骤 2：枚举 LoRA 与元数据**
 
@@ -108,7 +108,7 @@ T1 (侦察: WebUI LoRA 清单 + ComfyUI 现状 + 主人确认名单)
 
 **WritePaths：** 无仓库写入。写入目标为 Windows 上 ComfyUI 的 `models/loras/` 目录（经 connect.sh 远程操作）。
 
-**Resources：** Windows 机器访问（1 个并发）；大文件拷贝走 `connect.sh large-check` 前置（LAN 优先，Tailscale 必须 direct）。
+**Resources：** Windows 机器访问（1 个并发）；大文件拷贝走 `connect.sh windows large-check` 前置，仅在家庭 LAN 已证明时执行。
 
 **Files：**
 - Create：Windows ComfyUI `models/loras/<名单内文件>`（拷贝）

@@ -11,7 +11,7 @@
 ## 全局约束
 
 - **现役实例不可动**：9880/9881/9882 三个 launchd 服务、其 plist、权重、参考音频，在 T8 切换前一律不修改、不重启；新模型只上新端口 9883（v2ProPlus）/ 9884（v4）。
-- **三台机器操作只经 skills**：`~/.agents/skills/home-mac-connect/SKILL.md`、`~/.agents/skills/home-windows-connect/SKILL.md`、`~/.agents/skills/home-lan-connect/SKILL.md`；禁止自拼 ssh/scp；不读任何凭据文件。
+- **三台机器操作只经 skills**：`~/.agents/skills/home-connect/SKILL.md`；禁止自拼 ssh/scp；不读任何凭据文件。
 - **Windows 显存竞争**：SD WebUI 原生常驻（~3.9G）；vLLM（WSL，现 stopped）拉起期间不得开训；每次训练启动前 `nvidia-smi` 确认可用余量 ≥16G。
 - **长任务一律后台化**：nohup / 后台 + 日志文件落盘，SSH 会话断开不致死；恢复时先查日志断点。
 - **仓库改动范围仅限**：`src/tts.ts`（合成超时默认值与 `TtsConfig` 注释）、`src/index.ts`（`toolTimeoutOverrides` 增加 `say` 条目）、`AGENTS.md`（语音节/§15 数值同步、过期欠账改写）；macmini 的 `fish.config.json`（仅 voices 切换；`toolTimeoutSeconds` 保持 30 不动）。其余仓库文件不动。
@@ -75,7 +75,7 @@ T3 (基线测量，独立) ─────────────────�
 - Create：`D:\datasets\elysia\uvr5\`（1183 wav）、`D:\datasets\elysia\sliced\`（749 wav）、`D:\datasets\elysia\reports\T1-inventory.md`
 
 **接口契约：**
-- Consumes：macmini `~/tts/datasets/elysia/语音/` 三档（盘点报告为权威：`2切片后` 749 wav+7 pkf、`3处理后` 1183 wav）；home-mac-connect 新命令 `get-lan`
+- Consumes：macmini `~/tts/datasets/elysia/语音/` 三档（盘点报告为权威：`2切片后` 749 wav+7 pkf、`3处理后` 1183 wav）；home-connect 的 `mac get-lan`
 - Produces：Windows 上 UVR5 档与切片档（ASCII 路径），计数/字节数与盘点一致，供 T2 直接消费
 
 **终态关联：** `F1`（数据集就位）
@@ -83,7 +83,7 @@ T3 (基线测量，独立) ─────────────────�
 **验收标准：**
 - [ ] 步骤 1：核对 macmini 源——三档目录与盘点报告一致（1183/749/261）；`1未处理` **不传输**（留 macmini 作源备份）
 - [ ] 步骤 2：打包——macmini 上把 `3处理后`（改名为 `uvr5/`）与 `2切片后`（改名为 `sliced/`，剔除 7 个 .pkf；子目录映射为 ASCII 名，映射表记录）打成单个 tar；`connect.sh get-lan` 拉到本地（先 lan-check）；**全程禁用中继 get**
-- [ ] 步骤 3：LAN 传 Windows——经 home-windows-connect 的 LAN 入口（large-check 通过后）传到 `D:\datasets\elysia\` 并解包（tar 内容已全 ASCII，规避代码页问题）
+- [ ] 步骤 3：LAN 传 Windows——经 home-connect 的 Windows LAN 入口（large-check 通过后）传到 `D:\datasets\elysia\` 并解包（tar 内容已全 ASCII，规避代码页问题）
 - [ ] 步骤 4：核对——uvr5 1183 个、sliced 749 个，字节总量与 macmini 侧一致（双端 manifest sha256 或字节数+抽样 sha）；抽查 5 条 ffprobe 时长/采样率
 - [ ] 步骤 5：写 `T1-inventory.md`（引用 macmini 盘点报告 + Windows 落位清单 + 目录映射表）；清理三处暂存（macmini /tmp tar、本地 /tmp tar、本地 `/tmp/elysia_tx` 旧中继分卷）
 

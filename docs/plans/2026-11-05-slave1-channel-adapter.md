@@ -295,7 +295,7 @@ T0 ──> T6a ─────────────────────�
   `config/auth.json`、`.env`、`fish.config.json` 就位（含 `CHANNELS=none`）。
   依赖：T5（最终代码）、T6a（Node）、T0（模型连通）。
   做法：rsync 本地仓库（排除 `var/`、`.env`、`config/models.json`、`config/auth.json`、
-  `node_modules/`）→ 单独传 `node_modules/`；从 macmini 经 home-mac-connect 取
+  `node_modules/`）→ 单独传 `node_modules/`；从 macmini 经 home-connect 取
   `config/models.json` + `config/auth.json`（本地临时文件 → 上传 → `chmod 600`，任何环节不打印内容）。
   验收：F4 全通过。
   停止条件：`npm run ping` 失败且定位到 provider/代理配置（不是 TCP 栈）→ 先只保留
