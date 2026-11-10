@@ -13,6 +13,7 @@ scripts/fish.sh status               # 数据目录 / 幂等表 / 原话簿概�
 scripts/fish.sh digest [日期] [群号] # 复盘某天某个群
 scripts/fish.sh probe                # QQ 侧验收
 scripts/fish.sh log 60               # 鱼日志尾部
+scripts/fish-logs.sh -m 30 -g 659976571 # 一次拉齐最近消息/DB事件/在途任务/鱼日志/协议端日志
 scripts/fish.sh deploy               # git pull + 平滑重启（标准部署入口）
 scripts/fish.sh memes                # 表情包库状态（本地批量导入：主人把图放进 media/meme-inbox/ 再让鱼逐批登记）
 scripts/fish.sh help                 # 全部子命令（其它命令原样透传）
