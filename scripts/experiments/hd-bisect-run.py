@@ -154,7 +154,7 @@ def main():
 
     result = {"tag": tag, "prompt_id": prompt_id, "stages": {}}
     for node_id in previews:
-        source = str(graph[node_id]["inputs"]["images"][0][0])
+        source = str(graph[node_id]["inputs"]["images"][0])
         stage = STAGE_OF_SOURCE.get(source, "final")
         images = job.get("outputs", {}).get(node_id, {}).get("images", [])
         if len(images) != 1:

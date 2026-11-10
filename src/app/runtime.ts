@@ -572,7 +572,7 @@ export async function bootRuntime(): Promise<void> {
       .catch((error: unknown) => console.error("[fish] working drain failed", error instanceof Error ? error.message : error));
   },
   // draw 阶段进度机械提示（不过模型）：comfy ws 的阶段事件回调，sketch=初采样完成、
-  // refine=二次采样完成。与 onLongWork 同款：轮类型闸、同轮同阶段只发一次、
+  // refine=脸修开始。与 onLongWork 同款：轮类型闸、同轮同阶段只发一次、
   // 幂等键 stage:draw:<round>:<stage>、入队后立即冲 outbox；失败只打日志不影响出图。
   onDrawStage: (round, stage) => {
     const key = String(round);

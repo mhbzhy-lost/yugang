@@ -4,18 +4,18 @@ import { readFileSync } from "node:fs";
 type Node = { class_type: string; inputs: Record<string, unknown> };
 type Graph = Record<string, Node>;
 
-const WORKFLOW_HASH = "d948b4e5d4ff3d42620d32d070af391aa1ad199c811d589bf60131df561c408b";
+const WORKFLOW_HASH = "b2ea5b8e1f46903f0295a2ce355705c15ed263c21c1bf338dc7fd29c058a9e60";
 const GRAPH_BYTES = readFileSync(new URL("./workflow.json", import.meta.url));
 if (createHash("sha256").update(GRAPH_BYTES).digest("hex") !== WORKFLOW_HASH) throw new Error("draw workflow hash mismatch");
 const TEMPLATE = JSON.parse(GRAPH_BYTES.toString("utf8")) as Graph;
 if (TEMPLATE["1"]?.inputs.unet_name !== "DeltaMix 3.8B V8.safetensors" || TEMPLATE["9"]?.class_type !== "PreviewImage") throw new Error("draw workflow contract mismatch");
 
 // ── 双人管线（独立模板，与单人管线互不影响）──
-const RS_WORKFLOW_HASH = "fcbd6e8011b7721753a487a49116075f10db72eb92b62d53208a0a697b13682a";
+const RS_WORKFLOW_HASH = "db329c9dfbf6812cccd4a70f9bc94142faeedc16fc57c82115ddd8cc4e16b7d3";
 const RS_BYTES = readFileSync(new URL("./workflow-rs.json", import.meta.url));
 if (createHash("sha256").update(RS_BYTES).digest("hex") !== RS_WORKFLOW_HASH) throw new Error("draw RS workflow hash mismatch");
 const RS_TEMPLATE = JSON.parse(RS_BYTES.toString("utf8")) as Graph;
-if (RS_TEMPLATE["4"]?.class_type !== "RSMultiCharacterPrompts" || RS_TEMPLATE["5"]?.class_type !== "RSMultiCharacterSampler" || RS_TEMPLATE["61"]?.class_type !== "ImageUpscaleWithModel" || RS_TEMPLATE["64"]?.class_type !== "KSampler" || RS_TEMPLATE["66"]?.class_type !== "PreviewImage" || RS_TEMPLATE["101"]?.class_type !== "FaceDetailer") throw new Error("draw RS workflow contract mismatch");
+if (RS_TEMPLATE["4"]?.class_type !== "RSMultiCharacterPrompts" || RS_TEMPLATE["5"]?.class_type !== "RSMultiCharacterSampler" || RS_TEMPLATE["61"]?.class_type !== "ImageUpscaleWithModel" || RS_TEMPLATE["62"]?.class_type !== "ImageScaleBy" || RS_TEMPLATE["66"]?.class_type !== "PreviewImage" || RS_TEMPLATE["101"]?.class_type !== "FaceDetailer") throw new Error("draw RS workflow contract mismatch");
 
 /**
  * ComfyUI 的 CLIPTextEncode 把半角括号当权重语法（`(xxx)` = 1.1）；
@@ -66,7 +66,7 @@ export function comfyUrl(value: string): string {
 export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   const graph = structuredClone(TEMPLATE);
   const seed = args.seed ?? randomBytes(4).readUInt32BE();
-  for (const id of ["7", "11", "14", "42"]) graph[id].inputs.seed = seed;
+  for (const id of ["7", "11", "42"]) graph[id].inputs.seed = seed;
   graph["7"].inputs.cfg = args.cfg ?? 4.5;
   graph["6"].inputs.width = args.width ?? 912;
   graph["6"].inputs.height = args.height ?? 1216;
@@ -75,7 +75,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     // 风格 LoRA：全局画风，挂在底模之后、角色 LoRA 之前（节点 88）。
     if (!/^[\w .@()-]+\.safetensors$/.test(args.style.file) || !Number.isFinite(args.style.weight) || args.style.weight < 0.4 || args.style.weight > 1.1) throw new Error("invalid draw style");
     graph["88"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: ["1", 0], clip: ["2", 0], text: `<lora:${args.style.file}:${args.style.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
-    for (const id of ["7", "11", "14", "42"]) graph[id].inputs.model = ["88", 0];
+    for (const id of ["7", "11", "42"]) graph[id].inputs.model = ["88", 0];
     for (const id of ["4", "5", "11", "42"]) graph[id].inputs.clip = ["88", 1];
   }
   if (args.lora) {
@@ -83,7 +83,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     if (!/^[\w .@()-]+\.safetensors$/.test(args.lora.file) || !Number.isFinite(args.lora.weight) || args.lora.weight < 0.4 || args.lora.weight > 1.1) throw new Error("invalid draw lora");
     const upstream = args.style ? { model: ["88", 0], clip: ["88", 1] } : { model: ["1", 0], clip: ["2", 0] };
     graph["93"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: upstream.model, clip: upstream.clip, text: `<lora:${args.lora.file}:${args.lora.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
-    for (const id of ["7", "11", "14", "42"]) graph[id].inputs.model = ["93", 0];
+    for (const id of ["7", "11", "42"]) graph[id].inputs.model = ["93", 0];
     for (const id of ["4", "5", "11", "42"]) graph[id].inputs.clip = ["93", 1];
   }
   if (args.ref) {
@@ -94,13 +94,11 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     graph["7"].inputs.denoise = args.ref.strength;
     delete graph["6"];
   }
-  graph["90"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
-  graph["91"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["90", 0], image: [args.handRepair === true ? "42" : "43", 0] } };
-  // 二次采样与脸修恒在净 2 倍域内跑：实测 3x 时 node 14 在 ~6x 官方 token 数上把高频能量砍到 ×0.55（脸部 ×0.40，
-  // 线稿断成虚线），2x 时只温和损失 ×0.78。hd 的第三倍改在脸修之后用同一超分模型纯放大补齐，采样不进超域。
-  graph["92"] = { class_type: "ImageScaleBy", inputs: { image: ["91", 0], upscale_method: "lanczos", scale_by: 0.5 } };
-  graph["44"].inputs.pixels = ["92", 0];
-  graph["13"].inputs.scale_by = 1;
+  // 超分链在模板里（90/91/92）：初采样解码 → AnimeSharp 4x → lanczos 0.5 = 净 2 倍；手修开启时超分输入改接 42。
+  if (args.handRepair === true) graph["91"].inputs.image = ["42", 0];
+  // 没有二次采样（2026-11-10 实测后删除）：全图低强度重采样在动漫域超分之后只销毁高频
+  // （单人 2x ×0.78、双人 2x ×0.69、脸部 ×0.62–0.77），旁路对照里看不到任何修复收益；
+  // 双人侧它的全局注意力还会抹平 RS 点位隔离。超分后直接进脸修。
   if (args.hd === true) {
     graph["95"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
     graph["96"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["95", 0], image: ["11", 0] } };
@@ -110,7 +108,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   return graph;
 }
 
-// ── 双人管线：RS 点位分区一次成型，后接超分、二次采样和脸修 ──
+// ── 双人管线：RS 点位分区一次成型，后接超分和脸修 ──
 
 export interface MultiPart {
   text: string;
@@ -150,16 +148,16 @@ function multiRoleTags(part: MultiPart): string {
 }
 
 /**
- * 二次采样（denoise 0.30 全图）与脸修（denoise 0.25 按脸 crop）共用 node 40 的全局提示。
+ * 脸修（denoise 0.25 按脸 crop）用 node 40 的全局提示。
  * 这里绝不能放角色描述：脸修 crop 后「左/右」位置词失效，合并提示会把另一侧的特征
  * （牙、瞳孔、耳朵之类）画到这张脸上。角色身份由初采样的 RS 区域管线负责，
- * 后两道低强度 pass 只按已画好的画面微调，只保留质量前缀与场景。
+ * 这道低强度 pass 只按已画好的画面微调，只保留质量前缀与场景。
  */
 function multiSceneText(args: MultiDraw): string {
   return String(TEMPLATE["4"].inputs.text) + (/^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`) + (args.bypass ? ", " + args.bypass : "");
 }
 
-/** 双人唯一管线：RS 点位独立提示 → AnimeSharp → 低强度二次采样 → 脸修。 */
+/** 双人唯一管线：RS 点位独立提示 → AnimeSharp 超分 → 脸修。 */
 export function makeRsGraph(args: MultiDraw): Graph {
   validateMulti(args);
   const g = structuredClone(RS_TEMPLATE);
@@ -178,10 +176,9 @@ export function makeRsGraph(args: MultiDraw): Graph {
   g["62"].inputs.scale_by = 0.5;
   g["40"].inputs.text = multiSceneText(args);
   g["61"].inputs.image = ["5", 0];
-  g["64"].inputs.seed = postSeed;
   g["101"].inputs.seed = postSeed;
   if (args.hd === true) {
-    // 与单人同构：RS 二次采样（node 64）与脸修（node 101）留在 2 倍域，第三倍在脸修后纯放大。
+    // 与单人同构：脸修（node 101）在 2 倍域，第三倍在脸修后纯放大。
     g["95"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
     g["96"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["95", 0], image: ["101", 0] } };
     g["97"] = { class_type: "ImageScaleBy", inputs: { image: ["96", 0], upscale_method: "lanczos", scale_by: 0.375 } };
@@ -197,9 +194,9 @@ let busy = false;
 /** draw 阶段进度（不过模型）：sketch/refine=单管线；multi-*=双人 RS 管线两段。 */
 export type DrawStage = "sketch" | "refine" | "multi-first" | "multi-second";
 
-/** 阶段状态机：实测事件序列（2026-11-08）——"7"初采样 → "42"手修（hand_repair=true 时；否则"43"直接"91"超分）
- *  → "91"/"92"/"44"/"13" → "14"二次采样 → "8"/"11"脸修 → "9"输出。
- *  进入初采样后首批节点（sketch）与二次采样后首批节点（refine）时各汇报一次；乱序/未知节点忽略。 */
+/** 阶段状态机：实测事件序列（2026-11-10）——"7"初采样 → "42"手修（hand_repair=true 时；否则"43"直接"91"超分）
+ *  → "91"/"92"超分 → "11"脸修 → "9"输出。
+ *  进入初采样后首批节点（sketch）与脸修（refine）时各汇报一次；乱序/未知节点忽略。 */
 function makeStageTracker(promptId: string, onStage: (stage: DrawStage) => void): (message: unknown) => void {
   let stage = 0;
   return (message) => {
@@ -212,7 +209,7 @@ function makeStageTracker(promptId: string, onStage: (stage: DrawStage) => void)
       if (stage < 1 && (node === "43" || node === "42" || node === "91")) {
         stage = 1;
         onStage("sketch");
-      } else if (stage < 2 && (node === "8" || node === "11")) {
+      } else if (stage < 2 && node === "11") {
         stage = 2;
         onStage("refine");
       }
