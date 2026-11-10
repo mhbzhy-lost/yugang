@@ -33,7 +33,7 @@
   "5": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, \nlips, shiny skin, abs, monochrome, photorealistic, 3d, render, realistic face, oily skin, airbrushed, subsurface scattering, flat lighting",
+      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, \nlips, shiny skin, abs, monochrome, photorealistic, 3d, render, realistic face, oily skin, airbrushed, subsurface scattering, flat lighting, sketch, pencil lines, stray lines, rough lines, unfinished lineart",
       "clip": [
         "2",
         0
@@ -79,74 +79,7 @@
     "class_type": "PreviewImage",
     "inputs": {
       "images": [
-        "11",
-        0
-      ]
-    }
-  },
-  "10": {
-    "class_type": "UltralyticsDetectorProvider",
-    "inputs": {
-      "model_name": "bbox/face_yolov8n.pt"
-    }
-  },
-  "11": {
-    "class_type": "FaceDetailer",
-    "inputs": {
-      "guide_size": 512,
-      "guide_size_for": true,
-      "max_size": 1024,
-      "seed": 1234567,
-      "steps": 20,
-      "cfg": 3,
-      "sampler_name": "euler",
-      "scheduler": "simple",
-      "denoise": 0.25,
-      "feather": 10,
-      "noise_mask": true,
-      "force_inpaint": true,
-      "bbox_threshold": 0.35,
-      "bbox_dilation": 10,
-      "bbox_crop_factor": 3,
-      "sam_detection_hint": "center-1",
-      "sam_dilation": 0,
-      "sam_threshold": 0.93,
-      "sam_bbox_expansion": 0,
-      "sam_mask_hint_threshold": 0.7,
-      "sam_mask_hint_use_negative": "False",
-      "drop_size": 10,
-      "wildcard": "",
-      "cycle": 1,
-      "inpaint_model": false,
-      "noise_mask_feather": 20,
-      "tiled_encode": false,
-      "tiled_decode": false,
-      "image": [
         "92",
-        0
-      ],
-      "model": [
-        "1",
-        0
-      ],
-      "clip": [
-        "2",
-        0
-      ],
-      "vae": [
-        "3",
-        0
-      ],
-      "positive": [
-        "4",
-        0
-      ],
-      "negative": [
-        "5",
-        0
-      ],
-      "bbox_detector": [
-        "10",
         0
       ]
     }

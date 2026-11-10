@@ -27,17 +27,17 @@
 启动时结构契约校验：代码 rewiring 的角色节点缺位即拒启；2026-11-10 起不钉死 hash，模板迭代 = 改文件 + commit + deploy），
 通过 `COMFYUI_URL` 指向 macmini 的 `127.0.0.1:18190` SSH 隧道；不接受模型传入工作流、节点、模型名或地址。
 文生图按初采样 30 步（cfg 4.5）→ 可选手部修复（`hand_repair`，默认关；hand_yolov8n 检测 + 16 步 / 0.25）
-→ `4x-AnimeSharp` 超分后 lanczos 缩放 0.5（净 2 倍）→ 人脸修复（face_yolov8n + 20 步 / 0.25）
-→ `PreviewImage` 输出；**管线没有二次采样**（2026-11-10 实测删除：全图低强度重采样在超分之后只销毁高频——
+→ `4x-AnimeSharp` 超分后 lanczos 缩放 0.5（净 2 倍）→ `PreviewImage` 输出。
+**没有脸修**（2026-11-10 主人裁定退役：一般不需要）、**没有二次采样**（2026-11-10 实测删除：全图低强度重采样在超分之后只销毁高频——
 单人 2x ×0.78、双人 2x ×0.69、脸部 ×0.62–0.77——旁路对照看不到任何修复收益，双人侧它的全图注意力还会抹平
 RS 点位隔离；旧模板的 `LatentUpscaleBy`（1.25）随之一并移除，超分只认 AnimeSharp 这一条）。
 文生图可选受控 `ratio`（7 档，默认 3:4 = 912×1216，长边 1216/1280 级）；改图沿用参考图比例（尺寸对齐可能略有偏差）。
 `hd` 是文生图与改图共用的高清档（2026-11-10）：只在用户明确要「高清大图 / 超级清楚 / 分辨率大点 / 当壁纸」时开，
-明显更慢，没提就不开。**脸修恒在净 2 倍域内，hd 的第三倍在脸修之后用同一超分模型纯放大补齐**
+明显更慢，没提就不开。**采样与手修恒在净 2 倍域内，hd 的第三倍在超分之后用同一超分模型纯放大补齐**
 （节点 95/96/97，双人同构）——ESRGAN 放大是全卷积局部推理、无全图位置编码，纯放大不超域；
 实测在 3 倍 latent 上跑扩散（旧 hd 的二次采样，38,988 token ≈ 官方 3:4 档 6 倍）会把高频砍到 ×0.55、脸部 ×0.40。
 **不要把 hd 改回「先放大到 3 倍再采样」，也不要把二次采样加回管线**。
-`ref` 是整图重绘，不是蒙版局部编辑，同样走超分与脸修。图片通过 `type=temp` 取回本地 `gen/`，
+`ref` 是整图重绘，不是蒙版局部编辑，同样走超分。图片通过 `type=temp` 取回本地 `gen/`，
 Windows 输入上传限定 `yugang-ref-<uuid>.png`；计划任务 `Yugang-ComfyUI-RefCleanup` 使用
 `scripts/comfy-ref-cleanup.ps1` 的对应副本，每小时在登录用户会话中尝试清理 24 小时以上专用文件，
 ComfyUI 忙或队列状态不可用时不删除，不触碰其他 input。部署前须核对该任务与脚本已安装且可运行。
@@ -48,7 +48,7 @@ ComfyUI 忙或队列状态不可用时不删除，不触碰其他 input。部署
 （key → LoRA 文件名 + 机械注入串 / 表内权重），tags 取 `listCharacters()` / `findCharacter()` / `findSection()` 渲染词表。
 加角色或画风 = 只改对应 JSON，不许再写第二份常量或 preset。两者都经 `AnimaLoRARemapTagLoader` 做 28→52 层映射
 （`auto_remap` 开、`extend_to_new_layers` 关），链序是底模 → 风格（节点 88）→ 角色（节点 93），消费方
-（model 侧 7/11/14/42、clip 侧 4/5/11/42）统一改接末端节点；`hsr` 现在是 `styles.json` 里的普通条目
+（model 侧 7/42、clip 侧 4/5/42）统一改接末端节点；`hsr` 现在是 `styles.json` 里的普通条目
 （HSR Anima.safetensors，权重 0.7 取自表），不再是硬编码 preset，效果仍需人工确认。LoRA 权重受控 0.4–1.1、缺省 0.8。
 draw 的 `character` / `style` / `characters[].character` 在 Schema 里是**普通字符串而非枚举**（2026-11-10 主人裁定放开）：
 白名单在执行期查表判定，查不到就以 tool 错误打回并给出正确 key，模型侧清单只由 `tags` 提供（draw 的 TOOL.md 不列角色清单）。
@@ -60,8 +60,7 @@ draw 的 `character` / `style` / `characters[].character` 在 Schema 里是**普
 双人图走单人管线直出（RS 区域管线 2026-11-10 退役，`workflow-rs.json` 已删）：
 `characters[]` 恰好两项 → `makeGraph` 的 parts 分支，positive = 质量前缀 + `2girls` + 每人 inject/description + 场景，
 命名角色的 LoRA 走 `AnimaLoRARemapTagLoader` 链 93→94（与单人同款 loader，28→52 remap 原生生效）；
-**脸修 positive 改场景-only 文本**（node 41）：脸 crop 后方位词失效，全文会把另一人的特征
-（牙、瞳孔、耳朵之类）画到这张脸上（串色）；超分 / 脸修 / hd 尾部与单人同链，**不做手修、没有二次采样**。
+超分 / hd 尾部与单人同链，**没有脸修、不做手修、没有二次采样**。
 **构图自由原则（主人裁定）**：工具不接受任何控制构图分布的参数；左右 / 上下 / 前后 / 拥抱重叠
 全由模型决定，按自然语言写进 description 与 prompt。风格四轴（线稿/阴影/光影）机械内置在模板质量前缀
 （场景级，单人双人同吃，无 opt-out）；负向轴钉在模板 node 5。退役依据（床载体 A/B）：RS 白盒内「真拥抱」与

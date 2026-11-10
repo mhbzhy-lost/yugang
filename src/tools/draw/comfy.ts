@@ -9,7 +9,7 @@ const TEMPLATE = JSON.parse(readFileSync(new URL("./workflow.json", import.meta.
 // 必须在场且 class 正确，缺任何一个启动即炸，绝不带病出图。模板迭代 = 改本文件 + commit + deploy。
 const TEMPLATE_CONTRACT: Array<[string, string]> = [
   ["1", "UNETLoader"], ["4", "CLIPTextEncode"], ["5", "CLIPTextEncode"], ["6", "EmptySD3LatentImage"],
-  ["7", "KSampler"], ["9", "PreviewImage"], ["11", "FaceDetailer"], ["42", "FaceDetailer"],
+  ["7", "KSampler"], ["9", "PreviewImage"], ["42", "FaceDetailer"],
   ["91", "ImageUpscaleWithModel"], ["92", "ImageScaleBy"],
 ];
 for (const [id, cls] of TEMPLATE_CONTRACT) {
@@ -69,7 +69,7 @@ export function comfyUrl(value: string): string {
 export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   const graph = structuredClone(TEMPLATE);
   const seed = args.seed ?? randomBytes(4).readUInt32BE();
-  for (const id of ["7", "11", "42"]) graph[id].inputs.seed = seed;
+  for (const id of ["7", "42"]) graph[id].inputs.seed = seed;
   graph["7"].inputs.cfg = args.cfg ?? 4.5;
   graph["6"].inputs.width = args.width ?? 912;
   graph["6"].inputs.height = args.height ?? 1216;
@@ -87,16 +87,16 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     // 风格 LoRA：全局画风，挂在底模之后、角色 LoRA 之前（节点 88）。
     if (!/^[\w .@()-]+\.safetensors$/.test(args.style.file) || !Number.isFinite(args.style.weight) || args.style.weight < 0.4 || args.style.weight > 1.1) throw new Error("invalid draw style");
     graph["88"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: ["1", 0], clip: ["2", 0], text: `<lora:${args.style.file}:${args.style.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
-    for (const id of ["7", "11", "42"]) graph[id].inputs.model = ["88", 0];
-    for (const id of ["4", "5", "11", "42"]) graph[id].inputs.clip = ["88", 1];
+    for (const id of ["7", "42"]) graph[id].inputs.model = ["88", 0];
+    for (const id of ["4", "5", "42"]) graph[id].inputs.clip = ["88", 1];
   }
   if (args.lora) {
     // 角色 LoRA 链在风格之后（有风格时接 88），消费方统一改接 93。
     if (!/^[\w .@()-]+\.safetensors$/.test(args.lora.file) || !Number.isFinite(args.lora.weight) || args.lora.weight < 0.4 || args.lora.weight > 1.1) throw new Error("invalid draw lora");
     const upstream = args.style ? { model: ["88", 0], clip: ["88", 1] } : { model: ["1", 0], clip: ["2", 0] };
     graph["93"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: upstream.model, clip: upstream.clip, text: `<lora:${args.lora.file}:${args.lora.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
-    for (const id of ["7", "11", "42"]) graph[id].inputs.model = ["93", 0];
-    for (const id of ["4", "5", "11", "42"]) graph[id].inputs.clip = ["93", 1];
+    for (const id of ["7", "42"]) graph[id].inputs.model = ["93", 0];
+    for (const id of ["4", "5", "42"]) graph[id].inputs.clip = ["93", 1];
   }
   if (args.parts !== undefined) {
     // 双人直出：角色 LoRA 链 93→94（风格之后），消费方统一改接链尾。
@@ -110,13 +110,9 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
       last = id;
     });
     if (last) {
-      for (const id of ["7", "11", "42"]) graph[id].inputs.model = [last, 0];
-      for (const id of ["4", "5", "11", "42"]) graph[id].inputs.clip = [last, 1];
+      for (const id of ["7", "42"]) graph[id].inputs.model = [last, 0];
+      for (const id of ["4", "5", "42"]) graph[id].inputs.clip = [last, 1];
     }
-    // 脸修 positive 改场景-only：crop 后位置词失效，全文会把另一人的特征画到这张脸上。
-    // node 44：二次采样删除后空闲（41 是手部检测器加载器，双人沿用不得占用）。
-    graph["44"] = { class_type: "CLIPTextEncode", inputs: { clip: up.clip, text: `${prefix}2girls, ${normalizeTagForm(args.prompt)}${suffix}` } };
-    graph["11"].inputs.positive = ["44", 0];
   }
   if (args.ref) {
     if (!inputName || !/^yugang-ref-[a-f0-9-]{36}\.png$/.test(inputName)) throw new Error("invalid draw input name");
@@ -133,7 +129,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   // 双人侧它的全局注意力还会抹平 RS 点位隔离。超分后直接进脸修。
   if (args.hd === true) {
     graph["95"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
-    graph["96"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["95", 0], image: ["11", 0] } };
+    graph["96"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["95", 0], image: ["92", 0] } };
     graph["97"] = { class_type: "ImageScaleBy", inputs: { image: ["96", 0], upscale_method: "lanczos", scale_by: 0.375 } };
     graph["9"].inputs.images = ["97", 0];
   }
@@ -166,12 +162,12 @@ export class ComfyExecutionFailed extends Error {}
 export class ComfyBusy extends Error {}
 let busy = false;
 
-/** draw 阶段进度（不过模型）：sketch=初采样，refine=脸修。 */
-export type DrawStage = "sketch" | "refine";
+/** draw 阶段进度（不过模型）：sketch=初采样（后接超分/可选手修，无扩散阶段）。 */
+export type DrawStage = "sketch";
 
-/** 阶段状态机：实测事件序列（2026-11-10）——"7"初采样 → "42"手修（hand_repair=true 时；否则"43"直接"91"超分）
- *  → "91"/"92"超分 → "11"脸修 → "9"输出。
- *  进入初采样后首批节点（sketch）与脸修（refine）时各汇报一次；乱序/未知节点忽略。 */
+/** 阶段状态机："7"初采样 → "42"手修（hand_repair=true 时；否则"43"直接"91"超分）
+ *  → "91"/"92"超分 → "9"输出（脸修 2026-11-10 退役，主人裁定一般不需要）。
+ *  进入初采样后首批节点（sketch）时汇报一次；乱序/未知节点忽略。 */
 function makeStageTracker(promptId: string, onStage: (stage: DrawStage) => void): (message: unknown) => void {
   let stage = 0;
   return (message) => {
@@ -184,9 +180,6 @@ function makeStageTracker(promptId: string, onStage: (stage: DrawStage) => void)
       if (stage < 1 && (node === "43" || node === "42" || node === "91")) {
         stage = 1;
         onStage("sketch");
-      } else if (stage < 2 && node === "11") {
-        stage = 2;
-        onStage("refine");
       }
     } catch { /* 非 JSON 帧忽略 */ }
   };
