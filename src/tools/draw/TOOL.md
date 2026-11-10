@@ -58,6 +58,11 @@ light particles 会把整图压成 pastel 洗白；detailed skin shading、subtl
 「不挂 LoRA / 用 tag 直出」时才省 character 键、自己在 description 写外观特征。
 双人不支持顶层 character、style、ref；hd 可用。
 
+两人的 description 必须互相区分：姿态、朝向、所在侧（左/右、前/后）或服装至少一项不同，
+并写明谁对谁做什么（A 牵着 B、B 靠在 A 肩上）。禁止两人写近乎相同的动作与朝向
+（如都「坐着仰头看天」）——区域相接时模型会把两人融合成一个特征对半的合体人物。
+两人做同一件事时也要给各自不同的身体锚点：如一人盘腿坐左侧仰头、一人跪坐右侧扶膝。
+
 双人只需选景别和间距，不传坐标或矩形尺寸；这两项只用于 characters。
 
 - framing 默认 normal：普通画面、中景或近景在 prompt 自然描述，人物动作和互动也可写入。

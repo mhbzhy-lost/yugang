@@ -65,7 +65,8 @@ draw 的 `character` / `style` / `characters[].character` 在 Schema 里是**普
 **双人构图预设（2026-11-11 实验定版）**：模型不传 region、点位或坐标；只选 `framing: normal|wide`
 与 `spacing: together|apart`，默认 normal+together。普通/中景/近景不接 Camera（近景只写提示词）；
 只有 wide 接 RSCameraControl（模板 node 80，distance=1，base_prompt 显式填写、两路输出接 Sampler）。
-两人默认相接、不重叠矩形（x=0.345/0.655、y=0.5、w=0.31、h=0.85）；用户明确要求相隔且无接触动作时
+两人 description 必须互异（姿态/朝向/位置/服装至少一项不同，写明谁左谁右、谁对谁做什么），
+雷同描述＋相接区域会把两人融合成一个合体人（44-fusion-fix 案底）；两人默认相接、不重叠矩形（x=0.345/0.655、y=0.5、w=0.31、h=0.85）；用户明确要求相隔且无接触动作时
 用分离矩形（x=0.29/0.71、w=0.30，其余相同）。远景公共 prompt 只写场景、动作与关系归各自 description；
 不额外手写 wide shot/very wide shot，保留 Camera 原生行为。Camera=0、point 默认双人布局和九宫格均退役。
 生产仍保留 30 步初采样、超分与 denoise=0.25 质感 pass；20 步直出只是实验规格。
