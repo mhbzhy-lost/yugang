@@ -125,7 +125,8 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
   `"x-yugang-enum-from": "memeTags"`（启动时按 `prompt/meme-tags.md` 机械换成 enum），
   其它运行时改写模型所见 Schema 的通道一律拒绝
 - 工具面分两层：四个 `say_*` / `react` / `tool_search` 初始可见（eager），其余已启用工具统一 `deferred: true`；
-  模型先用中文/英文检索 `tool_search`，命中后从下一次模型请求起才能调用。`runtime` section
+  模型先用中文/英文检索 `tool_search`，首次命中后从下一次模型请求起才能调用；搜索范围包含当前会话已提供与尚未提供的工具，
+  每次命中均返回当前注册定义的完整说明和参数 Schema，已提供工具可重复查阅、不重复改变开放状态。`runtime` section
   （`prompt/runtime.md`）负责这条渐进加载协议，`tool_catalog` section 只列已启用工具的 `name + 摘要`
 - 加一个工具 = 三处改动，缺一不可：
 

@@ -6,13 +6,12 @@
  * 与 ASCII 词混合的确定性检索，字段权重 name > 顶部摘要 > Schema（参数名/参数说明/
  * 枚举值）> 正文指南；分数并列按 name 字典序，同一输入永远同一结果。
  *
- * 加载状态完全走 pi-durable 原生机制：候选只取 api.agent(context).deferred
- * （已经加载进当前请求的不重复返回），命中通过结果里的 control.addTools 交给宿主写
- * modelTools——下一次模型请求起才出现在工具列表里，本工具不自己保存任何状态，
- * 也不直接改 AgentDoc。
+ * 每次搜索当前会话已开放与尚未开放的工具，返回当前注册定义的完整说明和参数。
+ * 只有尚未开放的命中项通过 control.addTools 交给宿主写 modelTools；已开放工具可反复
+ * 查阅，不重复修改开放状态。本工具不缓存说明，也不直接改 AgentDoc。
  *
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest；成功/空结果/空查询/非法 limit 的
- * 模型可见文案全部来自 prompt/messages.md。
+ * 模型可见文案全部来自工具包 messages.json。
  */
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { renderTemplate } from "../../prompt/index.ts";
@@ -141,7 +140,7 @@ export function scoreToolForTokens(queryTokens: readonly string[], tool: ToolReg
 
 /**
  * 中文/英文混合检索：score 降序、name 字典序并列；确定性排序，不做任何随机。
- * 候选由调用方传入（execute 里只取当前会话的 deferred），这里只负责打分。
+ * 候选由调用方传入（当前会话已开放与尚未开放工具的并集），这里只负责打分。
  */
 export function searchToolNames(query: string, candidates: readonly ToolRegistration[], limit: number): string[] {
   const queryTokens = [...new Set(tokenize(query))].filter((token) => token.length > 1 || !QUERY_STOPWORDS.has(token));
@@ -171,23 +170,25 @@ export function createToolSearchTool(manifest: ToolManifest, deps: ToolPackageDe
       const limit = args.limit ?? TOOL_SEARCH_DEFAULT_LIMIT;
       if (!Number.isInteger(limit) || limit <= 0) throw new Error(messages["tool_search_bad_limit"] ?? "tool_search_bad_limit");
 
-      // 候选只取当前会话还没提供的 deferred 工具：已经加载的不会重复出现在结果里
-      const candidates = (await api.agent(context)).deferred;
-      const loaded = searchToolNames(query, candidates, limit);
-      if (loaded.length === 0) {
+      const agent = await api.agent(context);
+      const byName = new Map([...agent.deferred, ...agent.tools].map((tool) => [tool.name, tool]));
+      const candidates = [...byName.values()];
+      const matched = searchToolNames(query, candidates, limit);
+      if (matched.length === 0) {
         return { output: [{ type: "text", text: messages["tool_search_none"] ?? "tool_search_none" }] };
       }
 
-      const header = renderTemplate(messages["tool_search_ok"] ?? "", { count: String(loaded.length) });
+      const header = renderTemplate(messages["tool_search_ok"] ?? "", { count: String(matched.length) });
       const line = messages["tool_search_line"] ?? "{{name}}";
-      const lines = loaded.map((name) => {
-        const tool = candidates.find((candidate) => candidate.name === name);
-        const summary = summaryAndGuide(String(tool?.description ?? "")).summary.trim();
-        return renderTemplate(line, { name, summary });
+      const lines = matched.map((name) => {
+        const tool = byName.get(name)!;
+        return renderTemplate(line, { name, description: String(tool.description ?? ""), parameters: JSON.stringify(tool.parameters, null, 2) });
       });
       const text = [header, ...lines].filter((part) => part.length > 0).join("\n");
-      // 加载交给 pi-durable 原生状态机（写 modelTools.add）：下一次模型请求起才提供
-      return { output: [{ type: "text", text }], details: { loaded }, control: { addTools: loaded } };
+      const pending = new Set(agent.deferred.map((tool) => tool.name));
+      const loaded = matched.filter((name) => pending.has(name) && !agent.tools.some((tool) => tool.name === name));
+      // 已开放工具只返回最新说明；首次开放仍交给原生状态机，下一次模型请求起生效。
+      return { output: [{ type: "text", text }], details: { loaded }, ...(loaded.length > 0 ? { control: { addTools: loaded } } : {}) };
     },
   });
 }
