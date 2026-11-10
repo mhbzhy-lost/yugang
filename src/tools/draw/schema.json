@@ -48,7 +48,7 @@
         },
         "minItems": 2,
         "maxItems": 2,
-        "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项，顺序为左、右；每项写 description，可选 character 表示该位是 AI 娘。人数由工具自动处理，不用写 2girls。与单人 character 互斥，双人不支持 style 和改图"
+        "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项；每项写 description，可选 character 表示该人是命名角色（默认挂角色 LoRA，仅用户明确不挂时省略）。构图（左右/上下/前后/重叠）由你决定并写进 description 与 prompt，工具不接受位置参数。人数由工具自动处理，不用写 2girls。与单人 character 互斥，双人不支持 style 和改图"
       },
       "lora_weight": {
         "type": "number",

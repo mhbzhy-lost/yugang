@@ -10,12 +10,6 @@ if (createHash("sha256").update(GRAPH_BYTES).digest("hex") !== WORKFLOW_HASH) th
 const TEMPLATE = JSON.parse(GRAPH_BYTES.toString("utf8")) as Graph;
 if (TEMPLATE["1"]?.inputs.unet_name !== "DeltaMix 3.8B V8.safetensors" || TEMPLATE["9"]?.class_type !== "PreviewImage") throw new Error("draw workflow contract mismatch");
 
-// ── 双人管线（独立模板，与单人管线互不影响）──
-const RS_WORKFLOW_HASH = "db329c9dfbf6812cccd4a70f9bc94142faeedc16fc57c82115ddd8cc4e16b7d3";
-const RS_BYTES = readFileSync(new URL("./workflow-rs.json", import.meta.url));
-if (createHash("sha256").update(RS_BYTES).digest("hex") !== RS_WORKFLOW_HASH) throw new Error("draw RS workflow hash mismatch");
-const RS_TEMPLATE = JSON.parse(RS_BYTES.toString("utf8")) as Graph;
-if (RS_TEMPLATE["4"]?.class_type !== "RSMultiCharacterPrompts" || RS_TEMPLATE["5"]?.class_type !== "RSMultiCharacterSampler" || RS_TEMPLATE["61"]?.class_type !== "ImageUpscaleWithModel" || RS_TEMPLATE["62"]?.class_type !== "ImageScaleBy" || RS_TEMPLATE["66"]?.class_type !== "PreviewImage" || RS_TEMPLATE["101"]?.class_type !== "FaceDetailer") throw new Error("draw RS workflow contract mismatch");
 
 /**
  * ComfyUI 的 CLIPTextEncode 把半角括号当权重语法（`(xxx)` = 1.1）；
@@ -54,6 +48,8 @@ export interface ComfyDraw {
   handRepair?: boolean;
   /** 角色 LoRA：file/inject 来自角色词表，这里只做形态校验与机械拼接。 */
   lora?: { file: string; weight: number; inject: string };
+  /** 双人直出：恰好两位，构图由模型决定；角色 LoRA 走 93/94 链。与 lora 互斥。 */
+  parts?: MultiPart[];
   ref?: { png: Buffer; strength: number };
 }
 
@@ -70,7 +66,16 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   graph["7"].inputs.cfg = args.cfg ?? 4.5;
   graph["6"].inputs.width = args.width ?? 912;
   graph["6"].inputs.height = args.height ?? 1216;
-  graph["4"].inputs.text = String(graph["4"].inputs.text) + (args.lora ? `${escapeInjected(normalizeTagForm(args.lora.inject))}, ` : "") + normalizeTagForm(args.prompt) + (args.bypass ? `, ${args.bypass}` : "") + (args.bypassP ? `, ${args.bypassP}` : "");
+  const prefix = String(graph["4"].inputs.text);
+  const suffix = (args.bypass ? `, ${args.bypass}` : "") + (args.bypassP ? `, ${args.bypassP}` : "");
+  if (args.parts !== undefined) {
+    validateParts(args.parts);
+    if (args.lora) throw new Error("invalid draw parts with lora");
+    const segments = args.parts.flatMap((part) => [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text)].filter((s) => s));
+    graph["4"].inputs.text = `${prefix}2girls, ${segments.join(", ")}, ${normalizeTagForm(args.prompt)}${suffix}`;
+  } else {
+    graph["4"].inputs.text = prefix + (args.lora ? `${escapeInjected(normalizeTagForm(args.lora.inject))}, ` : "") + normalizeTagForm(args.prompt) + suffix;
+  }
   if (args.style) {
     // 风格 LoRA：全局画风，挂在底模之后、角色 LoRA 之前（节点 88）。
     if (!/^[\w .@()-]+\.safetensors$/.test(args.style.file) || !Number.isFinite(args.style.weight) || args.style.weight < 0.4 || args.style.weight > 1.1) throw new Error("invalid draw style");
@@ -85,6 +90,25 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     graph["93"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: upstream.model, clip: upstream.clip, text: `<lora:${args.lora.file}:${args.lora.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
     for (const id of ["7", "11", "42"]) graph[id].inputs.model = ["93", 0];
     for (const id of ["4", "5", "11", "42"]) graph[id].inputs.clip = ["93", 1];
+  }
+  if (args.parts !== undefined) {
+    // 双人直出：角色 LoRA 链 93→94（风格之后），消费方统一改接链尾。
+    let up: { model: [string, number]; clip: [string, number] } = args.style ? { model: ["88", 0], clip: ["88", 1] } : { model: ["1", 0], clip: ["2", 0] };
+    let last = "";
+    args.parts.forEach((part, i) => {
+      if (!part.role) return;
+      const id = String(93 + i);
+      graph[id] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: up.model, clip: up.clip, text: `<lora:${part.role.file}:${part.role.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
+      up = { model: [id, 0], clip: [id, 1] };
+      last = id;
+    });
+    if (last) {
+      for (const id of ["7", "11", "42"]) graph[id].inputs.model = [last, 0];
+      for (const id of ["4", "5", "11", "42"]) graph[id].inputs.clip = [last, 1];
+    }
+    // 脸修 positive 改场景-only：crop 后位置词失效，全文会把另一人的特征画到这张脸上。
+    graph["41"] = { class_type: "CLIPTextEncode", inputs: { clip: up.clip, text: `${prefix}2girls, ${normalizeTagForm(args.prompt)}${suffix}` } };
+    graph["11"].inputs.positive = ["41", 0];
   }
   if (args.ref) {
     if (!inputName || !/^yugang-ref-[a-f0-9-]{36}\.png$/.test(inputName)) throw new Error("invalid draw input name");
@@ -108,36 +132,19 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   return graph;
 }
 
-// ── 双人管线：RS 点位分区一次成型，后接超分和脸修 ──
-
+/** 双人直出的一位：此人的描述 + 可选角色 LoRA（身份锚）。 */
 export interface MultiPart {
   text: string;
   role?: { file: string; weight: number; inject: string };
-}
-export interface MultiDraw {
-  prompt: string;
-  /** 高清模式：净 3 倍出图；采样与脸修恒在 2 倍域内，第三倍在脸修后纯放大补齐。 */
-  hd?: boolean;
-  width: number;
-  height: number;
-  seed?: number;
-  parts: MultiPart[];
-  /** 场景级 bypass（bypass: 段）：附加到初始生成与收尾段末尾。 */
-  bypass?: string;
-  /** 人物级 bypass（pbypass: 段）：附加到两个人物的区域提示末尾。 */
-  pbypass?: string;
 }
 
 const MAX_IMAGE = 25 * 1024 * 1024;
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function validateMulti(args: MultiDraw): void {
-  const n = args.parts.length;
-  if (n !== 2) throw new Error("invalid multi parts count");
-  if (args.width < 512 || args.width > 1536 || args.height < 512 || args.height > 1536 || args.width % 2 !== 0) throw new Error("invalid multi size");
-  if (!args.prompt || args.prompt.length > 1000) throw new Error("invalid multi prompt");
-  for (const p of args.parts) {
+function validateParts(parts: MultiPart[]): void {
+  if (parts.length !== 2) throw new Error("invalid multi parts count");
+  for (const p of parts) {
     if (!p.text || p.text.length > 800) throw new Error("invalid multi part text");
     if (p.role !== undefined && (!/^[\w .@()-]+\.safetensors$/.test(p.role.file) || !Number.isFinite(p.role.weight) || p.role.weight < 0.4 || p.role.weight > 1.1)) throw new Error("invalid multi role");
   }
@@ -147,52 +154,12 @@ function multiRoleTags(part: MultiPart): string {
   return (part.role?.inject ?? "").split(",").map((tag) => tag.trim()).filter((tag) => tag && !/^(?:1girl|solo)$/i.test(tag)).join(", ");
 }
 
-/**
- * 脸修（denoise 0.25 按脸 crop）用 node 40 的全局提示。
- * 这里绝不能放角色描述：脸修 crop 后「左/右」位置词失效，合并提示会把另一侧的特征
- * （牙、瞳孔、耳朵之类）画到这张脸上。角色身份由初采样的 RS 区域管线负责，
- * 这道低强度 pass 只按已画好的画面微调，只保留质量前缀与场景。
- */
-function multiSceneText(args: MultiDraw): string {
-  return String(TEMPLATE["4"].inputs.text) + (/^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`) + (args.bypass ? ", " + args.bypass : "");
-}
-
-/** 双人唯一管线：RS 点位独立提示 → AnimeSharp 超分 → 脸修。 */
-export function makeRsGraph(args: MultiDraw): Graph {
-  validateMulti(args);
-  const g = structuredClone(RS_TEMPLATE);
-  for (let i = 0; i < 2; i++) {
-    const part = args.parts[i];
-    g["4"].inputs[`character${i + 1}`] = [escapeInjected(normalizeTagForm(multiRoleTags(part))), normalizeTagForm(part.text), args.pbypass].filter(Boolean).join(", ");
-    g["4"].inputs[`character${i + 1}_lora`] = part.role?.file ?? "None";
-    g["4"].inputs[`character${i + 1}_lora_strength`] = part.role?.weight ?? 1;
-    g["4"].inputs[`character${i + 1}_lora_clip_strength`] = part.role?.weight ?? 1;
-  }
-  const seed = args.seed ?? randomBytes(4).readUInt32BE();
-  const postSeed = randomBytes(4).readUInt32BE();
-  const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;
-  Object.assign(g["5"].inputs, { prompt: [commonPrompt, args.bypass].filter(Boolean).join(", "), negative_prompt: String(TEMPLATE["5"].inputs.text), width: args.width, height: args.height, seed });
-  g["32"].inputs.text = String(TEMPLATE["5"].inputs.text);
-  g["62"].inputs.scale_by = 0.5;
-  g["40"].inputs.text = multiSceneText(args);
-  g["61"].inputs.image = ["5", 0];
-  g["101"].inputs.seed = postSeed;
-  if (args.hd === true) {
-    // 与单人同构：脸修（node 101）在 2 倍域，第三倍在脸修后纯放大。
-    g["95"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
-    g["96"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["95", 0], image: ["101", 0] } };
-    g["97"] = { class_type: "ImageScaleBy", inputs: { image: ["96", 0], upscale_method: "lanczos", scale_by: 0.375 } };
-    g["66"].inputs.images = ["97", 0];
-  }
-  return g;
-}
-
 export class ComfyExecutionFailed extends Error {}
 export class ComfyBusy extends Error {}
 let busy = false;
 
-/** draw 阶段进度（不过模型）：sketch/refine=单管线；multi-*=双人 RS 管线两段。 */
-export type DrawStage = "sketch" | "refine" | "multi-first" | "multi-second";
+/** draw 阶段进度（不过模型）：sketch=初采样，refine=脸修。 */
+export type DrawStage = "sketch" | "refine";
 
 /** 阶段状态机：实测事件序列（2026-11-10）——"7"初采样 → "42"手修（hand_repair=true 时；否则"43"直接"91"超分）
  *  → "91"/"92"超分 → "11"脸修 → "9"输出。
@@ -312,40 +279,6 @@ async function runComfyJob(url: string, args: ComfyDraw, onSubmitted: () => void
   }
 }
 
-/** 多角色阶段追踪：区域采样完成后进入超分，再进入脸修。 */
-function makeMultiStageTracker(promptId: string, onStage: (stage: DrawStage) => void): (message: unknown) => void {
-  let stage = 0;
-  return (message) => {
-    if (typeof message !== "string") return;
-    try {
-      const event = JSON.parse(message) as { type?: string; data?: { node?: string | null; prompt_id?: string } };
-      if (event.type !== "executing" || event.data?.prompt_id !== promptId) return;
-      const node = event.data?.node;
-      if (typeof node !== "string") return;
-      if (stage < 1 && node === "61") { stage = 1; onStage("multi-first"); }
-      else if (stage < 2 && node === "101") { stage = 2; onStage("multi-second"); }
-    } catch { /* ignore */ }
-  };
-}
-
-function openMultiStageSocket(base: string, clientId: string, promptId: string, onStage: (stage: DrawStage) => void): { close: () => void } {
-  try {
-    const ws = new WebSocket(`${base.replace("http", "ws")}/ws?clientId=${clientId}`);
-    ws.binaryType = "arraybuffer";
-    const onMessage = makeMultiStageTracker(promptId, onStage);
-    ws.addEventListener("message", (event) => onMessage((event as MessageEvent).data));
-    ws.addEventListener("error", () => {});
-    return { close: () => { try { ws.close(); } catch { /* already closed */ } } };
-  } catch { return { close: () => {} }; }
-}
-
-export async function runMulti(url: string, args: MultiDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void): Promise<Buffer> {
-  if (busy) throw new ComfyBusy("ComfyUI busy");
-  busy = true;
-  try { return await runMultiJob(url, args, onSubmitted, onStage); }
-  finally { busy = false; }
-}
-
 type ComfyHistoryJob = { status?: { status_str?: string; completed?: boolean }; outputs?: Record<string, { images?: Array<{ filename?: string; subfolder?: string; type?: string }> }> };
 
 /** 提交一个 graph 并轮询到成功（失败/超时抛错）。 */
@@ -377,18 +310,3 @@ async function fetchOutputImage(base: string, job: ComfyHistoryJob, nodeId: stri
   return imageBytes(await request(`${base}/view?${query}`, {}, 30_000));
 }
 
-async function runMultiJob(url: string, args: MultiDraw, onSubmitted: () => void, onStage?: (stage: DrawStage) => void): Promise<Buffer> {
-  const base = comfyUrl(url);
-  const queue = await (await request(`${base}/queue`)).json() as { queue_running?: unknown[]; queue_pending?: unknown[] };
-  if (!Array.isArray(queue.queue_running) || !Array.isArray(queue.queue_pending)) throw new Error("invalid ComfyUI queue");
-  if (queue.queue_running.length || queue.queue_pending.length) throw new ComfyBusy("ComfyUI busy");
-  const id = randomUUID();
-  const clientId = randomUUID();
-  const graph = makeRsGraph(args);
-  const socket = onStage ? openMultiStageSocket(base, clientId, id, onStage) : undefined;
-  try {
-    onSubmitted();
-    const job = await submitAndWait(base, graph, id, clientId, Date.now() + 560_000);
-    return await fetchOutputImage(base, job, "66");
-  } finally { socket?.close(); }
-}

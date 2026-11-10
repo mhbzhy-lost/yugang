@@ -9,7 +9,7 @@ import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { loraBook, styleBook } from "../characters.ts";
-import { ComfyBusy, ComfyExecutionFailed, runComfy, runMulti, type ComfyDraw, type DrawStage, type MultiPart } from "./comfy.ts";
+import { ComfyBusy, ComfyExecutionFailed, runComfy, type ComfyDraw, type DrawStage, type MultiPart } from "./comfy.ts";
 
 interface DrawArgs {
   prompt: string;
@@ -112,9 +112,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       try {
         const stageCb = deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined;
         const bp = deps.bypassOf?.(round);
-        const png = multiParts
-          ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, () => { state.submitted = true; }, stageCb)
-          : await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, handRepair: args.hand_repair ?? false, hd: args.hd === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, () => { state.submitted = true; }, stageCb);
+        const png = await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, handRepair: args.hand_repair ?? false, hd: args.hd === true, ref, lora, parts: multiParts, bypass: bp?.bypass, bypassP: bp?.pbypass }, () => { state.submitted = true; }, stageCb);
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
         const file = `${Date.now()}-${randomUUID()}.png`;

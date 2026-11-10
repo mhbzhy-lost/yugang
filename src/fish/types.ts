@@ -109,6 +109,8 @@ export interface FishOptions {
   onWatchChanged?: (conversationId: string, people: WatchedPerson[]) => void;
   /** 表情包跨轮冷却（毫秒）；传函数则每次现取，改配置立即生效。 */
   memeCooldownMs?: number | (() => number);
+  /** GIF 自动收图豁免开关（fish.config.json 的 gifAutoCollect，热加载）；传函数每次现取。 */
+  gifAutoCollect?: () => boolean;
   /** 单次工具调用超时（秒），缺省 30。 */
   toolTimeoutSeconds?: number;
   /** 个别工具的单独超时（秒）：只放宽指定工具，其余仍按 toolTimeoutSeconds。 */
@@ -130,8 +132,8 @@ export interface FishOptions {
   onSayCall?: (roundId: unknown) => void;
   /** 重耗时工具 execute 入口的宿主回调：本轮第一次调用时发「正在执行」机械提示；restart 会 await 返回的 Promise。 */
   onLongWork?: (tool: string, submissionId: unknown) => void | Promise<void>;
-  /** draw 阶段进度机械提示（不过模型）：单管线 sketch/refine、双人 multi-first/second；宿主经 outbox 立即发出。 */
-  onDrawStage?: (roundId: unknown, stage: "sketch" | "refine" | "multi-first" | "multi-second") => void;
+  /** draw 阶段进度机械提示（不过模型）：sketch=初采样、refine=脸修；宿主经 outbox 立即发出。 */
+  onDrawStage?: (roundId: unknown, stage: "sketch" | "refine") => void;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费，轮结束失效。 */
   bypassOf?: (roundId: unknown) => string | undefined;
   /** 每个群的工作目录根；实际 cwd 是 <workspaceRoot>/<groupKey>。 */

@@ -56,23 +56,18 @@ draw 的 `character` / `style` / `characters[].character` 在 Schema 里是**普
 输出给 ComfyUI 前统一 danbooru tag 形态（`normalizeTagForm`：`xxx_(yyy_zzz)` → `xxx \(yyy zzz\)`），
 注入串再过幂等括号转义（`escapeInjected`），免得触发词的下划线与括号被 prompt 语义吃掉。
 
-双人图固定走 `workflow-rs.json`（SHA-256 固定校验）：`RSMultiCharacterPrompts` 以左右点位
-（0.4/0.6, 0.5）给两人独立提示，公共提示机械保证以 `2girls` 开头，`RSMultiCharacterSampler`
-一次完成 30 步初始生成（seed 每次提交前随机），
-之后 `4x-AnimeSharp` 超分（恒净 2 倍）与脸修（20 步 / 0.25）；**不做手修、没有二次采样**。
-脸修用节点 40 的全局提示，那里**只放场景与质量词、绝不放角色描述**：
-脸修按脸 crop 后「左 / 右」方位词失效，合并两人描述会把另一侧的特征（牙、瞳孔、耳朵之类）画到这张脸上（串色）；
-角色身份只由初采样的 RS 区域管线负责，脸修这道低强度 pass 只按已画好的画面微调。
-双人请求可在 `characters[].character` 挂各自的角色 LoRA（映射到 `RSMultiCharacterPrompts` 的
-`characterN_lora` 字段），不做 YOLO/SAM 分割、没有 Impact 回退分支。
-**槽位 LoRA 的 remap 补丁（2026-11-09）**：槽位在节点内部按文件名原生加载 LoRA（无 remap），
-而角色 LoRA 是 28 块老 Anima、基座是 52 块 DeltaMix 3.8B V8，直挂会错层崩坏；Windows 侧 RS 节点包
-带本仓库补丁 `scripts/comfy-rs-remap-patch.py`（幂等；在槽位加载内按 Anima-Remap manifest 重写块号，
-语义同单人 `AnimaLoRARemapTagLoader` 的 extend off；首跑备份 `regional_lora.py.pre-yugang-remap`）。
-**升级 comfyui-rs-multicharacter-sampler 节点包后必须重跑该脚本**（锚点不匹配会报错拒写，不会静默错patch）。
+双人图走单人管线直出（RS 区域管线 2026-11-10 退役，`workflow-rs.json` 已删）：
+`characters[]` 恰好两项 → `makeGraph` 的 parts 分支，positive = 质量前缀 + `2girls` + 每人 inject/description + 场景，
+命名角色的 LoRA 走 `AnimaLoRARemapTagLoader` 链 93→94（与单人同款 loader，28→52 remap 原生生效）；
+**脸修 positive 改场景-only 文本**（node 41）：脸 crop 后方位词失效，全文会把另一人的特征
+（牙、瞳孔、耳朵之类）画到这张脸上（串色）；超分 / 脸修 / hd 尾部与单人同链，**不做手修、没有二次采样**。
+**构图自由原则（主人裁定）**：工具不接受任何控制构图分布的参数；左右 / 上下 / 前后 / 拥抱重叠
+全由模型决定，按自然语言写进 description 与 prompt。退役依据（床载体 A/B）：RS 白盒内「真拥抱」与
+「不复制」互斥（重叠区 = 复制头 spawn 点；分离旋钮靠撬开全部重叠赢、拥抱随之消失），
+直出在人数 / 构图 / 身份三轴全胜（D 组实验，见 docs/plans/2026-11-10-rs-quality-experiment-design.md）。
+历史 RS 槽位 remap 补丁 `scripts/comfy-rs-remap-patch.py` 随 RS 退役仅存档（RS 节点包不再被生产使用）。
 重启 ComfyUI 用 `scripts/comfy-restart-windows.ps1`（Windows 副本 `D:\ComfyUI-Anima\yugang-restart-comfyui.ps1`，
 Start-Process 独立进程树；WSL/ssh 会话里直接跑前台启动链会被会话回收带走）。
-生效指纹：`runtime-lan.log` 里 `RS MC character N LoRA <file> remapped 28->52 blocks`。
 `hand_repair` 只作用于单人图。
 
 **入口只注册**（2026-11-05）：`src/index.ts` 不写任何业务逻辑，只有 `app.use(...)`
@@ -172,7 +167,10 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
 **导入轮 inline 化**：meme_import 结果直接附清单图（每批 ≤12 张、cursor 续批）并全部记 seen，
 meme_add 的机械校验链零改动（「seen」语义覆盖两种模式）。**GIF 收录随 ambient 轮**
 （静默收图轮已退役）：动图抽帧直附上下文 + 行内双边收录标记，收不收当场判断；
-fallback 模式保留 inbound 路径由 look 转述。
+fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.config.json` 的
+`gifAutoCollect` 门控**（2026-11-10 改配置，缺省 **false**）：false 时 ambient 轮不附
+双边收录标记、`meme_add` 对非主人轮的 inbound 动图同样拒绝——动图同静态图，只有
+主人点头的轮才能收；true 才恢复旧自动收行为。
 
 原因：这些都是一条「通往一切的边」，而群里坐着的是可以被 prompt 注入的陌生人。
 一个工具的危险性应该写在它的 `execute()` 里被人读到，而不是藏在模型能拼出来的命令行里。
@@ -355,7 +353,8 @@ fallback 模式保留 inbound 路径由 look 转述。
 - 仍然保留：md5 去重（同一张内容不重复入库）。**静默收图轮已退役**（2026-11-06 主人裁定）：
   GIF 不再起专门轮次，随 ambient 轮进上下文（inline 抽帧 + 行内双边标记
   「值得收就用meme_add收它，不值得就不收」，收不收当场判断；fallback 模式 GIF 保留
-  inbound 路径由 look 转述）。`fish.gif_ingest` entry kind 只剩历史数据，
+  inbound 路径由 look 转述）。双边标记与 inbound 动图豁免均受 `gifAutoCollect` 门控
+  （2026-11-10，缺省 false = 动图也要主人点头）。`fish.gif_ingest` entry kind 只剩历史数据，
   compact 的排除口径继续认它。
 - 存量补标：`scripts/migrate-memes.ts`（规则映射）与 `scripts/retag-memes.ts`（flash 读 caption/tags 判词，
   **不许**新增词表外的 tag、不许改 caption，写回前备份 + 重读合并）

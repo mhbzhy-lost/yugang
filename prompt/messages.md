@@ -105,8 +105,6 @@ working_meme_add: 正在把新表情收进柜子，一张张来
 working_restart: 我去重启一下，马上回来
 draw_stage_sketch: 线稿画好了，正在精修和放大，别急
 draw_stage_refine: 放大重绘完成，最后收拾一下细节
-draw_stage_multi_first: 两个人都画好了，开始放大细化
-draw_stage_multi_second: 放大细化好了，最后修一下脸
 
 # 工具目录 section（tool_catalog）的渲染文案；行为说明在 prompt/runtime.md，这里只留标签与行格式
 tool_catalog_header: 当前可用的能力目录（按名字排序）：
@@ -126,7 +124,8 @@ image_look_hint: [本轮要求] 使用 look 工具读取消息中的图片。
 # GIF inline（2026-11-06）：glm 网关对 image/gif 只解码首帧（实测），动图一律抽帧多 block。
 # 行内标签带帧数后缀；末尾标签声明帧序与同一性（社区实践：Qwen fps 语义 / MiniCPM image_id）。
 # image_gif_collect_hint 是 ambient 轮里直发 GIF 的双边收录标记（两边都说，不鼓励一直收图；
-# 静默收图轮已退役，ambient 轮就是收录现场）。
+# 静默收图轮已退役，ambient 轮就是收录现场）。只在 fish.config.json 的 gifAutoCollect
+# 开着时由宿主附上（2026-11-10 改配置，缺省 false = 动图也要主人点头，不附标记）。
 image_gif_tag: [图片#{{n}} {{ref}} ·动图{{frames}}帧]
 image_gif_compressed_tag: [图片#{{n}} 压缩图 ·动图{{frames}}帧按时间顺序，同一张GIF]
 image_gif_collect_hint: 值得收就用meme_add收它，不值得就不收

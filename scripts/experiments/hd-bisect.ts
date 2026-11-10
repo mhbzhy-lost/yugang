@@ -1,7 +1,7 @@
 /**
  * 管线阶段级 bisect 的图导出器 —— 只读诊断，不连 ComfyUI、不提交。
  *
- * 用途：把生产 makeGraph / makeRsGraph 构造的图（带 SHA-256 模板校验）原样导出，
+ * 用途：把生产 makeGraph 构造的图（带 SHA-256 模板校验）原样导出（单人/双人直出同模板），
  * 并在 初采样 / 超分后 / 最终 三处挂 PreviewImage 抽头，交给 Windows 侧运行器
  * （hd-bisect-run.py）提交与测量。图一律从生产代码导出，不手抄节点。
  *
@@ -21,7 +21,7 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { makeGraph, makeRsGraph } from "../../src/tools/draw/comfy.ts";
+import { makeGraph } from "../../src/tools/draw/comfy.ts";
 
 const SEED = 20261110;
 const WIDTH = 912;
@@ -43,12 +43,6 @@ const SINGLE_TAPS = [
   { src: "92", preview: "992", label: "upscaled", note: "AnimeSharp 4x + ImageScaleBy 之后，未经脸修" },
   { src: "11", preview: "9", label: "final", note: "FaceDetailer 之后（hd 时其后还有纯放大尾部 95/96/97）" },
 ] as const;
-const MULTI_TAPS = [
-  { src: "5", preview: "95x", label: "initial", note: "RS 初采样原图" },
-  { src: "62", preview: "96x", label: "upscaled", note: "AnimeSharp 4x + ImageScaleBy 之后，未经脸修" },
-  { src: "101", preview: "66", label: "final", note: "FaceDetailer 之后（hd 时其后还有纯放大尾部 95/96/97）" },
-] as const;
-
 function fail(msg: string): never {
   console.error("ABORT", msg);
   process.exit(1);
@@ -81,20 +75,11 @@ function singleGraph(hd: boolean): Graph {
   );
 }
 
+/** 双人直出：与单人同模板，parts 两位；抽头同单人。 */
 function multiGraph(hd: boolean): Graph {
   return addTaps(
-    makeRsGraph({
-      prompt: MULTI_SCENE,
-      width: 1280,
-      height: 720,
-      seed: SEED,
-      hd,
-      parts: [
-        { text: MULTI_LEFT },
-        { text: MULTI_RIGHT },
-      ],
-    }) as unknown as Graph,
-    MULTI_TAPS,
+    makeGraph({ prompt: MULTI_SCENE, width: 1280, height: 720, seed: SEED, hd, parts: [{ text: MULTI_LEFT }, { text: MULTI_RIGHT }] }) as unknown as Graph,
+    SINGLE_TAPS,
     hd,
   );
 }
@@ -102,7 +87,7 @@ function multiGraph(hd: boolean): Graph {
 function dump(tag: string, g: Graph, taps: readonly (typeof SINGLE_TAPS)[number][], outdir: string): void {
   const ids = Object.keys(g).sort((a, b) => (Number.isNaN(Number(a)) || Number.isNaN(Number(b)) ? a.localeCompare(b) : Number(a) - Number(b)));
   console.log(`--- ${tag} 节点 ${ids.length} 个：${ids.join(",")}`);
-  const scaleNode = g["92"] ?? g["62"];
+  const scaleNode = g["92"];
   console.log(`    首级缩放 scale_by=${(scaleNode.inputs as any).scale_by}   无二次采样（2026-11-10 起管线不含重采样 pass）`);
   for (const tap of taps) {
     if (!g[tap.preview]) fail(`${tag} 缺抽头节点 ${tap.preview}`);
@@ -122,8 +107,8 @@ function main(): void {
     dump("2x", singleGraph(false), SINGLE_TAPS, outdir);
     dump("3x", singleGraph(true), SINGLE_TAPS, outdir);
   } else {
-    dump("multi-2x", multiGraph(false), MULTI_TAPS, outdir);
-    dump("multi-3x", multiGraph(true), MULTI_TAPS, outdir);
+    dump("multi-2x", multiGraph(false), SINGLE_TAPS, outdir);
+    dump("multi-3x", multiGraph(true), SINGLE_TAPS, outdir);
   }
   console.log("DRY OK（未连接 ComfyUI）", outdir);
 }

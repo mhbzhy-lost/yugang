@@ -40,10 +40,13 @@ style=<风格 key> 挂全局画风 LoRA，不改 prompt，可与 character、ref
 
 ## 双人
 
-双人同框必须传 characters，恰好两项，顺序左、右。每项写 description：
-挂了角色的只写动作、表情、服装；普通人写清外貌。互动写在各自 description 或 prompt；
-prompt 只写场景和全局氛围，人数不用写。双人不能用顶层 character、style、ref，
-耗时约两分钟；复杂重叠可能出现人物重复或串色。
+双人同框必须传 characters，恰好两项。构图完全由你决定（左右/上下/前后/拥抱重叠都行），
+工具不接受任何位置参数：把构图当自然语言写进 description 与 prompt。每项写 description：
+挂了角色的只写动作、表情、服装；普通人写清外貌。互动（拥抱/倚靠/趴靠等）自由写在
+任一人的 description 或 prompt 里，不需要回避重叠。prompt 只写场景和全局氛围，人数不用写。
+命名角色默认挂角色 LoRA（characters[].character）；仅当用户明确说「不挂 LoRA / 用 tag 直出」
+时才省 character 键、自己在 description 写外观特征。双人不能用顶层 character、style、ref；
+耗时与单人同量级；hd 可用。
 
 hand_repair 只对单人有效，默认关；用户明确要修手才传 true。双人固定不修手。
 

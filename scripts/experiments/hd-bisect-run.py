@@ -2,7 +2,7 @@
 """hd / 管线阶段级 bisect 的 Windows 侧运行器。
 
 只读诊断：不改鱼与 ComfyUI 的任何配置。图 JSON 由本地 scripts/experiments/hd-bisect.ts
-从生产 makeGraph / makeRsGraph 导出（模板带 SHA-256 校验），本脚本不手抄任何节点，
+从生产 makeGraph 导出（单人/双人直出同模板，模板带 SHA-256 校验），本脚本不手抄任何节点，
 只按图里的 PreviewImage 抽头取图并测量。
 
 阶段判定（按抽头读取的源节点归类，单人/双人通用）：

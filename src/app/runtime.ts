@@ -399,7 +399,7 @@ const roundConv = new Map<string, Conversation>();
 // 与 roundConv 同生命周期，settle 的 finally 里整份删。
 const workingSent = new Map<string, Set<string>>();
 /** draw 阶段进度机械提示的去重表：round → 已发阶段（单/多管线全部阶段）。 */
-const drawStageSent = new Map<string, Set<"sketch" | "refine" | "multi-first" | "multi-second">>();
+const drawStageSent = new Map<string, Set<"sketch" | "refine">>();
 // 窗口键（chatKey\0发送者）→ 本组是否有「必答」放行（private/mentioned）。
 // gate 逐条放行时累积，flushBurst 整组消费并清掉：正文兜底只补必答轮——环境轮（free_pass）
 // 零 say_* 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
@@ -460,6 +460,9 @@ export async function bootRuntime(): Promise<void> {
   ...(modelSelection.transport ? { streamTransport: modelSelection.transport } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时
   memeCooldownMs: () => Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
+  // GIF 自动收图豁免（fish.config.json 的 gifAutoCollect，热加载）：false（缺省）= 动图同静态图，
+  // ambient 轮不附双边收录标记，meme_add 只在主人点头的轮里收
+  gifAutoCollect: () => fishConfig().config.gifAutoCollect,
   // 语音：按会话所在人格取配置（只认 fish.config 的 voices，没配就是没有语音）
   ttsOf: (conversationId) => voiceConfigFor(mappingKeys.get(String(conversationId)) ?? ""),
   // look / video 的视觉描述模型：models.vision；省略时与 models.main 相同
@@ -579,11 +582,7 @@ export async function bootRuntime(): Promise<void> {
     const conv = round === undefined || round === null ? undefined : roundConv.get(key);
     const text = stage === "sketch"
       ? (fish.prompts.messages["draw_stage_sketch"] ?? "")
-      : stage === "refine"
-        ? (fish.prompts.messages["draw_stage_refine"] ?? "")
-        : stage === "multi-first"
-          ? (fish.prompts.messages["draw_stage_multi_first"] ?? "")
-          : (fish.prompts.messages["draw_stage_multi_second"] ?? "");
+      : (fish.prompts.messages["draw_stage_refine"] ?? "");
     if (!key || conv === undefined || !text) return;
     if (!shouldSendWorkingReceipt(triggerOf.get(key)?.kind, "draw")) return;
     const sent = drawStageSent.get(key);
@@ -1419,8 +1418,9 @@ async function submitShardRound(chatKey: string, items: readonly EngageShardItem
     for (const ref of item.quoted?.images ?? []) pushRef(ref);
   }
   const imagePlan = planInlineImages(refs, config.mediaRoot, inline, fish.prompts.messages);
-  // 直发行文本换编（含 GIF 的双边标记）；fallback 模式不换，保留 inbound 路径 + look 提示
-  const collectHint = fish.prompts.messages["image_gif_collect_hint"] ?? "";
+  // 直发行文本换编（含 GIF 的双边标记）；fallback 模式不换，保留 inbound 路径 + look 提示。
+  // 双边收录标记只在 gifAutoCollect 开着时附（关着 = 动图也要主人点头，不引导当场收）
+  const collectHint = fishConfig().config.gifAutoCollect ? (fish.prompts.messages["image_gif_collect_hint"] ?? "") : "";
   const renderFresh = inline
     ? fresh.map((item) => {
       let text = item.text;
