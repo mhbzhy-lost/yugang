@@ -34,36 +34,11 @@
           "properties": {
             "character": {
               "type": "string",
-              "description": "该位的角色 LoRA 键：先用 tags 查角色拿 key；填了挂 LoRA 并注入官方外观，不填表示普通人物"
+              "description": "此人的角色 LoRA 键，先查 tags；仅普通人物或用户明确要求不挂 LoRA 时省略"
             },
             "description": {
               "type": "string",
               "description": "此人的动作、表情和服装；普通人物还需描述外貌"
-            },
-            "region": {
-              "type": "object",
-              "properties": {
-                "x": {
-                  "type": "number"
-                },
-                "y": {
-                  "type": "number"
-                },
-                "width": {
-                  "type": "number"
-                },
-                "height": {
-                  "type": "number"
-                }
-              },
-              "required": [
-                "x",
-                "y",
-                "width",
-                "height"
-              ],
-              "additionalProperties": false,
-              "description": "此人在画面里的矩形区域（画布归一化 0-1；x/y 是盒中心，width/height 是尺寸）。区域≈人物的画面份额：远景渺小人物用小盒（如 w0.12 h0.25），全身近景用高盒（如 w0.3 h0.85）。贴身构图（拥抱/并肩）两人的盒也各自独立、只轻度相邻，别大幅重叠（重叠区会触发复制头/肢体错位），亲密感写进 description。不填走默认分区（人物偏大）"
             }
           },
           "required": [
@@ -73,7 +48,7 @@
         },
         "minItems": 2,
         "maxItems": 2,
-        "description": "双人同框的唯一入口：画面要同时出现两个人时必须传，恰好两项；每项写 description，可选 character 表示该人是命名角色（默认挂角色 LoRA，仅用户明确不挂时省略）。每个人在画面的位置与大小用 region 声明（见 region 字段），景别与构图意图同时写进 description 与 prompt。人数由工具自动处理，不用写 2girls。与单人 character 互斥，双人不支持 style 和改图"
+        "description": "双人同框必须传，恰好两项；每项写 description，可选 character 挂角色 LoRA。默认两人靠近；明确相隔且没有身体接触时才传 spacing=apart。人数自动处理。与顶层 character 互斥，双人不支持 style 和 ref"
       },
       "hand_repair": {
         "type": "boolean",
@@ -86,6 +61,22 @@
       "hd": {
         "type": "boolean",
         "description": "高清模式，默认 false（2 倍放大出图）。用户明确要高清大图、超级清楚、分辨率大点、要当壁纸这类要求时传 true：3 倍放大，图更大更清晰，但明显更慢；用户没提就不要开"
+      },
+      "framing": {
+        "type": "string",
+        "enum": [
+          "normal",
+          "wide"
+        ],
+        "description": "仅双人可用。默认 normal：普通、中景或近景都在提示词描述。用户明确要求远景、全景环境为主时选 wide；此时 prompt 只写场景、光照和环境，两人的动作与关系写各自 description。不额外手写 wide shot 或 very wide shot"
+      },
+      "spacing": {
+        "type": "string",
+        "enum": [
+          "together",
+          "apart"
+        ],
+        "description": "仅双人可用。默认 together：两人靠近，适合牵手、拥抱、依偎。只有用户明确要求两人相隔且无身体接触动作时选 apart；不得把远景误解为两人彼此远离"
       }
     },
     "required": [

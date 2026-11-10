@@ -62,7 +62,13 @@ draw 的 `character` / `style` / `characters[].character` 在 Schema 里是**普
 无脸修无手修）→ 超分 → 质感 pass（denoise 0.25 裸地板词 + 链式 LoRA，R3 验证不融合）→ [hd 纯放大] → 输出。
 依据：非重叠场景 RS 3/3 全干净且串色免疫（直出同载体有鲸尾串色生产事故）；
 重叠场景复制头风险已知并接受（床载体案底），主人裁定不做模型侧判断来分流。
-**构图自由原则不变**：工具不接受点位/坐标参数，分布由自然语言写进 description 与 prompt。
+**双人构图预设（2026-11-11 实验定版）**：模型不传 region、点位或坐标；只选 `framing: normal|wide`
+与 `spacing: together|apart`，默认 normal+together。普通/中景/近景不接 Camera（近景只写提示词）；
+只有 wide 接 RSCameraControl（模板 node 80，distance=1，base_prompt 显式填写、两路输出接 Sampler）。
+两人默认相接、不重叠矩形（x=0.345/0.655、y=0.5、w=0.31、h=0.85）；用户明确要求相隔且无接触动作时
+用分离矩形（x=0.29/0.71、w=0.30，其余相同）。远景公共 prompt 只写场景、动作与关系归各自 description；
+不额外手写 wide shot/very wide shot，保留 Camera 原生行为。Camera=0、point 默认双人布局和九宫格均退役。
+生产仍保留 30 步初采样、超分与 denoise=0.25 质感 pass；20 步直出只是实验规格。
 历史 RS 槽位 remap 补丁 `scripts/comfy-rs-remap-patch.py` 随 RS 复活重新生效
 （升级 comfyui-rs-multicharacter-sampler 节点包后必须重跑该脚本）。
 重启 ComfyUI 用 `scripts/comfy-restart-windows.ps1`（Windows 副本 `D:\ComfyUI-Anima\yugang-restart-comfyui.ps1`，

@@ -23,7 +23,7 @@ const RS_TEMPLATE = JSON.parse(readFileSync(new URL("./workflow-rs.json", import
 const RS_TEMPLATE_CONTRACT: Array<[string, string]> = [
   ["1", "UNETLoader"], ["4", "RSMultiCharacterPrompts"], ["5", "RSMultiCharacterSampler"],
   ["61", "ImageUpscaleWithModel"], ["62", "ImageScaleBy"], ["66", "PreviewImage"],
-  ["71", "CLIPTextEncode"], ["72", "KSampler"],
+  ["71", "CLIPTextEncode"], ["72", "KSampler"], ["80", "RSCameraControl"],
 ];
 for (const [id, cls] of RS_TEMPLATE_CONTRACT) {
   if (RS_TEMPLATE[id]?.class_type !== cls) throw new Error(`draw RS workflow contract mismatch: node ${id} != ${cls}`);
@@ -127,12 +127,10 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   return graph;
 }
 
-/** RS 区域管线的一位：此人的描述 + 可选角色 LoRA（身份锚）+ 可选 region 盒（画面份额）。 */
+/** RS 区域管线的一位：此人的描述与可选角色 LoRA。 */
 export interface MultiPart {
   text: string;
   role?: { file: string; weight: number; inject: string };
-  /** 鱼声明的画布区域（归一化 0-1，x/y 为盒中心）：区域≈人物占画面的份额与位置。 */
-  region?: { x: number; y: number; width: number; height: number };
 }
 export interface MultiDraw {
   prompt: string;
@@ -142,6 +140,8 @@ export interface MultiDraw {
   height: number;
   seed?: number;
   parts: MultiPart[];
+  framing?: "normal" | "wide";
+  spacing?: "together" | "apart";
   /** 场景级 bypass（bypass: 段）：附加到初采样公共提示与 pass 正向末尾。 */
   bypass?: string;
   /** 人物级 bypass（pbypass: 段）：附加到两个人物的区域提示末尾。 */
@@ -157,13 +157,6 @@ function validateParts(parts: MultiPart[]): void {
   for (const p of parts) {
     if (!p.text || p.text.length > 800) throw new Error("invalid multi part text");
     if (p.role !== undefined && (!/^[\w .@()-]+\.safetensors$/.test(p.role.file) || !Number.isFinite(p.role.weight) || p.role.weight < 0.4 || p.role.weight > 1.1)) throw new Error("invalid multi role");
-    const r = p.region;
-    if (r !== undefined) {
-      const fields = [r.x, r.y, r.width, r.height];
-      if (fields.some((v) => typeof v !== "number" || !Number.isFinite(v))) throw new Error("invalid multi region");
-      if (r.width <= 0 || r.width > 1 || r.height <= 0 || r.height > 1) throw new Error("invalid multi region size");
-      if (r.x - r.width / 2 < 0 || r.x + r.width / 2 > 1 || r.y - r.height / 2 < 0 || r.y + r.height / 2 > 1) throw new Error("invalid multi region bounds");
-    }
   }
 }
 
@@ -171,17 +164,18 @@ function multiRoleTags(part: MultiPart): string {
   return (part.role?.inject ?? "").split(",").map((tag) => tag.trim()).filter((tag) => tag && !/^(?:1girl|solo)$/i.test(tag)).join(", ");
 }
 
-/** RS 区域管线（双人唯一路径）：身份隔离由槽位 LoRA + region 盒保证；重叠场景复制头风险已知并接受（主人裁定不做路由分流）。 */
+/** 双人唯一路径：固定相接或分离矩形，只有远景接 Camera。 */
 export function makeRsGraph(args: MultiDraw): Graph {
   validateParts(args.parts);
+  if (args.framing !== undefined && !["normal", "wide"].includes(args.framing)) throw new Error("invalid multi framing");
+  if (args.spacing !== undefined && !["together", "apart"].includes(args.spacing)) throw new Error("invalid multi spacing");
   const g = structuredClone(RS_TEMPLATE);
   const floor = String(TEMPLATE["71"].inputs.text); // pass 裸地板（node 4 现含四轴，不可取）
   const neg = String(TEMPLATE["5"].inputs.text);
   const seed = args.seed ?? randomBytes(4).readUInt32BE();
   const passSeed = randomBytes(4).readUInt32BE();
   const suffix = args.bypass ? `, ${args.bypass}` : "";
-  const anyRegion = args.parts.some((part) => part.region !== undefined);
-  if (anyRegion) g["4"].inputs.layout_mode = "mixed"; // 有 region 才进 mixed，否则保持模板 points 默认（旧布局行为）
+  g["4"].inputs.layout_mode = "boxes";
   for (let i = 0; i < 2; i++) {
     const part = args.parts[i];
     const s = g["4"].inputs;
@@ -189,20 +183,22 @@ export function makeRsGraph(args: MultiDraw): Graph {
     s[`character${i + 1}_lora`] = part.role?.file ?? "None";
     s[`character${i + 1}_lora_strength`] = part.role?.weight ?? 1;
     s[`character${i + 1}_lora_clip_strength`] = part.role?.weight ?? 1;
-    // 几何直接写 node 4（RSMultiCharacterPrompts 自带 x/y/width/height/geometry，无需 Position 节点）：
-    // 声明了 region 用 box，否则 point（mixed 模式下 point 槽位走自动划分，同旧布局）。
-    if (part.region !== undefined) {
-      s[`character${i + 1}_geometry`] = "box";
-      s[`character${i + 1}_x`] = part.region.x;
-      s[`character${i + 1}_y`] = part.region.y;
-      s[`character${i + 1}_width`] = part.region.width;
-      s[`character${i + 1}_height`] = part.region.height;
-    } else if (anyRegion) {
-      s[`character${i + 1}_geometry`] = "point";
-    }
+    const apart = args.spacing === "apart";
+    s[`character${i + 1}_x`] = apart ? [0.29, 0.71][i] : [0.345, 0.655][i];
+    s[`character${i + 1}_y`] = 0.5;
+    s[`character${i + 1}_width`] = apart ? 0.30 : 0.31;
+    s[`character${i + 1}_height`] = 0.85;
   }
   const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;
   Object.assign(g["5"].inputs, { prompt: String(RS_TEMPLATE["5"].inputs.prompt) + commonPrompt + suffix, negative_prompt: neg, width: args.width, height: args.height, seed }); // 初采样带四轴扁平前缀（模板 node5.prompt），pass 才裸地板
+  if (args.framing === "wide") {
+    Object.assign(g["80"].inputs, { base_prompt: g["5"].inputs.prompt, canvas_aspect: args.width / args.height });
+    g["5"].inputs.character_pipe = ["80", 0];
+    g["5"].inputs.prompt = ["80", 1];
+  } else {
+    delete g["80"];
+    g["5"].inputs.character_pipe = ["4", 0];
+  }
   // 质感 pass：裸地板 + 双人合并词（R3 验证：denoise 0.25 低强度增益不融合），负向与初采样同。
   const passSegments = args.parts.flatMap((part) => [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text)].filter((s) => s));
   g["71"].inputs.text = `${floor}${commonPrompt}, ${passSegments.join(", ")}${suffix}`;

@@ -19,7 +19,9 @@ interface DrawArgs {
   hd?: boolean;
   ref?: string;
   character?: string;
-  characters?: Array<{ character?: string; description: string; region?: { x: number; y: number; width: number; height: number } }>;
+  characters?: Array<{ character?: string; description: string }>;
+  framing?: "normal" | "wide";
+  spacing?: "together" | "apart";
 }
 
 const RATIO_SIZES = {
@@ -62,13 +64,15 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
       deps.onLongWork?.("draw", round);
-      const positive = args.prompt.trim();
+      const positive = typeof args.prompt === "string" ? args.prompt.trim() : "";
       // 自定义画图模式（2026-11-10）：用户明确要时 prompt 可为空串，内容全部由角色词表/机械前缀承担；
       // 只限长度，不退非空。
       if (typeof args.prompt !== "string" || positive.length > 1000) throw new Error(deps.prompts.messages["draw_prompt"] ?? "draw_prompt");
       if (!deps.comfyUrl) throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
       if (args.hand_repair !== undefined && typeof args.hand_repair !== "boolean") throw new Error(deps.prompts.messages["draw_hand_repair"] ?? "draw_hand_repair");
       if (args.hd !== undefined && typeof args.hd !== "boolean") throw new Error(deps.prompts.messages["draw_hd"] ?? "draw_hd");
+      if ((args.framing !== undefined && !["normal", "wide"].includes(args.framing)) || (args.spacing !== undefined && !["together", "apart"].includes(args.spacing))) throw new Error(deps.prompts.messages["draw_composition"]);
+      if (args.characters === undefined && (args.framing !== undefined || args.spacing !== undefined)) throw new Error(deps.prompts.messages["draw_composition_multi"]);
       const ratio = args.ratio ?? "3:4";
       if (typeof ratio !== "string" || !Object.hasOwn(RATIO_SIZES, ratio)) throw new Error(deps.prompts.messages["draw_ratio"] ?? "draw_ratio");
       const [width, height] = RATIO_SIZES[ratio];
@@ -91,13 +95,11 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         if (args.style !== undefined || args.ref !== undefined) throw new Error(deps.prompts.messages["draw_multi_unsupported"] ?? "draw_multi_unsupported");
         if (!Array.isArray(args.characters) || args.characters.length !== 2) throw new Error(deps.prompts.messages["draw_characters_count"] ?? "draw_characters_count");
         if (args.characters.some((part) => !part || typeof part !== "object" || typeof part.description !== "string" || !part.description.trim())) throw new Error(deps.prompts.messages["draw_multi_sides"] ?? "draw_multi_sides");
-        multiParts = args.characters.map((part, index) => {
+        multiParts = args.characters.map((part) => {
           const book = part.character === undefined ? undefined : loraBook(part.character);
           if (part.character !== undefined && !book) throw new Error(renderTemplate(deps.prompts.messages["draw_character"] ?? "{{key}}", { key: part.character }));
-          const region = typeof part.region === "object" && part.region !== null && ["x", "y", "width", "height"].every((k) => typeof (part.region as Record<string, unknown>)[k] === "number")
-            ? { x: Number(part.region.x), y: Number(part.region.y), width: Number(part.region.width), height: Number(part.region.height) }
-            : undefined;
-          return { text: part.description.trim(), ...(book ? { role: { file: book.file, weight: book.weight, inject: book.inject } } : {}), ...(region ? { region } : {}) };
+          if (Object.hasOwn(part, "region")) throw new Error(deps.prompts.messages["draw_region_retired"]);
+          return { text: part.description.trim(), ...(book ? { role: { file: book.file, weight: book.weight, inject: book.inject } } : {}) };
         });
       }
       if (round === undefined) throw new Error(deps.prompts.messages["draw_round_missing"] ?? "draw_round_missing");
@@ -112,7 +114,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         const stageCb = deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined;
         const bp = deps.bypassOf?.(round);
         const png = multiParts
-          ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, () => { state.submitted = true; })
+          ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts, framing: args.framing, spacing: args.spacing, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, () => { state.submitted = true; })
           : await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, handRepair: args.hand_repair ?? false, hd: args.hd === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, () => { state.submitted = true; }, stageCb);
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
