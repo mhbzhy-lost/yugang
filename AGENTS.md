@@ -25,18 +25,39 @@
 
 `draw` 使用 Windows ComfyUI 的固定 V8 API 工作流（`src/tools/draw/workflow.json`，SHA-256 固定校验），
 通过 `COMFYUI_URL` 指向 macmini 的 `127.0.0.1:18190` SSH 隧道；不接受模型传入工作流、节点、模型名或地址。
-文生图按初采样 30 步 → 可选手部修复（`hand_repair`，默认关）→ RealESRGAN anime_6B 2 倍超分 → 二次采样 30 步 → 人脸修复 → `PreviewImage` 输出；
-文生图可选受控 `ratio`，默认 3:4；改图沿用参考图比例（尺寸对齐可能略有偏差）。文生图和改图默认均为 2 倍。`hsr` 用固定 LoRA 权重 0.7 经 28→52 层映射，
-效果需人工确认；`ref` 是整图重绘，不是蒙版局部编辑，同样默认使用 RealESRGAN 2 倍超分与二次采样。图片通过 `type=temp` 取回本地 `gen/`，
+文生图按初采样 30 步（cfg 4.5）→ 可选手部修复（`hand_repair`，默认关；hand_yolov8n 检测 + 16 步 / 0.25）
+→ `4x-AnimeSharp` 超分后 lanczos 缩放（缺省 `scale_by 0.5` = 净 2 倍，`hd: true` 时 0.75 = 净 3 倍）
+→ 二次采样 16 步 / 0.30 → 人脸修复（face_yolov8n + 20 步 / 0.25）→ `PreviewImage` 输出；
+基座的 `LatentUpscaleBy`（1.25）被机械置 1 停用，超分只认 AnimeSharp 这一条。
+文生图可选受控 `ratio`（7 档，默认 3:4 = 912×1216，长边 1216/1280 级）；改图沿用参考图比例（尺寸对齐可能略有偏差）。
+`hd` 是文生图与改图共用的高清档（2026-11-10）：只在用户明确要「高清大图 / 超级清楚 / 分辨率大点 / 当壁纸」时开，
+明显更慢，没提就不开。`ref` 是整图重绘，不是蒙版局部编辑，同样走超分与二次采样。图片通过 `type=temp` 取回本地 `gen/`，
 Windows 输入上传限定 `yugang-ref-<uuid>.png`；计划任务 `Yugang-ComfyUI-RefCleanup` 使用
 `scripts/comfy-ref-cleanup.ps1` 的对应副本，每小时在登录用户会话中尝试清理 24 小时以上专用文件，
 ComfyUI 忙或队列状态不可用时不删除，不触碰其他 input。部署前须核对该任务与脚本已安装且可运行。
 提交状态不明的画图在当前轮禁止重试，避免网络超时造成重复任务。
 
+**角色与风格 LoRA 的唯一事实源是 `src/tools/characters.ts`**（2026-11-10 词表化）：它加载 `src/tools/tags/` 下的
+三份 JSON（`ai-girls.json` / `honkai3rd.json` / `styles.json`），draw 取 `loraBook(key)` / `styleBook(key)`
+（key → LoRA 文件名 + 机械注入串 / 表内权重），tags 取 `listCharacters()` / `findCharacter()` / `findSection()` 渲染词表。
+加角色或画风 = 只改对应 JSON，不许再写第二份常量或 preset。两者都经 `AnimaLoRARemapTagLoader` 做 28→52 层映射
+（`auto_remap` 开、`extend_to_new_layers` 关），链序是底模 → 风格（节点 88）→ 角色（节点 93），消费方
+（model 侧 7/11/14/42、clip 侧 4/5/11/42）统一改接末端节点；`hsr` 现在是 `styles.json` 里的普通条目
+（HSR Anima.safetensors，权重 0.7 取自表），不再是硬编码 preset，效果仍需人工确认。LoRA 权重受控 0.4–1.1、缺省 0.8。
+draw 的 `character` / `style` / `characters[].character` 在 Schema 里是**普通字符串而非枚举**（2026-11-10 主人裁定放开）：
+白名单在执行期查表判定，查不到就以 tool 错误打回并给出正确 key，模型侧清单只由 `tags` 提供（draw 的 TOOL.md 不列角色清单）。
+**不要再加回「检测到手写表内角色 tag 却没传 character 就打回」的机械闸**——写角色 tag 而不挂 LoRA 本就是合理用法
+（表外角色、或主人点名不要 LoRA 时），那道闸反而拦住正常用法，已按主人裁定整体移除。
+输出给 ComfyUI 前统一 danbooru tag 形态（`normalizeTagForm`：`xxx_(yyy_zzz)` → `xxx \(yyy zzz\)`），
+注入串再过幂等括号转义（`escapeInjected`），免得触发词的下划线与括号被 prompt 语义吃掉。
+
 双人图固定走 `workflow-rs.json`（SHA-256 固定校验）：`RSMultiCharacterPrompts` 以左右点位
 （0.4/0.6, 0.5）给两人独立提示，公共提示机械保证以 `2girls` 开头，`RSMultiCharacterSampler`
 一次完成 30 步初始生成（seed 每次提交前随机），
-之后 AnimeSharp 2 倍超分、低强度全图采样（16 步 / 0.30）与脸修（20 步 / 0.25）；**不做手修**。
+之后 `4x-AnimeSharp` 超分（与单人共用 `hd` 档：缺省净 2 倍，`hd: true` 净 3 倍）、低强度全图采样（16 步 / 0.30）
+与脸修（20 步 / 0.25）；**不做手修**。二次采样与脸修共用节点 40 的全局提示，那里**只放场景与质量词、绝不放角色描述**：
+脸修按脸 crop 后「左 / 右」方位词失效，合并两人描述会把另一侧的特征（牙、瞳孔、耳朵之类）画到这张脸上（串色）；
+角色身份只由初采样的 RS 区域管线负责，后两道低强度 pass 只按已画好的画面微调。
 双人请求可在 `characters[].character` 挂各自的角色 LoRA（映射到 `RSMultiCharacterPrompts` 的
 `characterN_lora` 字段），不做 YOLO/SAM 分割、没有 Impact 回退分支。
 **槽位 LoRA 的 remap 补丁（2026-11-09）**：槽位在节点内部按文件名原生加载 LoRA（无 remap），
@@ -547,7 +568,7 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
 ## 命令
 
 ```bash
-npm test           # 166 项，含上面每条约束与新闻 R1–R12 竞态矩阵的兜底
+npm test           # 174 项，含上面每条约束与新闻 R1–R12 竞态矩阵的兜底
 npm run prompts    # 列出 prompt 文件 + sha256 + 27 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属 + 内嵌扫描结果
 npm run smoke:news # 新闻 N1–N5 + 生产 runtime 竞态 smoke（真实模型、隔离 SQLite/凭据、虚构新闻源，不接 QQ）
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
