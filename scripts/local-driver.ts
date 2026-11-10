@@ -266,7 +266,9 @@ async function main(): Promise<void> {
       for (const match of line.text.matchAll(IMAGE_REF)) refs.push(match[1] ?? "");
       for (const ref of line.quoted?.images ?? []) refs.push(ref);
       const plan = planInlineImages(refs, mediaRoot, true, fish.prompts.messages);
-      const collectHint = fish.prompts.messages["image_gif_collect_hint"] ?? "";
+      // GIF 双边收录标记只在 gifAutoCollect 开着时附（线上由 fish.config.json 门控，缺省 false）；
+      // 本地驱动不加载 fish.config，按缺省不附
+      const collectHint = "";
       let text = line.text;
       for (const [ref, n] of plan.numbers) {
         const frames = plan.gifFrames.get(ref);

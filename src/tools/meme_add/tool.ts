@@ -11,7 +11,8 @@
  *
  * 本地导入例外：ref 落在 meme-inbox/ 时，必须同时满足「主人触发」「当前轮 meme_import 清单里有这张」
  * 「这一轮模型真的见过这张」（inline 模式 = meme_import 结果里直接附过图，fallback 模式 = look 过）；
- * 动图的既有豁免只适用于 inbound/ 自动收图，
+ * 动图的既有豁免只适用于 inbound/ 自动收图、且 fish.config.json 的
+ * gifAutoCollect 开着（缺省 false = 动图也要主人点头），
  * 不能用来绕开本地清单，也不能把其他目录的 gif 当成群图。
  *
  * 导入轮的清单状态只有 meme_import/shared.ts 一份，这里只读「在清单里 / 看过」两个凭据。
@@ -79,9 +80,10 @@ export function createMemeAddTool(manifest: ToolManifest, deps: ToolPackageDeps)
           throw new Error(renderTemplate(deps.prompts.messages["meme_add_not_looked"] ?? "{{ref}}", { ref: localRef }));
         }
       } else {
-        // 收录规则：动图（.gif）允许鱼自己判断入库——但只限群里来的 inbound/ 图；
-        // 其他格式、以及其他目录的动图，都必须主人点头。
-        if (!byMaster && !(isGif && inInbound)) {
+        // 收录规则：动图（.gif）在 gifAutoCollect 开着时允许鱼自己判断入库——但只限
+        // 群里来的 inbound/ 图；开关关着（缺省）、其他格式、以及其他目录的动图，
+        // 都必须主人点头。
+        if (!byMaster && !((deps.gifAutoCollect?.() ?? false) && isGif && inInbound)) {
           throw new Error(deps.prompts.messages["meme_add_master"] ?? "meme_add_master");
         }
       }

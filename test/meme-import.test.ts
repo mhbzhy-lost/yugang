@@ -3,7 +3,7 @@
  *
  * 覆盖的机械边界：
  *  - meme-inbox/ 只有「主人 + 本轮 meme_import 清单 + 这一轮 look 过」才能读、能收
- *  - 动图豁免严格限 inbound/；其他目录的 gif 一样要主人
+ *  - 动图豁免严格限 inbound/ 且受 gifAutoCollect 门控（缺省 false = 一样要主人）；
  *  - 来源校验 fail closed：符号链接 / realpath 逃逸 / 坏 magic / 超限
  *  - 逐张配额：普通轮 2 张，导入轮＝清单张数（上限 50），cursor 续批，清单不跨轮
  *  - say_media 不能把 meme-inbox 里的图直接当 media 发出去
@@ -82,12 +82,18 @@ function setup(over: { master?: string; userId?: number; maxBytes?: number; inli
     ...(over.inline ? { inlineVisionOn: () => true } : {}),
   });
   const cappedLimits = { ...DEFAULT_LIMITS, mediaRoot, ...(over.maxBytes === undefined ? {} : { maxMediaBytes: over.maxBytes }) };
-  const memeAdd = createMemeAddTool(manifests.get("meme_add")!, {
+  const baseAddDeps = {
     mediaRoot,
     prompts,
     master,
     triggerOf,
     limits: cappedLimits,
+  };
+  const memeAdd = createMemeAddTool(manifests.get("meme_add")!, baseAddDeps)!;
+  // gifAutoCollect 开着时（旧缺省行为）的实例：非主人轮也能收 inbound/ 动图
+  const memeAddGif = createMemeAddTool(manifests.get("meme_add")!, {
+    ...baseAddDeps,
+    gifAutoCollect: () => true,
   })!;
   const memeImport = createMemeImportTool(manifests.get("meme_import")!, {
     mediaRoot,
@@ -105,6 +111,7 @@ function setup(over: { master?: string; userId?: number; maxBytes?: number; inli
     mediaRoot,
     look,
     memeAdd,
+    memeAddGif,
     memeImport,
     say,
     conversationId,
@@ -217,8 +224,8 @@ test("主人清单外 / 清单内：look 与 meme_add 的逐张链路", async ()
   }
 });
 
-test("动图豁免严格限 inbound：inbox gif 与其他目录 gif 都要主人", async () => {
-  const { mediaRoot, memeAdd, conversationId, cleanup, setUserId } = setup({ userId: 999 });
+test("动图豁免严格限 inbound 且受 gifAutoCollect 门控（2026-11-10 改配置，缺省 false）", async () => {
+  const { mediaRoot, memeAdd, memeAddGif, conversationId, cleanup, setUserId } = setup({ userId: 999 });
   try {
     const api = fakeApi(conversationId, "round-3");
     writeInbox(mediaRoot, "b.gif", GIF);
@@ -235,9 +242,16 @@ test("动图豁免严格限 inbound：inbox gif 与其他目录 gif 都要主人
       "非 inbound 目录的 gif 同样要主人",
     );
 
-    // inbound 的群图 gif 仍是合法豁免（自动收图链路）：
+    // inbound 的群图 gif：gifAutoCollect 缺省 false，非主人轮同样拒绝（主人同意才能收）
     writeFileSync(join(mediaRoot, "inbound", "d.gif"), GIF);
-    const added = await textOf(memeAdd, { ...CAPTION, ref: "inbound/d.gif" }, api);
+    await assert.rejects(
+      () => textOf(memeAdd, { ...CAPTION, ref: "inbound/d.gif" }, api),
+      /只有主人能让图长期留在库里/,
+      "gifAutoCollect=false 时 inbound 动图豁免关闭",
+    );
+
+    // 开关打开（旧行为）：inbound 的群图 gif 在非主人轮也可收（自动收图链路）
+    const added = await textOf(memeAddGif, { ...CAPTION, ref: "inbound/d.gif" }, api);
     assert.match(added, /收好了/);
 
     // 主人身份下 inbox gif 仍要清单 + 已 look（由上一个用例覆盖清单缺口，这里验「未看」）
