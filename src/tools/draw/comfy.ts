@@ -131,6 +131,8 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
 export interface MultiPart {
   text: string;
   role?: { file: string; weight: number; inject: string };
+  /** 鱼声明的画布区域（归一化 0-1，x/y 为盒中心）：区域≈人物占画面的份额与位置。 */
+  region?: { x: number; y: number; width: number; height: number };
 }
 export interface MultiDraw {
   prompt: string;
@@ -155,6 +157,13 @@ function validateParts(parts: MultiPart[]): void {
   for (const p of parts) {
     if (!p.text || p.text.length > 800) throw new Error("invalid multi part text");
     if (p.role !== undefined && (!/^[\w .@()-]+\.safetensors$/.test(p.role.file) || !Number.isFinite(p.role.weight) || p.role.weight < 0.4 || p.role.weight > 1.1)) throw new Error("invalid multi role");
+    const r = p.region;
+    if (r !== undefined) {
+      const fields = [r.x, r.y, r.width, r.height];
+      if (fields.some((v) => typeof v !== "number" || !Number.isFinite(v))) throw new Error("invalid multi region");
+      if (r.width <= 0 || r.width > 1 || r.height <= 0 || r.height > 1) throw new Error("invalid multi region size");
+      if (r.x - r.width / 2 < 0 || r.x + r.width / 2 > 1 || r.y - r.height / 2 < 0 || r.y + r.height / 2 > 1) throw new Error("invalid multi region bounds");
+    }
   }
 }
 
@@ -178,6 +187,19 @@ export function makeRsGraph(args: MultiDraw): Graph {
     s[`character${i + 1}_lora`] = part.role?.file ?? "None";
     s[`character${i + 1}_lora_strength`] = part.role?.weight ?? 1;
     s[`character${i + 1}_lora_clip_strength`] = part.role?.weight ?? 1;
+    // Position 节点（6）：声明了区域用 box，否则 point 缺省（同旧布局行为）
+    const pos = g["6"].inputs;
+    if (part.region !== undefined) {
+      pos[`character${i + 1}_geometry`] = "box";
+      pos[`character${i + 1}_x`] = part.region.x;
+      pos[`character${i + 1}_y`] = part.region.y;
+      pos[`character${i + 1}_width`] = part.region.width;
+      pos[`character${i + 1}_height`] = part.region.height;
+    } else {
+      pos[`character${i + 1}_geometry`] = "point";
+      pos[`character${i + 1}_x`] = 0.5;
+      pos[`character${i + 1}_y`] = 0.5;
+    }
   }
   const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;
   Object.assign(g["5"].inputs, { prompt: String(RS_TEMPLATE["5"].inputs.prompt) + commonPrompt + suffix, negative_prompt: neg, width: args.width, height: args.height, seed }); // 初采样带四轴扁平前缀（模板 node5.prompt），pass 才裸地板

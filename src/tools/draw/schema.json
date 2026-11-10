@@ -39,6 +39,31 @@
             "description": {
               "type": "string",
               "description": "此人的动作、表情和服装；普通人物还需描述外貌"
+            },
+            "region": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                },
+                "width": {
+                  "type": "number"
+                },
+                "height": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "x",
+                "y",
+                "width",
+                "height"
+              ],
+              "additionalProperties": false,
+              "description": "此人在画面里的矩形区域（画布归一化 0-1；x/y 是盒中心，width/height 是尺寸）。区域≈人物的画面份额：远景渺小人物用小盒（如 w0.12 h0.25），全身近景用高盒（如 w0.3 h0.85），拥抱等贴身构图两人的盒大幅重叠。不填走默认分区（人物偏大）"
             }
           },
           "required": [

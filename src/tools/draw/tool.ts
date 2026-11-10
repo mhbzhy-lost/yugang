@@ -19,7 +19,7 @@ interface DrawArgs {
   hd?: boolean;
   ref?: string;
   character?: string;
-  characters?: Array<{ character?: string; description: string }>;
+  characters?: Array<{ character?: string; description: string; region?: { x: number; y: number; width: number; height: number } }>;
 }
 
 const RATIO_SIZES = {
@@ -94,7 +94,10 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         multiParts = args.characters.map((part, index) => {
           const book = part.character === undefined ? undefined : loraBook(part.character);
           if (part.character !== undefined && !book) throw new Error(renderTemplate(deps.prompts.messages["draw_character"] ?? "{{key}}", { key: part.character }));
-          return { text: part.description.trim(), ...(book ? { role: { file: book.file, weight: book.weight, inject: book.inject } } : {}) };
+          const region = typeof part.region === "object" && part.region !== null && ["x", "y", "width", "height"].every((k) => typeof (part.region as Record<string, unknown>)[k] === "number")
+            ? { x: Number(part.region.x), y: Number(part.region.y), width: Number(part.region.width), height: Number(part.region.height) }
+            : undefined;
+          return { text: part.description.trim(), ...(book ? { role: { file: book.file, weight: book.weight, inject: book.inject } } : {}), ...(region ? { region } : {}) };
         });
       }
       if (round === undefined) throw new Error(deps.prompts.messages["draw_round_missing"] ?? "draw_round_missing");
