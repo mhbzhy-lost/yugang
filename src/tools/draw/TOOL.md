@@ -30,6 +30,8 @@ character；双人填 characters[].character。本工具不列角色清单，也
 ## 画面与风格
 
 prompt 写画面本身，用 danbooru tag 为主；普通 tag（cat_ears 之类）查 tags 词表拿准写法和热度。
+用户明确说「自定义画图」时 prompt 传空字符串（其余参数照常），不要自己往里补词——
+画面内容由角色词表注入与模板机械前缀承担。
 负向词是内置的，别写「不要出现什么」。
 
 style=<风格 key> 挂全局画风 LoRA，不改 prompt，可与 character、ref 组合；

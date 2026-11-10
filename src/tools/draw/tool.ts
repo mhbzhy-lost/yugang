@@ -63,7 +63,9 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const round = live?.run?.inputs?.[0];
       deps.onLongWork?.("draw", round);
       const positive = args.prompt.trim();
-      if (!positive || positive.length > 1000) throw new Error(deps.prompts.messages["draw_prompt"] ?? "draw_prompt");
+      // 自定义画图模式（2026-11-10）：用户明确要时 prompt 可为空串，内容全部由角色词表/机械前缀承担；
+      // 只限长度，不退非空。
+      if (typeof args.prompt !== "string" || positive.length > 1000) throw new Error(deps.prompts.messages["draw_prompt"] ?? "draw_prompt");
       if (!deps.comfyUrl) throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
       if (args.hand_repair !== undefined && typeof args.hand_repair !== "boolean") throw new Error(deps.prompts.messages["draw_hand_repair"] ?? "draw_hand_repair");
       if (args.hd !== undefined && typeof args.hd !== "boolean") throw new Error(deps.prompts.messages["draw_hd"] ?? "draw_hd");

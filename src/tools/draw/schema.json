@@ -4,7 +4,7 @@
     "properties": {
       "prompt": {
         "type": "string",
-        "description": "画面描述。danbooru tag 为主（先查词表拿准词），可混自然语言，逗号分隔；负向词表是内置预设，不要在这里写「不要出现什么」"
+        "description": "画面描述。danbooru tag 为主（先查词表拿准词），可混自然语言，逗号分隔；负向词表是内置预设，不要在这里写「不要出现什么」。用户明确要「自定义画图」时传空字符串，内容交给角色词表与机械前缀"
       },
       "style": {
         "type": "string",
