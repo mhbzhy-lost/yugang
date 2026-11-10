@@ -21,6 +21,5 @@
   "draw_multi_unsupported": "双人同框不支持风格（style）和改图（ref）；去掉后再试",
   "draw_multi_sides": "双角色同框要在 characters 的两项里分别写 description",
   "draw_style": "没有这个风格 key：{{key}}。先用 tags 查（不传关键词拿总表），把风格条目的 key 填进 style；或者不填 style",
-  "draw_hd": "高清开关必须是 true 或 false",
-  "draw_layout": "layout 只能是 separate（两人不重叠）或 overlap（两人贴身交叠）"
+  "draw_hd": "高清开关必须是 true 或 false"
 }

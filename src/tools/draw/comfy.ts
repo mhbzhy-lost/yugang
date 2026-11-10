@@ -67,8 +67,6 @@ export interface ComfyDraw {
   handRepair?: boolean;
   /** 角色 LoRA：file/inject 来自角色词表，这里只做形态校验与机械拼接。 */
   lora?: { file: string; weight: number; inject: string };
-  /** 双人直出：恰好两位，构图由模型决定；角色 LoRA 走 93/94 链。与 lora 互斥。 */
-  parts?: MultiPart[];
   ref?: { png: Buffer; strength: number };
 }
 
@@ -89,23 +87,10 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   graph["6"].inputs.height = args.height ?? 1216;
   const prefix = String(graph["4"].inputs.text);
   const suffix = (args.bypass ? `, ${args.bypass}` : "") + (args.bypassP ? `, ${args.bypassP}` : "");
-  if (args.parts !== undefined) {
-    validateParts(args.parts);
-    if (args.lora) throw new Error("invalid draw parts with lora");
-    const segments = args.parts.flatMap((part) => [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text)].filter((s) => s));
-    graph["4"].inputs.text = `${prefix}2girls, ${segments.join(", ")}, ${normalizeTagForm(args.prompt)}${suffix}`;
-  } else {
-    graph["4"].inputs.text = prefix + (args.lora ? `${escapeInjected(normalizeTagForm(args.lora.inject))}, ` : "") + normalizeTagForm(args.prompt) + suffix;
-  }
+  graph["4"].inputs.text = prefix + (args.lora ? `${escapeInjected(normalizeTagForm(args.lora.inject))}, ` : "") + normalizeTagForm(args.prompt) + suffix;
   // 质感 pass（M2 定版 2026-11-10）：超分后同域重采样 denoise 0.25。初采样带四轴扁平（node 4），
   // pass 用裸地板 + 同内容（去轴向自然走，M2 验证）；负向共用 node 5；LoRA 挂链时 pass 采样器同接链尾（R3）。
-  const passFloor = String(graph["71"].inputs.text);
-  if (args.parts !== undefined) {
-    const segments = args.parts.flatMap((part) => [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text)].filter((s) => s));
-    graph["71"].inputs.text = `${passFloor}2girls, ${segments.join(", ")}, ${normalizeTagForm(args.prompt)}${suffix}`;
-  } else {
-    graph["71"].inputs.text = passFloor + (args.lora ? `${escapeInjected(normalizeTagForm(args.lora.inject))}, ` : "") + normalizeTagForm(args.prompt) + suffix;
-  }
+  graph["71"].inputs.text = String(graph["71"].inputs.text) + (args.lora ? `${escapeInjected(normalizeTagForm(args.lora.inject))}, ` : "") + normalizeTagForm(args.prompt) + suffix;
   if (args.style) {
     // 风格 LoRA：全局画风，挂在底模之后、角色 LoRA 之前（节点 88）。
     if (!/^[\w .@()-]+\.safetensors$/.test(args.style.file) || !Number.isFinite(args.style.weight) || args.style.weight < 0.4 || args.style.weight > 1.1) throw new Error("invalid draw style");
@@ -120,22 +105,6 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     graph["93"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: upstream.model, clip: upstream.clip, text: `<lora:${args.lora.file}:${args.lora.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
     for (const id of ["7", "42", "72"]) graph[id].inputs.model = ["93", 0];
     for (const id of ["4", "5", "71"]) graph[id].inputs.clip = ["93", 1];
-  }
-  if (args.parts !== undefined) {
-    // 双人直出：角色 LoRA 链 93→94（风格之后），消费方统一改接链尾。
-    let up: { model: [string, number]; clip: [string, number] } = args.style ? { model: ["88", 0], clip: ["88", 1] } : { model: ["1", 0], clip: ["2", 0] };
-    let last = "";
-    args.parts.forEach((part, i) => {
-      if (!part.role) return;
-      const id = String(93 + i);
-      graph[id] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: up.model, clip: up.clip, text: `<lora:${part.role.file}:${part.role.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
-      up = { model: [id, 0], clip: [id, 1] };
-      last = id;
-    });
-    if (last) {
-      for (const id of ["7", "42", "72"]) graph[id].inputs.model = [last, 0];
-      for (const id of ["4", "5", "71"]) graph[id].inputs.clip = [last, 1];
-    }
   }
   if (args.ref) {
     if (!inputName || !/^yugang-ref-[a-f0-9-]{36}\.png$/.test(inputName)) throw new Error("invalid draw input name");
@@ -412,4 +381,3 @@ async function fetchOutputImage(base: string, job: ComfyHistoryJob, nodeId: stri
   const query = new URLSearchParams({ filename: image.filename, type: "temp", subfolder: "" });
   return imageBytes(await request(`${base}/view?${query}`, {}, 30_000));
 }
-

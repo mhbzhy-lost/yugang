@@ -34,10 +34,9 @@
 **约束**：pass 的 denoise 不许超 0.25 越界（M3 实测 0.35 唇形失控）；禁止把它改回超分前「修复」用途；
 禁止在 3 倍 latent 上跑任何扩散（旧 hd 事故：DiT 位置编码超域，高频砍到 ×0.55）。
 
-**双人路由（layout 参数，模型语义声明）**：`separate`（两人不重叠）→ RS 区域管线
-（`workflow-rs.json` + `makeRsGraph`：槽位 LoRA 身份隔离，pass 挂链式 LoRA 93→94，R2/R3 验证不融合）；
-`overlap`（贴身交叠，缺省）→ 单人管线直出（RS 在重叠场景必出复制头，床载体实验）。
-文生图可选受控 `ratio`（7 档，默认 3:4）；改图沿用参考图比例。`hd` 只在用户明确要高清时开。
+**双人固定走 RS 区域管线**（2026-11-11 主人裁定：双人一律 RS，不做任何模型侧路由判断，
+`layout` 参数已删，模型不选管线）：`workflow-rs.json` + `makeRsGraph`/`runMulti`，槽位 LoRA 身份隔离，
+pass 挂链式 LoRA（R2/R3 验证不融合）。重叠场景（拥抱/叠靠）的复制头风险已知并接受。
 `ref` 是整图重绘，同样走超分与质感 pass。图片通过 `type=temp` 取回本地 `gen/`，
 Windows 输入上传限定 `yugang-ref-<uuid>.png`；计划任务 `Yugang-ComfyUI-RefCleanup` 使用
 `scripts/comfy-ref-cleanup.ps1` 的对应副本，每小时在登录用户会话中尝试清理 24 小时以上专用文件，
@@ -58,15 +57,12 @@ draw 的 `character` / `style` / `characters[].character` 在 Schema 里是**普
 输出给 ComfyUI 前统一 danbooru tag 形态（`normalizeTagForm`：`xxx_(yyy_zzz)` → `xxx \(yyy zzz\)`），
 注入串再过幂等括号转义（`escapeInjected`），免得触发词的下划线与括号被 prompt 语义吃掉。
 
-双人按 `layout` 路由（2026-11-10 晚定稿，两路都过真实失败载体验证）：
-- **overlap（缺省）**：两人贴身交叠（拥抱/叠靠/趴身上）→ 单人管线直出（makeGraph 的 parts 分支，
-  positive = 质量地板 + 四轴 + `2girls` + 每人 inject/description + 场景，LoRA 链 93→94）。
-  依据：RS 在重叠场景必出复制头（床载体：重叠区 = 复制头 spawn 点）。
-- **separate**：两人不重叠（并排/对面/有缝）→ **RS 区域管线**（workflow-rs.json + makeRsGraph/runMulti）：
-  槽位结构身份隔离（鲸尾串色免疫，草地载体验证）；初采样带四轴扁平前缀，无脸修无手修。
-  依据：RS 非重叠场景 3/3 全干净，直出在同载体同 seed 下也有串色案底。
-- 两路尾部同链：超分 → 质感 pass（denoise 0.25 裸地板词 + 同套 LoRA，R3 验证不融合）→ [hd 纯放大] → 输出。
-**构图自由原则不变**：工具不接受点位/坐标参数，layout 只是管线选择，具体分布仍由自然语言决定。
+双人固定走 RS 区域管线（2026-11-11 主人裁定，layout 路由整体删除）：
+`characters[]` 恰好两项 → `makeRsGraph`（node 4 槽位独立提示 + 槽位 LoRA、node 5 初采样带四轴扁平前缀、
+无脸修无手修）→ 超分 → 质感 pass（denoise 0.25 裸地板词 + 链式 LoRA，R3 验证不融合）→ [hd 纯放大] → 输出。
+依据：非重叠场景 RS 3/3 全干净且串色免疫（直出同载体有鲸尾串色生产事故）；
+重叠场景复制头风险已知并接受（床载体案底），主人裁定不做模型侧判断来分流。
+**构图自由原则不变**：工具不接受点位/坐标参数，分布由自然语言写进 description 与 prompt。
 历史 RS 槽位 remap 补丁 `scripts/comfy-rs-remap-patch.py` 随 RS 复活重新生效
 （升级 comfyui-rs-multicharacter-sampler 节点包后必须重跑该脚本）。
 重启 ComfyUI 用 `scripts/comfy-restart-windows.ps1`（Windows 副本 `D:\ComfyUI-Anima\yugang-restart-comfyui.ps1`，

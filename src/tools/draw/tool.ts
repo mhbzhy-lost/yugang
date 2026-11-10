@@ -20,7 +20,6 @@ interface DrawArgs {
   ref?: string;
   character?: string;
   characters?: Array<{ character?: string; description: string }>;
-  layout?: string;
 }
 
 const RATIO_SIZES = {
@@ -85,17 +84,13 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         if (!book) throw new Error(renderTemplate(deps.prompts.messages["draw_style"] ?? "{{key}}", { key: args.style }));
         style = book;
       }
-      // 双人唯一入口：characters 两项；layout=separate 走 RS 区域管线（非重叠场景），
-      // 缺省 overlap 走单人管线直出（重叠场景 RS 会出复制头，床载体实验）。
+      // 双人唯一入口：characters 两项 → 一律 RS 区域管线（2026-11-11 主人裁定：不做任何路由判断）。
       let multiParts: MultiPart[] | undefined;
-      let separate = false;
       if (args.characters !== undefined) {
         if (args.character !== undefined) throw new Error(deps.prompts.messages["draw_characters_conflict"] ?? "draw_characters_conflict");
         if (args.style !== undefined || args.ref !== undefined) throw new Error(deps.prompts.messages["draw_multi_unsupported"] ?? "draw_multi_unsupported");
-        if (args.layout !== undefined && args.layout !== "separate" && args.layout !== "overlap") throw new Error(deps.prompts.messages["draw_layout"] ?? "draw_layout");
         if (!Array.isArray(args.characters) || args.characters.length !== 2) throw new Error(deps.prompts.messages["draw_characters_count"] ?? "draw_characters_count");
         if (args.characters.some((part) => !part || typeof part !== "object" || typeof part.description !== "string" || !part.description.trim())) throw new Error(deps.prompts.messages["draw_multi_sides"] ?? "draw_multi_sides");
-        separate = args.layout === "separate";
         multiParts = args.characters.map((part, index) => {
           const book = part.character === undefined ? undefined : loraBook(part.character);
           if (part.character !== undefined && !book) throw new Error(renderTemplate(deps.prompts.messages["draw_character"] ?? "{{key}}", { key: part.character }));
@@ -113,9 +108,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       try {
         const stageCb = deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined;
         const bp = deps.bypassOf?.(round);
-        const png = separate
-          ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts!, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, () => { state.submitted = true; })
-          : await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, handRepair: args.hand_repair ?? false, hd: args.hd === true, ref, lora, parts: multiParts, bypass: bp?.bypass, bypassP: bp?.pbypass }, () => { state.submitted = true; }, stageCb);
+        const png = await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts!, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, () => { state.submitted = true; });
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
         const file = `${Date.now()}-${randomUUID()}.png`;
