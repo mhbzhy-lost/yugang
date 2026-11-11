@@ -25,6 +25,10 @@
 
 `draw` 使用 Windows ComfyUI 的固定 V8 API 工作流（`src/tools/draw/workflow.json` 单人/直出 + `workflow-rs.json` RS 区域，启动时结构契约校验：代码 rewiring 的角色节点缺位即拒启；不钉死 hash，模板迭代 = 改文件 + commit + deploy），
 通过 `COMFYUI_URL` 指向 macmini 的 `127.0.0.1:18190` SSH 隧道；不接受模型传入工作流、节点、模型名或地址。
+**画图总开关是 `fish.config.json` 的 `drawEnabled`（布尔、缺省 true、effect=hot，资源闸）**：关闭时 draw 入口即拒（`draw_disabled` 文案），
+且单/双人管线的 `onSubmitted` 回调在标记 `submitted` 前再读一次热值并拒绝，堵住 /queue 查询与 ref 预处理期间关闭开关的窗口；
+回调拒绝经 catch 仍回明确关闭回执、不谎称已提交（`submitted` 保持 false，可重试）。已 accepted 的作业不取消、不重投，
+提交状态不明不可重 POST 的规则不变。`COMFYUI_URL` 仅保留连接地址语义，不再兼作停用手段；需要临时让出 GPU（如离线实验期）时原子热切换本键，不重启鱼。
 
 **管线（2026-11-10 晚定版）**：初采样 30 步（cfg 4.5，带轴扁平正向）→ 可选手修（`hand_repair`，默认关）→
 `4x-AnimeSharp` 超分 lanczos 0.5（净 2 倍）→ **质感 pass**（denoise 0.25 同域重采样，裸地板词 + 同内容，

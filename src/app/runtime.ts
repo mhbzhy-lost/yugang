@@ -463,6 +463,9 @@ export async function bootRuntime(): Promise<void> {
   // GIF 自动收图豁免（fish.config.json 的 gifAutoCollect，热加载）：false（缺省）= 动图同静态图，
   // ambient 轮不附双边收录标记，meme_add 只在主人点头的轮里收
   gifAutoCollect: () => fishConfig().config.gifAutoCollect,
+  // 本地画图总开关（fish.config.json 的 drawEnabled，热加载，资源闸）：false = draw 入口即拒、
+  // 提交前再复核，让出 GPU；G0/G1 实验期原子切换，不重启
+  drawEnabled: () => fishConfig().config.drawEnabled,
   // 语音：按会话所在人格取配置（只认 fish.config 的 voices，没配就是没有语音）
   ttsOf: (conversationId) => voiceConfigFor(mappingKeys.get(String(conversationId)) ?? ""),
   // look / video 的视觉描述模型：models.vision；省略时与 models.main 相同

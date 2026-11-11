@@ -111,6 +111,8 @@ export interface FishOptions {
   memeCooldownMs?: number | (() => number);
   /** GIF 自动收图豁免开关（fish.config.json 的 gifAutoCollect，热加载）；传函数每次现取。 */
   gifAutoCollect?: () => boolean;
+  /** 本地画图总开关（fish.config.json 的 drawEnabled，热加载，资源闸）；传函数每次现取，缺省视为开。 */
+  drawEnabled?: () => boolean;
   /** 单次工具调用超时（秒），缺省 30。 */
   toolTimeoutSeconds?: number;
   /** 个别工具的单独超时（秒）：只放宽指定工具，其余仍按 toolTimeoutSeconds。 */

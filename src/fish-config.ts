@@ -224,6 +224,12 @@ export interface FishConfig {
    * 只有主人点头的轮才能收 meme_add。
    */
   gifAutoCollect: boolean;
+  /**
+   * 本地画图总开关（2026-11-11 新增，资源闸）：true（缺省）= draw 正常提交 ComfyUI；
+   * false = draw 入口即拒、且真正 POST 前再次复核，热生效不重启。COMFYUI_URL 仍只作连接地址，
+   * 不再兼作停用手段。G0/G1 实验期用它原子让出/收回鱼的 GPU 使用权。
+   */
+  drawEnabled: boolean;
   /** 按人格配置的语音：人格名 → TTS 参数。没有条目的人格没有语音能力。speed 为可选语速倍率（0.5–2.0，缺省原速）。 */
   voices: Record<string, { url: string; referWav?: string; referText?: string; referLanguage?: string; speed?: number }>;
   /** 周报发到哪个群；空 = 不发。 */
@@ -327,6 +333,11 @@ function checkSalvage(raw: unknown): FieldCheck {
 function checkGifAutoCollect(raw: unknown): FieldCheck {
   if (typeof raw === "boolean") return { ok: true, value: raw };
   return { ok: false, reason: "gifAutoCollect 必须是 true/false" };
+}
+
+function checkDrawEnabled(raw: unknown): FieldCheck {
+  if (typeof raw === "boolean") return { ok: true, value: raw };
+  return { ok: false, reason: "drawEnabled 必须是 true/false" };
 }
 
 function checkVoices(raw: unknown): FieldCheck {
@@ -684,6 +695,7 @@ export const FISH_CONFIG_FIELDS: readonly FishConfigFieldSpec[] = [
   { name: "memeCooldownMinutes", effect: "hot", check: numberIn("memeCooldownMinutes 必须在 0–240", 0, 240) },
   { name: "salvagePlainReply", effect: "hot", check: checkSalvage },
   { name: "gifAutoCollect", effect: "hot", check: checkGifAutoCollect },
+  { name: "drawEnabled", effect: "hot", check: checkDrawEnabled },
   { name: "voices", effect: "hot", check: checkVoices },
   { name: "weeklyGroupId", effect: "hot", check: checkWeeklyGroup },
 ];
@@ -731,6 +743,7 @@ const DEFAULTS: FishConfig = {
   toolTimeoutSeconds: 30,
   salvagePlainReply: true,
   gifAutoCollect: false,
+  drawEnabled: true,
 };
 
 /** 读一次（不缓存），供热加载与启动各取所需。 */
