@@ -30,6 +30,8 @@ character；双人填 characters[].character。本工具不列角色清单，也
 ## 画面与风格
 
 prompt 写画面本身，用 danbooru tag 为主；普通 tag（cat_ears 之类）查 tags 词表拿准写法和热度。
+**进本工具的全部文本（prompt 与 characters[].description）一律英文 tag/短语、逗号分隔**：底模只吃英文 tag 分布，
+中文句子虽能被文本编码器编码，却条件化极弱且两句相近中文会互相吞并（线上融合案底）；写中文等于没写。
 用户明确说「自定义画图」时 prompt 传空字符串（其余参数照常），不要自己往里补词——
 画面内容由角色词表注入与模板机械前缀承担。
 负向词是内置的，别写「不要出现什么」。
@@ -53,7 +55,7 @@ light particles 会把整图压成 pastel 洗白；detailed skin shading、subtl
 ## 双人
 
 双人同框必须传 characters，恰好两项，一律走区域隔离管线（模型不用管管线细节，
-也永远别向用户描述走没走「双人管线」之类的内部概念）。每项写 description：挂了角色的只写动作、表情、
+也永远别向用户描述走没走「双人管线」之类的内部概念）。每项写 description（英文 tag/短语，规则同 prompt）：挂了角色的只写动作、表情、
 服装；普通人写清外貌。人数不用写。命名角色默认挂角色 LoRA（characters[].character）；仅当用户明确说
 「不挂 LoRA / 用 tag 直出」时才省 character 键、自己在 description 写外观特征。
 双人不支持顶层 character、style、ref；hd 可用。
