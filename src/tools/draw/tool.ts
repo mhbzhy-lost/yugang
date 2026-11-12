@@ -76,7 +76,9 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       if (!enabled()) throw new Error(deps.prompts.messages["draw_disabled"] ?? "draw_disabled");
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
-      deps.onLongWork?.("draw", round);
+      // 机械提示区分管线（working_* 文案带不同耗时预期）：interaction / 双人 RS / 单人 fast / 单人默认
+      const workTool = args.pipeline === "interaction" ? "draw_interaction" : args.characters !== undefined ? "draw_rs" : args.fast === true ? "draw_fast" : "draw";
+      deps.onLongWork?.(workTool, round);
       const positive = typeof args.prompt === "string" ? args.prompt.trim() : "";
       // 自定义画图模式（2026-11-10）：用户明确要时 prompt 可为空串，内容全部由角色词表/机械前缀承担；
       // 只限长度，不退非空。
