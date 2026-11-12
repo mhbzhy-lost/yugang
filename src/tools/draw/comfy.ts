@@ -9,7 +9,7 @@ const TEMPLATE = JSON.parse(readFileSync(new URL("./workflow.json", import.meta.
 // 必须在场且 class 正确，缺任何一个启动即炸，绝不带病出图。模板迭代 = 改本文件 + commit + deploy。
 const TEMPLATE_CONTRACT: Array<[string, string]> = [
   ["1", "UNETLoader"], ["4", "CLIPTextEncode"], ["5", "CLIPTextEncode"], ["6", "EmptySD3LatentImage"],
-  ["7", "KSampler"], ["9", "PreviewImage"], ["42", "FaceDetailer"],
+  ["7", "KSampler"], ["9", "PreviewImage"],
   ["71", "CLIPTextEncode"], ["72", "KSampler"],
   ["91", "ImageUpscaleWithModel"], ["92", "ImageScaleBy"],
 ];
@@ -64,7 +64,6 @@ export interface ComfyDraw {
   height?: number;
   cfg?: number;
   seed?: number;
-  handRepair?: boolean;
   /** 角色 LoRA：file/inject 来自角色词表，这里只做形态校验与机械拼接。 */
   lora?: { file: string; weight: number; inject: string };
   ref?: { png: Buffer; strength: number };
@@ -80,7 +79,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   const graph = structuredClone(TEMPLATE);
   const seed = args.seed ?? randomBytes(4).readUInt32BE();
   const passSeed = randomBytes(4).readUInt32BE();
-  for (const id of ["7", "42"]) graph[id].inputs.seed = seed;
+  graph["7"].inputs.seed = seed;
   graph["72"].inputs.seed = passSeed;
   graph["7"].inputs.cfg = args.cfg ?? 4.5;
   graph["6"].inputs.width = args.width ?? 912;
@@ -95,7 +94,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     // 风格 LoRA：全局画风，挂在底模之后、角色 LoRA 之前（节点 88）。
     if (!/^[\w .@()-]+\.safetensors$/.test(args.style.file) || !Number.isFinite(args.style.weight) || args.style.weight < 0.4 || args.style.weight > 1.1) throw new Error("invalid draw style");
     graph["88"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: ["1", 0], clip: ["2", 0], text: `<lora:${args.style.file}:${args.style.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
-    for (const id of ["7", "42", "72"]) graph[id].inputs.model = ["88", 0];
+    for (const id of ["7", "72"]) graph[id].inputs.model = ["88", 0];
     for (const id of ["4", "5", "71"]) graph[id].inputs.clip = ["88", 1];
   }
   if (args.lora) {
@@ -103,7 +102,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     if (!/^[\w .@()-]+\.safetensors$/.test(args.lora.file) || !Number.isFinite(args.lora.weight) || args.lora.weight < 0.4 || args.lora.weight > 1.1) throw new Error("invalid draw lora");
     const upstream = args.style ? { model: ["88", 0], clip: ["88", 1] } : { model: ["1", 0], clip: ["2", 0] };
     graph["93"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: upstream.model, clip: upstream.clip, text: `<lora:${args.lora.file}:${args.lora.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
-    for (const id of ["7", "42", "72"]) graph[id].inputs.model = ["93", 0];
+    for (const id of ["7", "72"]) graph[id].inputs.model = ["93", 0];
     for (const id of ["4", "5", "71"]) graph[id].inputs.clip = ["93", 1];
   }
   if (args.ref) {
@@ -114,8 +113,7 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     graph["7"].inputs.denoise = args.ref.strength;
     delete graph["6"];
   }
-  // 超分链在模板里（90/91/92）：初采样解码 → AnimeSharp 4x → lanczos 0.5 = 净 2 倍；手修开启时超分输入改接 42。
-  if (args.handRepair === true) graph["91"].inputs.image = ["42", 0];
+  // 超分链在模板里（90/91/92）：初采样解码 → AnimeSharp 4x → lanczos 0.5 = 净 2 倍。
   // 质感 pass（尾部光照/质感化，M2 定版）：超分后的同域低强度重采样，denoise 0.25、裸地板词，
   // 负向共用 node 5；AGENTS 约束：禁止把它改回「修复」用途或提高强度越界（M3 实测 0.35 唇形失控）。
   if (args.hd === true) {
@@ -363,11 +361,11 @@ export class ComfyExecutionFailed extends Error {}
 export class ComfyBusy extends Error {}
 let busy = false;
 
-/** draw 阶段进度（不过模型）：sketch=初采样（后接超分/可选手修，无扩散阶段）。 */
+/** draw 阶段进度（不过模型）：sketch=初采样（后接超分，无扩散阶段）。 */
 export type DrawStage = "sketch";
 
-/** 阶段状态机："7"初采样 → "42"手修（hand_repair=true 时；否则"43"直接"91"超分）
- *  → "91"/"92"超分 → "9"输出（脸修 2026-11-10 退役，主人裁定一般不需要）。
+/** 阶段状态机："7"初采样 → "43"解码 → "91"/"92"超分 → "9"输出
+ *  （脸修 2026-11-10、手修 2026-11-13 退役，主人裁定）。
  *  进入初采样后首批节点（sketch）时汇报一次；乱序/未知节点忽略。 */
 function makeStageTracker(promptId: string, onStage: (stage: DrawStage) => void): (message: unknown) => void {
   let stage = 0;
@@ -378,7 +376,7 @@ function makeStageTracker(promptId: string, onStage: (stage: DrawStage) => void)
       if (event.type !== "executing" || event.data?.prompt_id !== promptId) return;
       const node = event.data?.node;
       if (typeof node !== "string") return;
-      if (stage < 1 && (node === "43" || node === "42" || node === "91" || node === "5" || node === "61")) {
+      if (stage < 1 && (node === "43" || node === "91" || node === "5" || node === "61")) {
         stage = 1;
         onStage("sketch");
       }

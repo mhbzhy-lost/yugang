@@ -50,10 +50,6 @@
         "maxItems": 2,
         "description": "双人同框必须传，恰好两项；每项写 description，可选 character 挂角色 LoRA。默认两人靠近；明确相隔且没有身体接触时才传 spacing=apart。人数自动处理。与顶层 character 互斥，双人不支持 style 和 ref"
       },
-      "hand_repair": {
-        "type": "boolean",
-        "description": "单人图是否自动修手，默认 false；要修手才传 true，对双人图不生效"
-      },
       "ref": {
         "type": "string",
         "description": "要重画的初图：只能填这一轮消息里出现过的 inbound/…，或自己之前画出来的 gen/…；不填就是从零画"

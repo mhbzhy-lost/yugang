@@ -10,7 +10,6 @@
   "draw_disabled": "本地画图已关闭，暂时用不了",
   "draw_round_missing": "无法确认当前轮次，暂时不能画图",
   "draw_ratio": "画面比例不在支持的选项里",
-  "draw_hand_repair": "手部修复开关必须是 true 或 false",
   "draw_ref_outside": "只能改这一轮群里的图（inbound/…）或你自己画过的图（gen/…）：{{ref}}",
   "draw_ref_missing": "找不到这张图：{{ref}}",
   "draw_ref_type": "这张不是能重画的图片格式：{{ref}}",
