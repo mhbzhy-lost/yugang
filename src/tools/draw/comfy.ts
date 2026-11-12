@@ -54,7 +54,7 @@ function normalizeTagForm(text: string): string {
 export interface ComfyDraw {
   /** 高清模式：净 3 倍出图；采样与质感 pass 恒在 2 倍域内，第三倍在 pass 后纯放大补齐。 */
   hd?: boolean;
-  /** 快速模式：净超分 1.2x（4x × lanczos 0.3），质感 pass 落 1.2x 域；仅单人默认管线。 */
+  /** 快速模式：初采样 20 步 + 净超分 1.2x（4x × lanczos 0.3），质感 pass 落 1.2x 域；仅单人默认管线。 */
   fast?: boolean;
   prompt: string;
   bypass?: string;
@@ -116,7 +116,10 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
     delete graph["6"];
   }
   // 超分链在模板里（90/91/92）：初采样解码 → AnimeSharp 4x → lanczos 0.5 = 净 2 倍。
-  if (args.fast === true) graph["92"].inputs.scale_by = 0.3; // 快速模式：4x × 0.3 = 净 1.2x，pass 同域变小
+  if (args.fast === true) {
+    graph["92"].inputs.scale_by = 0.3; // 快速模式：4x × 0.3 = 净 1.2x，pass 同域变小
+    graph["7"].inputs.steps = 20; // 初采样 30 → 20 步（主人裁定 2026-11-13，质量换速度）
+  }
   // 质感 pass（尾部光照/质感化，M2 定版）：超分后的同域低强度重采样，denoise 0.25、裸地板词，
   // 负向共用 node 5；AGENTS 约束：禁止把它改回「修复」用途或提高强度越界（M3 实测 0.35 唇形失控）。
   if (args.hd === true) {

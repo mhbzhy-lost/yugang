@@ -35,7 +35,7 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 提交状态不明不可重 POST 的规则不变。`COMFYUI_URL` 仅保留连接地址语义，不再兼作停用手段；需要临时让出 GPU（如离线实验期）时原子热切换本键，不重启鱼。
 
 **管线（2026-11-10 晚定版）**：初采样 30 步（cfg 4.5，带轴扁平正向）→
-`4x-AnimeSharp` 超分 lanczos 0.5（净 2 倍；单人 `fast` 快速模式 lanczos 0.3 净 1.2 倍，与 hd/双人/interaction 互斥）→ **质感 pass**（denoise 0.25 同域重采样，裸地板词 + 同内容，
+`4x-AnimeSharp` 超分 lanczos 0.5（净 2 倍；单人 `fast` 快速模式初采样 20 步 + lanczos 0.3 净 1.2 倍，与 hd/双人/interaction 互斥）→ **质感 pass**（denoise 0.25 同域重采样，裸地板词 + 同内容，
 机械消除过扁平并加回真实感——M 组/L 组/P 组三夜实验定版）→ hd 第三倍纯放大（95/96/97，接 pass 之后）→ 输出。
 **没有脸修也没有手修**（主人裁定退役；手修 2026-11-13 摘除模板 41/42 节点，WSL 生产不装 Impact-Pack）。词表四段式：正向初采样带四轴扁平（模板 node 4），pass 裸地板（node 71）；
 负向两遍同文（地板+monochrome / 防油锁 lips shiny skin abs oily airbrushed ssr / 碎线锁 sketch 系）。
