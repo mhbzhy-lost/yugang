@@ -335,6 +335,12 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 - 模型 key 不放 `.env`（走 `config/auth.json`）；`ONEBOT_TOKEN` 放 `.env`，由 `npm run token` 生成，
   同一条命令会写进 NapCat 的 `onebot.json`，两边必须一致
 - 生成类凭据一律用脚本 + `randomBytes`，不要手写、不要打印内容；`.env` 权限 600
+- **`fish.config.json` 受控字段增改必须同步 config 工具，缺一环鱼就自己切不了**（2026-11-13 drawEnabled 事故教训，审查时又发现 gifAutoCollect 漏登记）：
+  1. `src/fish-config.ts` 是白名单唯一事实源：`FishConfig` 接口字段、check 函数、`FISH_CONFIG_FIELDS` 条目（标注 hot / restart）、`DEFAULTS` 缺省值四处齐全；config 工具执行内核动态消费 `FISH_CONFIG_FIELDS`，不许写第二份白名单
+  2. `src/tools/config/TOOL.md` 白名单表加一行（类型 / 生效时机 / 语义）——这是模型知道字段存在的唯一信息来源，缺行鱼就不知道能改它
+  3. `fish.config.example` 补字段与 `_字段` 注释
+  4. 有工具消费该字段时：`src/fish/types.ts`（FishOptions）与 `src/tools/types.ts`（ToolPackageDeps）加依赖声明、`src/app/runtime.ts` 注入、`src/fish/tool-surface.ts` 透传，缺一环工具永远拿缺省值
+  5. 改完必须部署（`npm run deploy`）：线上鱼部署后才认新字段，代码合了没部署等于没改
 
 ### 10. 记账
 
