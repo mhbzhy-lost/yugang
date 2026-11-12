@@ -7,11 +7,11 @@
   模型：`~/anima-prod/ComfyUI/models/{checkpoints,diffusion_models,unet,text_encoders,vae,loras,upscale_models,model_patches}`（UNETLoader 走 `diffusion_models`，不是 `checkpoints`）。
   2B = oneObsessionAnima_v40；V8 = DeltaMix 3.8B V8；qwen_3_06b_base / qwen_image_vae；姿态 patch 在 `model_patches/rs_reference/anima_pose/`。
 - **实验实例在 WSL**：`~/anima-lab`（端口 8189，含全部守卫补丁与 noise_mask）。
-- **鱼已部署**：mini pid **69542**（feat/interaction-pipeline + merge b6e6a55），draw 工具新增 `pipeline` / `preset` 参数，默认 RS 不变。
+- **鱼已部署**：mini pid **70349**（main 545ca18，含交互管线与 drawEnabled 热开关），draw 工具新增 `pipeline` / `preset` 参数，默认 RS 不变。
 - **管线 v1 定稿**：CPU authoring（MHR FK 解接触世界 + 相机投影）→ B1 初采样（RS 装配 + LLLite 0.8/0–0.7 + LoRA 1.0 + 矩形框）→ AnimeSharp 超分 → **质感 pass 在最后 @2x 域**（scene img2img denoise 0.25 + 区域 pipe + 外部姿态 patch，Project 基础画布渲染姿态 + ImageScaleBy×2 规避 RS 2048 mask 上限）。
   单人 = 轻形态（KSampler + 链式 LoRA + LLLite，**无 RS**（不吃 N×N 偏置矩阵开销））。
 - **负向**：`low quality, worst quality, score_1, score_2, score_3, early, old, shiny skin`（monochrome/lips 已删）。
-- **drawEnabled=false 保持**，恢复画图权限**只等主人发话**。
+- **drawEnabled=true 已恢复**（2026-11-13 主人发话放开，config 热切换不重启）；后续让出 GPU 仍只由主人指令原子切换。
 - npm test 174/174 全绿；prompts 扫描干净。
 - 采样总账 **275 次扩散**（旧线 217 + scene-v2 12 + finish-v3 8 + run2 3 + orderB 1 + 管线验证 2 + 3x 2 + 单人 2 + 生产 2 + 3x-passlast 2 + 计时 2）。
 
