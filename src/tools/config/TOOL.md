@@ -33,6 +33,7 @@ fish.config.json 受控字段白名单（生效时机逐字段标注）：
 | compact | 对象 | 热加载 | 换页只按 tokens：maxTokens 1000–1000000（缺省 100000）、byModel（provider 或 provider/model → 阈值，精确模型键优先；google-antigravity 缺省 90000）。完整轮次结束后才换页，不截断消息；旧 maxEntries/maxChars 已停用 |
 | memeCooldownMinutes | 数值 | 热加载 | 0–240，表情包跨轮冷却（分钟） |
 | salvagePlainReply | 布尔 | 热加载 | 必答轮忘调出口工具时的正文兜底开关 |
+| gifAutoCollect | 布尔 | 热加载 | GIF 自动收录开关：缺省 false = 动图同静态图，ambient 轮不附收录标记、meme_add 只收主人点头轮的 inbound 动图；true 才恢复旧自动收行为 |
 | drawEnabled | 布尔 | 热加载 | 本地画图总开关（资源闸）：缺省 true；false 时 draw 入口即拒、真正提交前再复核一次，热生效不重启，用来临时让出 GPU。COMFYUI_URL 仍只作连接地址 |
 | voices | 对象 | 热加载 | 人格 → 语音配置：url 必填，referWav / referText / referLanguage / speed（0.5–2）可选 |
 | weeklyGroupId | 字符串 | 热加载 | 周报群号（纯数字），空串 = 不发；下次周报触发时按新值执行 |
