@@ -185,6 +185,8 @@ export interface ToolPackageDeps {
 
   /** GIF 自动收图豁免开关（fish.config.json 的 gifAutoCollect，热加载）：true 才允许 meme_add 在非主人轮收 inbound/ 动图。 */
   gifAutoCollect?: () => boolean;
+  /** 本地画图总开关（fish.config.json 的 drawEnabled，热加载，资源闸）：false 时 draw 入口即拒、提交前再复核；缺省视为开。 */
+  drawEnabled?: () => boolean;
   /** fish.reminder 任务定义（宿主装配时注入）：remind 工具 add 时建任务用；缺省不注册该工具。 */
   reminderTask?: AnyTask;
   /** 主模型直读图的宿主事实（vision==main 且白名单且未 /关看图）：look 与 meme_import 消费；缺省 = fallback。 */
