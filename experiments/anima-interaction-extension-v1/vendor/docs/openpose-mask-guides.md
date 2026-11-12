@@ -1,0 +1,44 @@
+# OpenPose mask guides
+
+The automatic masks are rough composition guides. Optional body-part guidance is **very weak attention guidance using the names of skeleton parts**. The generation model receives body-part text at mapped locations, not an OpenPose skeleton image. No ControlNet, pose detector or additional pose weights are loaded.
+
+한국어: **뼈대 자체를 쓰는 것이 아니라, 그 위치에 부위 이름을 넣어 아주 약하게 어텐션을 유도합니다.**
+
+## Connect the nodes
+
+Connect `RS OpenPose Masks` to the building pipe, followed by Character Prompt, Character LoRA (optional), Character Position and Finalize Character Pipe. Prompt, LoRA and Position can be in any order. The pose node preserves these settings and existing mask transforms when updating masks. A later mask source can replace its person mask; body-part guidance is then cleared so old part regions do not remain attached to the replacement mask.
+
+1. Click **Load Pose PNG**, or drop a colored OpenPose/DWPose skeleton PNG onto the pose node. A black or transparent background and standard COCO-18 colors are required. The numbered person masks appear before sampling. You can also connect one skeleton `IMAGE` from Load Image. JSON import/paste and `POSE_KEYPOINT` remain advanced alternatives.
+2. Choose **thickness** to adjust limb width and body padding. Start at `1.0`; available range is `0.25–3.0`.
+3. Match character prompt rows to the preview numbers. **PNG numbering follows neck position, left to right**; it is not automatic character identification. JSON/`POSE_KEYPOINT` keeps the original `people` array order. Disabled prompt rows retain their original numbers.
+4. In **Character Position**, select the person number above the layout, drag its mask, and use corners or −/+ to resize it. Part-name regions move and scale around the same person center. Canvas overflow is clipped; generated bodies are not cut out.
+5. Keep **body_part_strength = 0** for mask-only composition. Anima/SDXL users can optionally try a low value such as `0.1–0.2`. Six shared labels are used: `head`, `hands`, `chest`, `thighs`, `legs`, `feet`. Higher strength is not a promise of better pose adherence.
+
+Input coordinates must be pixels, with a `people` array containing COCO-18 (54 values) or BODY-25 (75 values) `pose_keypoints_2d`. JSON canvas dimensions take priority; width/height widgets are fallback values for the **original pose canvas**, not the generation resolution. Missing or low-confidence joints are omitted. COCO-18 ankle regions approximate feet; no fingers or toes are reconstructed. Use a single frame, not a video batch or a collection of named poses. Export a frame from a collection first. PNG pixel recovery supports standard COCO-18/DWPose body colors, not arbitrarily recolored, monochrome, or BODY-25 maps. Use original 64–2048 pixel maps; avoid labels, heavy compression and cropping away the neck/shoulders. Missing/occluded joints and their original confidence cannot be restored. Check masks when limbs cross; a PNG does not preserve original person IDs. Input priority is connected `POSE_KEYPOINT`, connected `IMAGE`, uploaded PNG, then JSON. For exact coordinates or BODY-25, use JSON/`POSE_KEYPOINT`.
+
+## Overlap separation
+
+`RS Character Interaction` optionally delays the decay of separation **only between non-overlapping character areas**. Overlap and background keep the sampler's existing schedule.
+
+| Preset | Behavior |
+|---|---|
+| baseline | Existing boundary behavior |
+| delay3 | Keep exclusive boundaries for 3 additional steps |
+| delay6 | Keep exclusive boundaries for 6 additional steps |
+| custom | Choose the additional hold steps and decay amount |
+
+Only **custom** uses the `delay_steps` and `decrement` controls; they are folded for fixed presets while their saved values remain intact. `delay3` / `delay6` use the sampler's boundary decrement, and `baseline` adds no extra protection. The node's panel explains the selected preset. Connected preset values are resolved at execution.
+
+The sampler's boundary hold and decay settings still govern the ordinary schedule. This extra path is implemented for Anima/SDXL and experimental SD1.5. Other families report a clear error when additional separation is requested. The baseline preset and automatic masks remain usable with existing model families. Body-part name guidance is limited to Anima/SDXL.
+
+## Preview, saving and limits
+
+The pose node shows numbered person masks. Position and Finalize show their transformed placement. Uploaded PNG selection, thickness changes and direct JSON edits update the diagram before generation. For a connected `IMAGE`, JSON, `POSE_KEYPOINT`, or connected thickness/confidence/canvas controls, **run the graph once**: its executed masks populate the diagram and position editor without evaluating arbitrary upstream nodes in the browser. You can then edit unconnected thickness/confidence controls and move/resize the masks. Changing the upstream source or its connection hides the old masks and requests another execution. Execution snapshots are temporary; reloaded workflows with connected inputs need another execution. ComfyUI's intermediate-output replay also supplies the masks when that execution is fully cached.
+
+Connect `pose_preview` to Preview Image to inspect joints and person masks; `person_masks` outputs a mask batch. Automatic masks and part regions are preserved in the extension's PNG/WebP metadata, together with interaction settings. The image loader restores the effective placed masks; metadata is not a saved skeleton editor.
+
+The Detailer also preserves the current part regions, their strengths and interaction settings in its output pipe and PNG/WebP, including when its input comes directly from Finalize. A later Mask Drawing replaces the whole mask table and clears old pose-part guidance, including blank rows; it never applies the old body-part regions under a new painted silhouette.
+
+These controls do not guarantee exact joint angles, correct hand contact, character identity or anatomy. The SDXL 20 OFF / 20 ON comparison did **not** demonstrate improved high-five pose accuracy; names can change clothing and appearance. Part-name guidance therefore defaults OFF. Keep using character prompts and suitable model-specific settings.
+
+See [PNG input validation](openpose-png-validation.md) and [release validation](release-1.0.0.md) for the actual tested paths. A basic pose example is in [examples/openpose](../examples/openpose).

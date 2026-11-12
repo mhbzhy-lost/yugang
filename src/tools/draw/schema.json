@@ -77,6 +77,18 @@
           "apart"
         ],
         "description": "仅双人可用。默认 together：两人靠近，适合牵手、拥抱、依偎。只有用户明确要求两人相隔且无身体接触动作时选 apart；不得把远景误解为两人彼此远离"
+      },
+      "pipeline": {
+        "type": "string",
+        "enum": [
+          "rs",
+          "interaction"
+        ],
+        "description": "默认 rs（原生产 RS 管线）。interaction = 2B 交互管线：CPU 编排姿态（Pose3D 预设）+ B1 初采样 + 超分 + 质感 pass@2x，单人也支持（轻形态 KSampler）。选它必须同时给 preset"
+      },
+      "preset": {
+        "type": "string",
+        "description": "仅 pipeline=interaction 时必填：姿态预设 id（离线编排的 scene_json+人物框），如 sit-haystack（草垛并坐牵手）、single-haystack（单人草垛侧坐）。预设决定姿态与构图，prompt 只写场景/氛围/服装"
       }
     },
     "required": [

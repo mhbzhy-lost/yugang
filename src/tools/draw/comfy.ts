@@ -229,6 +229,136 @@ export function makeRsGraph(args: MultiDraw): Graph {
   return g;
 }
 
+// ── 交互管线模板（2026-11-12 定稿：初采样 B1+Pose3D → AnimeSharp 2x → 重装备 pass@2x，
+//    顺序对照 B 臂胜出）。姿态来自离线 authoring 产出的冻结预设（scene_json + 人物框），
+//    运行时零求解；地板词（主人 2026-11-12 圈定）嵌在模板 11/37 的默认 prompt 里。──
+const INTERACTION_TEMPLATE = JSON.parse(readFileSync(new URL("./workflow-interaction.json", import.meta.url)).toString("utf8")) as Graph;
+const INTERACTION_TEMPLATE_CONTRACT: Array<[string, string]> = [
+  ["1", "RSMultiCharacterPrompt"], ["4", "RSMultiCharacterPose3D"], ["11", "RSMultiCharacterSampler"],
+  ["22", "ImageUpscaleWithModel"], ["23", "ImageScaleBy"],
+  ["33", "RSMultiCharacterFinalize"], ["35", "YugangStudyCameraProject"], ["36", "AnimaLLLiteApply"],
+  ["37", "YugangRSSceneImg2Img"], ["38", "SaveImage"],
+];
+for (const [id, cls] of INTERACTION_TEMPLATE_CONTRACT) {
+  if (INTERACTION_TEMPLATE[id]?.class_type !== cls) throw new Error(`draw interaction workflow contract mismatch: node ${id} != ${cls}`);
+}
+
+/** 姿态预设：离线 MHR authoring 冻结产物（scene_json 两档分辨率 + 归一化人物框）。 */
+export interface InteractionPreset {
+  scene_json: string;
+  scene_json_2x: string;
+  camera_extension: string;
+  box: Array<{ x: number; y: number; width: number; height: number }>;
+}
+
+export interface InteractionDraw {
+  prompt: string;
+  width: number;
+  height: number;
+  seed?: number;
+  passSeed?: number;
+  preset: InteractionPreset;
+  parts: MultiPart[];
+  label: string;
+}
+
+// 交互管线负向（2026-11-12 主人圈定并删去 monochrome/lips，用于 2B）
+const INTERACTION_NEGATIVE = "low quality, worst quality, score_1, score_2, score_3, early, old, shiny skin";
+export function makeInteractionGraph(args: InteractionDraw): Graph {
+  validateParts(args.parts);
+  if (!Number.isInteger(args.width) || !Number.isInteger(args.height) || args.width % 8 !== 0 || args.height % 8 !== 0) throw new Error("invalid interaction canvas");
+  const g = structuredClone(INTERACTION_TEMPLATE);
+  const floorPos = String(INTERACTION_TEMPLATE["11"].inputs.prompt);
+  const neg = INTERACTION_NEGATIVE;
+  const seed = args.seed ?? randomBytes(4).readUInt32BE(0);
+  const passSeed = args.passSeed ?? randomBytes(4).readUInt32BE(0);
+  const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;
+  const fullPrompt = floorPos + normalizeTagForm(commonPrompt);
+  for (const group of ["1", "30"] as const) {
+    for (let i = 0; i < 2; i++) {
+      const part = args.parts[i];
+      g[group].inputs[`character${i + 1}`] = [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text)].filter(Boolean).join(", ");
+      g[String(Number(group) + 1)].inputs[`character${i + 1}_lora`] = part.role?.file ?? "None";
+      g[String(Number(group) + 1)].inputs[`character${i + 1}_lora_strength`] = part.role?.weight ?? 1;
+      g[String(Number(group) + 1)].inputs[`character${i + 1}_lora_clip_strength`] = part.role?.weight ?? 1;
+      const b = args.preset.box[i];
+      g[String(Number(group) + 2)].inputs[`character${i + 1}_x`] = b.x;
+      g[String(Number(group) + 2)].inputs[`character${i + 1}_y`] = b.y;
+      g[String(Number(group) + 2)].inputs[`character${i + 1}_width`] = b.width;
+      g[String(Number(group) + 2)].inputs[`character${i + 1}_height`] = b.height;
+    }
+  }
+  g["4"].inputs.scene_json = args.preset.scene_json;
+  Object.assign(g["11"].inputs, { prompt: fullPrompt, negative_prompt: neg, seed, width: args.width, height: args.height });
+  g["12"].inputs.filename_prefix = `interaction/${args.label}/initial`;
+  g["13"].inputs.label = `${args.label} initial`;
+  g["35"].inputs.scene_json = args.preset.scene_json;
+  g["35"].inputs.camera_extension = args.preset.camera_extension;
+  Object.assign(g["37"].inputs, { prompt: fullPrompt, negative_prompt: neg, seed: passSeed, width: args.width * 2, height: args.height * 2 });
+  g["38"].inputs.filename_prefix = `interaction/${args.label}/final`;
+  g["39"].inputs.label = `${args.label} final`;
+  return g;
+}
+
+/** 单人轻形态：KSampler + 链式 LoRA + LLLite 姿态，无 RS（单人无隔离需求，
+ *  不承担 N×N 注意力偏置矩阵开销）。其余（姿态预设/超分/pass@2x/地板词）与双人一致。 */
+export function makeInteractionSingleGraph(args: {
+  prompt: string; width: number; height: number; seed?: number; passSeed?: number;
+  preset: InteractionPreset; part: MultiPart; label: string;
+}): Graph {
+  if (!args.part.text || args.part.text.length > 800) throw new Error("invalid single part text");
+  if (args.part.role !== undefined && (!/^[\w .@()-]+\.safetensors$/.test(args.part.role.file) || !Number.isFinite(args.part.role.weight) || args.part.role.weight < 0.4 || args.part.role.weight > 1.1)) throw new Error("invalid single role");
+  if (!Number.isInteger(args.width) || !Number.isInteger(args.height) || args.width % 8 !== 0 || args.height % 8 !== 0) throw new Error("invalid single canvas");
+  const g: Graph = {};
+  const floorPos = String(INTERACTION_TEMPLATE["11"].inputs.prompt);
+  const neg = INTERACTION_NEGATIVE;
+  const seed = args.seed ?? randomBytes(4).readUInt32BE(0);
+  const passSeed = args.passSeed ?? randomBytes(4).readUInt32BE(0);
+  const commonPrompt = /^1girl(?:\s|,)/i.test(args.prompt) ? args.prompt : `1girl, solo, ${args.prompt}`;
+  const fullPrompt = floorPos + normalizeTagForm(commonPrompt);
+  const part = args.part;
+  const desc = [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text)].filter(Boolean).join(", ");
+  const positive = `${fullPrompt}, ${desc}`;
+  const loraFile = part.role?.file ?? "None";
+  const loraW = part.role?.weight ?? 1;
+
+  g["1"] = { class_type: "UNETLoader", inputs: { unet_name: "oneObsessionAnima_v40.safetensors", weight_dtype: "default" } };
+  g["2"] = { class_type: "CLIPLoader", inputs: { clip_name: "qwen_3_06b_base.safetensors", type: "stable_diffusion", device: "default" } };
+  g["3"] = { class_type: "VAELoader", inputs: { vae_name: "qwen_image_vae.safetensors" } };
+  if (part.role) {
+    g["4"] = { class_type: "LoraLoader", inputs: { model: ["1", 0], clip: ["2", 0], lora_name: loraFile, strength_model: loraW, strength_clip: loraW } };
+  }
+  const modelOut = part.role ? ["4", 0] : ["1", 0];
+  const clipOut = part.role ? ["4", 1] : ["2", 0];
+  g["5"] = { class_type: "RSMultiCharacterPose3D", inputs: { pose_control: "auto", pose_strength: 0.8, pose_start: 0.0, pose_end: 0.7, scene_json: args.preset.scene_json } };
+  g["6"] = { class_type: "ModelPatchLoader", inputs: { name: "rs_reference/anima_pose/anima_3dpose_outline_7000.safetensors" } };
+  g["36"] = { class_type: "AnimaLLLiteApply", inputs: { strength: 0.8, start_percent: 0.0, end_percent: 0.7, model: modelOut, model_patch: ["6", 0], image: ["5", 5] } };
+  g["7"] = { class_type: "CLIPTextEncode", inputs: { text: positive, clip: clipOut } };
+  g["8"] = { class_type: "CLIPTextEncode", inputs: { text: neg, clip: clipOut } };
+  g["10"] = { class_type: "EmptySD3LatentImage", inputs: { width: args.width, height: args.height, batch_size: 1 } };
+  g["11"] = { class_type: "KSampler", inputs: {
+    model: ["36", 0],
+    positive: ["7", 0], negative: ["8", 0], latent_image: ["10", 0],
+    seed, steps: 30, cfg: 4.0, sampler_name: "euler_ancestral", scheduler: "sgm_uniform", denoise: 1.0 } };
+  g["14"] = { class_type: "VAEDecode", inputs: { samples: ["11", 0], vae: ["3", 0] } };
+  g["12"] = { class_type: "SaveImage", inputs: { images: ["14", 0], filename_prefix: `interaction/${args.label}/initial` } };
+
+  g["21"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
+  g["22"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["21", 0], image: ["14", 0] } };
+  g["23"] = { class_type: "ImageScaleBy", inputs: { image: ["22", 0], upscale_method: "lanczos", scale_by: 0.5 } };
+
+  g["24"] = { class_type: "VAEEncode", inputs: { pixels: ["23", 0], vae: ["3", 0] } };
+  g["25"] = { class_type: "CLIPTextEncode", inputs: { text: positive, clip: clipOut } };
+  g["26"] = { class_type: "CLIPTextEncode", inputs: { text: neg, clip: clipOut } };
+  g["27"] = { class_type: "KSampler", inputs: {
+    model: modelOut,
+    positive: ["25", 0], negative: ["26", 0], latent_image: ["24", 0],
+    seed: passSeed, steps: 30, cfg: 4.0, sampler_name: "euler_ancestral", scheduler: "sgm_uniform", denoise: 0.25 } };
+  g["28"] = { class_type: "VAEDecode", inputs: { samples: ["27", 0], vae: ["3", 0] } };
+  g["38"] = { class_type: "SaveImage", inputs: { images: ["28", 0], filename_prefix: `interaction/${args.label}/final` } };
+  return g;
+}
+
 export class ComfyExecutionFailed extends Error {}
 export class ComfyBusy extends Error {}
 let busy = false;
@@ -367,6 +497,54 @@ async function runComfyJob(url: string, args: ComfyDraw, onSubmitted: () => void
   } finally {
     stageSocket?.close();
   }
+}
+
+/** 交互双人管线提交：makeInteractionGraph → submitAndWait → 取 final(node 38)。
+ * 输出为 SaveImage 的 output 类型（可带子目录），与单管线 temp 语义不同，单独取图。 */
+async function fetchInteractionOutput(base: string, job: ComfyHistoryJob): Promise<Buffer> {
+  const images = job.outputs?.["38"]?.images;
+  if (!Array.isArray(images) || images.length !== 1) throw new Error("invalid interaction output");
+  const image = images[0];
+  if (image.type !== "output" || !image.filename || !/^[A-Za-z0-9_.-]+\.png$/.test(image.filename)) throw new Error("invalid interaction output path");
+  const query = new URLSearchParams({ filename: image.filename, type: "output", subfolder: image.subfolder ?? "" });
+  return imageBytes(await request(`${base}/view?${query}`, {}, 60_000));
+}
+
+export async function runInteraction(url: string, args: InteractionDraw, onSubmitted: () => void): Promise<Buffer> {
+  if (busy) throw new ComfyBusy("ComfyUI busy");
+  busy = true;
+  try {
+    const base = comfyUrl(url);
+    const queue = await (await request(`${base}/queue`)).json() as { queue_running?: unknown[]; queue_pending?: unknown[] };
+    if (!Array.isArray(queue.queue_running) || !Array.isArray(queue.queue_pending)) throw new Error("invalid ComfyUI queue");
+    if (queue.queue_running.length || queue.queue_pending.length) throw new ComfyBusy("ComfyUI busy");
+    const id = randomUUID();
+    const clientId = randomUUID();
+    const graph = makeInteractionGraph(args);
+    onSubmitted();
+    const job = await submitAndWait(base, graph, id, clientId, Date.now() + 600_000);
+    return await fetchInteractionOutput(base, job);
+  } finally { busy = false; }
+}
+
+export async function runInteractionSingle(url: string, args: {
+  prompt: string; width: number; height: number; seed?: number; passSeed?: number;
+  preset: InteractionPreset; part: MultiPart; label: string;
+}, onSubmitted: () => void): Promise<Buffer> {
+  if (busy) throw new ComfyBusy("ComfyUI busy");
+  busy = true;
+  try {
+    const base = comfyUrl(url);
+    const queue = await (await request(`${base}/queue`)).json() as { queue_running?: unknown[]; queue_pending?: unknown[] };
+    if (!Array.isArray(queue.queue_running) || !Array.isArray(queue.queue_pending)) throw new Error("invalid ComfyUI queue");
+    if (queue.queue_running.length || queue.queue_pending.length) throw new ComfyBusy("ComfyUI busy");
+    const id = randomUUID();
+    const clientId = randomUUID();
+    const graph = makeInteractionSingleGraph(args);
+    onSubmitted();
+    const job = await submitAndWait(base, graph, id, clientId, Date.now() + 600_000);
+    return await fetchInteractionOutput(base, job);
+  } finally { busy = false; }
 }
 
 type ComfyHistoryJob = { status?: { status_str?: string; completed?: boolean }; outputs?: Record<string, { images?: Array<{ filename?: string; subfolder?: string; type?: string }> }> };

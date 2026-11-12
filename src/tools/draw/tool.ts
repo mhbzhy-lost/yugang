@@ -9,6 +9,9 @@ import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { loraBook, styleBook } from "../characters.ts";
+import { runInteraction, runInteractionSingle, type InteractionPreset } from "./comfy.ts";
+
+const INTERACTION_PRESETS = JSON.parse(readFileSync(new URL("./interaction-presets.json", import.meta.url)).toString("utf8")) as Record<string, InteractionPreset>;
 import { ComfyBusy, ComfyExecutionFailed, runComfy, runMulti, type ComfyDraw, type DrawStage, type MultiPart } from "./comfy.ts";
 
 interface DrawArgs {
@@ -22,6 +25,8 @@ interface DrawArgs {
   characters?: Array<{ character?: string; description: string }>;
   framing?: "normal" | "wide";
   spacing?: "together" | "apart";
+  pipeline?: "rs" | "interaction";
+  preset?: string;
 }
 
 const RATIO_SIZES = {
@@ -33,9 +38,15 @@ const rounds = new Map<string, RoundState>();
 const REF_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic", ".heif"]);
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
+/** 提交前二次复核发现画图已被热关闭：在 onSubmitted 回调里抛出，阻止真正 POST，且不置 submitted。 */
+class DrawDisabledError extends Error {}
+
 export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration {
   const root = resolve(deps.mediaRoot);
   const realRoot = (() => { try { return realpathSync(root); } catch { return root; } })();
+  // 画图总开关（fish.config.json 的 drawEnabled，热加载，资源闸）：缺省视为开；每次现读，
+  // 入口与提交前各复核一次，关闭期间让出 GPU。
+  const enabled = () => (deps.drawEnabled?.() ?? true) !== false;
   const prepareRef = (raw: string): { png: Buffer; strength: number } => {
     const ref = raw.trim().replace(/^\[|\]$/g, "");
     const full = resolve(root, ref);
@@ -61,6 +72,8 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
     callers: ["model"],
     parameters: manifestParameters<DrawArgs>(manifest),
     execute: async (args, api, context) => {
+      // 资源闸：关闭时尽早拒绝（在 snapshot / onLongWork / 任何校验之前），不碰 GPU 管线。
+      if (!enabled()) throw new Error(deps.prompts.messages["draw_disabled"] ?? "draw_disabled");
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
       deps.onLongWork?.("draw", round);
@@ -110,12 +123,26 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const ref = args.ref !== undefined ? prepareRef(args.ref) : undefined;
       const state: RoundState = { round, pending: true, submitted: false, used: false };
       rounds.set(api.conversationId, state);
+      // 提交前二次复核：comfy.ts 在真正 POST 前同步调 onSubmitted（其间无 await），
+      // 这里再读一次热值，关闭则抛 DrawDisabledError 阻止 POST，且 submitted 保持 false（可重试）。
+      const onSubmitted = () => { if (!enabled()) throw new DrawDisabledError(); state.submitted = true; };
       try {
         const stageCb = deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined;
         const bp = deps.bypassOf?.(round);
-        const png = multiParts
-          ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts, framing: args.framing, spacing: args.spacing, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, () => { state.submitted = true; })
-          : await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, handRepair: args.hand_repair ?? false, hd: args.hd === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, () => { state.submitted = true; }, stageCb);
+        let png: Buffer;
+        if (args.pipeline === "interaction") {
+          if (args.ref !== undefined) throw new Error(deps.prompts.messages["draw_interaction_ref_unsupported"] ?? "interaction does not support ref");
+          if (!args.preset) throw new Error(deps.prompts.messages["draw_preset_required"] ?? "preset is required when pipeline=interaction");
+          const preset = INTERACTION_PRESETS[args.preset];
+          if (!preset) throw new Error(deps.prompts.messages["draw_preset_unknown"] ?? `unknown interaction preset: ${args.preset}`);
+          png = multiParts
+            ? await runInteraction(deps.comfyUrl, { prompt: positive, width, height, preset, parts: multiParts, label: args.preset }, onSubmitted)
+            : await runInteractionSingle(deps.comfyUrl, { prompt: positive, width, height, preset, part: { text: positive, ...(lora ? { role: lora } : {}) }, label: args.preset }, onSubmitted);
+        } else {
+          png = multiParts
+            ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts, framing: args.framing, spacing: args.spacing, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, onSubmitted)
+            : await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, handRepair: args.hand_repair ?? false, hd: args.hd === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, onSubmitted, stageCb);
+        }
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
         const file = `${Date.now()}-${randomUUID()}.png`;
@@ -123,6 +150,11 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         state.used = true;
         return { output: [{ type: "text", text: renderTemplate(deps.prompts.messages["draw_done"] ?? "gen/{{file}}", { file }) }] };
       } catch (error) {
+        // 提交前被关闭：保留明确关闭回执，不谎称已提交（submitted 仍 false，可重试）。
+        if (error instanceof DrawDisabledError) {
+          console.error("[fish] draw disabled before submit");
+          throw new Error(deps.prompts.messages["draw_disabled"] ?? "draw_disabled");
+        }
         if (error instanceof ComfyExecutionFailed) state.submitted = false;
         const detail = error instanceof Error ? error.message : "unknown";
         console.error(`[fish] draw failed: ${detail}`);

@@ -1,0 +1,146 @@
+{
+  "anima_role_kv": {
+    "repo": "AnticPan/Anima-Role-Ref-KV",
+    "revision": "259a0dce876ed70fc8835b888139756e23fb8a9f",
+    "file": "comfy/anima-role-ref-kv-v1.0.safetensors",
+    "folder": "ipadapter",
+    "subdir": "anima_role_kv",
+    "sha256": "102dcc38b48f984844305fff5c04730a857603f8796f47e92b67c61baef124bb"
+  },
+  "anima_adapter": {
+    "repo": "LuciferTC/Anima-IP-Adapter",
+    "revision": "99e9c351c9f00bdd188b5added0066a80d3b1de6",
+    "file": "ip_adapter-Character_Reference-10.safetensors",
+    "folder": "ipadapter",
+    "subdir": "anima_adapter",
+    "sha256": "dc9612cc28b55f00ba39f6169bfe4871130be028a55682ab54dd51360acb8232"
+  },
+  "anima_config": {
+    "repo": "google/siglip2-base-patch16-512",
+    "revision": "a89f5c5093f902bf39d3cd4d81d2c09867f0724b",
+    "file": "config.json",
+    "folder": "siglip2",
+    "subdir": "siglip2-base-patch16-512",
+    "sha256": "a15bc39fbcd92498dea6d5d3cb2b0d8b9ba389d6a3f2b565ea66128a2d141934"
+  },
+  "anima_preprocessor_config": {
+    "repo": "google/siglip2-base-patch16-512",
+    "revision": "a89f5c5093f902bf39d3cd4d81d2c09867f0724b",
+    "file": "preprocessor_config.json",
+    "folder": "siglip2",
+    "subdir": "siglip2-base-patch16-512",
+    "sha256": "63ff380d3e424f93e6fbca5cc8e74eeed882e96fd6be2b7728aed308f3ad1513"
+  },
+  "anima_model": {
+    "repo": "google/siglip2-base-patch16-512",
+    "revision": "a89f5c5093f902bf39d3cd4d81d2c09867f0724b",
+    "file": "model.safetensors",
+    "folder": "siglip2",
+    "subdir": "siglip2-base-patch16-512",
+    "sha256": "fe0e601c625e69eed8e73500d39e9b6164403fe03db8048e87913c3cefbbb3fe"
+  },
+  "sd_encoder": {
+    "repo": "h94/IP-Adapter",
+    "revision": "018e402774aeeddd60609b4ecdb7e298259dc729",
+    "file": "models/image_encoder/model.safetensors",
+    "folder": "clip_vision",
+    "subdir": "sd_encoder",
+    "sha256": "6ca9667da1ca9e0b0f75e46bb030f7e011f44f86cbfb8d5a36590fcd7507b030"
+  },
+  "sd15_adapter": {
+    "repo": "h94/IP-Adapter",
+    "revision": "018e402774aeeddd60609b4ecdb7e298259dc729",
+    "file": "models/ip-adapter-plus_sd15.safetensors",
+    "folder": "ipadapter",
+    "subdir": "sd15_adapter",
+    "sha256": "a1c250be40455cc61a43da1201ec3f1edaea71214865fb47f57927e06cbe4996"
+  },
+  "sdxl_adapter": {
+    "repo": "h94/IP-Adapter",
+    "revision": "018e402774aeeddd60609b4ecdb7e298259dc729",
+    "file": "sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors",
+    "folder": "ipadapter",
+    "subdir": "sdxl_adapter",
+    "sha256": "3f5062b8400c94b7159665b21ba5c62acdcd7682262743d7f2aefedef00e6581"
+  },
+  "krea_edit": {
+    "repo": "conradlocke/krea2-identity-edit",
+    "revision": "f33b26291c640e8ec50b0da420bfee3c9a660daa",
+    "file": "krea2_identity_edit_v2_r64.safetensors",
+    "folder": "ipadapter",
+    "subdir": "krea_edit",
+    "sha256": "2b35d52aec027fa627fd0b98adff405ee030edecbb816608ed7fc445a69a756b"
+  },
+  "moss_edit": {
+    "repo": "thearkorbit/moss-image-edit-lora-poc",
+    "revision": "4fd0283e1b05b67e4d5de273994a13e46219b7df",
+    "file": "moss_edit_lora_poc.safetensors",
+    "folder": "ipadapter",
+    "subdir": "moss_edit",
+    "sha256": "6f6dd51e0df2a8756726e7db798c87b4389402cbce49213777f4cfe725c6458c"
+  },
+  "redux": {
+    "repo": "Comfy-Org/flux1-redux-dev",
+    "revision": "2cf75771548d13ba8d2b35fd41a43a8e1cd8e8ae",
+    "file": "flux1-redux-dev.safetensors",
+    "folder": "style_models",
+    "subdir": "redux",
+    "sha256": null
+  },
+  "redux_encoder": {
+    "repo": "google/siglip-so400m-patch14-384",
+    "revision": "9fdffc58afc957d1a03a25b10dba0329ab15c2a3",
+    "file": "model.safetensors",
+    "folder": "clip_vision",
+    "subdir": "redux_encoder",
+    "sha256": null
+  },
+  "anima_frame_v2": {
+    "repo": "ElectronGirl/anima-ref-adapter",
+    "revision": "e05a8d21ad3f3aeb68875c5ed0e85787cfba79b0",
+    "file": "anima_ref_adapter_v2_r64.safetensors",
+    "folder": "ipadapter",
+    "subdir": "anima_frame_v2",
+    "sha256": "71dda6079e18d354e16e3347bc49a9b710afd9495c378efbb833d30cac9cb81b"
+  },
+  "anima_frame": {
+    "repo": "ElectronGirl/anima-ref-adapter",
+    "revision": "fed1e98a11a9b81d4ad274fd23cacc531fd4617e",
+    "file": "anima_ref_adapter_pilot_r32.safetensors",
+    "folder": "ipadapter",
+    "subdir": "anima_frame",
+    "sha256": "d42a07284a82ababd783a893db48048d0cfa0c3fdc0cda51fa82369755ed13ab"
+  },
+  "anima29_frame": {
+    "repo": "pamparamm/anima-ref-adapter-2.9B-converted",
+    "revision": "9ad676167584f291d08b4972db5de986ee03d6b4",
+    "file": "anima_ref_adapter_pilot_r32_29B.safetensors",
+    "folder": "ipadapter",
+    "subdir": "anima29B_frame",
+    "sha256": "fcf7c3b134a3fa522264cb8c3117bed9a32a634448cbf2a3d36213925ec52ebe"
+  },
+  "krea_pose": {
+    "repo": "thedeoxen/Krea-2-pose-controlnet",
+    "revision": "1da9762ca46e6c9e4014b309bf0147889f10982a",
+    "file": "krea2_turbo_openpose_controlnet.safetensors",
+    "folder": "loras",
+    "subdir": "krea_pose",
+    "sha256": "0ddc3aafce4abdf7af3309b2f00c1bacdf15df1f2b4fb7adc9ff71795da90ecf"
+  },
+  "moss_pose": {
+    "repo": "darask0/MOSS-Image-color-depth-control",
+    "revision": "357d7cc1eefd746de28ed74741c79464e3d82daa",
+    "file": "moss-control.safetensors",
+    "folder": "loras",
+    "subdir": "moss_pose",
+    "sha256": "e5c0c3efd05e4269207a39de6005798f14c90c6687c89c54eaffe4b76c43a763"
+  },
+  "anima_pose": {
+    "repo": "toyxyz/Anima_ControlNet-LLLite",
+    "revision": "37f3a4b6574f1dce3dfe3b5440285a39b11b3d8d",
+    "file": "anima_3dpose_outline_7000.safetensors",
+    "folder": "model_patches",
+    "subdir": "anima_pose",
+    "sha256": "8e2c90505c4363f74ea2deef427dd3b3f8e91ec41c40ab1955f18040fc15b708"
+  }
+}
