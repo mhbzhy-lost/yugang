@@ -83,6 +83,6 @@
 
 ## 参考文档
 - 管线定稿：`experiments/anima-interaction-extension-v1/PIPELINE-V1.md`
-- 分叉说明：`experiments/anima-interaction-extension-v1/vendor/FORK.md`
+- 分叉说明：`/Users/leshi.zhy/comfyui-nodes/FORK.md`
 - 研究计划：`docs/plans/2026-11-11-anima-interaction-study.md`、`docs/plans/2026-11-12-anima-contact-camera-extension.md`
 - 主人结论汇总：`Downloads/yugang-ab/47-…/RESEARCH-CONCLUSIONS.md`
