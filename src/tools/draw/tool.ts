@@ -19,6 +19,7 @@ interface DrawArgs {
   style?: string;
   ratio?: keyof typeof RATIO_SIZES;
   hd?: boolean;
+  fast?: boolean;
   ref?: string;
   character?: string;
   characters?: Array<{ character?: string; description: string }>;
@@ -82,6 +83,8 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       if (typeof args.prompt !== "string" || positive.length > 1000) throw new Error(deps.prompts.messages["draw_prompt"] ?? "draw_prompt");
       if (!deps.comfyUrl) throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
       if (args.hd !== undefined && typeof args.hd !== "boolean") throw new Error(deps.prompts.messages["draw_hd"] ?? "draw_hd");
+      if (args.fast !== undefined && typeof args.fast !== "boolean") throw new Error(deps.prompts.messages["draw_fast"] ?? "draw_fast");
+      if (args.fast === true && (args.hd === true || args.characters !== undefined || args.pipeline === "interaction")) throw new Error(deps.prompts.messages["draw_fast_scope"] ?? "draw_fast_scope");
       if ((args.framing !== undefined && !["normal", "wide"].includes(args.framing)) || (args.spacing !== undefined && !["together", "apart"].includes(args.spacing))) throw new Error(deps.prompts.messages["draw_composition"]);
       if (args.characters === undefined && (args.framing !== undefined || args.spacing !== undefined)) throw new Error(deps.prompts.messages["draw_composition_multi"]);
       const ratio = args.ratio ?? "3:4";
@@ -139,7 +142,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         } else {
           png = multiParts
             ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts, framing: args.framing, spacing: args.spacing, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, onSubmitted)
-            : await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, hd: args.hd === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, onSubmitted, stageCb);
+            : await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, hd: args.hd === true, fast: args.fast === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, onSubmitted, stageCb);
         }
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });

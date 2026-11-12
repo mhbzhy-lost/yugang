@@ -58,6 +58,10 @@
         "type": "boolean",
         "description": "高清模式，默认 false（2 倍放大出图）。用户明确要高清大图、超级清楚、分辨率大点、要当壁纸这类要求时传 true：3 倍放大，图更大更清晰，但明显更慢；用户没提就不要开"
       },
+      "fast": {
+        "type": "boolean",
+        "description": "单人快速模式，默认 false。净超分 1.2x（默认 2x），质感 pass 同域变小明显更快，细节少于默认；用户明确要快一点、赶时间、随便画画时传 true。只用于单人默认管线，不能与 hd、双人 characters、pipeline=interaction 同时传"
+      },
       "framing": {
         "type": "string",
         "enum": [
