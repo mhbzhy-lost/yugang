@@ -36,7 +36,7 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 
 **管线（2026-11-10 晚定版）**：初采样 30 步（cfg 4.5，带轴扁平正向）→
 `4x-AnimeSharp` 超分 lanczos 0.5（净 2 倍；单人 `fast` 快速模式初采样 20 步 + lanczos 0.3 净 1.2 倍，与 hd/双人/interaction 互斥）→ **质感 pass**（denoise 0.25 同域重采样，裸地板词 + 同内容，
-机械消除过扁平并加回真实感——M 组/L 组/P 组三夜实验定版）→ hd 第三倍纯放大（95/96/97，接 pass 之后）→ 输出。
+机械消除过扁平并加回真实感——M 组/L 组/P 组三夜实验定版）→ hd 第三倍纯放大（95/96/97，接 pass 之后）→ 输出（经 outbox 机械直发，模型不再调 say_media，见硬约束 4）。
 **没有脸修也没有手修**（主人裁定退役；手修 2026-11-13 摘除模板 41/42 节点，WSL 生产不装 Impact-Pack）。词表四段式：正向初采样带四轴扁平（模板 node 4），pass 裸地板（node 71）；
 负向两遍同文（地板+monochrome / 防油锁 lips shiny skin abs oily airbrushed ssr / 碎线锁 sketch 系）。
 **约束**：pass 的 denoise 不许超 0.25 越界（M3 实测 0.35 唇形失控）；禁止把它改回超分前「修复」用途；
@@ -196,7 +196,8 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 
 - 只有 `say_words` / `say_media` / `say_meme` / `say_voice` 能把东西发到 QQ，且都必须
   `callers: ["model"]`（脚本/嵌套调用不能绕）；四工具共享每轮 3 次**调用**额度（无豁免、
-  被拒不计数），额度规划守则（画图/表情包/语音保开口防吞）在 `prompt/runtime.md`
+  被拒不计数），额度规划守则（表情包/语音保开口防吞）在 `prompt/runtime.md`
+- **draw 出图机械直发**（主人裁定 2026-11-13）：draw 生成图后由工具经 `enqueueOutbound` 直接入 outbox 发出（同提交写 `fish.outbound` transcript、记附件闸 `recordMedia`），不再让模型调 say_media、不占开口额度；与 working_*/新闻播报同属宿主机械消息。入队失败回退提示模型手动 say_media 补发。模型侧出口仍只有 say_* 一族
 - 任何新增工具都不许直接调用 `emit()`
 - 校验失败必须以 tool 错误返回给模型（文案来自 `prompt/messages.md` 或该工具 `TOOL.md` 的 tool-messages 块），不许静默丢弃
 - 主动 @ 不是第二个出口：它是 `say_words` / `say_media` / `say_meme` 的 `mentions` 参数
