@@ -21,6 +21,7 @@
 |---|---|
 | 管线规格 | `experiments/anima-interaction-extension-v1/PIPELINE-V1.md` |
 | RS 分叉（唯一事实源） | `/Users/leshi.zhy/comfyui-nodes/comfyui-rs-multicharacter-sampler/`（节点库，独立于鱼缸仓库；部署=整目录复制到 custom_nodes） |
+| 自定义节点包 | `/Users/leshi.zhy/comfyui-nodes/{yugang_composition,yugang_interaction,yugang_study_support}/`（鱼缸仓库不保留节点源码） |
 | 交互模板 | `src/tools/draw/workflow-interaction.json`（26 节点，含 pose ImageScaleBy×2） |
 | 预设注册表 | `src/tools/draw/interaction-presets.json`（sit-haystack / single-haystack） |
 | 离线 authoring | `experiments/anima-interaction-extension-v1/{contacts.py,geometry.py,run2-author.py,sit-author.py,single-author.py}`（scipy/MHR，在 Windows/WSL 嵌入式或系统 python 上跑） |
