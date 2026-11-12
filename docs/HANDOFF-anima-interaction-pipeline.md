@@ -79,7 +79,7 @@
 - **端口**：prod=8188（WSL）、lab=8189（WSL）、生产鱼在 mini（非本机）。`wf-run.py` 里 LAB 常量注意 8188/8189 别打错。
 - **枚举**：UNETLoader 用 `diffusion_models` 目录；ModelPatchLoader 在 Linux 用正斜杠（Windows 用反斜杠）。
 - **RS 上限**：3D mask 渲染 ≤2048/边，pass 姿态一律基础画布渲染 + ImageScaleBy×2，不写 scene_json_2x。
-- **步数**：pass 的 steps=30 只是调度表，denoise 0.25 实际只跑尾部约 7–8 步；pass@3840 实测 824s（4K 域每步近百秒），pass@2560 实测 196s。
+- **步数**：pass 的 steps=30 是**真实步数**，denoise 0.25 不减步——ComfyUI `set_steps` 用 `new_steps=int(steps/denoise)=120` 生成调度再取 `sigmas[-(steps+1):]`（低噪尾部 31 个 sigma），仍跑满 30 步（2026-11-13 源码 + 执行日志核实，纠正旧「7–8 步」误记）；pass 是耗时大头，fast 模式据此把 pass 砍到 14 步。pass@3840 实测 824s、pass@2560 实测 196s（折合每步约 27s / 6.5s）。
 - **提交纪律**：未知提交不可重 POST；成功任务不重复提交；失败按简单清单单独触发。
 
 ## 参考文档
