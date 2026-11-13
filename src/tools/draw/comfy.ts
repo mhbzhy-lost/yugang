@@ -54,7 +54,7 @@ function normalizeTagForm(text: string): string {
 export interface ComfyDraw {
   /** 高清模式：净 3 倍出图；采样与质感 pass 恒在 2 倍域内，第三倍在 pass 后纯放大补齐。 */
   hd?: boolean;
-  /** 快速模式：初采样 28 步 + 质感 pass 14 步 + 净超分 1.2x（4x × lanczos 0.3）；仅单人默认管线。 */
+  /** 快速模式：初采样 28 步 + 质感 pass 8 步 + 净超分 1.2x（4x × lanczos 0.3）；仅单人默认管线。 */
   fast?: boolean;
   prompt: string;
   bypass?: string;
@@ -119,9 +119,9 @@ export function makeGraph(args: ComfyDraw, inputName?: string): Graph {
   if (args.fast === true) {
     graph["92"].inputs.scale_by = 0.3; // 快速模式：4x × 0.3 = 净 1.2x，pass 同域变小
     graph["7"].inputs.steps = 28; // 初采样 30 → 28 步（主人裁定 2026-11-13）
-    // 质感 pass 30 → 14 步：denoise 0.25 不减步数（set_steps 取 int(steps/denoise) 调度的低噪尾部，
+    // 质感 pass 30 → 8 步：denoise 0.25 不减步数（set_steps 取 int(steps/denoise) 调度的低噪尾部，
     // 仍跑满 steps），pass 才是耗时大头，砍步数才是真提速（执行日志 + 源码核实）。
-    graph["72"].inputs.steps = 14;
+    graph["72"].inputs.steps = 8;
   }
   // 质感 pass（尾部光照/质感化，M2 定版）：超分后的同域低强度重采样，denoise 0.25、裸地板词，
   // 负向共用 node 5；AGENTS 约束：禁止把它改回「修复」用途或提高强度越界（M3 实测 0.35 唇形失控）。

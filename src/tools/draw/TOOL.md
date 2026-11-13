@@ -59,7 +59,7 @@ light particles 会把整图压成 pastel 洗白；detailed skin shading、subtl
 用户明确要「高清大图 / 超级清楚 / 分辨率大点 / 当壁纸」时传 hd: true（3 倍放大，
 明显更慢）；平时不传，默认 2 倍。单人和双人通用。
 
-用户明确要「快一点 / 赶时间 / 随便画画」时传 fast: true（单人 V8 直出快速模式：初采样 28 步 + 质感 pass 14 步 + 净超分 1.2x，明显更快，细节少于单人姿态线）；平时不传。fast 不能与 hd、双人 characters、pipeline=interaction 同时传。
+用户明确要「快一点 / 赶时间 / 随便画画」时传 fast: true（单人 V8 直出快速模式：初采样 28 步 + 质感 pass 8 步 + 净超分 1.2x，明显更快，细节少于单人姿态线）；平时不传。fast 不能与 hd、双人 characters、pipeline=interaction 同时传。
 
 ## 双人
 
