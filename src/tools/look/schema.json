@@ -5,10 +5,19 @@
       "ref": {
         "type": "string",
         "description": "图片引用，就是群里那条消息里中括号写的东西，比如 inbound/ab12.png；导入轮的待收图是 meme-inbox/xxx.png（登记回执会给引用）"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "view",
+          "metadata"
+        ],
+        "description": "默认 view：调用视觉描述图片内容；明确要求提取 PNG prompt/workflow/管线等元数据时传 metadata，此模式只读 PNG 头并由宿主直接发到 QQ，不走视觉模型"
       }
     },
     "required": [
       "ref"
-    ]
+    ],
+    "additionalProperties": false
   }
 }

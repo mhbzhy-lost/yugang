@@ -18,6 +18,7 @@
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest（factory 只消费它，不再有第二份运行时定义）。
  */
 import { spawnSync } from "node:child_process";
+import { inflateSync } from "node:zlib";
 import { existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep, extname, relative } from "node:path";
@@ -27,6 +28,7 @@ import { ledgerOf, recordLook } from "../../egress/ledger.ts";
 import { describeImage, isDescribeFiltered } from "../../media/describe.ts";
 import { checkMemeSource } from "../../media/meme-store.ts";
 import { DEFAULT_LIMITS } from "../../egress/policy.ts";
+import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { fenceReadablePath } from "../fs-shared.ts";
@@ -36,6 +38,7 @@ import { MEME_IMPORT_MAX, memeImportHas, memeImportLookLimit, memeImportLooked, 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface LookArgs {
   ref: string;
+  mode?: "view" | "metadata";
 }
 
 /** 看图快捷开关：主人 /关看图 后置位（var/look-off.marker），重启保持；网关视觉管线不稳时止损用。 */
@@ -75,13 +78,13 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
     callers: ["model"],
     parameters: manifestParameters<LookArgs>(manifest),
     execute: async (args, api, context) => {
-      // 机械锁（2026-11-06 主人裁定）：主模型直读模式下图全部 inline 附上（普通轮 ≤8 张、
-      // 收图轮、导入轮），look 没有任何剩余场景，一律拒绝——prompt 引导 + 硬边界双保险。
-      // fallback 模式（vision≠main）与本开关无关，照旧走 look 转述。
-      if (deps.inlineVisionOn?.()) {
+      const metadata = args.mode === "metadata";
+      // 机械锁（2026-11-06 主人裁定）：主模型直读模式下普通看图由 inline 附上，
+      // 但 metadata 是纯本地 PNG 头解析，不经过视觉模型，因此不受此锁影响。
+      if (!metadata && deps.inlineVisionOn?.()) {
         throw new Error(deps.prompts.messages["look_inline_locked"] ?? "look_inline_locked");
       }
-      if (lookDisabled) {
+      if (!metadata && lookDisabled) {
         return { output: [{ type: "text", text: deps.prompts.messages["look_cmd_off"] ?? "看图已关" }] };
       }
       const ref = args.ref.trim().replace(/^\[|\]$/g, "");
@@ -102,6 +105,9 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
 
       const mime = MIME[extname(full).toLowerCase()];
       if (!mime) throw new Error(renderTemplate(deps.prompts.messages["look_type"] ?? "{{ref}}", { ref }));
+      if (metadata && mime !== "image/png") {
+        throw new Error(renderTemplate(deps.prompts.messages["look_metadata_invalid"] ?? "{{ref}}", { ref }));
+      }
 
       // 导入轮：只认本轮 meme_import 清单里、且本轮触发是主人的 inbox 图，额度按清单张数（上限 50）；
       // 其余一律按普通轮 2 张。inbox 不是普通媒体，那两张额度不能拿来授权读它。
@@ -122,7 +128,36 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
           throw new Error(renderTemplate(deps.prompts.messages["look_missing"] ?? "{{ref}}", { ref }));
         }
       }
+
+      if (metadata) {
+        let bytes: Buffer;
+        try {
+          bytes = readFileSync(full);
+        } catch {
+          throw new Error(renderTemplate(deps.prompts.messages["look_missing"] ?? "{{ref}}", { ref }));
+        }
+        const text = formatPngMetadata(
+          bytes,
+          localRef,
+          deps.prompts.messages["look_metadata_empty"] ?? "PNG 没有可读的文本元数据",
+          deps.prompts.messages["look_metadata_invalid"] ?? "不是可解析的 PNG 文件",
+        );
+        const items = splitOutboundText(text);
+        const ts = Date.now();
+        const payload: OutboundPayload = {
+          items,
+          quote: true,
+          ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
+          ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
+          at: ts,
+          key: `${api.conversationId}:look-metadata:${api.callId}`,
+        };
+        await enqueueOutbound(api, payload, context);
+        return { output: [{ type: "text", text: deps.prompts.messages["look_metadata_sent"] ?? "metadata_sent" }] };
+      }
+
       const importing = inInbox && roundId !== undefined && memeImportHas(roundId, localRef);
+      // 导入轮：只认本轮 meme_import 清单里、且本轮触发是主人的 inbox 图，额度按清单张数（上限 50）；
       const importLimit = roundId === undefined ? undefined : memeImportLookLimit(roundId);
       // 额度＝清单张数（上限 50）：清单只有一张时就只看得了一张，不被普通轮的 2 张抬上去
       const effectiveLimit = importing && importLimit !== undefined ? Math.min(importLimit, MEME_IMPORT_MAX) : limit;
@@ -190,6 +225,121 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       return { output: [{ type: "text", text: described.text }] };
     },
   });
+}
+
+type PngTextEntry = { keyword: string; text: string };
+const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+const PNG_METADATA_LIMIT = 120_000;
+const PNG_TEXT_LIMIT = 24_000;
+
+function decodePngText(bytes: Buffer): PngTextEntry[] | null {
+  if (bytes.length < PNG_SIGNATURE.length || !bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) return null;
+  const entries: PngTextEntry[] = [];
+  let offset = PNG_SIGNATURE.length;
+  let total = 0;
+  let chunks = 0;
+  while (offset + 12 <= bytes.length && chunks < 4096) {
+    const length = bytes.readUInt32BE(offset);
+    const type = bytes.subarray(offset + 4, offset + 8).toString("ascii");
+    const start = offset + 8;
+    const end = start + length;
+    if (end + 4 > bytes.length) return null;
+    const data = bytes.subarray(start, end);
+    offset = end + 4;
+    chunks++;
+    if (type === "tEXt") {
+      const split = data.indexOf(0);
+      if (split > 0) {
+        const keyword = data.subarray(0, split).toString("latin1").slice(0, 79);
+        const text = data.subarray(split + 1).toString("utf8").slice(0, PNG_TEXT_LIMIT);
+        entries.push({ keyword, text });
+        total += text.length;
+      }
+    } else if (type === "zTXt") {
+      const split = data.indexOf(0);
+      if (split > 0 && data[split + 1] === 0) {
+        try {
+          const keyword = data.subarray(0, split).toString("latin1").slice(0, 79);
+          const text = inflateSync(data.subarray(split + 2)).toString("utf8").slice(0, PNG_TEXT_LIMIT);
+          entries.push({ keyword, text });
+          total += text.length;
+        } catch {
+          /* 损坏的单个压缩文本块不影响其它元数据。 */
+        }
+      }
+    } else if (type === "iTXt") {
+      const fields: Buffer[] = [];
+      let cursor = 0;
+      for (let i = 0; i < 5; i++) {
+        const split = data.indexOf(0, cursor);
+        if (split < 0) { cursor = -1; break; }
+        fields.push(data.subarray(cursor, split));
+        cursor = split + 1;
+      }
+      if (cursor >= 0 && fields.length === 5 && cursor <= data.length) {
+        try {
+          const compressed = fields[1][0] === 1;
+          const raw = compressed ? inflateSync(data.subarray(cursor)) : data.subarray(cursor);
+          const keyword = fields[0].toString("latin1").slice(0, 79);
+          const text = raw.toString("utf8").slice(0, PNG_TEXT_LIMIT);
+          entries.push({ keyword, text });
+          total += text.length;
+        } catch {
+          /* 损坏的单个压缩文本块不影响其它元数据。 */
+        }
+      }
+    }
+    if (total > PNG_METADATA_LIMIT || type === "IEND") break;
+  }
+  return entries;
+}
+
+function safeMetadataValue(value: unknown, depth = 0): unknown {
+  if (depth > 6) return "[depth omitted]";
+  if (typeof value === "string") return value.length > 1200 ? `${value.slice(0, 1200)}…[truncated]` : value;
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+  if (Array.isArray(value)) {
+    if (value.length > 80) return [...value.slice(0, 80).map((item) => safeMetadataValue(item, depth + 1)), "…[items truncated]"];
+    return value.map((item) => safeMetadataValue(item, depth + 1));
+  }
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (["data", "mask", "character_masks"].includes(key) && typeof child === "string" && child.length > 200) {
+        out[key] = `[${child.length} chars omitted]`;
+      } else if (key === "character_masks" && Array.isArray(child)) {
+        out[key] = `[${child.length} masks omitted]`;
+      } else {
+        out[key] = safeMetadataValue(child, depth + 1);
+      }
+    }
+    return out;
+  }
+  return String(value);
+}
+
+function summarizeMetadataValue(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return JSON.stringify(safeMetadataValue(parsed), null, 2);
+  } catch {
+    return text.length > 1200 ? `${text.slice(0, 1200)}…[truncated]` : text;
+  }
+}
+
+function splitOutboundText(text: string): string[] {
+  const limit = 1800;
+  const chunks: string[] = [];
+  for (let offset = 0; offset < text.length; offset += limit) chunks.push(text.slice(offset, offset + limit));
+  return chunks.length > 0 ? chunks : [text];
+}
+
+function formatPngMetadata(bytes: Buffer, ref: string, emptyText: string, invalidText: string): string {
+  const entries = decodePngText(bytes);
+  if (entries === null) return `${invalidText}\nref: ${ref}`;
+  if (entries.length === 0) return `${emptyText}\nref: ${ref}`;
+  const body = entries.map(({ keyword, text }) => `${keyword}:\n${summarizeMetadataValue(text)}`).join("\n\n");
+  return `PNG 元数据（机械提取）\nref: ${ref}\n\n${body}`.slice(0, PNG_METADATA_LIMIT);
 }
 
 /** macOS sips 压缩：GIF 取首帧、超尺寸缩到 1280px，输出 JPEG；失败返回 null。 */
