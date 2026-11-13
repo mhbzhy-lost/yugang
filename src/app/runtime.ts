@@ -2492,10 +2492,16 @@ export function listenMessages(app: { dispatch(ctx: MessageCtx): Promise<void> }
   };
 }
 
+/** 空闲保活：未启用任何通道时事件循环里没有 WS/定时器，Node 会自然退出（exit 0），
+ * launchd KeepAlive 就会陷入「启动→退出→再拉起」循环。用一个长间隔 timer 把进程钉住，
+ * 停机时在 closeFish 里清掉。 */
+let idleKeepalive: ReturnType<typeof setInterval> | undefined;
+
 /** 启动：连 OneBot；连不上直接退出（协议端/地址/token 三件事自查）。 */
 export async function connectOnebot(): Promise<void> {
   if (!channels.has("qq")) {
-    console.log(`[鱼缸] 通道 qq 未启用（CHANNELS=${process.env.CHANNELS ?? ""}），跳过 OneBot 连接`);
+    console.log(`[鱼缸] 通道 qq 未启用（CHANNELS=${process.env.CHANNELS ?? ""})，跳过 OneBot 连接`);
+    if (channels.enabled.length === 0) idleKeepalive = setInterval(() => {}, 3_600_000);
     return;
   }
   try {
@@ -2617,6 +2623,7 @@ export function closeOnebot(): void {
 }
 
 export async function closeFish(): Promise<void> {
+  if (idleKeepalive !== undefined) clearInterval(idleKeepalive);
   try {
     await fish.close();
   } catch {
