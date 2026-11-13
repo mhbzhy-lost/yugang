@@ -18,10 +18,21 @@ import { DATA_HOME, REPO_ROOT } from "../src/paths.ts";
 const LOG = join(DATA_HOME, "fish-console.log");
 
 // 1. 拉代码；失败就停手，线上继续跑旧代码
-console.log("[deploy] git pull origin main");
-const pull = spawnSync("git", ["pull", "origin", "main"], { stdio: "inherit" });
-if (pull.status !== 0) {
-  console.error("[deploy] ✗ git pull 失败，不动线上");
+console.log("[deploy] git fetch origin main");
+const fetch = spawnSync("git", ["fetch", "origin", "main"], { stdio: "inherit" });
+if (fetch.status !== 0) {
+  console.error("[deploy] ✗ git fetch 失败，不动线上");
+  process.exit(1);
+}
+const dirty = spawnSync("git", ["status", "--porcelain"], { encoding: "utf8" });
+if (dirty.status !== 0 || (dirty.stdout ?? "").trim() !== "") {
+  console.error("[deploy] ✗ 生产工作区有未提交改动，不自动覆盖");
+  process.exit(1);
+}
+console.log("[deploy] git reset --hard FETCH_HEAD");
+const reset = spawnSync("git", ["reset", "--hard", "FETCH_HEAD"], { stdio: "inherit" });
+if (reset.status !== 0) {
+  console.error("[deploy] ✗ git reset 失败，不动线上");
   process.exit(1);
 }
 
