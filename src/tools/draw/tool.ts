@@ -27,8 +27,6 @@ interface DrawArgs {
   characters?: Array<{ character?: string; description: string }>;
   framing?: "normal" | "wide";
   spacing?: "together" | "apart";
-  pipeline?: "rs" | "interaction";
-  preset?: string;
 }
 
 const RATIO_SIZES = {
@@ -85,7 +83,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       if (!deps.comfyUrl) throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
       if (args.hd !== undefined && typeof args.hd !== "boolean") throw new Error(deps.prompts.messages["draw_hd"] ?? "draw_hd");
       if (args.fast !== undefined && typeof args.fast !== "boolean") throw new Error(deps.prompts.messages["draw_fast"] ?? "draw_fast");
-      if (args.fast === true && (args.hd === true || args.characters !== undefined || args.pipeline === "interaction")) throw new Error(deps.prompts.messages["draw_fast_scope"] ?? "draw_fast_scope");
+      if (args.fast === true && (args.hd === true || args.characters !== undefined)) throw new Error(deps.prompts.messages["draw_fast_scope"] ?? "draw_fast_scope");
       if ((args.framing !== undefined && !["normal", "wide"].includes(args.framing)) || (args.spacing !== undefined && !["together", "apart"].includes(args.spacing))) throw new Error(deps.prompts.messages["draw_composition"]);
       if (args.characters === undefined && (args.framing !== undefined || args.spacing !== undefined)) throw new Error(deps.prompts.messages["draw_composition_multi"]);
       const ratio = args.ratio ?? "3:4";
@@ -117,15 +115,15 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
           return { text: part.description.trim(), ...(book ? { role: { file: book.file, weight: book.weight, inject: book.inject } } : {}) };
         });
       }
-      const customSingle = multiParts === undefined && (positive.length === 0 || args.ref !== undefined || args.fast === true);
-      // 机械提示区分管线：普通单/双人与姿态线合并；仅自定义单人保留直出提示。
-      deps.onLongWork?.(customSingle ? "draw" : "draw_interaction", round);
+      // 路由合并（2026-11-13）：从零画默认姿态线（单/双看数量）；仅 fast/ref 走直出。
+      const useDirect = multiParts === undefined && (args.ref !== undefined || args.fast === true);
+      deps.onLongWork?.(useDirect ? "draw" : "draw_interaction", round);
       if (round === undefined) throw new Error(deps.prompts.messages["draw_round_missing"] ?? "draw_round_missing");
       const previous = rounds.get(api.conversationId);
       if (previous?.pending) throw new Error(deps.prompts.messages["draw_inflight"] ?? "draw_inflight");
       if (previous?.round === round && previous.used) throw new Error(deps.prompts.messages["draw_used"] ?? "draw_used");
       if (previous?.round === round && previous.submitted) throw new Error(deps.prompts.messages["draw_uncertain"] ?? "draw_uncertain");
-      const ref = customSingle && args.ref !== undefined ? prepareRef(args.ref) : undefined;
+      const ref = useDirect && args.ref !== undefined ? prepareRef(args.ref) : undefined;
       const state: RoundState = { round, pending: true, submitted: false, used: false };
       rounds.set(api.conversationId, state);
       // 提交前二次复核：comfy.ts 在真正 POST 前同步调 onSubmitted（其间无 await），
@@ -135,9 +133,9 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         const stageCb = deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined;
         const bp = deps.bypassOf?.(round);
         let png: Buffer;
-        const useInteraction = !customSingle;
+        const useInteraction = !useDirect;
         if (useInteraction) {
-          const presetName = args.preset ?? (multiParts ? "sit-haystack" : "single-haystack");
+          const presetName = multiParts ? "sit-haystack" : "single-haystack";
           const preset = INTERACTION_PRESETS[presetName];
           if (!preset) throw new Error(deps.prompts.messages["draw_preset_unknown"] ?? `unknown interaction preset: ${presetName}`);
           png = multiParts

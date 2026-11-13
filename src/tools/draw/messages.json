@@ -24,7 +24,7 @@
   "draw_style": "没有这个风格 key：{{key}}。先用 tags 查（不传关键词拿总表），把风格条目的 key 填进 style；或者不填 style",
   "draw_hd": "高清开关必须是 true 或 false",
   "draw_fast": "快速模式开关必须是 true 或 false",
-  "draw_fast_scope": "fast 只用于单人默认管线：不能与 hd、双人 characters 或 pipeline=interaction 同时传",
+  "draw_fast_scope": "fast 只用于单人直出快速：不能与 hd、双人 characters 同时传",
   "draw_composition": "framing 只认 normal 或 wide；spacing 只认 together 或 apart",
   "draw_composition_multi": "framing 和 spacing 只用于双人 characters；单人请在 prompt 描述构图",
   "draw_region_retired": "region 已停用；用 framing 选择远景，spacing 选择靠近或分开，不要传坐标",

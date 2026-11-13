@@ -35,16 +35,16 @@ prompt 写画面本身，用 danbooru tag 为主；普通 tag（cat_ears 之类�
 **单人直出基础正向词**统一为 `masterpiece, best quality, absurdres, score_7, score_8, score_9, anime`；初采样和质感 pass 都追加角色注入词与用户 prompt。
 **单人直出负向基础词**统一为 `low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin, abs`；初采样和质感 pass 共用。
 
-用户明确说「自定义画图」时 prompt 传空字符串（其余参数照常），单人走 V8 直出；用户明确要快一点时传 `fast: true`。
+用户明确说「自定义画图」时 prompt 传空字符串（内容交给角色词表/机械前缀），仍走姿态线；只有 `fast`/`ref` 走直出。
 style=<风格 key> 挂全局画风 LoRA，可与 character、ref 组合；风格与角色 LoRA 权重由词表预设，角色统一 1.0，模型不可调。
 
-## 交互管线（pipeline=interaction，2026-11-13 上线）
+## 姿态线（从零画默认，2026-11-13 路由合并）
 
 新增 V8 交互管线：**CPU 编排姿态（离线 authoring 的 scene_json 预设）+ B1 初采样
 （RS 区域装配 + 52 层 V8 LLLite 姿态 0.8/0–0.7）→ 超分 → 质感 pass@2x**，一次提交全链。
-- 双人：传 `characters` 两项即固定走这条 V8 姿态线；`preset` 省略时默认 `sit-haystack`。
-- 单人默认：不传 `pipeline` 时走**轻形态 V8 姿态线**（KSampler + Pose3D + 链式 LoRA + 52 层 LLLite；当前 `single-haystack`：单人草垛侧坐）。用户明确自定义或传 `fast: true` 时走单人 V8 直出；`pipeline="interaction"` 仍兼容旧调用并使用同一条单人姿态线。
-- 普通单人和双人都不再有第二条默认生产线。`ref` 只在单人自定义直出中可用；姿态线不接 ref；`hd: true` 在姿态线的 2 倍 pass 结束后再纯放大至净 3 倍，不在 3 倍域执行扩散。
+- 双人：传 `characters` 两项即固定走这条 V8 姿态线（预设内部默认 `sit-haystack`，不对外暴露）。
+- 单人默认：走**轻形态 V8 姿态线**（KSampler + Pose3D + 链式 LoRA + 52 层 LLLite；当前 `single-haystack`：单人草垛侧坐）。仅 `fast: true`（快速直出）或 `ref`（改图直出）走直出；`pipeline`/`preset` 不再对外暴露。
+- 普通单人和双人都不再有第二条默认生产线。`ref` 走直出改图；姿态线不接 ref；`hd: true` 在姿态线的 2 倍 pass 结束后再纯放大至净 3 倍，不在 3 倍域执行扩散。
 - 双人构图：`framing=wide` 恢复 RS Camera 的远景提示与区域缩放，同一缩放同时作用于 LLLite 姿态图；普通景别不接 Camera。`spacing=apart` 同步平移人物区域和对应姿态，适用于无接触动作的分离场景。
 - 姿态线初采样与 pass 均为 30 步、CFG 4.5、dpmpp_2m / sgm_uniform；初采样＝质量地板(含anime)+真实感细节词、pass 基础词，负向去 lips。
 - 质感 pass 为普通 KSampler @2x＋角色 LoRA 串联（老版结构），不挂 RS/LLLite：区域控制与姿态窗口都只作用于初采样高噪声段，低幅度第二遍挂它们无益（学术/社区共识，见交接）。
@@ -60,11 +60,11 @@ light particles 会把整图压成 pastel 洗白；detailed skin shading、subtl
 用户明确要「高清大图 / 超级清楚 / 分辨率大点 / 当壁纸」时传 hd: true（3 倍放大，
 明显更慢）；平时不传，默认 2 倍。单人和双人通用。
 
-用户明确要「快一点 / 赶时间 / 随便画画」时传 fast: true（单人 V8 直出快速模式：初采样 28 步 + 质感 pass 8 步 + 净超分 1.2x，明显更快，细节少于单人姿态线）；平时不传。fast 不能与 hd、双人 characters、pipeline=interaction 同时传。
+用户明确要「快一点 / 赶时间 / 随便画画」时传 fast: true（单人 V8 直出快速模式：初采样 28 步 + 质感 pass 8 步 + 净超分 1.2x，明显更快，细节少于单人姿态线）；平时不传。fast 不能与 hd、双人 characters 同时传。
 
 ## 双人
 
-双人同框必须传 `characters`，恰好两项；**双人固定走 V8 + 52 层 LLLite 姿态线**，不再有普通 RS 分支，`preset` 省略时默认 `sit-haystack`。预设决定姿态与构图；模型不用传 `pipeline`。每项写 description（英文 tag/短语，规则同 prompt）：挂了角色的只写动作、表情、
+双人同框必须传 `characters`，恰好两项；**双人固定走 V8 + 52 层 LLLite 姿态线**，不再有普通 RS 分支（预设内部默认 `sit-haystack`，模型不传 `pipeline`/`preset`）。预设决定姿态与构图。每项写 description（英文 tag/短语，规则同 prompt）：挂了角色的只写动作、表情、
 服装；普通人写清外貌。人数不用写。命名角色默认挂角色 LoRA（characters[].character）；仅当用户明确说
 「不挂 LoRA / 用 tag 直出」时才省 character 键、自己在 description 写外观特征。
 双人不支持顶层 character、style、ref；hd 可用。
