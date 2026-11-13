@@ -23,8 +23,8 @@ export function parseChannels(raw: string | undefined): ChannelId[] {
 }
 
 export interface ChannelRegistryOptions {
-  /** QQ 适配器的构造参数（mediaRoot / pacingSeconds / onSent 等），由 runtime 传入。 */
-  qq?: unknown;
+  /** 已构造好的 QQ 适配器（宿主把 OneBot/Gate 单例包装后传入；不传则无法启用 qq）。 */
+  qq?: ChannelAdapter;
 }
 
 export interface ChannelRegistry {
@@ -40,22 +40,22 @@ export interface ChannelRegistry {
 }
 
 /**
- * 构造通道注册表。T1 阶段 QQ factory 尚未接线：传 `qq` 选项时抛「未实现」占位错误，
- * T3 由 `createQqAdapter` 落地；钉钉 factory 始终返回 undefined（协议待定）。
+ * 构造通道注册表。QQ 需要传入已构造的 adapter（options.qq）；钉钉协议待定，
+ * factory 始终返回 undefined（仅提示）。
  */
 export function createChannelRegistry(
   enabledIds: readonly ChannelId[],
-  _options: ChannelRegistryOptions = {},
+  options: ChannelRegistryOptions = {},
 ): ChannelRegistry {
   const adapters: ChannelAdapter[] = [];
   for (const id of enabledIds) {
     if (id === "qq") {
-      // T3 接入：adapters.push(createQqAdapter(options.qq))
-      throw new Error("qq adapter 尚未接线（T3）");
+      if (!options.qq) throw new Error("qq enabled but no adapter (runtime 构造失败)");
+      adapters.push(options.qq);
     }
     if (id === "dingtalk") {
       // 协议待定，先留白：配置了 dingtalk 也不构造实例，仅提示。
-      console.warn("[channels] dingtalk adapter 协议待定，未启用");
+      console.warn("[channels] dingtalk 协议待定，未启用");
       continue;
     }
   }

@@ -27,6 +27,9 @@ import { openFish, SentmapDoc, type Fish, type GroupProfile } from "../harness.t
 import { OneBot, orderByArrival, type IncomingMessage, type OneBotSendFailure } from "../channels/qq/onebot.ts";
 import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "../qq/voice-route.ts";
 import { createGate, type GateDecision } from "../qq/gate.ts";
+import { parseChannels, createChannelRegistry } from "../channels/registry.ts";
+import { createQqAdapter } from "../channels/qq/adapter.ts";
+import { presentQQ } from "../channels/qq/normalize.ts";
 import { isCurfewAt } from "../qq/curfew.ts";
 import { gifTagOf, imageTagOf, mentionTargetsOf, type ForwardAttachment, type ModelMessage } from "../channels/qq/model-input.ts";
 import { engageGroupsIncludes, createEngageNext, type EngageShardItem } from "../qq/engage-next.ts";
@@ -2132,6 +2135,14 @@ const gate = createGate({
   groups: config.groups,
 });
 
+/** 通道开关（计划 §4.4）：CHANNELS 缺省 qq（macmini 行为不变）；none/空串 = 全关；
+ *  未知名字启动即抛错。QQ 适配器包装同一批单例（onebot/gate），行为不变。 */
+export const channelIds = parseChannels(process.env.CHANNELS);
+export const channels = createChannelRegistry(
+  channelIds,
+  channelIds.includes("qq") ? { qq: createQqAdapter({ onebot, gate }) } : {},
+);
+
 /** 群周报：周日 21 点整点档私聊发给主人一次，var/weekly.json 记住发过的周防止重发。 */
 function startWeekly(): void {
   const weeklyPath = join(HOME, "weekly.json");
@@ -2472,6 +2483,7 @@ export const privateChatStage: Middleware<MessageCtx> = async (ctx, next) => {
 /** OneBot 入口接线：把每条入站消息送进 app 的中间件链；错误在最外层统一留痕。 */
 export function listenMessages(app: { dispatch(ctx: MessageCtx): Promise<void> }): () => void {
   return () => {
+    if (!channels.has("qq")) return; // CHANNELS 未含 qq：无入站来源，不注册监听
     onebot.onMessage((raw) => {
       void app.dispatch(createMessageCtx(raw)).catch((error: unknown) => {
         console.error("[鱼缸] 处理消息失败", error instanceof Error ? error.message : error);
@@ -2482,6 +2494,10 @@ export function listenMessages(app: { dispatch(ctx: MessageCtx): Promise<void> }
 
 /** 启动：连 OneBot；连不上直接退出（协议端/地址/token 三件事自查）。 */
 export async function connectOnebot(): Promise<void> {
+  if (!channels.has("qq")) {
+    console.log(`[鱼缸] 通道 qq 未启用（CHANNELS=${process.env.CHANNELS ?? ""}），跳过 OneBot 连接`);
+    return;
+  }
   try {
     await onebot.connect();
   } catch {
@@ -2555,10 +2571,13 @@ export function printBanner(): void {
   console.log(`[鱼缸] 已连接，模型 ${shown.provider}/${shown.model}，工具 ${fish.toolNames.join("、")}`);
   console.log(`[鱼缸] 视觉 ${visionModel.provider}/${visionModel.modelId}，兜底 ${visionFallbackModel ? `${visionFallbackModel.provider}/${visionFallbackModel.modelId}` : "无"}，图片 ${modelSelection.image ? `${modelSelection.image.provider}/${modelSelection.image.modelId}` : "未配置"}`);
   console.log(`[鱼缸] 凭据 ${shown.key}（${shown.keySource}）`);
+  const onOff = (id: "qq" | "dingtalk"): string => (channels.has(id) ? "启用" : "未启用");
+  console.log(`[鱼缸] 通道 qq：${onOff("qq")} · dingtalk：${onOff("dingtalk")}`);
 }
 
 /** 开窗状态机 + 周报：都在 OneBot 连上之前起，与迁移前的模块加载时点一致。 */
 export function startEngage(): void {
+  if (!channels.has("qq")) return; // 开窗/周报都往 QQ 群发，qq 未启用时不起
   startWeekly();
   // 开窗循环开始跳：每个 GROUPS 群从 closed 零计时起相位
   engageNext.start();
@@ -2570,6 +2589,7 @@ export function stopEngage(): void {
 }
 
 export async function startNews(): Promise<void> {
+  if (!channels.has("qq")) return; // 新闻目标群是 QQ 群，qq 未启用时不起
   if (!newsJob) throw new Error("news_job_not_ready");
   await newsJob.recover((group) => `qq:group:${group}`);
   newsScheduler.start();
