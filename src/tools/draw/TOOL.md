@@ -45,13 +45,14 @@ style=<风格 key> 挂全局画风 LoRA，可与 character、ref 组合；风格
 - 双人：传 `characters` 两项即固定走这条 V8 姿态线；`preset` 省略时默认 `sit-haystack`。
 - 单人默认：不传 `pipeline` 时走**轻形态 V8 姿态线**（KSampler + Pose3D + 链式 LoRA + 52 层 LLLite；当前 `single-haystack`：单人草垛侧坐）。用户明确自定义或传 `fast: true` 时走单人 V8 直出；`pipeline="interaction"` 仍兼容旧调用并使用同一条单人姿态线。
 - 普通单人和双人都不再有第二条默认生产线。`ref` 只在单人自定义直出中可用；姿态线不接 ref；`hd: true` 在姿态线的 2 倍 pass 结束后再纯放大至净 3 倍，不在 3 倍域执行扩散。
+- 双人构图：`framing=wide` 恢复 RS Camera 的远景提示与区域缩放，同一缩放同时作用于 LLLite 姿态图；普通景别不接 Camera。`spacing=apart` 同步平移人物区域和对应姿态，适用于无接触动作的分离场景。
+- 姿态线初采样与 pass 均为 30 步、CFG 4.5、dpmpp_2m / sgm_uniform；初采样＝质量地板(含anime)+真实感细节词、pass 基础词，负向去 lips。
+- 质感 pass 为普通 KSampler @2x＋角色 LoRA 串联（老版结构），不挂 RS/LLLite：区域控制与姿态窗口都只作用于初采样高噪声段，低幅度第二遍挂它们无益（学术/社区共识，见交接）。
 - 预设是冻结姿态资产，不是随便起名：要写新姿态先由主人授权离线编排，不能自己编 key。
 
-以下四轴仅用于姿态线的独立模板，单人直出/快速模式使用上面的基础词：
-clean lineart, thin lines / cel shading, hard-edged shadows, painterly shading, visible brushstrokes,
-multi-tone shading / cinematic lighting, directional light, strong rim light, dramatic shadows, dappled sunlight。
-机械集不含 blush，需要时按人自己在 description 加。姿态线负向使用独立预设，不要在正向里写「不要什么」。
-四轴没有开关；用户明确要其它特定画风时自己在 prompt 写风格词与四轴共存，或查风格 LoRA 词表有没有对应条目；
+姿态线初采样＝质量地板(含anime)+`detailed, intricate, film grain, depth of field`（2026-11-13 定稿，无四轴/赛璐璐），负向去 lips，pass 基础词；直出/fast 无 LLLite 不扁，保持各自基础词不共用。
+机械集不含 blush，需要时按人自己在 description 加。不要在正向里写「不要什么」。
+用户明确要其它特定画风时自己在 prompt 写风格词，或查风格 LoRA 词表有没有对应条目；
 参考实测反例：soft gradient、soft volumetric lighting、light rays、
 light particles 会把整图压成 pastel 洗白；detailed skin shading、subtle shadow 单独用出喷枪渐变皮肤
 （欧美油腻感）。

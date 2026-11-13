@@ -236,15 +236,14 @@ export function makeRsGraph(args: MultiDraw): Graph {
   return g;
 }
 
-// ── 交互管线模板（2026-11-12 定稿：初采样 B1+Pose3D → AnimeSharp 2x → 重装备 pass@2x，
-//    顺序对照 B 臂胜出）。姿态来自离线 authoring 产出的冻结预设（scene_json + 人物框），
-//    运行时零求解；地板词（主人 2026-11-12 圈定）嵌在模板 11/37 的默认 prompt 里。──
+// ── 交互管线模板（2026-11-13 修订：初采样 B1+Pose3D+RS+Camera → AnimeSharp 2x →
+//    老版质感 pass@2x＝普通 KSampler+角色 LoRA 串联，不挂 RS/LLLite）。
+//    姿态来自离线 authoring 冻结预设；基础质量词嵌在模板 11/71 默认 prompt。──
 const INTERACTION_TEMPLATE = JSON.parse(readFileSync(new URL("./workflow-interaction.json", import.meta.url)).toString("utf8")) as Graph;
 const INTERACTION_TEMPLATE_CONTRACT: Array<[string, string]> = [
   ["1", "RSMultiCharacterPrompt"], ["4", "RSMultiCharacterPose3D"], ["11", "RSMultiCharacterSampler"],
   ["22", "ImageUpscaleWithModel"], ["23", "ImageScaleBy"],
-  ["33", "RSMultiCharacterFinalize"], ["35", "YugangStudyCameraProject"], ["36", "AnimaLLLiteApply"],
-  ["37", "YugangRSSceneImg2Img"], ["38", "SaveImage"],
+  ["35", "YugangStudyCameraProject"], ["70", "VAEEncode"], ["72", "KSampler"], ["73", "VAEDecode"], ["38", "SaveImage"],
 ];
 for (const [id, cls] of INTERACTION_TEMPLATE_CONTRACT) {
   if (INTERACTION_TEMPLATE[id]?.class_type !== cls) throw new Error(`draw interaction workflow contract mismatch: node ${id} != ${cls}`);
@@ -272,10 +271,13 @@ export interface InteractionDraw {
   bypass?: string;
   /** 宿主人物段：原样追加到两遍的每个人物区域正向末尾。 */
   pbypass?: string;
+  framing?: "normal" | "wide";
+  spacing?: "together" | "apart";
 }
 
-// 交互管线负向（2026-11-12 主人圈定并删去 monochrome/lips）
-const INTERACTION_NEGATIVE = "low quality, worst quality, score_1, score_2, score_3, early, old, shiny skin";
+// 姿态线初采样＝质量地板(含anime)+真实感细节词（无四轴/赛璐璐，2026-11-13 定稿）；负向去 lips；pass 用基础词。直出/fast 无 LLLite 不扁，保持各自基础词不共用。
+const INTERACTION_NEGATIVE = String(RS_TEMPLATE["5"].inputs.negative_prompt);
+const INTERACTION_STYLE = "detailed, intricate, film grain, depth of field, ";
 export function makeInteractionGraph(args: InteractionDraw): Graph {
   validateParts(args.parts);
   if (!Number.isInteger(args.width) || !Number.isInteger(args.height) || args.width % 8 !== 0 || args.height % 8 !== 0) throw new Error("invalid interaction canvas");
@@ -286,7 +288,8 @@ export function makeInteractionGraph(args: InteractionDraw): Graph {
   const passSeed = args.passSeed ?? randomBytes(4).readUInt32BE(0);
   const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;
   const fullPrompt = floorPos + normalizeTagForm(commonPrompt) + (args.bypass ? `, ${args.bypass}` : "");
-  for (const group of ["1", "30"] as const) {
+  const initialPrompt = floorPos + INTERACTION_STYLE + normalizeTagForm(commonPrompt) + (args.bypass ? `, ${args.bypass}` : "");
+  for (const group of ["1"] as const) {
     for (let i = 0; i < 2; i++) {
       const part = args.parts[i];
       g[group].inputs[`character${i + 1}`] = [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text), args.pbypass].filter(Boolean).join(", ");
@@ -301,14 +304,33 @@ export function makeInteractionGraph(args: InteractionDraw): Graph {
     }
   }
   g["4"].inputs.scene_json = args.preset.scene_json;
-  Object.assign(g["11"].inputs, { prompt: fullPrompt, negative_prompt: neg, seed, width: args.width, height: args.height });
+  Object.assign(g["11"].inputs, { prompt: initialPrompt, negative_prompt: neg, seed, width: args.width, height: args.height });
   g["12"].inputs.filename_prefix = `interaction/${args.label}/initial`;
   g["13"].inputs.label = `${args.label} initial`;
   g["35"].inputs.scene_json = args.preset.scene_json;
   g["35"].inputs.camera_extension = args.preset.camera_extension;
-  Object.assign(g["37"].inputs, { prompt: fullPrompt, negative_prompt: neg, seed: passSeed, width: args.width * 2, height: args.height * 2 });
   g["38"].inputs.filename_prefix = `interaction/${args.label}/final`;
-  g["39"].inputs.label = `${args.label} final`;
+  // Camera 与姿态图同步：RS pipe 只承载区域/LoRA，LLLite 仅在初采样模型端施加一次。
+  g["5"].inputs.building_pipe = ["3", 0];
+  g["13"].inputs.scene_info = ["35", 6];
+  g["60"] = { class_type: "YugangPoseLayout", inputs: { character_pipe: ["7", 0], pose_image: ["35", 0], owner_a: ["35", 1], owner_b: ["35", 2], base_prompt: initialPrompt, framing: args.framing ?? "normal", spacing: args.spacing ?? "together", canvas_aspect: args.width / args.height } };
+  g["75"] = { class_type: "AnimaLLLiteApply", inputs: { strength: 0.8, start_percent: 0., end_percent: 0.7, model: ["8", 0], model_patch: ["34", 0], image: ["60", 2] } };
+  Object.assign(g["11"].inputs, { model: ["75", 0], character_pipe: ["60", 0], prompt: ["60", 1] });
+  // 质感 pass 回老版结构：普通 KSampler @2x + 角色 LoRA 串联，不挂 RS/LLLite（姿态窗口与低幅度不相交，挂了也零作用）。
+  const passDesc = args.parts.map((p) => [p.role ? escapeInjected(normalizeTagForm(multiRoleTags(p))) : "", normalizeTagForm(p.text), args.pbypass].filter(Boolean).join(", ")).join(", ");
+  let passModel: [string, number] = ["8", 0];
+  let passClip: [string, number] = ["9", 0];
+  let chainId = 93;
+  for (const p of args.parts) {
+    if (!p.role) continue;
+    g[String(chainId)] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: passModel, clip: passClip, text: `<lora:${p.role.file}:${p.role.weight}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
+    passModel = [String(chainId), 0];
+    passClip = [String(chainId), 1];
+    chainId++;
+  }
+  g["71"].inputs = { text: `${fullPrompt}, ${passDesc}`, clip: passClip };
+  g["74"].inputs = { text: neg, clip: passClip };
+  Object.assign(g["72"].inputs, { model: passModel, seed: passSeed });
   applyInteractionHd(g, args.hd);
   return g;
 }
@@ -343,7 +365,8 @@ export function makeInteractionSingleGraph(args: {
   const part = args.part;
   const desc = [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text)].filter(Boolean).join(", ");
   const suffix = (args.bypass ? `, ${args.bypass}` : "") + (args.pbypass ? `, ${args.pbypass}` : "");
-  const positive = `${fullPrompt}, ${desc}${suffix}`;
+  const positive = `${floorPos}${INTERACTION_STYLE}${normalizeTagForm(commonPrompt)}, ${desc}${suffix}`;
+  const passPositive = `${fullPrompt}, ${desc}${suffix}`;
   const loraFile = part.role?.file ?? "None";
   const loraW = part.role?.weight ?? 1;
 
@@ -364,7 +387,7 @@ export function makeInteractionSingleGraph(args: {
   g["11"] = { class_type: "KSampler", inputs: {
     model: ["36", 0],
     positive: ["7", 0], negative: ["8", 0], latent_image: ["10", 0],
-    seed, steps: 30, cfg: 4.0, sampler_name: "euler_ancestral", scheduler: "sgm_uniform", denoise: 1.0 } };
+    seed, steps: 30, cfg: 4.5, sampler_name: "dpmpp_2m", scheduler: "sgm_uniform", denoise: 1.0 } };
   g["14"] = { class_type: "VAEDecode", inputs: { samples: ["11", 0], vae: ["3", 0] } };
   g["12"] = { class_type: "SaveImage", inputs: { images: ["14", 0], filename_prefix: `interaction/${args.label}/initial` } };
 
@@ -373,12 +396,12 @@ export function makeInteractionSingleGraph(args: {
   g["23"] = { class_type: "ImageScaleBy", inputs: { image: ["22", 0], upscale_method: "lanczos", scale_by: 0.5 } };
 
   g["24"] = { class_type: "VAEEncode", inputs: { pixels: ["23", 0], vae: ["3", 0] } };
-  g["25"] = { class_type: "CLIPTextEncode", inputs: { text: positive, clip: clipOut } };
+  g["25"] = { class_type: "CLIPTextEncode", inputs: { text: passPositive, clip: clipOut } };
   g["26"] = { class_type: "CLIPTextEncode", inputs: { text: neg, clip: clipOut } };
   g["27"] = { class_type: "KSampler", inputs: {
     model: modelOut,
     positive: ["25", 0], negative: ["26", 0], latent_image: ["24", 0],
-    seed: passSeed, steps: 30, cfg: 4.0, sampler_name: "euler_ancestral", scheduler: "sgm_uniform", denoise: 0.25 } };
+    seed: passSeed, steps: 30, cfg: 4.5, sampler_name: "dpmpp_2m", scheduler: "sgm_uniform", denoise: 0.25 } };
   g["28"] = { class_type: "VAEDecode", inputs: { samples: ["27", 0], vae: ["3", 0] } };
   g["38"] = { class_type: "SaveImage", inputs: { images: ["28", 0], filename_prefix: `interaction/${args.label}/final` } };
   applyInteractionHd(g, args.hd);

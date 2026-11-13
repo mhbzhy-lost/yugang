@@ -1,119 +1,391 @@
 {
-  "1": {"class_type": "RSMultiCharacterPrompt", "inputs": {
-    "character_count": 2,
-    "character1_enable": true, "character1_kind": "character",
-    "character2_enable": true, "character2_kind": "character",
-    "character3_enable": false, "character3_kind": "character",
-    "character4_enable": false, "character4_kind": "character",
-    "character5_enable": false, "character5_kind": "character",
-    "character6_enable": false, "character6_kind": "character",
-    "character7_enable": false, "character7_kind": "character",
-    "character8_enable": false, "character8_kind": "character",
-    "character9_enable": false, "character9_kind": "character",
-    "character10_enable": false, "character10_kind": "character"}},
-  "2": {"class_type": "RSMultiCharacterLoRA", "inputs": {
-    "character_count": 2,
-    "character1_lora": "None", "character1_lora_strength": 1, "character1_lora_clip_strength": 1,
-    "character2_lora": "None", "character2_lora_strength": 1, "character2_lora_clip_strength": 1,
-    "character3_lora": "None", "character3_lora_strength": 1, "character3_lora_clip_strength": 1,
-    "character4_lora": "None", "character4_lora_strength": 1, "character4_lora_clip_strength": 1,
-    "character5_lora": "None", "character5_lora_strength": 1, "character5_lora_clip_strength": 1,
-    "character6_lora": "None", "character6_lora_strength": 1, "character6_lora_clip_strength": 1,
-    "character7_lora": "None", "character7_lora_strength": 1, "character7_lora_clip_strength": 1,
-    "character8_lora": "None", "character8_lora_strength": 1, "character8_lora_clip_strength": 1,
-    "character9_lora": "None", "character9_lora_strength": 1, "character9_lora_clip_strength": 1,
-    "character10_lora": "None", "character10_lora_strength": 1, "character10_lora_clip_strength": 1,
-    "lora_application_mode": "precision", "building_pipe": ["1", 0]}},
-  "3": {"class_type": "RSMultiCharacterPosition", "inputs": {
-    "character_count": 2,
-    "character1_geometry": "box", "character1_x": 0.5, "character1_y": 0.5, "character1_width": 0.3, "character1_height": 0.85,
-    "character2_geometry": "box", "character2_x": 0.5, "character2_y": 0.5, "character2_width": 0.3, "character2_height": 0.85,
-    "character3_geometry": "point", "character3_x": 0.5, "character3_y": 0.5, "character3_width": 0.4, "character3_height": 0.8,
-    "character4_geometry": "point", "character4_x": 0.5, "character4_y": 0.5, "character4_width": 0.4, "character4_height": 0.8,
-    "character5_geometry": "point", "character5_x": 0.5, "character5_y": 0.5, "character5_width": 0.4, "character5_height": 0.8,
-    "character6_geometry": "point", "character6_x": 0.5, "character6_y": 0.5, "character6_width": 0.4, "character6_height": 0.8,
-    "character7_geometry": "point", "character7_x": 0.5, "character7_y": 0.5, "character7_width": 0.4, "character7_height": 0.8,
-    "character8_geometry": "point", "character8_x": 0.5, "character8_y": 0.5, "character8_width": 0.4, "character8_height": 0.8,
-    "character9_geometry": "point", "character9_x": 0.5, "character9_y": 0.5, "character9_width": 0.4, "character9_height": 0.8,
-    "character10_geometry": "point", "character10_x": 0.5, "character10_y": 0.5, "character10_width": 0.4, "character10_height": 0.8,
-    "building_pipe": ["2", 0]}},
-  "4": {"class_type": "RSMultiCharacterPose3D", "inputs": {
-    "pose_control": "auto", "pose_strength": 0.8, "pose_start": 0.0, "pose_end": 0.7,
-    "scene_json": "{}", "building_pipe": ["3", 0]}},
-  "5": {"class_type": "RSMultiCharacterMask", "inputs": {"character_id": 1, "enabled": false, "margin": 0, "threshold": 0.5, "building_pipe": ["4", 0]}},
-  "6": {"class_type": "RSMultiCharacterMask", "inputs": {"character_id": 2, "enabled": false, "margin": 0, "threshold": 0.5, "building_pipe": ["5", 0]}},
-  "7": {"class_type": "RSMultiCharacterFinalize", "inputs": {"building_pipe": ["6", 0]}},
-  "8": {"class_type": "UNETLoader", "inputs": {"unet_name": "DeltaMix 3.8B V8.safetensors", "weight_dtype": "default"}},
-  "9": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_06b_base.safetensors", "type": "stable_diffusion", "device": "default"}},
-  "10": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
-  "11": {"class_type": "RSMultiCharacterSampler", "inputs": {
-    "model": ["8", 0], "clip": ["9", 0], "vae": ["10", 0], "character_pipe": ["7", 0],
-    "steps": 30, "cfg": 4.0, "sampler_name": "euler_ancestral", "scheduler": "sgm_uniform",
-    "width": 1024, "height": 768, "seed": 0,
-    "autosave": false, "save_format": "PNG", "webp_quality": 90,
-    "initial_character_gain": 1.7, "initial_common_prior": 0.05, "initial_spatial_separation": 0.9,
-    "boundary_hold_steps": 3, "boundary_decrement": 0.2, "common_after_step3_boost": 0.1,
-    "region_feather": 0.04, "layout_method": "regional", "prompt_syntax": "ComfyUI",
-    "prompt": "masterpiece, best quality, absurdres, score_7, score_8, score_9, ",
-    "negative_prompt": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin"}},
-  "12": {"class_type": "SaveImage", "inputs": {"images": ["11", 0], "filename_prefix": "interaction/initial"}},
-  "13": {"class_type": "YugangStudyMetadata", "inputs": {"label": "interaction initial", "generation_info": ["11", 3], "scene_info": ["4", 4]}},
-
-  "21": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": "4x-AnimeSharp.safetensors"}},
-  "22": {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["21", 0], "image": ["11", 0]}},
-  "23": {"class_type": "ImageScaleBy", "inputs": {"image": ["22", 0], "upscale_method": "lanczos", "scale_by": 0.5}},
-
-  "30": {"class_type": "RSMultiCharacterPrompt", "inputs": {
-    "character_count": 2,
-    "character1_enable": true, "character1_kind": "character",
-    "character2_enable": true, "character2_kind": "character",
-    "character3_enable": false, "character3_kind": "character",
-    "character4_enable": false, "character4_kind": "character",
-    "character5_enable": false, "character5_kind": "character",
-    "character6_enable": false, "character6_kind": "character",
-    "character7_enable": false, "character7_kind": "character",
-    "character8_enable": false, "character8_kind": "character",
-    "character9_enable": false, "character9_kind": "character",
-    "character10_enable": false, "character10_kind": "character"}},
-  "31": {"class_type": "RSMultiCharacterLoRA", "inputs": {
-    "character_count": 2,
-    "character1_lora": "None", "character1_lora_strength": 1, "character1_lora_clip_strength": 1,
-    "character2_lora": "None", "character2_lora_strength": 1, "character2_lora_clip_strength": 1,
-    "character3_lora": "None", "character3_lora_strength": 1, "character3_lora_clip_strength": 1,
-    "character4_lora": "None", "character4_lora_strength": 1, "character4_lora_clip_strength": 1,
-    "character5_lora": "None", "character5_lora_strength": 1, "character5_lora_clip_strength": 1,
-    "character6_lora": "None", "character6_lora_strength": 1, "character6_lora_clip_strength": 1,
-    "character7_lora": "None", "character7_lora_strength": 1, "character7_lora_clip_strength": 1,
-    "character8_lora": "None", "character8_lora_strength": 1, "character8_lora_clip_strength": 1,
-    "character9_lora": "None", "character9_lora_strength": 1, "character9_lora_clip_strength": 1,
-    "character10_lora": "None", "character10_lora_strength": 1, "character10_lora_clip_strength": 1,
-    "lora_application_mode": "precision", "building_pipe": ["30", 0]}},
-  "32": {"class_type": "RSMultiCharacterPosition", "inputs": {
-    "character_count": 2,
-    "character1_geometry": "box", "character1_x": 0.5, "character1_y": 0.5, "character1_width": 0.3, "character1_height": 0.85,
-    "character2_geometry": "box", "character2_x": 0.5, "character2_y": 0.5, "character2_width": 0.3, "character2_height": 0.85,
-    "character3_geometry": "point", "character3_x": 0.5, "character3_y": 0.5, "character3_width": 0.4, "character3_height": 0.8,
-    "character4_geometry": "point", "character4_x": 0.5, "character4_y": 0.5, "character4_width": 0.4, "character4_height": 0.8,
-    "character5_geometry": "point", "character5_x": 0.5, "character5_y": 0.5, "character5_width": 0.4, "character5_height": 0.8,
-    "character6_geometry": "point", "character6_x": 0.5, "character6_y": 0.5, "character6_width": 0.4, "character6_height": 0.8,
-    "character7_geometry": "point", "character7_x": 0.5, "character7_y": 0.5, "character7_width": 0.4, "character7_height": 0.8,
-    "character8_geometry": "point", "character8_x": 0.5, "character8_y": 0.5, "character8_width": 0.4, "character8_height": 0.8,
-    "character9_geometry": "point", "character9_x": 0.5, "character9_y": 0.5, "character9_width": 0.4, "character9_height": 0.8,
-    "character10_geometry": "point", "character10_x": 0.5, "character10_y": 0.5, "character10_width": 0.4, "character10_height": 0.8,
-    "building_pipe": ["31", 0]}},
-  "33": {"class_type": "RSMultiCharacterFinalize", "inputs": {"building_pipe": ["32", 0]}},
-  "34": {"class_type": "ModelPatchLoader", "inputs": {"name": "rs_reference/anima_pose/anima_v8_3dpose.safetensors"}},
-  "35": {"class_type": "YugangStudyCameraProject", "inputs": {"scene_json": "{}", "camera_extension": "{\"matrix\": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], \"roll\": 0, \"center\": null, \"tail\": null}"}},
-  "36": {"class_type": "AnimaLLLiteApply", "inputs": {"strength": 0.8, "start_percent": 0.0, "end_percent": 0.7, "model": ["8", 0], "model_patch": ["34", 0], "image": ["40", 0]}},
-  "40": {"class_type": "ImageScaleBy", "inputs": {"image": ["35", 0], "upscale_method": "lanczos", "scale_by": 2.0}},
-  "37": {"class_type": "YugangRSSceneImg2Img", "inputs": {
-    "model": ["36", 0], "clip": ["9", 0], "vae": ["10", 0], "character_pipe": ["33", 0], "image": ["23", 0],
-    "denoise": 0.25,
-    "steps": 30, "cfg": 4.0, "sampler_name": "euler_ancestral", "scheduler": "sgm_uniform",
-    "width": 2048, "height": 1536, "seed": 0,
-    "autosave": false, "save_format": "PNG", "webp_quality": 90,
-    "prompt": "masterpiece, best quality, absurdres, score_7, score_8, score_9, ",
-    "negative_prompt": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin"}},
-  "38": {"class_type": "SaveImage", "inputs": {"images": ["37", 0], "filename_prefix": "interaction/final"}},
-  "39": {"class_type": "YugangStudyMetadata", "inputs": {"label": "interaction final", "generation_info": ["37", 3]}}
+  "1": {
+    "class_type": "RSMultiCharacterPrompt",
+    "inputs": {
+      "character_count": 2,
+      "character1_enable": true,
+      "character1_kind": "character",
+      "character2_enable": true,
+      "character2_kind": "character",
+      "character3_enable": false,
+      "character3_kind": "character",
+      "character4_enable": false,
+      "character4_kind": "character",
+      "character5_enable": false,
+      "character5_kind": "character",
+      "character6_enable": false,
+      "character6_kind": "character",
+      "character7_enable": false,
+      "character7_kind": "character",
+      "character8_enable": false,
+      "character8_kind": "character",
+      "character9_enable": false,
+      "character9_kind": "character",
+      "character10_enable": false,
+      "character10_kind": "character"
+    }
+  },
+  "2": {
+    "class_type": "RSMultiCharacterLoRA",
+    "inputs": {
+      "character_count": 2,
+      "character1_lora": "None",
+      "character1_lora_strength": 1,
+      "character1_lora_clip_strength": 1,
+      "character2_lora": "None",
+      "character2_lora_strength": 1,
+      "character2_lora_clip_strength": 1,
+      "character3_lora": "None",
+      "character3_lora_strength": 1,
+      "character3_lora_clip_strength": 1,
+      "character4_lora": "None",
+      "character4_lora_strength": 1,
+      "character4_lora_clip_strength": 1,
+      "character5_lora": "None",
+      "character5_lora_strength": 1,
+      "character5_lora_clip_strength": 1,
+      "character6_lora": "None",
+      "character6_lora_strength": 1,
+      "character6_lora_clip_strength": 1,
+      "character7_lora": "None",
+      "character7_lora_strength": 1,
+      "character7_lora_clip_strength": 1,
+      "character8_lora": "None",
+      "character8_lora_strength": 1,
+      "character8_lora_clip_strength": 1,
+      "character9_lora": "None",
+      "character9_lora_strength": 1,
+      "character9_lora_clip_strength": 1,
+      "character10_lora": "None",
+      "character10_lora_strength": 1,
+      "character10_lora_clip_strength": 1,
+      "lora_application_mode": "precision",
+      "building_pipe": [
+        "1",
+        0
+      ]
+    }
+  },
+  "3": {
+    "class_type": "RSMultiCharacterPosition",
+    "inputs": {
+      "character_count": 2,
+      "character1_geometry": "box",
+      "character1_x": 0.5,
+      "character1_y": 0.5,
+      "character1_width": 0.3,
+      "character1_height": 0.85,
+      "character2_geometry": "box",
+      "character2_x": 0.5,
+      "character2_y": 0.5,
+      "character2_width": 0.3,
+      "character2_height": 0.85,
+      "character3_geometry": "point",
+      "character3_x": 0.5,
+      "character3_y": 0.5,
+      "character3_width": 0.4,
+      "character3_height": 0.8,
+      "character4_geometry": "point",
+      "character4_x": 0.5,
+      "character4_y": 0.5,
+      "character4_width": 0.4,
+      "character4_height": 0.8,
+      "character5_geometry": "point",
+      "character5_x": 0.5,
+      "character5_y": 0.5,
+      "character5_width": 0.4,
+      "character5_height": 0.8,
+      "character6_geometry": "point",
+      "character6_x": 0.5,
+      "character6_y": 0.5,
+      "character6_width": 0.4,
+      "character6_height": 0.8,
+      "character7_geometry": "point",
+      "character7_x": 0.5,
+      "character7_y": 0.5,
+      "character7_width": 0.4,
+      "character7_height": 0.8,
+      "character8_geometry": "point",
+      "character8_x": 0.5,
+      "character8_y": 0.5,
+      "character8_width": 0.4,
+      "character8_height": 0.8,
+      "character9_geometry": "point",
+      "character9_x": 0.5,
+      "character9_y": 0.5,
+      "character9_width": 0.4,
+      "character9_height": 0.8,
+      "character10_geometry": "point",
+      "character10_x": 0.5,
+      "character10_y": 0.5,
+      "character10_width": 0.4,
+      "character10_height": 0.8,
+      "building_pipe": [
+        "2",
+        0
+      ]
+    }
+  },
+  "4": {
+    "class_type": "RSMultiCharacterPose3D",
+    "inputs": {
+      "pose_control": "auto",
+      "pose_strength": 0.8,
+      "pose_start": 0.0,
+      "pose_end": 0.7,
+      "scene_json": "{}",
+      "building_pipe": [
+        "3",
+        0
+      ]
+    }
+  },
+  "5": {
+    "class_type": "RSMultiCharacterMask",
+    "inputs": {
+      "character_id": 1,
+      "enabled": false,
+      "margin": 0,
+      "threshold": 0.5,
+      "building_pipe": [
+        "4",
+        0
+      ]
+    }
+  },
+  "6": {
+    "class_type": "RSMultiCharacterMask",
+    "inputs": {
+      "character_id": 2,
+      "enabled": false,
+      "margin": 0,
+      "threshold": 0.5,
+      "building_pipe": [
+        "5",
+        0
+      ]
+    }
+  },
+  "7": {
+    "class_type": "RSMultiCharacterFinalize",
+    "inputs": {
+      "building_pipe": [
+        "6",
+        0
+      ]
+    }
+  },
+  "8": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "DeltaMix 3.8B V8.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "9": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "stable_diffusion",
+      "device": "default"
+    }
+  },
+  "10": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "11": {
+    "class_type": "RSMultiCharacterSampler",
+    "inputs": {
+      "model": [
+        "8",
+        0
+      ],
+      "clip": [
+        "9",
+        0
+      ],
+      "vae": [
+        "10",
+        0
+      ],
+      "character_pipe": [
+        "7",
+        0
+      ],
+      "steps": 30,
+      "cfg": 4.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "sgm_uniform",
+      "width": 1024,
+      "height": 768,
+      "seed": 0,
+      "autosave": false,
+      "save_format": "PNG",
+      "webp_quality": 90,
+      "initial_character_gain": 1.7,
+      "initial_common_prior": 0.05,
+      "initial_spatial_separation": 0.9,
+      "boundary_hold_steps": 3,
+      "boundary_decrement": 0.2,
+      "common_after_step3_boost": 0.1,
+      "region_feather": 0.04,
+      "layout_method": "regional",
+      "prompt_syntax": "ComfyUI",
+      "prompt": "masterpiece, best quality, absurdres, score_7, score_8, score_9, anime, ",
+      "negative_prompt": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, shiny skin"
+    }
+  },
+  "12": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "11",
+        0
+      ],
+      "filename_prefix": "interaction/initial"
+    }
+  },
+  "13": {
+    "class_type": "YugangStudyMetadata",
+    "inputs": {
+      "label": "interaction initial",
+      "generation_info": [
+        "11",
+        3
+      ],
+      "scene_info": [
+        "4",
+        4
+      ]
+    }
+  },
+  "21": {
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "4x-AnimeSharp.safetensors"
+    }
+  },
+  "22": {
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "upscale_model": [
+        "21",
+        0
+      ],
+      "image": [
+        "11",
+        0
+      ]
+    }
+  },
+  "23": {
+    "class_type": "ImageScaleBy",
+    "inputs": {
+      "image": [
+        "22",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "scale_by": 0.5
+    }
+  },
+  "34": {
+    "class_type": "ModelPatchLoader",
+    "inputs": {
+      "name": "rs_reference/anima_pose/anima_v8_3dpose.safetensors"
+    }
+  },
+  "35": {
+    "class_type": "YugangStudyCameraProject",
+    "inputs": {
+      "scene_json": "{}",
+      "camera_extension": "{\"matrix\": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], \"roll\": 0, \"center\": null, \"tail\": null}"
+    }
+  },
+  "38": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "73",
+        0
+      ],
+      "filename_prefix": "interaction/final"
+    }
+  },
+  "70": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "23",
+        0
+      ],
+      "vae": [
+        "10",
+        0
+      ]
+    }
+  },
+  "71": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "masterpiece, best quality, absurdres, score_7, score_8, score_9, ",
+      "clip": [
+        "9",
+        0
+      ]
+    }
+  },
+  "74": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, shiny skin",
+      "clip": [
+        "9",
+        0
+      ]
+    }
+  },
+  "72": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "8",
+        0
+      ],
+      "positive": [
+        "71",
+        0
+      ],
+      "negative": [
+        "74",
+        0
+      ],
+      "latent_image": [
+        "70",
+        0
+      ],
+      "steps": 30,
+      "cfg": 4.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "sgm_uniform",
+      "denoise": 0.25,
+      "seed": 0
+    }
+  },
+  "73": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "72",
+        0
+      ],
+      "vae": [
+        "10",
+        0
+      ]
+    }
+  }
 }

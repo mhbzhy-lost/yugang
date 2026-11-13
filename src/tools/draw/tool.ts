@@ -141,7 +141,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
           const preset = INTERACTION_PRESETS[presetName];
           if (!preset) throw new Error(deps.prompts.messages["draw_preset_unknown"] ?? `unknown interaction preset: ${presetName}`);
           png = multiParts
-            ? await runInteraction(deps.comfyUrl, { prompt: positive, width, height, preset, parts: multiParts, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, onSubmitted)
+            ? await runInteraction(deps.comfyUrl, { prompt: positive, width, height, preset, parts: multiParts, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass, framing: args.framing, spacing: args.spacing }, onSubmitted)
             : await runInteractionSingle(deps.comfyUrl, { prompt: positive, width, height, preset, part: { text: positive, ...(lora ? { role: lora } : {}) }, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, onSubmitted);
         } else {
           png = await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, hd: args.hd === true, fast: args.fast === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, onSubmitted, stageCb);
