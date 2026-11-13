@@ -100,7 +100,6 @@ tool_timeout: 这个工具卡住超过半分钟了，先别重试，换个办法
 working_video: 我去把这个视频翻出来看看，稍等
 working_draw: 在画了，单人一张大概两分钟，稍等一下下
 working_draw_fast: 快速模式起笔，一分钟出头就好，稍等
-working_draw_rs: 双人同框开画，大概两分钟，稍等一下下
 working_draw_interaction: 这张要先摆姿势构图，工序多，大概四分钟，稍等哦
 working_gpt_image: 这张交给在线画师，稍等
 working_meme_import: 新表情到货，我一张张过目

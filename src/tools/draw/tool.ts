@@ -83,9 +83,12 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       if (!deps.comfyUrl) throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
       if (args.hd !== undefined && typeof args.hd !== "boolean") throw new Error(deps.prompts.messages["draw_hd"] ?? "draw_hd");
       if (args.fast !== undefined && typeof args.fast !== "boolean") throw new Error(deps.prompts.messages["draw_fast"] ?? "draw_fast");
+      if (args.character !== undefined && typeof args.character !== "string") throw new Error(deps.prompts.messages["draw_character_type"] ?? "draw_character_type");
+      if (args.style !== undefined && typeof args.style !== "string") throw new Error(deps.prompts.messages["draw_style_type"] ?? "draw_style_type");
+      if (args.ref !== undefined && typeof args.ref !== "string") throw new Error(renderTemplate(deps.prompts.messages["draw_ref_type"] ?? "{{ref}}", { ref: String(args.ref) }));
       if (args.fast === true && (args.hd === true || args.characters !== undefined)) throw new Error(deps.prompts.messages["draw_fast_scope"] ?? "draw_fast_scope");
-      if ((args.framing !== undefined && !["normal", "wide"].includes(args.framing)) || (args.spacing !== undefined && !["together", "apart"].includes(args.spacing))) throw new Error(deps.prompts.messages["draw_composition"]);
-      if (args.characters === undefined && (args.framing !== undefined || args.spacing !== undefined)) throw new Error(deps.prompts.messages["draw_composition_multi"]);
+      if ((args.framing !== undefined && !["normal", "wide"].includes(args.framing)) || (args.spacing !== undefined && !["together", "apart"].includes(args.spacing))) throw new Error(deps.prompts.messages["draw_composition"] ?? "draw_composition");
+      if (args.characters === undefined && (args.framing !== undefined || args.spacing !== undefined)) throw new Error(deps.prompts.messages["draw_composition_multi"] ?? "draw_composition_multi");
       const ratio = args.ratio ?? "3:4";
       if (typeof ratio !== "string" || !Object.hasOwn(RATIO_SIZES, ratio)) throw new Error(deps.prompts.messages["draw_ratio"] ?? "draw_ratio");
       const [width, height] = RATIO_SIZES[ratio];
@@ -112,12 +115,13 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
           const book = part.character === undefined ? undefined : loraBook(part.character);
           if (part.character !== undefined && !book) throw new Error(renderTemplate(deps.prompts.messages["draw_character"] ?? "{{key}}", { key: part.character }));
           if (Object.hasOwn(part, "region")) throw new Error(deps.prompts.messages["draw_region_retired"]);
+          if (part.description.length > 800) throw new Error(deps.prompts.messages["draw_multi_length"] ?? "draw_multi_length");
           return { text: part.description.trim(), ...(book ? { role: { file: book.file, weight: book.weight, inject: book.inject } } : {}) };
         });
       }
       // 路由合并（2026-11-13）：从零画默认姿态线（单/双看数量）；仅 fast/ref 走直出。
       const useDirect = multiParts === undefined && (args.ref !== undefined || args.fast === true);
-      deps.onLongWork?.(useDirect ? "draw" : "draw_interaction", round);
+      deps.onLongWork?.(useDirect ? (args.fast === true ? "draw_fast" : "draw") : "draw_interaction", round);
       if (round === undefined) throw new Error(deps.prompts.messages["draw_round_missing"] ?? "draw_round_missing");
       const previous = rounds.get(api.conversationId);
       if (previous?.pending) throw new Error(deps.prompts.messages["draw_inflight"] ?? "draw_inflight");
@@ -137,10 +141,10 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         if (useInteraction) {
           const presetName = multiParts ? "sit-haystack" : "single-haystack";
           const preset = INTERACTION_PRESETS[presetName];
-          if (!preset) throw new Error(deps.prompts.messages["draw_preset_unknown"] ?? `unknown interaction preset: ${presetName}`);
+          if (!preset) throw new Error(renderTemplate(deps.prompts.messages["draw_preset_unknown"] ?? "{{key}}", { key: presetName }));
           png = multiParts
             ? await runInteraction(deps.comfyUrl, { prompt: positive, width, height, preset, parts: multiParts, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass, framing: args.framing, spacing: args.spacing }, onSubmitted)
-            : await runInteractionSingle(deps.comfyUrl, { prompt: positive, width, height, preset, part: { text: positive, ...(lora ? { role: lora } : {}) }, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, onSubmitted);
+            : await runInteractionSingle(deps.comfyUrl, { prompt: positive, width, height, preset, part: { text: "", ...(lora ? { role: lora } : {}) }, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, onSubmitted);
         } else {
           png = await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, hd: args.hd === true, fast: args.fast === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, onSubmitted, stageCb);
         }

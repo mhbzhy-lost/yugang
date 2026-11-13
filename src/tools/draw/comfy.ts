@@ -234,7 +234,7 @@ export function makeInteractionSingleGraph(args: {
   preset: InteractionPreset; part: MultiPart; label: string; hd?: boolean;
   bypass?: string; pbypass?: string;
 }): Graph {
-  if (!args.part.text || args.part.text.length > 800) throw new Error("invalid single part text");
+  if (args.part.text.length > 800) throw new Error("invalid single part text");
   if (args.part.role !== undefined && (!/^[\w .@()-]+\.safetensors$/.test(args.part.role.file) || !Number.isFinite(args.part.role.weight) || args.part.role.weight < 0.4 || args.part.role.weight > 1.1)) throw new Error("invalid single role");
   if (!Number.isInteger(args.width) || !Number.isInteger(args.height) || args.width % 8 !== 0 || args.height % 8 !== 0) throw new Error("invalid single canvas");
   const g = structuredClone(SINGLE_TEMPLATE);
@@ -285,7 +285,7 @@ function makeStageTracker(promptId: string, onStage: (s: DrawStage) => void): (m
       if (event.type !== "executing" || event.data?.prompt_id !== promptId) return;
       const node = event.data?.node;
       if (typeof node !== "string") return;
-      if (stage < 1 && (node === "43" || node === "91" || node === "5" || node === "61")) { stage = 1; onStage("sketch"); }
+      if (stage < 1 && (node === "43" || node === "91")) { stage = 1; onStage("sketch"); }
     } catch { /* 非 JSON 帧忽略 */ }
   };
 }

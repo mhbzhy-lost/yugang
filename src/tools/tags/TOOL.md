@@ -15,7 +15,7 @@ LoRA 文件名、建议权重、适配底模、来源、触发词、基础外观
 draw 的用法：
 
 - 角色：`character=<key>`，自动挂角色 LoRA 并注入该角色的触发词与基础外观；
-- 画风：`style=<key>`，只挂风格 LoRA，不改 prompt；
+- 画风：`style=<key>`，只挂风格 LoRA，不改 prompt；仅 draw 的 fast/ref 直出生效，姿态线忽略；
 - 服装：回执里的服装段不会自动注入，想穿哪套就抄进 prompt。
 
 查不到时回执会给「相近的条目」，照着换关键词再查，不要凭记忆编 key。

@@ -131,7 +131,6 @@ function workingTextOf(tool: string): string {
     case "video": return fish.prompts.messages["working_video"] ?? "";
     case "draw": return fish.prompts.messages["working_draw"] ?? "";
     case "draw_fast": return fish.prompts.messages["working_draw_fast"] ?? "";
-    case "draw_rs": return fish.prompts.messages["working_draw_rs"] ?? "";
     case "draw_interaction": return fish.prompts.messages["working_draw_interaction"] ?? "";
     case "gpt_image": return fish.prompts.messages["working_gpt_image"] ?? "";
     case "meme_import": return fish.prompts.messages["working_meme_import"] ?? "";
@@ -543,7 +542,7 @@ export async function bootRuntime(): Promise<void> {
     const count = sayCalled.get(key);
     if (count !== undefined) sayCalled.set(key, count + 1);
   },
-  // 重耗时工具（video/draw〔含管线变体 draw_fast/draw_rs/draw_interaction〕/gpt_image/meme_import/meme_add/restart）execute 入口的机械提示：
+  // 重耗时工具（video/draw〔含管线变体 draw_fast/draw_interaction〕/gpt_image/meme_import/meme_add/restart）execute 入口的机械提示：
   // 本轮第一次调用时经 outbox 唯一出口发一条拟人文案（prompt/messages.md 的 working_*），
   // 幂等键 working:<tool>:<submissionId> 防崩溃重放；拿不到轮标识或会话映射就不发、不报错。
   // restart 返回 Promise：工具会 await 它，保证提示在进程退出前入队并冲一次 outbox。
@@ -554,7 +553,7 @@ export async function bootRuntime(): Promise<void> {
     if (!round || conv === undefined || !text) return;
     // 回执只给正在等的人：自由交流 / 开窗注入 / 自己逛的轮里没人问，冒一句「稍等」像自言自语
     if (!shouldSendWorkingReceipt(triggerOf.get(round)?.kind, tool)) return;
-    // draw 的管线变体（draw_fast/draw_rs/draw_interaction）算同一家族：同轮只发一条提示，
+    // draw 的管线变体（draw_fast/draw_interaction）算同一家族：同轮只发一条提示，
     // 幂等键也用家族名，换变体重试不会多发（与旧 working:draw:<round> 键兼容）
     const family = tool.startsWith("draw_") ? "draw" : tool;
     const sentTools = workingSent.get(round);

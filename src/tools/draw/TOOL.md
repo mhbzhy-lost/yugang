@@ -7,10 +7,10 @@ description: 本地 Stable Diffusion 画图/改图，快且免费；出图后自
 
 画法两种：
 - 从零画：不填 ref，按 prompt 画；ratio 选横图/方图/竖图，默认 3:4。
-- 改图：填 ref，整张图按 prompt 重画。ref 只认本轮消息里的 inbound/… 和自己画过的
-  gen/…；改图沿用参考图比例，ratio 不生效。
+- 改图：填 ref，整张图按 prompt 重画。ref 认媒体目录内的 inbound/… 或 gen/…；
+  改图沿用参考图比例，ratio 不生效。
 
-管线自动选择，不用你挑：画人（character/characters）默认走姿态线；只有 `fast`（快速）和 `ref`（改图）走直出。
+管线自动选择，不用你挑：画人（character/characters）默认走姿态线；只有 `fast`（快速）和 `ref`（改图）走直出。非人物题材（风景/动物/物品）建议 fast，姿态线会套人体骨架。
 
 看不到图的内容就别猜原图长什么样。失败时把错误告诉用户、可以改描述重试，
 不要换别的工具、也不要假装画好了。用户点名云端/在线画图时不在此处。

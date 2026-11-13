@@ -4,11 +4,11 @@
     "properties": {
       "prompt": {
         "type": "string",
-        "description": "画面描述。danbooru tag 为主（先查词表拿准词），可混自然语言，逗号分隔；负向词表是内置预设，不要在这里写「不要出现什么」。用户明确要「自定义画图」时传空字符串，内容交给角色词表与机械前缀"
+        "description": "画面描述。一律英文 danbooru tag/短语、逗号分隔（先查词表拿准词，不要写中文）；负向词表是内置预设，不要在这里写「不要出现什么」。用户明确要「自定义画图」时传空字符串，内容交给角色词表与机械前缀。非人物题材（风景/动物/物品）建议 fast，姿态线会套人体骨架"
       },
       "style": {
         "type": "string",
-        "description": "风格 LoRA 键：用户要某种画风时，先用 tags 查（不传关键词拿总表），把风格条目的 key 填这里；挂在全局、不注入任何 tag。不填不挂"
+        "description": "风格 LoRA 键：用户要某种画风时，先用 tags 查（不传关键词拿总表），把风格条目的 key 填这里；挂在全局、不注入任何 tag。不填不挂。仅 fast/ref 直出生效，姿态线忽略"
       },
       "ratio": {
         "type": "string",
@@ -38,7 +38,7 @@
             },
             "description": {
               "type": "string",
-              "description": "此人的动作、表情和服装；普通人物还需描述外貌"
+              "description": "此人的动作、表情和服装（≤800 字）；普通人物还需描述外貌"
             }
           },
           "required": [
@@ -52,7 +52,7 @@
       },
       "ref": {
         "type": "string",
-        "description": "要重画的初图：只能填这一轮消息里出现过的 inbound/…，或自己之前画出来的 gen/…；不填就是从零画"
+        "description": "要重画的初图：填媒体目录内的 inbound/… 或 gen/…；不填就是从零画"
       },
       "hd": {
         "type": "boolean",
@@ -81,6 +81,7 @@
     },
     "required": [
       "prompt"
-    ]
+    ],
+    "additionalProperties": false
   }
 }
