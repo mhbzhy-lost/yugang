@@ -76,3 +76,9 @@
 ## 收尾状态
 
 - F1 PASS（174/174 + prompts 28）；F2/F3 PASS（verify-channels 16 项）；F4 部分（代码/Node/配置就绪，`npm run ping` 因模型凭据为 dummy 占位跳过——**待办**）；F5 PASS；F6 待主人确认 macmini 生产鱼在线。
+
+## F5 修正记录（15:47）
+
+- 首轮 F5 误判：顶层 `state = spawn scheduled` + 每轮横幅重复，实为「启动→事件循环空→exit 0→KeepAlive 再拉起」循环（CHANNELS=none 时无 WS/定时器，Node 自然退出）。
+- 修复：connectOnebot 在「未启用任何通道」时挂 1 小时空闲保活 timer（closeFish 清理），commit 1d72f1f；174 测试全绿。
+- 复验：pid 恒 66288 持续 70 秒无重启，`连不上` 计数 0 → **F5 PASS（真值）**。
