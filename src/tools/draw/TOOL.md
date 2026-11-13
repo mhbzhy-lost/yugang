@@ -32,9 +32,11 @@ character；双人填 characters[].character。本工具不列角色清单，也
 prompt 写画面本身，用 danbooru tag 为主；普通 tag（cat_ears 之类）查 tags 词表拿准写法和热度。
 **进本工具的全部文本（prompt 与 characters[].description）一律英文 tag/短语、逗号分隔**：底模只吃英文 tag 分布，
 中文句子虽能被文本编码器编码，却条件化极弱且两句相近中文会互相吞并（线上融合案底）；写中文等于没写。
+**单人直出基础正向词**统一为 `masterpiece, best quality, absurdres, score_7, score_8, score_9, anime`；初采样和质感 pass 都追加角色注入词与用户 prompt。
 **单人直出负向基础词**统一为 `low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin, abs`；初采样和质感 pass 共用。
 
-单人直出负向基础词统一为：`low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin, abs`；初采样和质感 pass 共用。
+用户明确说「自定义画图」时 prompt 传空字符串（其余参数照常），单人走 V8 直出；用户明确要快一点时传 `fast: true`。
+style=<风格 key> 挂全局画风 LoRA，可与 character、ref 组合；风格与角色 LoRA 权重由词表预设，模型不可调。
 
 ## 交互管线（pipeline=interaction，2026-11-13 上线）
 
@@ -42,14 +44,13 @@ prompt 写画面本身，用 danbooru tag 为主；普通 tag（cat_ears 之类�
 （RS 区域装配 + 52 层 V8 LLLite 姿态 0.8/0–0.7）→ 超分 → 质感 pass@2x**，一次提交全链。
 - 双人：传 `characters` 两项即固定走这条 V8 姿态线；`preset` 省略时默认 `sit-haystack`。
 - 单人默认：不传 `pipeline` 时走**轻形态 V8 姿态线**（KSampler + Pose3D + 链式 LoRA + 52 层 LLLite；当前 `single-haystack`：单人草垛侧坐）。用户明确自定义或传 `fast: true` 时走单人 V8 直出；`pipeline="interaction"` 仍兼容旧调用并使用同一条单人姿态线。
-- 普通单人和双人都不再有第二条默认生产线。`ref` 只在单人自定义直出中可用；姿态线不接 ref；`hd` 在姿态线下不额外加段。
+- 普通单人和双人都不再有第二条默认生产线。`ref` 只在单人自定义直出中可用；姿态线不接 ref；`hd: true` 在姿态线的 2 倍 pass 结束后再纯放大至净 3 倍，不在 3 倍域执行扩散。
 - 预设是冻结姿态资产，不是随便起名：要写新姿态先由主人授权离线编排，不能自己编 key。
 
-风格四轴已机械内置在模板质量前缀（场景级，单人双人同吃，不用写也不要自己手写这套词）：
+以下四轴仅用于姿态线的独立模板，单人直出/快速模式使用上面的基础词：
 clean lineart, thin lines / cel shading, hard-edged shadows, painterly shading, visible brushstrokes,
 multi-tone shading / cinematic lighting, directional light, strong rim light, dramatic shadows, dappled sunlight。
-机械集不含 blush，需要时按人自己在 description 加。负向轴同样机械内置在模板（封锁 photorealistic /
-油腻皮肤 / 喷枪渐变），不要写「不要什么」。
+机械集不含 blush，需要时按人自己在 description 加。姿态线负向使用独立预设，不要在正向里写「不要什么」。
 四轴没有开关；用户明确要其它特定画风时自己在 prompt 写风格词与四轴共存，或查风格 LoRA 词表有没有对应条目；
 参考实测反例：soft gradient、soft volumetric lighting、light rays、
 light particles 会把整图压成 pastel 洗白；detailed skin shading、subtle shadow 单独用出喷枪渐变皮肤

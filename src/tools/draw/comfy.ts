@@ -267,6 +267,7 @@ export interface InteractionDraw {
   preset: InteractionPreset;
   parts: MultiPart[];
   label: string;
+  hd?: boolean;
 }
 
 // 交互管线负向（2026-11-12 主人圈定并删去 monochrome/lips）
@@ -304,14 +305,25 @@ export function makeInteractionGraph(args: InteractionDraw): Graph {
   Object.assign(g["37"].inputs, { prompt: fullPrompt, negative_prompt: neg, seed: passSeed, width: args.width * 2, height: args.height * 2 });
   g["38"].inputs.filename_prefix = `interaction/${args.label}/final`;
   g["39"].inputs.label = `${args.label} final`;
+  applyInteractionHd(g, args.hd);
   return g;
+}
+
+/** 高清只在 pass 解码后净放大 1.5 倍；扩散始终留在 2 倍域。 */
+function applyInteractionHd(g: Graph, hd?: boolean): void {
+  if (hd !== true) return;
+  const image = g["38"].inputs.images;
+  g["95"] = { class_type: "UpscaleModelLoader", inputs: { model_name: "4x-AnimeSharp.safetensors" } };
+  g["96"] = { class_type: "ImageUpscaleWithModel", inputs: { upscale_model: ["95", 0], image } };
+  g["97"] = { class_type: "ImageScaleBy", inputs: { image: ["96", 0], upscale_method: "lanczos", scale_by: 0.375 } };
+  g["38"].inputs.images = ["97", 0];
 }
 
 /** 单人轻形态：KSampler + 链式 LoRA + LLLite 姿态，无 RS（单人无隔离需求，
  *  不承担 N×N 注意力偏置矩阵开销）。其余（姿态预设/超分/pass@2x/地板词）与双人一致。 */
 export function makeInteractionSingleGraph(args: {
   prompt: string; width: number; height: number; seed?: number; passSeed?: number;
-  preset: InteractionPreset; part: MultiPart; label: string;
+  preset: InteractionPreset; part: MultiPart; label: string; hd?: boolean;
 }): Graph {
   if (!args.part.text || args.part.text.length > 800) throw new Error("invalid single part text");
   if (args.part.role !== undefined && (!/^[\w .@()-]+\.safetensors$/.test(args.part.role.file) || !Number.isFinite(args.part.role.weight) || args.part.role.weight < 0.4 || args.part.role.weight > 1.1)) throw new Error("invalid single role");
@@ -333,7 +345,7 @@ export function makeInteractionSingleGraph(args: {
   g["2"] = { class_type: "CLIPLoader", inputs: { clip_name: "qwen_3_06b_base.safetensors", type: "stable_diffusion", device: "default" } };
   g["3"] = { class_type: "VAELoader", inputs: { vae_name: "qwen_image_vae.safetensors" } };
   if (part.role) {
-    g["4"] = { class_type: "LoraLoader", inputs: { model: ["1", 0], clip: ["2", 0], lora_name: loraFile, strength_model: loraW, strength_clip: loraW } };
+    g["4"] = { class_type: "AnimaLoRARemapTagLoader", inputs: { model: ["1", 0], clip: ["2", 0], text: `<lora:${loraFile}:${loraW}>`, default_weight: 1, weight_multiplier: 1, auto_remap: true, save_remapped: false, extend_to_new_layers: false, extend_strength: 0.5, manifest: "Auto (Recommended)" } };
   }
   const modelOut = part.role ? ["4", 0] : ["1", 0];
   const clipOut = part.role ? ["4", 1] : ["2", 0];
@@ -363,6 +375,7 @@ export function makeInteractionSingleGraph(args: {
     seed: passSeed, steps: 30, cfg: 4.0, sampler_name: "euler_ancestral", scheduler: "sgm_uniform", denoise: 0.25 } };
   g["28"] = { class_type: "VAEDecode", inputs: { samples: ["27", 0], vae: ["3", 0] } };
   g["38"] = { class_type: "SaveImage", inputs: { images: ["28", 0], filename_prefix: `interaction/${args.label}/final` } };
+  applyInteractionHd(g, args.hd);
   return g;
 }
 
@@ -413,6 +426,26 @@ async function request(url: string, init: RequestInit = {}, timeout = 10_000): P
   return res;
 }
 
+/** 提交前核对模型文件；重映射节点会把缺失文件降级成警告，宿主必须拒绝无 LoRA 出图。 */
+async function requireGraphLoras(base: string, graph: Graph): Promise<void> {
+  const needed = new Set<string>();
+  for (const node of Object.values(graph)) {
+    if (node.class_type === "AnimaLoRARemapTagLoader") {
+      for (const match of String(node.inputs.text).matchAll(/<lora:([^:>]+):[^>]+>/g)) needed.add(match[1]);
+    } else if (node.class_type === "RSMultiCharacterLoRA" || node.class_type === "RSMultiCharacterPrompts") {
+      for (const [key, value] of Object.entries(node.inputs)) {
+        if (/^character\d+_lora$/.test(key) && typeof value === "string" && value !== "None") needed.add(value);
+      }
+    }
+  }
+  if (!needed.size) return;
+  const info = await (await request(`${base}/object_info/LoraLoader`)).json() as Record<string, { input?: { required?: { lora_name?: unknown[] } } }>;
+  const names = info.LoraLoader?.input?.required?.lora_name?.[0];
+  if (!Array.isArray(names) || names.some((name) => typeof name !== "string")) throw new Error("invalid ComfyUI LoRA inventory");
+  const missing = [...needed].filter((name) => !names.includes(name));
+  if (missing.length) throw new Error(`ComfyUI LoRA files missing: ${missing.join(", ")}`);
+}
+
 async function imageBytes(response: Response): Promise<Buffer> {
   const size = Number(response.headers.get("content-length") ?? 0);
   if (!response.headers.get("content-type")?.toLowerCase().startsWith("image/png") || size > MAX_IMAGE || !response.body) throw new Error("invalid image response");
@@ -453,6 +486,7 @@ export async function runMulti(url: string, args: MultiDraw, onSubmitted: () => 
     const id = randomUUID();
     const clientId = randomUUID();
     const graph = makeRsGraph(args);
+    await requireGraphLoras(base, graph);
     onSubmitted();
     const job = await submitAndWait(base, graph, id, clientId, Date.now() + 400_000);
     return await fetchOutputImage(base, job, "66");
@@ -475,6 +509,7 @@ async function runComfyJob(url: string, args: ComfyDraw, onSubmitted: () => void
     if (upload.name !== name || upload.subfolder || upload.type !== "input") throw new Error("unexpected ComfyUI upload path");
   }
   const graph = makeGraph(args, name);
+  await requireGraphLoras(base, graph);
   const id = randomUUID();
   const clientId = randomUUID();
   const stageSocket = onStage ? openStageSocket(base, clientId, id, onStage) : undefined;
@@ -528,6 +563,7 @@ export async function runInteraction(url: string, args: InteractionDraw, onSubmi
     const id = randomUUID();
     const clientId = randomUUID();
     const graph = makeInteractionGraph(args);
+    await requireGraphLoras(base, graph);
     onSubmitted();
     const job = await submitAndWait(base, graph, id, clientId, Date.now() + 600_000);
     return await fetchInteractionOutput(base, job);
@@ -536,7 +572,7 @@ export async function runInteraction(url: string, args: InteractionDraw, onSubmi
 
 export async function runInteractionSingle(url: string, args: {
   prompt: string; width: number; height: number; seed?: number; passSeed?: number;
-  preset: InteractionPreset; part: MultiPart; label: string;
+  preset: InteractionPreset; part: MultiPart; label: string; hd?: boolean;
 }, onSubmitted: () => void): Promise<Buffer> {
   if (busy) throw new ComfyBusy("ComfyUI busy");
   busy = true;
@@ -548,6 +584,7 @@ export async function runInteractionSingle(url: string, args: {
     const id = randomUUID();
     const clientId = randomUUID();
     const graph = makeInteractionSingleGraph(args);
+    await requireGraphLoras(base, graph);
     onSubmitted();
     const job = await submitAndWait(base, graph, id, clientId, Date.now() + 600_000);
     return await fetchInteractionOutput(base, job);

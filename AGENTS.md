@@ -38,8 +38,8 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 **单人直出基础负向词**统一为 `low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin, abs`；两次采样共用。
 `4x-AnimeSharp` 超分 lanczos 0.5（净 2 倍；单人 `fast` 快速模式初采样 28 步 + 质感 pass 8 步 + lanczos 0.3 净 1.2 倍，与 hd/双人/interaction 互斥）→ **质感 pass**（denoise 0.25 同域重采样，裸地板词 + 同内容，
 机械消除过扁平并加回真实感——M 组/L 组/P 组三夜实验定版）→ hd 第三倍纯放大（95/96/97，接 pass 之后）→ 输出（经 outbox 机械直发，模型不再调 say_media，见硬约束 4）。
-**没有脸修也没有手修**（主人裁定退役；手修 2026-11-13 摘除模板 41/42 节点，WSL 生产不装 Impact-Pack）。词表四段式：正向初采样带四轴扁平（模板 node 4），pass 裸地板（node 71）；
-负向两遍同文（地板+monochrome / 防油锁 lips shiny skin abs oily airbrushed ssr / 碎线锁 sketch 系）。
+**没有脸修也没有手修**（主人裁定退役；手修 2026-11-13 摘除模板 41/42 节点，WSL 生产不装 Impact-Pack）。单人直出初采样与 pass 共用上述基础正负向词；姿态线使用独立模板。
+**V8 LoRA 与高清接线**（2026-11-13 修复）：单人姿态线与直出都使用 `AnimaLoRARemapTagLoader`（auto_remap=true、extend_to_new_layers=false）；双人初采样与 pass 的 RS 槽位都必须安装 `scripts/comfy-rs-remap-patch.py` 补丁，缺依赖/manifest 时拒绝加载，禁止静默错位。WSL ComfyUI 的 `extra_model_paths.yaml` 必须保留 Forge 目录 `/mnt/c/Users/mhbzhy/sd-webui-forge-neo/models/Lora` 的映射，覆盖角色词表里的文件；提交前按 ComfyUI 文件清单核对，缺文件拒绝提交，不能只检查节点加载成功。姿态 pass 的实验尺寸闸须用 `scripts/comfy-scene-canvas-patch.py` 补齐生产七种比例的 2 倍域。单人/双人姿态线 `hd` 均透传至 graph，在 2 倍 pass 解码后由 AnimeSharp 4x × lanczos 0.375 净放大至 3 倍，最终取 node 38。
 **约束**：pass 的 denoise 不许超 0.25 越界（M3 实测 0.35 唇形失控）；禁止把它改回超分前「修复」用途；
 禁止在 3 倍 latent 上跑任何扩散（旧 hd 事故：DiT 位置编码超域，高频砍到 ×0.55）。
 

@@ -12,7 +12,7 @@
 - 锚点行不存在或不唯一（节点包升级后结构变化）：报错退出 2，不写文件
 - 首次打补丁前备份为 <目标>.pre-yugang-remap
 重映射语义与单人管线 AnimaLoRARemapTagLoader（extend_to_new_layers=false）一致：
-插入层无旧块对应即 drop；块数不小于模型时原样透传。
+插入层无旧块对应即 drop；块数相同则原样透传；缺依赖或无法确定映射时拒绝加载。
 """
 import py_compile
 import sys
@@ -28,26 +28,24 @@ CALL_ANCHOR = (
 
 FUNC_TEXT = '''# --- yugang remap patch start ---
 def _yugang_remap_blocks(weights, model, slot, name):
-    """Remap older smaller-block Anima LoRAs onto larger-block models.
-
-    The slot loader below matches LoRA keys with ComfyUI's native mapping and
-    silently drops unmatched keys, which mis-binds 28-block Anima LoRAs onto
-    the 52-block DeltaMix model. Rewrite block indices first with the
-    Anima-Remap pack's manifest logic so both packs agree on the mapping.
-    Passes weights through when the Anima-Remap pack is missing, the LoRA has
-    no main-block keys, or its block count already matches the model.
-    """
+    """按 manifest 将旧 Anima LoRA 映射到扩层模型，缺依赖时拒绝静默错位。"""
     import sys
     common = next((m for n, m in sys.modules.items() if n.endswith("anima_common")), None)
     if common is None:
-        return weights
+        raise RuntimeError("RS LoRA remap dependency missing: Anima-Remap")
     lora_blocks = common.get_lora_block_count(weights.keys())
     model_blocks = common.get_model_block_count(model)
-    if not lora_blocks or not model_blocks or lora_blocks >= model_blocks:
+    if not lora_blocks:
         return weights
+    if not model_blocks:
+        raise RuntimeError("RS LoRA remap cannot determine model block count")
+    if lora_blocks == model_blocks:
+        return weights
+    if lora_blocks > model_blocks:
+        raise RuntimeError("RS LoRA has more blocks than the connected model")
     manifest = common.resolve_manifest("Auto (Recommended)", lora_blocks, model_blocks)
     if not manifest:
-        return weights
+        raise RuntimeError("RS LoRA remap manifest missing")
     base_to_target = common.build_base_to_target(manifest)
     remapped, dropped = {}, 0
     for key, value in weights.items():
