@@ -34,8 +34,7 @@ character；双人填 characters[].character。本工具不列角色清单，也
 prompt 写画面本身，用 danbooru tag 为主；普通 tag（cat_ears 之类）查 tags 词表拿准写法和热度。
 **进本工具的全部文本（prompt 与 characters[].description）一律英文 tag/短语、逗号分隔**：底模只吃英文 tag 分布，
 中文句子虽能被文本编码器编码，却条件化极弱且两句相近中文会互相吞并（线上融合案底）；写中文等于没写。
-**直出/fast 基础正向词**统一为 `masterpiece, best quality, absurdres, score_7, score_8, score_9, anime`；初采样和质感 pass 都追加角色注入词与用户 prompt。
-**直出/fast 基础负向词**统一为 `low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin, abs`；初采样和质感 pass 共用。（姿态线词表另见下，不共用。）
+质量地板与负向词表都由工具内置、自动拼进每遍采样，**prompt 只写画面内容，不要重复质量词，也不要在 prompt 写负向**。直出/fast 与姿态线的内置词表不同，但都不需要你写。
 
 用户明确说「自定义画图」时 prompt 传空字符串（内容交给角色词表/机械前缀），仍走姿态线；只有 `fast`/`ref` 走直出。
 style=<风格 key> 挂全局画风 LoRA，**仅直出/fast 生效**（姿态线不接 style），可与 ref 组合；风格与角色 LoRA 权重由词表预设，角色统一 1.0，模型不可调。
@@ -47,7 +46,7 @@ V8 姿态线：**CPU 编排姿态（离线 authoring 的 scene_json 预设）+ �
 - 单人默认：走**轻形态 V8 姿态线**（KSampler + Pose3D + 链式 LoRA + 52 层 LLLite；当前 `single-haystack`：单人草垛侧坐）。仅 `fast: true`（快速直出）或 `ref`（改图直出）走直出；`pipeline`/`preset` 不再对外暴露。
 - 普通单人和双人都不再有第二条默认生产线。`ref` 走直出改图；姿态线不接 ref；`hd: true` 在姿态线的 2 倍 pass 结束后再纯放大至净 3 倍，不在 3 倍域执行扩散。
 - 双人构图：`framing=wide` 恢复 RS Camera 的远景提示与区域缩放，同一缩放同时作用于 LLLite 姿态图；普通景别不接 Camera。`spacing=apart` 同步平移人物区域和对应姿态，适用于无接触动作的分离场景。
-- 姿态线初采样与 pass 均为 30 步、CFG 4.5、dpmpp_2m / sgm_uniform；初采样＝质量地板(含anime)+`detailed, intricate, film grain, depth of field`（无四轴/赛璐璐），pass 基础词，负向去 lips。
+- 姿态线初采样与 pass 均为 30 步、CFG 4.5、dpmpp_2m / sgm_uniform；质量地板与真实感细节词由工具自动加（初采样细节更多、pass 基础），负向内置，均不需你写。
 - 质感 pass 为普通 KSampler @2x＋角色 LoRA 串联（老版结构），不挂 RS/LLLite：区域控制与姿态窗口都只作用于初采样高噪声段，低幅度第二遍挂它们无益（学术/社区共识，见交接）。
 - 预设是冻结姿态资产，不是随便起名：要写新姿态先由主人授权离线编排，不能自己编 key。
 
