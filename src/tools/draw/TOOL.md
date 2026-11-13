@@ -32,10 +32,9 @@ character；双人填 characters[].character。本工具不列角色清单，也
 prompt 写画面本身，用 danbooru tag 为主；普通 tag（cat_ears 之类）查 tags 词表拿准写法和热度。
 **进本工具的全部文本（prompt 与 characters[].description）一律英文 tag/短语、逗号分隔**：底模只吃英文 tag 分布，
 中文句子虽能被文本编码器编码，却条件化极弱且两句相近中文会互相吞并（线上融合案底）；写中文等于没写。
-用户明确说「自定义画图」时 prompt 传空字符串（其余参数照常），单人会走 V8 直出；用户明确要「快一点 / 赶时间 / 随便画画」时传 `fast: true`，同样走单人 V8 直出快速模式。
+**单人直出负向基础词**统一为 `low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin, abs`；初采样和质感 pass 共用。
 
-style=<风格 key> 挂全局画风 LoRA，不改 prompt，可与 character、ref 组合；
-风格与角色 LoRA 权重都由词表逐条预设（角色缺省 0.8），模型不可调；要调改词表文件。
+单人直出负向基础词统一为：`low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin, abs`；初采样和质感 pass 共用。
 
 ## 交互管线（pipeline=interaction，2026-11-13 上线）
 

@@ -23,7 +23,7 @@
   "4": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "text": "masterpiece, best quality, absurdres, score_7, score_8, score_9, clean lineart, thin lines, cel shading, hard-edged shadows, painterly shading, visible brushstrokes, multi-tone shading, cinematic lighting, directional light, strong rim light, dramatic shadows, dappled sunlight, ",
+      "text": "masterpiece, best quality, absurdres, score_7, score_8, score_9, anime, ",
       "clip": [
         "2",
         0
@@ -33,7 +33,7 @@
   "5": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin, abs, oily skin, airbrushed, subsurface scattering, sketch, pencil lines, stray lines, rough lines, unfinished lineart",
+      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin, abs",
       "clip": [
         "2",
         0
@@ -147,7 +147,7 @@
         "2",
         0
       ],
-      "text": "masterpiece, best quality, absurdres, score_7, score_8, score_9, "
+      "text": "masterpiece, best quality, absurdres, score_7, score_8, score_9, anime, "
     }
   },
   "72": {

@@ -34,7 +34,8 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 回调拒绝经 catch 仍回明确关闭回执、不谎称已提交（`submitted` 保持 false，可重试）。已 accepted 的作业不取消、不重投，
 提交状态不明不可重 POST 的规则不变。`COMFYUI_URL` 仅保留连接地址语义，不再兼作停用手段；需要临时让出 GPU（如离线实验期）时原子热切换本键，不重启鱼。
 
-**管线（2026-11-10 晚定版）**：初采样 30 步（cfg 4.5，带轴扁平正向）→
+**单人直出基础正向词**统一为 `masterpiece, best quality, absurdres, score_7, score_8, score_9, anime`；初采样和质感 pass 在此基础上追加角色注入词与用户 prompt。
+**单人直出基础负向词**统一为 `low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin, abs`；两次采样共用。
 `4x-AnimeSharp` 超分 lanczos 0.5（净 2 倍；单人 `fast` 快速模式初采样 28 步 + 质感 pass 8 步 + lanczos 0.3 净 1.2 倍，与 hd/双人/interaction 互斥）→ **质感 pass**（denoise 0.25 同域重采样，裸地板词 + 同内容，
 机械消除过扁平并加回真实感——M 组/L 组/P 组三夜实验定版）→ hd 第三倍纯放大（95/96/97，接 pass 之后）→ 输出（经 outbox 机械直发，模型不再调 say_media，见硬约束 4）。
 **没有脸修也没有手修**（主人裁定退役；手修 2026-11-13 摘除模板 41/42 节点，WSL 生产不装 Impact-Pack）。词表四段式：正向初采样带四轴扁平（模板 node 4），pass 裸地板（node 71）；
