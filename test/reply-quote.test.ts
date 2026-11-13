@@ -11,7 +11,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { OneBot, type IncomingMessage, type OneBotEvent } from "../src/qq/onebot.ts";
+import { OneBot, type IncomingMessage, type OneBotEvent } from "../src/channels/qq/onebot.ts";
 import { createDebouncer, type PendingBurst } from "../src/qq/debounce.ts";
 
 /** 假 WebSocket：connect() 立刻打开，send 的 API 调用当场回一个纯文本被引消息（李四：「原文」）。 */

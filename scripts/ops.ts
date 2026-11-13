@@ -9,7 +9,7 @@
 import { DATA_HOME as HOME } from "../src/paths.ts";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { withAccessToken } from "../src/qq/onebot.ts";
+import { withAccessToken } from "../src/channels/qq/onebot.ts";
 import { localDay } from "../src/records/usage.ts";
 
 

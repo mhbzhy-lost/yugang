@@ -1,28 +1,281 @@
 /**
- * 通道无关的消息行与列表渲染（从 src/qq/model-input.ts 抽出的共享部分）。
+ * 通道无关的消息行与列表渲染（docs/decisions/2026-11-04-model-input-templates.md §2–§5）。
+ * 从 src/qq/model-input.ts 迁入（2026-11-13 通道适配器 T2）；QQ 专属的入站解析在
+ * src/channels/qq/onebot.ts，本文件不依赖任何通道。
+ * 消息行、列表边界、引用原文与合集附件的纯渲染函数。
  *
- * T1 阶段先从 `../qq/model-input.ts` 转发导出，现有 import 一律不动（行为零变化）；
- * T2 迁移时内容反转：实现搬进本文件，QQ 专属部分留在 `src/channels/qq/model-input.ts`。
- * `src/compact.ts` 与 `src/external/news-broadcast.ts` 改从本文件取渲染（T2）。
+ * 消息行统一为 `[m:id][可选标签] 昵称(QQ): 正文`——`: ` 后永远是当前消息正文，
+ * 其它信息全部放在 `: ` 前的标签里；标签顺序固定 m → 回复 → 转发合集 → @ →
+ * 主人/特别关注。标签只陈述事实，语义与应对规则统一写在 system prompt。
+ *
+ * 引用原文与合集附件是消息列表后的附加段，不参与时间线排序；顺序由装配方保证
+ * （先引用原文、再合集附件，最近合集补展开最后）。文案唯一来源是 prompt/messages.md
+ * 的模板 key；这里的 ?? 兜底只服务于拿不到文案表的调用（值与 messages.md 一致）。
  */
-export {
-  MESSAGE_LIST_START,
-  MESSAGE_LIST_END,
-  mentionTargetsOf,
-  imageTagOf,
-  imageCompressedTagOf,
-  gifCompressedTagOf,
-  gifTagOf,
-  renderMessageLine,
-  renderMessageList,
-  renderQuotedOriginal,
-  renderForwardAttachment,
-} from "../qq/model-input.ts";
-export type {
-  MessageTable,
-  MessageBlockParts,
-  ForwardChildMessage,
-  ForwardAttachment,
-  QuotedMessage,
-  ModelMessage,
-} from "../qq/model-input.ts";
+import { renderTemplate } from "../prompt/index.ts";
+
+export const MESSAGE_LIST_START = "> 消息起始";
+export const MESSAGE_LIST_END = "> 消息结束";
+
+export type MessageTable = Readonly<Record<string, string>>;
+
+/** 一轮 user 输入的组成件（T2 接线用）：一个 text block 与按编号在后的压缩 image blocks。 */
+export interface MessageBlockParts {
+  text: string;
+  images: readonly string[];
+}
+
+/** 合集里的一条子消息：只有 API 真实返回了 ID / QQ 才有对应字段，缺失不伪造。 */
+export interface ForwardChildMessage {
+  position: number;
+  messageId?: number | string;
+  userId?: string;
+  nickname: string;
+  text: string;
+  images: readonly string[];
+}
+
+/** 消息列表后的合集附加段：sourceMessageId 缺失（最近合集补展开）时不渲染 [来自m:id]。 */
+export interface ForwardAttachment {
+  id: string;
+  sourceMessageId?: number | string;
+  total: number;
+  children: readonly ForwardChildMessage[];
+  truncated: boolean;
+}
+
+/** 直接回复水合出的引用原文；forward 在场时被引的是合集父消息（不重复展开）。 */
+export interface QuotedMessage {
+  id: string;
+  nickname: string;
+  userId: string;
+  text: string;
+  images: readonly string[];
+  forward?: ForwardAttachment;
+  /** 被引的这条是不是鱼自己发的（由入站解析按 self_id 机械判定）：用于「接收对象」标签。 */
+  fromSelf?: boolean;
+}
+
+export interface ModelMessage {
+  messageId?: number | string;
+  userId: string;
+  nickname: string;
+  text: string;
+  mentionsBot: boolean;
+  replyIds: readonly string[];
+  master: boolean;
+  watched: boolean;
+  quoted?: QuotedMessage;
+  forward?: ForwardAttachment;
+  /** 这条消息 @ 的**其他人**昵称（不含 @鱼 / @全体）。`undefined` = 没有 @；
+   *  `[]` = 有 @ 但含 @鱼/@全体（不得回退到引用判断）。渲染成
+   *  `[此消息的接收对象是 X，不是你]`，避免把「A 回 B」读成在叫自己。 */
+  mentionTargets?: readonly string[];
+  /** 指向性标签专用的「引用作者昵称」：背景/历史行不携带完整 quoted（避免引用原文
+   *  附加段膨胀），只带这一个字段供 `[此消息的接收对象是…]` 使用。 */
+  quotedAuthor?: string;
+  /** 被引的是不是鱼自己（与 QuotedMessage.fromSelf 同义，供 quotedAuthor 分支使用）。 */
+  quotedAuthorIsSelf?: boolean;
+}
+
+/**
+ * 入站 mentions → 接收对象名单。三种返回值含义不同，渲染层靠它区分「没 @」与「@ 了但包含鱼」：
+ *   - `undefined`：这条消息没有 @ 任何人 → 允许回退到引用判断；
+ *   - `[]`：有 @，但含 @鱼 / @全体成员（都包含鱼，不能说「不是你」）→ 不得回退到引用；
+ *   - 非空数组：纯 @别人 → 这些就是接收对象。
+ */
+export function mentionTargetsOf(
+  mentions: readonly { name: string; kind: "bot" | "other" | "all" }[] | undefined,
+): readonly string[] | undefined {
+  if (!mentions || mentions.length === 0) return undefined;
+  if (mentions.some((m) => m.kind !== "other")) return [];
+  return mentions.map((m) => m.name.trim()).filter((name) => name.length > 0);
+}
+
+/** 一行正文：空白折叠成单空格（decisions §2：每条消息占一行）。 */
+function lineText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** inline 模式的图片编号标签（[图片#N inbound/…]）：始终带路径——模型可直接把路径
+ * 填给 draw / gpt_image 等要图片引用的工具，不需要为此再 look。 */
+export function imageTagOf(n: number, ref: string, messages: MessageTable): string {
+  return renderTemplate(messages["image_tag"] ?? "[图片#{{n}} {{ref}}]", { n: String(n), ref });
+}
+
+/** inline 模式的压缩图标签（[图片#N 压缩图]），按编号跟在 image block 之后。 */
+export function imageCompressedTagOf(n: number, messages: MessageTable): string {
+  return renderTemplate(messages["image_compressed_tag"] ?? "[图片#{{n}} 压缩图]", { n: String(n) });
+}
+
+/** inline 模式的 GIF 帧压缩图标签：声明帧序与同一性（模型据此把连续 block 归为一张动图）。 */
+export function gifCompressedTagOf(n: number, frames: number, messages: MessageTable): string {
+  return renderTemplate(messages["image_gif_compressed_tag"] ?? "[图片#{{n}} ·GIF{{frames}}f]", {
+    n: String(n),
+    frames: String(frames),
+  });
+}
+
+/** inline 模式的 GIF 编号标签（带帧数后缀）：与 gifCompressedTagOf 共用编号。 */
+export function gifTagOf(n: number, ref: string, frames: number, messages: MessageTable): string {
+  return renderTemplate(messages["image_gif_tag"] ?? "[图片#{{n}} {{ref}} ·GIF{{frames}}f]", {
+    n: String(n),
+    ref,
+    frames: String(frames),
+  });
+}
+
+/** `[m:id]` 锚点：没有真实 id 就不渲染，不伪造。 */
+function idTag(id: number | string | undefined): string {
+  return id === undefined || String(id).length === 0 ? "" : `[m:${id}]`;
+}
+
+/** 「昵称(QQ)」；缺一边就只写另一边，都缺返回空。 */
+function person(nickname: string, userId: string): string {
+  const name = nickname.trim();
+  const qq = userId.trim();
+  if (name && qq) return `${name}(${qq})`;
+  return name || qq;
+}
+
+/**
+ * 单条消息行：`[m:id][回复了m:rid][转发合集][这条消息@了你][主人/特别关注] 昵称(QQ): 正文`。
+ * 父消息没有附带文字时用 [转发合集] 内容占位；引用原文不在行内渲染（装配方后置）。
+ */
+export function renderMessageLine(message: ModelMessage, messages: MessageTable): string {
+  const tags: string[] = [];
+  const anchor = idTag(message.messageId);
+  if (anchor) tags.push(anchor);
+  for (const replyId of message.replyIds) {
+    if (!replyId) continue;
+    tags.push(renderTemplate(messages["message_reply"] ?? "[回复了m:{{id}}]", { id: replyId }));
+  }
+  if (message.forward) tags.push(messages["message_forward"] ?? "[转发合集]");
+  if (message.mentionsBot) tags.push(messages["message_mention_bot"] ?? "[这条消息@了你]");
+  else {
+    // 指向性标签（2026-11-05）：@ 优先于引用；@鱼/@全体 不算「不是你」（名单由解析层滤过）。
+    // 目的：A 回复 B 时鱼不要把别人的对话当成在叫自己。
+    // 有 @ 时（哪怕 @ 的是鱼/全体）一律以 @ 为准，不再回退到引用——否则
+    // 「@全体 + 引用别人」会被错标成「接收对象是别人」（2026-11-05 验收 A4）
+    const atTargets = message.mentionTargets;
+    const quoteWho =
+      message.quoted !== undefined
+        ? message.quoted.fromSelf === true ? "" : message.quoted.nickname.trim()
+        : message.quotedAuthorIsSelf !== true
+          ? (message.quotedAuthor ?? "").trim()
+          : "";
+    const who = atTargets !== undefined ? atTargets.slice(0, 3).join("、") : quoteWho;
+    const targetTpl = messages["message_target_other"];
+    if (who.length > 0 && targetTpl !== undefined) tags.push(renderTemplate(targetTpl, { who }));
+  }
+  // [主人] 与 [特别关注] 互斥，master 优先
+  if (message.master) tags.push(messages["message_master"] ?? "[主人]");
+  else if (message.watched) tags.push(messages["message_watched"] ?? "[特别关注]");
+
+  const body = lineText(message.text)
+    || (message.forward ? messages["forward_parent_placeholder"] ?? "[转发合集]" : "");
+  const prefix = tags.join("");
+  const speaker = person(message.nickname, message.userId);
+  return `${prefix}${prefix.length > 0 ? " " : ""}${speaker}: ${body}`.trimEnd();
+}
+
+function listHeader(messages: MessageTable, kind: "group" | "private" | "history"): string {
+  if (kind === "private") return messages["message_private_header"] ?? "私聊有新消息啦。";
+  if (kind === "history") return messages["message_history_header"] ?? "[历史消息]";
+  return messages["message_group_header"] ?? "群里有新消息啦。";
+}
+
+/**
+ * 标准消息列表：边界头 + `> 消息起始` + 逐行 + `> 消息结束`。
+ * lines 接受已渲染的行（背景/历史尾巴）或 ModelMessage（现渲染），顺序即真实接收顺序。
+ */
+export function renderMessageList(
+  lines: readonly (ModelMessage | string)[],
+  messages: MessageTable,
+  kind: "group" | "private" | "history",
+): string {
+  const rendered = lines.map((line) => (typeof line === "string" ? line : renderMessageLine(line, messages)));
+  return [
+    listHeader(messages, kind),
+    messages["message_list_start"] ?? MESSAGE_LIST_START,
+    ...rendered,
+    messages["message_list_end"] ?? MESSAGE_LIST_END,
+  ].join("\n");
+}
+
+/**
+ * 引用原文附加段（消息列表后）。三种形态：
+ * - 被引的是合集父消息：半角冒号 + [转发合集] 占位，不重复展开（附件另行渲染）；
+ * - 普通文字引用：全角冒号 + 「原文」；
+ * - 水合失败（昵称/QQ/正文/合集全缺）：显式读取失败标记，不伪造内容。
+ *
+ * 被引消息带图时，图必须跟原文一起出现（2026-11-05 主人反馈：回复一张图说「收图」，
+ * 引用原文渲染成「」——模型拿不到 inbound 引用，既没法 look 也没法 meme_add）。
+ * `imageNumbers` 是 inline 模式的编号表：命中就渲染成 [图片#N]（压缩图在消息末尾），
+ * 没命中就保留 [图片 inbound/…] 让模型用 look 读（两种读图模式各走各的）。
+ */
+export function renderQuotedOriginal(
+  quoted: QuotedMessage,
+  messages: MessageTable,
+  imageNumbers?: ReadonlyMap<string, number>,
+  gifFrames?: ReadonlyMap<string, number>,
+): string {
+  const who = person(quoted.nickname, quoted.userId);
+  if (quoted.forward) {
+    return renderTemplate(messages["quoted_original_forward"] ?? "[引用原文][m:{{id}}] {{who}}: [转发合集]", {
+      id: quoted.id,
+      who,
+    });
+  }
+  const images = quoted.images
+    .map((ref) => {
+      const n = imageNumbers?.get(ref);
+      if (n === undefined) return renderTemplate(messages["quoted_image"] ?? "[图片 {{ref}}]", { ref });
+      const frames = gifFrames?.get(ref);
+      return frames !== undefined ? gifTagOf(n, ref, frames, messages) : imageTagOf(n, ref, messages);
+    })
+    .join(" ");
+  const text = [lineText(quoted.text), images].filter((part) => part.length > 0).join(" ");
+  if (!who && !text) {
+    return renderTemplate(messages["quoted_read_failed"] ?? "[引用原文][m:{{id}}]（读取失败）", { id: quoted.id });
+  }
+  return renderTemplate(messages["quoted_original"] ?? "[引用原文][m:{{id}}] {{who}}：「{{text}}」", {
+    id: quoted.id,
+    who,
+    text,
+  });
+}
+
+/**
+ * 合集附加段（消息列表后）：`[转发合集 N 条][来自m:id]` + 边界内 `[合集#N]` 子消息行
+ * （保持 OneBot 返回顺序，仅渲染真实存在的子消息 ID/QQ），截断行在 `> 消息结束` 之后。
+ * 子消息文本里的 [图片#N] 占位与压缩 image block 的编号对齐由装配方（T2）负责。
+ * 拉取失败/空合集渲染显式读取失败标记，不伪造条数。
+ */
+export function renderForwardAttachment(forward: ForwardAttachment, messages: MessageTable): string {
+  const source = forward.sourceMessageId === undefined || String(forward.sourceMessageId).length === 0
+    ? ""
+    : renderTemplate(messages["forward_source"] ?? "[来自m:{{id}}]", { id: String(forward.sourceMessageId) });
+  if (forward.children.length === 0) {
+    return messages["forward_read_failed"] ?? "[转发合集读取失败]";
+  }
+  const header = renderTemplate(messages["forward_header"] ?? "[转发合集 {{count}} 条]{{source}}", {
+    count: String(forward.total),
+    source,
+  });
+  const lines = forward.children.map((child) => {
+    const prefix = `${renderTemplate(messages["forward_child_prefix"] ?? "[合集#{{position}}]", { position: String(child.position) })}${idTag(child.messageId)}`;
+    const who = person(child.nickname || "?", child.userId ?? "");
+    return `${prefix} ${who}: ${lineText(child.text)}`.trimEnd();
+  });
+  const parts = [
+    header,
+    messages["message_list_start"] ?? MESSAGE_LIST_START,
+    ...lines,
+    messages["message_list_end"] ?? MESSAGE_LIST_END,
+  ];
+  if (forward.truncated) {
+    parts.push(renderTemplate(messages["forward_truncated"] ?? "…共 {{count}} 条", { count: String(forward.total) }));
+  }
+  return parts.join("\n");
+}

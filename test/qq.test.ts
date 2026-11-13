@@ -16,8 +16,8 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
 import { OutboxDoc } from "../src/store.ts";
-import { withContext } from "../src/qq/debounce.ts";
-import type { IncomingMessage } from "../src/qq/onebot.ts";
+import { withContext } from "../src/channels/qq/round-input.ts";
+import type { IncomingMessage } from "../src/channels/qq/onebot.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));

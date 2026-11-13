@@ -5,7 +5,7 @@
  *   ONEBOT_WS_URL=ws://127.0.0.1:3001 ONEBOT_TOKEN=xxx npm run probe
  *   TEST_GROUP=123456 npm run probe          # 额外发一条测试消息
  */
-import { withAccessToken } from "../src/qq/onebot.ts";
+import { withAccessToken } from "../src/channels/qq/onebot.ts";
 const url = process.env.ONEBOT_WS_URL ?? "ws://127.0.0.1:3001";
 const token = process.env.ONEBOT_TOKEN;
 const testGroup = process.env.TEST_GROUP;

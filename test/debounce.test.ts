@@ -12,12 +12,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createDebouncer,
-  backgroundFor,
   lastPayload,
   type BurstMessage,
   type PendingBurst,
 } from "../src/qq/debounce.ts";
-import type { IncomingMessage } from "../src/qq/onebot.ts";
+import { backgroundFor } from "../src/channels/qq/round-input.ts";
+import type { IncomingMessage } from "../src/channels/qq/onebot.ts";
 
 const CHAT = "qq:group:42";
 

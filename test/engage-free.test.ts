@@ -106,7 +106,7 @@ test("纯输出任务轮（browse/remind/news）不推进 flag（源码形态断
 });
 
 test("@ 轮背景两态：answerContextSize 缺省全量、设了截最近 N（backgroundFor 纯函数）", async () => {
-  const { backgroundFor } = await import("../src/qq/debounce.ts");
+  const { backgroundFor } = await import("../src/channels/qq/round-input.ts");
   const bucket = Array.from({ length: 30 }, (_, index) => ({
     arrivalSeq: index + 1,
     userId: 100 + index,

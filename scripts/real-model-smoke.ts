@@ -65,7 +65,7 @@ import { createFishModels, addFishProvider } from "../src/model/models.ts";
 import { resetRun, resetLook } from "../src/egress/ledger.ts";
 import { clearMemeImportRound } from "../src/tools/meme_import/shared.ts";
 import { resolveReadable, SAND_ROOT } from "../src/tools/fs-shared.ts";
-import { renderMessageList, type ModelMessage } from "../src/qq/model-input.ts";
+import { renderMessageList, type ModelMessage } from "../src/channels/qq/model-input.ts";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
 const RUN_ID = `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;

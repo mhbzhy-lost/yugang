@@ -5,7 +5,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseEvent, completeAtNames, fillAtName, type OneBotEvent } from "../src/qq/onebot.ts";
+import { parseEvent, completeAtNames, fillAtName, type OneBotEvent } from "../src/channels/qq/onebot.ts";
 
 const SELF = 1000;
 

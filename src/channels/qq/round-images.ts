@@ -3,8 +3,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingMessage } from "./onebot.ts";
 import type { BurstMessage } from "./debounce.ts";
-import { extractGifFrames, GIF_FRAME_LONG_SIDE, type GifFramePlan } from "../media/gif-frames.ts";
-import { inlineImageOf, shrinkForModel, type ShrinkResult } from "../media/shrink-image.ts";
+import { extractGifFrames, GIF_FRAME_LONG_SIDE, type GifFramePlan } from "../../media/gif-frames.ts";
+import { inlineImageOf, shrinkForModel, type ShrinkResult } from "../../media/shrink-image.ts";
 import { gifCompressedTagOf, gifTagOf, imageCompressedTagOf, imageTagOf, type ForwardAttachment, type MessageTable } from "./model-input.ts";
 
 // vision==main 时静态图应全部直读（主人裁定 2026-11-06：不再为省额度强制 look 转述），

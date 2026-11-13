@@ -23,7 +23,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { Conversation, ConversationId } from "@earendil-works/pi-durable";
 import { renderTemplate, type PromptSet } from "./prompt/index.ts";
-import { renderMessageList, type ModelMessage } from "./qq/model-input.ts";
+import { renderMessageList, type ModelMessage } from "./channels/render.ts";
 import { extractMemories, type ExtractSaved } from "./memory/extract.ts";
 import { MEMORY_EVAL_KIND, MEMORY_INBOUND_KIND, MEMORY_ZERO_EXTRACT_PAGES, type EvalEventData, type MemoryInbound } from "./memory/index.ts";
 

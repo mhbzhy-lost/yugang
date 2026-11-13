@@ -24,22 +24,22 @@ import { isLookDisabled } from "../tools/look/tool.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { Conversation, ConversationId, EntryId, SettledSubmissionRecord } from "@earendil-works/pi-durable";
 import { openFish, SentmapDoc, type Fish, type GroupProfile } from "../harness.ts";
-import { OneBot, orderByArrival, type IncomingMessage, type OneBotSendFailure } from "../qq/onebot.ts";
+import { OneBot, orderByArrival, type IncomingMessage, type OneBotSendFailure } from "../channels/qq/onebot.ts";
 import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "../qq/voice-route.ts";
 import { createGate, type GateDecision } from "../qq/gate.ts";
 import { isCurfewAt } from "../qq/curfew.ts";
-import { gifTagOf, imageTagOf, mentionTargetsOf, type ForwardAttachment, type ModelMessage } from "../qq/model-input.ts";
+import { gifTagOf, imageTagOf, mentionTargetsOf, type ForwardAttachment, type ModelMessage } from "../channels/qq/model-input.ts";
 import { engageGroupsIncludes, createEngageNext, type EngageShardItem } from "../qq/engage-next.ts";
 import { engageModeOf } from "../qq/engage-mode.ts";
 import {
   createDebouncer,
-  withContext,
   DEBOUNCE_WINDOW_MS,
   lastPayload,
   type BurstMessage,
   type PendingBurst,
   type RecentChatMessage,
 } from "../qq/debounce.ts";
+import { withContext } from "../channels/qq/round-input.ts";
 import { replaceWatched, type WatchedMap } from "../qq/watch-state.ts";
 import { MEMORY_ENGAGE_KIND, type CompactResult } from "../compact.ts";
 import { makeReminderTask } from "../tools/remind/task.ts";
@@ -77,8 +77,8 @@ import { clearViewedVideos } from "../external/video-browse.ts";
 import { clearSeenLinks, recordSeenLinks } from "../egress/seen-links.ts";
 import { shouldSendWorkingReceipt } from "../working-receipt.ts";
 import type { Middleware } from "./app.ts";
-import { planInlineImages, planRoundImages, rewriteRoundForwardImages } from "../qq/round-images.ts";
-import { appendAnswerRules, appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
+import { planInlineImages, planRoundImages, rewriteRoundForwardImages } from "../channels/qq/round-images.ts";
+import { appendAnswerRules, appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../channels/qq/round-input.ts";
 import { buildNewsCandidateInput, renderNewsBroadcast, validateNewsDigest, type NewsCandidateInput, type NewsDigest } from "../external/news-broadcast.ts";
 import { createNewsJob, type NewsJob } from "../external/news-job.ts";
 import { createNewsFreeze, NewsFrozenError, splitNewsBurst } from "../external/news-freeze.ts";

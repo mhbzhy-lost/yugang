@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createGate, type GateOptions } from "../src/qq/gate.ts";
-import type { IncomingMessage } from "../src/qq/onebot.ts";
+import type { IncomingMessage } from "../src/channels/qq/onebot.ts";
 
 const MASTER = "1000";
 

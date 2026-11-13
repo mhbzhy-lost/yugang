@@ -46,8 +46,9 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { loadPrompts, renderTemplate } from "../src/prompt/index.ts";
 import { loadToolManifests } from "../src/tools/manifest.ts";
 import { DISABLED_TOOL_PACKAGES, mergeToolMessages } from "../src/tools/loader.ts";
-import { withContext, type BurstMessage, type RecentChatMessage } from "../src/qq/debounce.ts";
-import { planRoundImages, rewriteRoundForwardImages } from "../src/qq/round-images.ts";
+import {type BurstMessage, type RecentChatMessage} from "../src/qq/debounce.ts";
+import { withContext } from "../src/channels/qq/round-input.ts";
+import { planRoundImages, rewriteRoundForwardImages } from "../src/channels/qq/round-images.ts";
 import {
   appendAnswerRules,
   appendVoiceHint,
@@ -57,13 +58,13 @@ import {
   renderOpenMessageList,
   submitContentOf,
   type RoundContentBlock,
-} from "../src/qq/round-input.ts";
+} from "../src/channels/qq/round-input.ts";
 import { buildNewsCandidateInput } from "../src/external/news-broadcast.ts";
 import { createEngageNext, type EngageShardItem } from "../src/qq/engage-next.ts";
 import type { ShrinkResult } from "../src/media/shrink-image.ts";
 import { openFish } from "../src/harness.ts";
-import type { IncomingMessage } from "../src/qq/onebot.ts";
-import type { ForwardAttachment, ModelMessage, QuotedMessage } from "../src/qq/model-input.ts";
+import type { IncomingMessage } from "../src/channels/qq/onebot.ts";
+import type { ForwardAttachment, ModelMessage, QuotedMessage } from "../src/channels/qq/model-input.ts";
 import {
   AUTHORITATIVE_SCENE_COUNT,
   authoritativeDecisionsPath,

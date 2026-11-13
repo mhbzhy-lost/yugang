@@ -1,6 +1,6 @@
 /** 新闻成品与任务输入渲染：宿主和权威模板机械测试共用的无副作用入口。 */
 import { renderTemplate } from "../prompt/index.ts";
-import type { MessageTable } from "../qq/model-input.ts";
+import type { MessageTable } from "../channels/render.ts";
 import type { NewsItem, NewsTopicFeed } from "./news-client.ts";
 import { newsSourceLabelOf } from "./news-client.ts";
 import { sanitizeExternalText } from "./sanitize.ts";

@@ -17,10 +17,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPrompts } from "../src/prompt/index.ts";
-import { planRoundImages } from "../src/qq/round-images.ts";
-import { withContext, type BurstMessage } from "../src/qq/debounce.ts";
-import type { IncomingMessage } from "../src/qq/onebot.ts";
-import type { QuotedMessage } from "../src/qq/model-input.ts";
+import { planRoundImages } from "../src/channels/qq/round-images.ts";
+import {type BurstMessage} from "../src/qq/debounce.ts";
+import { withContext } from "../src/channels/qq/round-input.ts";
+import type { IncomingMessage } from "../src/channels/qq/onebot.ts";
+import type { QuotedMessage } from "../src/channels/qq/model-input.ts";
 import type { ShrinkResult } from "../src/media/shrink-image.ts";
 
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));

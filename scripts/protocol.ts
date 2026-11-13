@@ -13,7 +13,7 @@ import { DATA_HOME as HOME } from "../src/paths.ts";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { discoverUin, napcatConfigDir, writeOneBotConfig as writeConfig } from "./lib/onebot-config.ts";
-import { withAccessToken } from "../src/qq/onebot.ts";
+import { withAccessToken } from "../src/channels/qq/onebot.ts";
 import { join } from "node:path";
 
 

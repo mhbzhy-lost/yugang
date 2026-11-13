@@ -19,7 +19,7 @@ import { renderTemplate } from "../src/prompt/index.ts";
 import { resetLook, resetRun } from "../src/egress/ledger.ts";
 import { absorbSecrets } from "../src/egress/absorb.ts";
 import { sumUsage } from "../src/records/usage.ts";
-import { renderMessageList } from "../src/qq/model-input.ts";
+import { renderMessageList } from "../src/channels/qq/model-input.ts";
 import { createEngageNext } from "../src/qq/engage-next.ts";
 import type { RoundTrigger } from "../src/tools/types.ts";
 

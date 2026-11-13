@@ -4,7 +4,7 @@
  * 展开合并转发（限一层，文本进上下文、子图走同一落盘路径）。
  */
 
-import { isLookDisabled } from "../tools/look/tool.ts";
+import { isLookDisabled } from "../../tools/look/tool.ts";
 import { renderForwardAttachment, type ForwardAttachment, type ForwardChildMessage, type QuotedMessage } from "./model-input.ts";
 
 export interface OneBotSegment {

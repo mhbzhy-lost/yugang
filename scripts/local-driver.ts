@@ -35,11 +35,12 @@ import { fileURLToPath } from "node:url";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { loadFishModels } from "../src/model/config.ts";
 import { openFish } from "../src/harness.ts";
-import { planRoundImages, planInlineImages } from "../src/qq/round-images.ts";
-import { assembleRoundContent, submitContentOf, appendAnswerRules, renderOpenMessageList, renderOpenQuotedText, renderBrowseOpportunity } from "../src/qq/round-input.ts";
-import { gifTagOf, imageTagOf } from "../src/qq/model-input.ts";
-import { withContext, type BurstMessage } from "../src/qq/debounce.ts";
-import type { QuotedMessage, ForwardAttachment } from "../src/qq/model-input.ts";
+import { planRoundImages, planInlineImages } from "../src/channels/qq/round-images.ts";
+import { assembleRoundContent, submitContentOf, appendAnswerRules, renderOpenMessageList, renderOpenQuotedText, renderBrowseOpportunity } from "../src/channels/qq/round-input.ts";
+import { gifTagOf, imageTagOf } from "../src/channels/qq/model-input.ts";
+import type { BurstMessage } from "../src/qq/debounce.ts";
+import { withContext } from "../src/channels/qq/round-input.ts";
+import type { QuotedMessage, ForwardAttachment } from "../src/channels/qq/model-input.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));

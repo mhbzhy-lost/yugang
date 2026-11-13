@@ -15,7 +15,7 @@ import { loadFishConfig } from "../src/fish-config.ts";
 import { createEngageNext, type EngageShardItem } from "../src/qq/engage-next.ts";
 import { engageModeOf } from "../src/qq/engage-mode.ts";
 import { runtimeTextOf } from "../src/qq/runtime-text.ts";
-import { renderOpenMessageList, renderOpenQuotedText } from "../src/qq/round-input.ts";
+import { renderOpenMessageList, renderOpenQuotedText } from "../src/channels/qq/round-input.ts";
 import { fakeClock, localAt } from "./lib/fake-clock.ts";
 
 const ROOT = join(import.meta.dirname, "..");
