@@ -1,0 +1,271 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "DeltaMix 3.8B V8.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "stable_diffusion",
+      "device": "default"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "AnimaLoRARemapTagLoader",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "clip": [
+        "2",
+        0
+      ],
+      "text": "<lora:aigrilsV1.0.safetensors:1>",
+      "default_weight": 1,
+      "weight_multiplier": 1,
+      "auto_remap": true,
+      "save_remapped": false,
+      "extend_to_new_layers": false,
+      "extend_strength": 0.5,
+      "manifest": "Auto (Recommended)"
+    }
+  },
+  "5": {
+    "class_type": "RSMultiCharacterPose3D",
+    "inputs": {
+      "pose_control": "auto",
+      "pose_strength": 0.8,
+      "pose_start": 0,
+      "pose_end": 0.7,
+      "scene_json": "{\n  \"version\": 2,\n  \"width\": 1280,\n  \"height\": 720,\n  \"mask_mode\": \"visible\",\n  \"outline\": true,\n  \"camera\": {\n    \"position\": [\n      0.0,\n      1.3334878875142908,\n      5.23003530042881\n    ],\n    \"target\": [\n      0.0,\n      1.3334878875142908,\n      4.23003530042881\n    ],\n    \"fov\": 38.0\n  },\n  \"people\": [\n    {\n      \"id\": 1,\n      \"position\": [\n        0.0,\n        0.0,\n        0.0\n      ],\n      \"rotation\": [\n        0.0,\n        0.0,\n        0.0\n      ],\n      \"scale\": 1.0,\n      \"bulk\": 1.0,\n      \"joints\": {\n        \"left_shoulder\": [\n          -16.899315358757562,\n          -50.990328779501404,\n          21.21524090917419\n        ],\n        \"left_elbow\": [\n          2.016092209244914,\n          0.7582765139192823,\n          -34.525332904249545\n        ],\n        \"right_shoulder\": [\n          -16.905474763156054,\n          -50.99028326840505,\n          21.215261681512924\n        ],\n        \"right_elbow\": [\n          0.3466398517210887,\n          0.7582203254346714,\n          -34.52538225346238\n        ],\n        \"left_hip\": [\n          5.989761885982859,\n          -7.134996355592626,\n          -90.39162716301429\n        ],\n        \"left_knee\": [\n          9.65930023069991e-14,\n          14.296288442786567,\n          91.32559809567289\n        ],\n        \"right_hip\": [\n          9.039282468981437,\n          -7.190659351607159,\n          -90.39902673015852\n        ],\n        \"right_knee\": [\n          0.0018770334595030857,\n          17.338272933939393,\n          91.37190687078254\n        ],\n        \"neck\": [\n          10.0,\n          0.0,\n          0.0\n        ],\n        \"head\": [\n          12.0,\n          0.0,\n          0.0\n        ]\n      }\n    }\n  ]\n}"
+    }
+  },
+  "6": {
+    "class_type": "ModelPatchLoader",
+    "inputs": {
+      "name": "rs_reference/anima_pose/anima_v8_3dpose.safetensors"
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "masterpiece, best quality, absurdres, score_7, score_8, score_9, anime, detailed, intricate, film grain, depth of field, 1girl, solo, sitting, aigirls, aigirls（deepseek）, blue hair, gradient hair, very long hair, wavy hair, ahoge, blue eyes, fins, cetacean tail, maid headdress, blue ribbon, sitting",
+      "clip": [
+        "4",
+        1
+      ]
+    }
+  },
+  "8": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, shiny skin, abs, oily skin, airbrushed, subsurface scattering, sketch, pencil lines, stray lines, rough lines, unfinished lineart",
+      "clip": [
+        "4",
+        1
+      ]
+    }
+  },
+  "10": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 912,
+      "height": 1216,
+      "batch_size": 1
+    }
+  },
+  "11": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "36",
+        0
+      ],
+      "positive": [
+        "7",
+        0
+      ],
+      "negative": [
+        "8",
+        0
+      ],
+      "latent_image": [
+        "10",
+        0
+      ],
+      "seed": 1,
+      "steps": 30,
+      "cfg": 4.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "sgm_uniform",
+      "denoise": 1
+    }
+  },
+  "12": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "14",
+        0
+      ],
+      "filename_prefix": "interaction/t/initial"
+    }
+  },
+  "14": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "11",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "21": {
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "4x-AnimeSharp.safetensors"
+    }
+  },
+  "22": {
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "upscale_model": [
+        "21",
+        0
+      ],
+      "image": [
+        "14",
+        0
+      ]
+    }
+  },
+  "23": {
+    "class_type": "ImageScaleBy",
+    "inputs": {
+      "image": [
+        "22",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "scale_by": 0.5
+    }
+  },
+  "24": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "23",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "25": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "masterpiece, best quality, absurdres, score_7, score_8, score_9, anime, 1girl, solo, sitting, aigirls, aigirls（deepseek）, blue hair, gradient hair, very long hair, wavy hair, ahoge, blue eyes, fins, cetacean tail, maid headdress, blue ribbon, sitting",
+      "clip": [
+        "4",
+        1
+      ]
+    }
+  },
+  "26": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, shiny skin, abs, oily skin, airbrushed, subsurface scattering, sketch, pencil lines, stray lines, rough lines, unfinished lineart",
+      "clip": [
+        "4",
+        1
+      ]
+    }
+  },
+  "27": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "positive": [
+        "25",
+        0
+      ],
+      "negative": [
+        "26",
+        0
+      ],
+      "latent_image": [
+        "24",
+        0
+      ],
+      "seed": 2,
+      "steps": 30,
+      "cfg": 4.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "sgm_uniform",
+      "denoise": 0.25
+    }
+  },
+  "28": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "27",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "36": {
+    "class_type": "AnimaLLLiteApply",
+    "inputs": {
+      "strength": 0.8,
+      "start_percent": 0,
+      "end_percent": 0.7,
+      "model": [
+        "4",
+        0
+      ],
+      "model_patch": [
+        "6",
+        0
+      ],
+      "image": [
+        "5",
+        5
+      ]
+    }
+  },
+  "38": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "28",
+        0
+      ],
+      "filename_prefix": "interaction/t/final"
+    }
+  }
+}

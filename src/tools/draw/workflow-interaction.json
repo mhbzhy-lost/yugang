@@ -235,7 +235,7 @@
       "layout_method": "regional",
       "prompt_syntax": "ComfyUI",
       "prompt": "masterpiece, best quality, absurdres, score_7, score_8, score_9, anime, ",
-      "negative_prompt": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, shiny skin"
+      "negative_prompt": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, shiny skin, abs, oily skin, airbrushed, subsurface scattering, sketch, pencil lines, stray lines, rough lines, unfinished lineart"
     }
   },
   "12": {
@@ -341,7 +341,7 @@
   "74": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, shiny skin",
+      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, shiny skin, abs, oily skin, airbrushed, subsurface scattering, sketch, pencil lines, stray lines, rough lines, unfinished lineart",
       "clip": [
         "9",
         0
