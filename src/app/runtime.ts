@@ -458,7 +458,7 @@ export async function bootRuntime(): Promise<void> {
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
   // 重耗时工具单独放宽：say_voice 要等 GPT-SoVITS 合成（默认超时 120s，覆盖 250s 含空响应重试一次的最坏 240s），
   // video 要下视频、抽帧、逐帧过视觉模型；全局 toolTimeoutSeconds 保持 30 不动
-  toolTimeoutOverrides: { say_voice: 250, video: 90, gpt_image: 210, draw: 600 },
+  toolTimeoutOverrides: { say_voice: 250, video: 90, gpt_image: 210, draw: 1800 },
   // codex 订阅走 WebSocket（Node 的 WS 不吃 --use-env-proxy），过代理时在 main provider 写 transport: "sse"
   ...(modelSelection.transport ? { streamTransport: modelSelection.transport } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时

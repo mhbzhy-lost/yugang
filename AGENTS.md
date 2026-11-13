@@ -413,8 +413,8 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 
 - 日志统一带 `HH:MM:SS` 前缀（`src/index.ts` 启动时包一层 console），排查按时间对齐
 - 单次工具调用超时 30 秒（`fish.config` 的 `toolTimeoutSeconds`），个别重耗时工具按 `toolTimeoutOverrides`
-  单独放宽（代码内置：say_voice 250s / video 90s / gpt_image 210s / draw 600s——单角色全管线约 2 分钟，
-  双角色管线约 2 分钟内，含备转余量），超时以 tool 错误返回，
+  单独放宽（代码内置：say_voice 250s / video 90s / gpt_image 210s / draw 1800s——V8 双人 2 倍域 pass 实测约 8 分半，
+  交互管线 history 等待 1500s，外层另留取图与存储余量），超时以 tool 错误返回，
   **没有整轮超时**
 
 ### 16. 长期记忆（审批闸 + 公共/私有双轨）

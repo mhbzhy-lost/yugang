@@ -565,7 +565,7 @@ export async function runInteraction(url: string, args: InteractionDraw, onSubmi
     const graph = makeInteractionGraph(args);
     await requireGraphLoras(base, graph);
     onSubmitted();
-    const job = await submitAndWait(base, graph, id, clientId, Date.now() + 600_000);
+    const job = await submitAndWait(base, graph, id, clientId, Date.now() + 1_500_000);
     return await fetchInteractionOutput(base, job);
   } finally { busy = false; }
 }
@@ -586,7 +586,7 @@ export async function runInteractionSingle(url: string, args: {
     const graph = makeInteractionSingleGraph(args);
     await requireGraphLoras(base, graph);
     onSubmitted();
-    const job = await submitAndWait(base, graph, id, clientId, Date.now() + 600_000);
+    const job = await submitAndWait(base, graph, id, clientId, Date.now() + 1_500_000);
     return await fetchInteractionOutput(base, job);
   } finally { busy = false; }
 }
