@@ -591,6 +591,20 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
 - 部署依赖：60s 是 macmini 上的自建 Docker 服务（镜像固定、loopback、健康检查、升级回滚的 runbook
   见 `docs/plans/2026-11-02-external-ammo.md` 附录）；RSS/知乎日报无自建依赖；60s 不可达只降级不阻断。
 
+## 通道适配器（2026-11-13）
+
+- 通道抽象：`src/channels/`。`types.ts` 是 `ChannelAdapter` 契约（入站 gate/present/render、
+  出站 send/react），`render.ts` 是通道无关的消息行/列表渲染（compact、新闻播报与 QQ 共用），
+  `registry.ts` 解析 `CHANNELS` 并按 chatKey 路由。
+- QQ 实现：`src/channels/qq/`（onebot.ts / round-input.ts / round-images.ts / normalize.ts /
+  adapter.ts；model-input.ts 是 `../render.ts` 的门面）。`src/qq/` 留的是「QQ 群行为策略」
+  （gate 窗口、debounce 攒批、engage、宵禁、bypass、watch、voice-route、runtime-text）。
+- `CHANNELS`（`.env`）：逗号分隔通道名，缺省 `qq`（macmini 行为不变）；`none`/空串 = 不启动
+  任何通道（无 QQ 机器上进程照常活着，模型可用，无开窗/新闻/OneBot 连接）；未知名字启动即抛错。
+- 新增通道 = 实现 `ChannelAdapter` + registry 注册 + `.env.example` 说明。钉钉（dingtalk）
+  协议待定，注册位已留、未实现。
+- 边界机械检查：`node scripts/verify-channels.ts`（F2/F3）。
+
 ## 命令
 
 ```bash
