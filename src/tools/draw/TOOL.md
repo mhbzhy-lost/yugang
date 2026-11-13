@@ -36,7 +36,7 @@ prompt 写画面本身，用 danbooru tag 为主；普通 tag（cat_ears 之类�
 **单人直出负向基础词**统一为 `low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, lips, shiny skin, abs`；初采样和质感 pass 共用。
 
 用户明确说「自定义画图」时 prompt 传空字符串（其余参数照常），单人走 V8 直出；用户明确要快一点时传 `fast: true`。
-style=<风格 key> 挂全局画风 LoRA，可与 character、ref 组合；风格与角色 LoRA 权重由词表预设，模型不可调。
+style=<风格 key> 挂全局画风 LoRA，可与 character、ref 组合；风格与角色 LoRA 权重由词表预设，角色统一 1.0，模型不可调。
 
 ## 交互管线（pipeline=interaction，2026-11-13 上线）
 

@@ -59,7 +59,7 @@ ComfyUI 忙或队列状态不可用时不删除，不触碰其他 input。部署
 加角色或画风 = 只改对应 JSON，不许再写第二份常量或 preset。两者都经 `AnimaLoRARemapTagLoader` 做 28→52 层映射
 （`auto_remap` 开、`extend_to_new_layers` 关），链序是底模 → 风格（节点 88）→ 角色（节点 93），消费方
 （model 侧 7/42、clip 侧 4/5/42）统一改接末端节点；`hsr` 现在是 `styles.json` 里的普通条目
-（HSR Anima.safetensors，权重 0.7 取自表），不再是硬编码 preset，效果仍需人工确认。LoRA 权重受控 0.4–1.1、缺省 0.8。
+（HSR Anima.safetensors，权重 0.7 取自表），不再是硬编码 preset，效果仍需人工确认。LoRA 权重受控 0.4–1.1；角色词表全部预设 1.0（含 AI 娘、Claude 与崩坏角色），风格权重独立取自表。
 draw 的 `character` / `style` / `characters[].character` 在 Schema 里是**普通字符串而非枚举**（2026-11-10 主人裁定放开）：
 白名单在执行期查表判定，查不到就以 tool 错误打回并给出正确 key，模型侧清单只由 `tags` 提供（draw 的 TOOL.md 不列角色清单）。
 **不要再加回「检测到手写表内角色 tag 却没传 character 就打回」的机械闸**——写角色 tag 而不挂 LoRA 本就是合理用法

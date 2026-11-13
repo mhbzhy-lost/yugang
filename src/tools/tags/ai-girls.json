@@ -5,7 +5,7 @@
     "name": "克劳德小姐（Claude 娘）",
     "lora": "claude_girl_anima_lora_clean.safetensors",
     "inject": "claude_girl, orange hair, very long hair, wavy hair, bangs, orange eyes, hair flower, hair bow, black bow",
-    "weight": 0.8,
+    "weight": 1.0,
     "base": "Anima",
     "source": "",
     "match": [
@@ -39,7 +39,7 @@
     "name": "鲸鱼娘（DeepSeek 娘）",
     "lora": "aigrilsV1.0.safetensors",
     "inject": "aigirls, aigirls（deepseek）, 1girl, solo, blue hair, gradient hair, very long hair, wavy hair, ahoge, blue eyes, fins, cetacean tail, maid headdress, blue ribbon",
-    "weight": 0.8,
+    "weight": 1.0,
     "base": "Anima",
     "source": "",
     "match": [
@@ -83,7 +83,7 @@
     "name": "千问娘（Qwen 娘）",
     "lora": "aigrilsV1.0.safetensors",
     "inject": "aigirls, aigirls（qwen）, 1girl, solo, blue hair, purple hair, gradient hair, very long hair, single braid, purple eyes, mini hat, hat ornament, braid bow, blue tassel, gold earrings",
-    "weight": 0.8,
+    "weight": 1.0,
     "base": "Anima",
     "source": "",
     "match": [
@@ -119,7 +119,7 @@
     "name": "智谱娘（GLM 狐娘）",
     "lora": "aigrilsV1.0.safetensors",
     "inject": "aigirls, aigirls（glm）, 1girl, solo, black hair, very long hair, black eyes, fox ears, fox tail, sleep mask, Z hair ornament, hair bell, white lace headdress, tassel",
-    "weight": 0.8,
+    "weight": 1.0,
     "base": "Anima",
     "source": "",
     "match": [
@@ -155,7 +155,7 @@
     "name": "月之暗面娘（Kimi 娘）",
     "lora": "aigrilsV1.0.safetensors",
     "inject": "aigirls, aigirls（kimi）, 1girl, solo, white hair, light blue hair, gradient hair, very long hair, blue eyes, white frilled headdress, navy hair bow, silver crescent, rainbow triangle, musical note, K hair ornament",
-    "weight": 0.8,
+    "weight": 1.0,
     "base": "Anima",
     "source": "",
     "match": [
@@ -191,7 +191,7 @@
     "name": "白龙娘（GPT 娘）",
     "lora": "aigrilsV1.0.safetensors",
     "inject": "aigirls, aigirls（gpt）, 1girl, solo, white hair, very long hair, ahoge, purple eyes, dragon horns, dragon wings, dragon tail, flower knot, tassel, earrings",
-    "weight": 0.8,
+    "weight": 1.0,
     "base": "Anima",
     "source": "",
     "match": [
@@ -227,7 +227,7 @@
     "name": "四角星猫耳娘（Gemini 娘）",
     "lora": "aigrilsV1.0.safetensors",
     "inject": "aigirls, aigirls（gemini）, 1girl, solo, blue hair, purple hair, gradient hair, very long hair, hair bun, double bun, ahoge, heterochromia, red eyes, yellow eyes, cat ears, cat tail, star hair ornament, star earrings",
-    "weight": 0.8,
+    "weight": 1.0,
     "base": "Anima",
     "source": "",
     "match": [
@@ -263,7 +263,7 @@
     "name": "吸血鬼大小姐（Grok 娘）",
     "lora": "aigrilsV1.0.safetensors",
     "inject": "aigirls, aigirls（grok）, 1girl, solo, blonde hair, very long hair, twintails, ahoge, blue eyes, slit pupils, pointy ears, fangs, vampire, black crown, gold crescent, bat wings, black hair bow",
-    "weight": 0.8,
+    "weight": 1.0,
     "base": "Anima",
     "source": "",
     "match": [

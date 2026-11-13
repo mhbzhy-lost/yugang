@@ -27,7 +27,7 @@ export interface CharacterEntry {
   readonly lora: string;
   /** draw 机械拼进 positive 的唯一段（style 组为空串）。 */
   readonly inject: string;
-  /** 给模型看的建议权重；draw 不消费。 */
+  /** 角色 / 风格预设权重；tags 展示，draw 按词表消费。 */
   readonly weight: number;
   readonly base: string;
   readonly source: string;
@@ -238,7 +238,7 @@ export function findSection(entry: CharacterEntry, raw: string): CharacterSectio
 export function loraBook(key: string): { file: string; inject: string; weight: number } | undefined {
   const entry = byKey(key);
   if (!entry || entry.group === "style") return undefined;
-  return { file: entry.lora, inject: entry.inject, weight: typeof entry.weight === "number" ? entry.weight : 0.8 };
+  return { file: entry.lora, inject: entry.inject, weight: entry.weight };
 }
 
 /** draw 用：风格 LoRA 的文件名与表内权重；角色组不可当风格挂。 */
