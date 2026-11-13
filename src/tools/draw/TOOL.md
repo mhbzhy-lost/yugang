@@ -32,9 +32,7 @@ character；双人填 characters[].character。本工具不列角色清单，也
 prompt 写画面本身，用 danbooru tag 为主；普通 tag（cat_ears 之类）查 tags 词表拿准写法和热度。
 **进本工具的全部文本（prompt 与 characters[].description）一律英文 tag/短语、逗号分隔**：底模只吃英文 tag 分布，
 中文句子虽能被文本编码器编码，却条件化极弱且两句相近中文会互相吞并（线上融合案底）；写中文等于没写。
-用户明确说「自定义画图」时 prompt 传空字符串（其余参数照常），不要自己往里补词——
-画面内容由角色词表注入与模板机械前缀承担。
-负向词是内置的，别写「不要出现什么」。
+用户明确说「自定义画图」时 prompt 传空字符串（其余参数照常），单人会走 V8 直出；用户明确要「快一点 / 赶时间 / 随便画画」时传 `fast: true`，同样走单人 V8 直出快速模式。
 
 style=<风格 key> 挂全局画风 LoRA，不改 prompt，可与 character、ref 组合；
 风格与角色 LoRA 权重都由词表逐条预设（角色缺省 0.8），模型不可调；要调改词表文件。
@@ -44,8 +42,8 @@ style=<风格 key> 挂全局画风 LoRA，不改 prompt，可与 character、ref
 新增 V8 交互管线：**CPU 编排姿态（离线 authoring 的 scene_json 预设）+ B1 初采样
 （RS 区域装配 + 52 层 V8 LLLite 姿态 0.8/0–0.7）→ 超分 → 质感 pass@2x**，一次提交全链。
 - 双人：传 `characters` 两项即固定走这条 V8 姿态线；`preset` 省略时默认 `sit-haystack`。
-- 单人：`character` + `pipeline="interaction"` + `preset` 必填，走**轻形态**（KSampler + 链式 LoRA + 52 层 V8 LLLite，无 RS 区域偏置开销；当前 `single-haystack`：单人草垛侧坐）。
-- 普通单人不传 `pipeline` 时走 V8 直出线；双人不再有普通 RS 分支。`ref` 不支持姿态 interaction；`hd` 在 interaction 下不额外加段（pass 已在 2x 域）。
+- 单人默认：不传 `pipeline` 时走**轻形态 V8 姿态线**（KSampler + Pose3D + 链式 LoRA + 52 层 LLLite；当前 `single-haystack`：单人草垛侧坐）。用户明确自定义或传 `fast: true` 时走单人 V8 直出；`pipeline="interaction"` 仍兼容旧调用并使用同一条单人姿态线。
+- 普通单人和双人都不再有第二条默认生产线。`ref` 只在单人自定义直出中可用；姿态线不接 ref；`hd` 在姿态线下不额外加段。
 - 预设是冻结姿态资产，不是随便起名：要写新姿态先由主人授权离线编排，不能自己编 key。
 
 风格四轴已机械内置在模板质量前缀（场景级，单人双人同吃，不用写也不要自己手写这套词）：
@@ -61,9 +59,7 @@ light particles 会把整图压成 pastel 洗白；detailed skin shading、subtl
 用户明确要「高清大图 / 超级清楚 / 分辨率大点 / 当壁纸」时传 hd: true（3 倍放大，
 明显更慢）；平时不传，默认 2 倍。单人和双人通用。
 
-用户明确要「快一点 / 赶时间 / 随便画画」时传 fast: true（初采样 28 步 + 质感 pass 14 步 + 净超分 1.2x，
-明显更快，细节少于默认）；平时不传。fast 只用于单人默认管线，不能与 hd、双人 characters、
-pipeline=interaction 同时传。
+用户明确要「快一点 / 赶时间 / 随便画画」时传 fast: true（单人 V8 直出快速模式：初采样 28 步 + 质感 pass 14 步 + 净超分 1.2x，明显更快，细节少于单人姿态线）；平时不传。fast 不能与 hd、双人 characters、pipeline=interaction 同时传。
 
 ## 双人
 

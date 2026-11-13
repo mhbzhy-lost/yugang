@@ -60,7 +60,7 @@
       },
       "fast": {
         "type": "boolean",
-        "description": "单人快速模式，默认 false。初采样 28 步 + 质感 pass 14 步（默认 30/30）+ 净超分 1.2x（默认 2x），明显更快，细节少于默认；用户明确要快一点、赶时间、随便画画时传 true。只用于单人默认管线，不能与 hd、双人 characters、pipeline=interaction 同时传"
+        "description": "单人快速模式，默认 false。传 true 时走单人 V8 直出快速模式：初采样 28 步 + 质感 pass 14 步 + 净超分 1.2x，明显更快，细节少于单人姿态线；不能与 hd、双人 characters、pipeline=interaction 同时传"
       },
       "framing": {
         "type": "string",

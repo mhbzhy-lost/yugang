@@ -117,7 +117,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
           return { text: part.description.trim(), ...(book ? { role: { file: book.file, weight: book.weight, inject: book.inject } } : {}) };
         });
       }
-      const customSingle = multiParts === undefined && (positive.length === 0 || args.ref !== undefined);
+      const customSingle = multiParts === undefined && (positive.length === 0 || args.ref !== undefined || args.fast === true);
       // 机械提示区分管线：普通单/双人与姿态线合并；仅自定义单人保留直出提示。
       deps.onLongWork?.(customSingle ? "draw" : "draw_interaction", round);
       if (round === undefined) throw new Error(deps.prompts.messages["draw_round_missing"] ?? "draw_round_missing");
