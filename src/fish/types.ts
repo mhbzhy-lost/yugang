@@ -137,7 +137,7 @@ export interface FishOptions {
   /** draw 阶段进度机械提示（不过模型）：sketch=初采样完成进入超分链；宿主经 outbox 立即发出。 */
   onDrawStage?: (roundId: unknown, stage: "sketch") => void;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费，轮结束失效。 */
-  bypassOf?: (roundId: unknown) => string | undefined;
+  bypassOf?: (roundId: unknown) => { bypass?: string; pbypass?: string } | undefined;
   /** 每个群的工作目录根；实际 cwd 是 <workspaceRoot>/<groupKey>。 */
   workspaceRoot: string;
   limits?: Partial<Omit<EgressLimits, "mediaRoot">>;

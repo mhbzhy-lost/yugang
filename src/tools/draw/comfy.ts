@@ -268,6 +268,10 @@ export interface InteractionDraw {
   parts: MultiPart[];
   label: string;
   hd?: boolean;
+  /** 宿主场景段：原样追加到初采样与 pass 的公共正向末尾。 */
+  bypass?: string;
+  /** 宿主人物段：原样追加到两遍的每个人物区域正向末尾。 */
+  pbypass?: string;
 }
 
 // 交互管线负向（2026-11-12 主人圈定并删去 monochrome/lips）
@@ -281,11 +285,11 @@ export function makeInteractionGraph(args: InteractionDraw): Graph {
   const seed = args.seed ?? randomBytes(4).readUInt32BE(0);
   const passSeed = args.passSeed ?? randomBytes(4).readUInt32BE(0);
   const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;
-  const fullPrompt = floorPos + normalizeTagForm(commonPrompt);
+  const fullPrompt = floorPos + normalizeTagForm(commonPrompt) + (args.bypass ? `, ${args.bypass}` : "");
   for (const group of ["1", "30"] as const) {
     for (let i = 0; i < 2; i++) {
       const part = args.parts[i];
-      g[group].inputs[`character${i + 1}`] = [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text)].filter(Boolean).join(", ");
+      g[group].inputs[`character${i + 1}`] = [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text), args.pbypass].filter(Boolean).join(", ");
       g[String(Number(group) + 1)].inputs[`character${i + 1}_lora`] = part.role?.file ?? "None";
       g[String(Number(group) + 1)].inputs[`character${i + 1}_lora_strength`] = part.role?.weight ?? 1;
       g[String(Number(group) + 1)].inputs[`character${i + 1}_lora_clip_strength`] = part.role?.weight ?? 1;
@@ -324,6 +328,7 @@ function applyInteractionHd(g: Graph, hd?: boolean): void {
 export function makeInteractionSingleGraph(args: {
   prompt: string; width: number; height: number; seed?: number; passSeed?: number;
   preset: InteractionPreset; part: MultiPart; label: string; hd?: boolean;
+  bypass?: string; pbypass?: string;
 }): Graph {
   if (!args.part.text || args.part.text.length > 800) throw new Error("invalid single part text");
   if (args.part.role !== undefined && (!/^[\w .@()-]+\.safetensors$/.test(args.part.role.file) || !Number.isFinite(args.part.role.weight) || args.part.role.weight < 0.4 || args.part.role.weight > 1.1)) throw new Error("invalid single role");
@@ -337,7 +342,8 @@ export function makeInteractionSingleGraph(args: {
   const fullPrompt = floorPos + normalizeTagForm(commonPrompt);
   const part = args.part;
   const desc = [part.role ? escapeInjected(normalizeTagForm(multiRoleTags(part))) : "", normalizeTagForm(part.text)].filter(Boolean).join(", ");
-  const positive = `${fullPrompt}, ${desc}`;
+  const suffix = (args.bypass ? `, ${args.bypass}` : "") + (args.pbypass ? `, ${args.pbypass}` : "");
+  const positive = `${fullPrompt}, ${desc}${suffix}`;
   const loraFile = part.role?.file ?? "None";
   const loraW = part.role?.weight ?? 1;
 
@@ -573,6 +579,7 @@ export async function runInteraction(url: string, args: InteractionDraw, onSubmi
 export async function runInteractionSingle(url: string, args: {
   prompt: string; width: number; height: number; seed?: number; passSeed?: number;
   preset: InteractionPreset; part: MultiPart; label: string; hd?: boolean;
+  bypass?: string; pbypass?: string;
 }, onSubmitted: () => void): Promise<Buffer> {
   if (busy) throw new ComfyBusy("ComfyUI busy");
   busy = true;

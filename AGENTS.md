@@ -40,6 +40,7 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 机械消除过扁平并加回真实感——M 组/L 组/P 组三夜实验定版）→ hd 第三倍纯放大（95/96/97，接 pass 之后）→ 输出（经 outbox 机械直发，模型不再调 say_media，见硬约束 4）。
 **没有脸修也没有手修**（主人裁定退役；手修 2026-11-13 摘除模板 41/42 节点，WSL 生产不装 Impact-Pack）。单人直出初采样与 pass 共用上述基础正负向词；姿态线使用独立模板。
 **V8 LoRA 与高清接线**（2026-11-13 修复）：单人姿态线与直出都使用 `AnimaLoRARemapTagLoader`（auto_remap=true、extend_to_new_layers=false）；双人初采样与 pass 的 RS 槽位都必须安装 `scripts/comfy-rs-remap-patch.py` 补丁，缺依赖/manifest 时拒绝加载，禁止静默错位。WSL ComfyUI 的 `extra_model_paths.yaml` 必须保留 Forge 目录 `/mnt/c/Users/mhbzhy/sd-webui-forge-neo/models/Lora` 的映射，覆盖角色词表里的文件；提交前按 ComfyUI 文件清单核对，缺文件拒绝提交，不能只检查节点加载成功。姿态 pass 的实验尺寸闸须用 `scripts/comfy-scene-canvas-patch.py` 补齐生产七种比例的 2 倍域。单人/双人姿态线 `hd` 均透传至 graph，在 2 倍 pass 解码后由 AnimeSharp 4x × lanczos 0.375 净放大至 3 倍，最终取 node 38。
+**宿主 bypass 接线**：单人直出/快速和单人姿态线在初采样、pass 正向末尾原样追加 `bypass` 与 `pbypass`；双人姿态线把 `bypass` 追加到两遍公共场景正向，把 `pbypass` 追加到两遍的两个角色槽位末尾。文本只由本轮宿主回调透传，不进入工具 Schema，不经 tag 归一化，轮结束清除。
 **约束**：pass 的 denoise 不许超 0.25 越界（M3 实测 0.35 唇形失控）；禁止把它改回超分前「修复」用途；
 禁止在 3 倍 latent 上跑任何扩散（旧 hd 事故：DiT 位置编码超域，高频砍到 ×0.55）。
 
