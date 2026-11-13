@@ -269,7 +269,7 @@ export interface InteractionDraw {
   label: string;
 }
 
-// 交互管线负向（2026-11-12 主人圈定并删去 monochrome/lips，用于 2B）
+// 交互管线负向（2026-11-12 主人圈定并删去 monochrome/lips）
 const INTERACTION_NEGATIVE = "low quality, worst quality, score_1, score_2, score_3, early, old, shiny skin";
 export function makeInteractionGraph(args: InteractionDraw): Graph {
   validateParts(args.parts);
@@ -329,7 +329,7 @@ export function makeInteractionSingleGraph(args: {
   const loraFile = part.role?.file ?? "None";
   const loraW = part.role?.weight ?? 1;
 
-  g["1"] = { class_type: "UNETLoader", inputs: { unet_name: "oneObsessionAnima_v40.safetensors", weight_dtype: "default" } };
+  g["1"] = { class_type: "UNETLoader", inputs: { unet_name: "DeltaMix 3.8B V8.safetensors", weight_dtype: "default" } };
   g["2"] = { class_type: "CLIPLoader", inputs: { clip_name: "qwen_3_06b_base.safetensors", type: "stable_diffusion", device: "default" } };
   g["3"] = { class_type: "VAELoader", inputs: { vae_name: "qwen_image_vae.safetensors" } };
   if (part.role) {
@@ -338,7 +338,7 @@ export function makeInteractionSingleGraph(args: {
   const modelOut = part.role ? ["4", 0] : ["1", 0];
   const clipOut = part.role ? ["4", 1] : ["2", 0];
   g["5"] = { class_type: "RSMultiCharacterPose3D", inputs: { pose_control: "auto", pose_strength: 0.8, pose_start: 0.0, pose_end: 0.7, scene_json: args.preset.scene_json } };
-  g["6"] = { class_type: "ModelPatchLoader", inputs: { name: "rs_reference/anima_pose/anima_3dpose_outline_7000.safetensors" } };
+  g["6"] = { class_type: "ModelPatchLoader", inputs: { name: "rs_reference/anima_pose/anima_v8_3dpose.safetensors" } };
   g["36"] = { class_type: "AnimaLLLiteApply", inputs: { strength: 0.8, start_percent: 0.0, end_percent: 0.7, model: modelOut, model_patch: ["6", 0], image: ["5", 5] } };
   g["7"] = { class_type: "CLIPTextEncode", inputs: { text: positive, clip: clipOut } };
   g["8"] = { class_type: "CLIPTextEncode", inputs: { text: neg, clip: clipOut } };

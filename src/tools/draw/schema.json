@@ -84,7 +84,7 @@
           "rs",
           "interaction"
         ],
-        "description": "默认 rs（原生产 RS 管线）。interaction = 2B 交互管线：CPU 编排姿态（Pose3D 预设）+ B1 初采样 + 超分 + 质感 pass@2x，单人也支持（轻形态 KSampler）。选它必须同时给 preset"
+        "description": "默认 rs（V8 生产 RS 管线；双人传 characters 时固定转 V8 姿态线）。interaction = V8 单人交互管线：CPU 编排姿态（Pose3D 预设）+ 轻形态 KSampler + 52 层 LLLite + 超分 + 质感 pass@2x。双人不需要传 pipeline，characters 两项即走姿态线；双人 preset 省略时默认 sit-haystack"
       },
       "preset": {
         "type": "string",

@@ -41,11 +41,11 @@ style=<风格 key> 挂全局画风 LoRA，不改 prompt，可与 character、ref
 
 ## 交互管线（pipeline=interaction，2026-11-13 上线）
 
-除默认 RS 管线外，新增 2B 交互管线：**CPU 编排姿态（离线 authoring 的 scene_json 预设）+ B1 初采样
-（RS 区域装配 + 原生 LLLite 姿态 0.8/0–0.7）→ 超分 → 质感 pass@2x**，一次提交全链。
-- 双人：`characters` 两项 + `pipeline="interaction"` + `preset` 必填。预设决定姿态与构图（当前 `sit-haystack`：草垛并坐牵手）。
-- 单人：`character` + `pipeline="interaction"` + `preset` 必填，走**轻形态**（KSampler + 链式 LoRA + LLLite，无 RS 区域偏置开销；当前 `single-haystack`：单人草垛侧坐）。
-- 不传 `pipeline` 时行为与旧版完全一致（RS 生产形态）；`ref` 不支持 interaction；`hd` 在 interaction 下不额外加段（pass 已在 2x 域）。
+新增 V8 交互管线：**CPU 编排姿态（离线 authoring 的 scene_json 预设）+ B1 初采样
+（RS 区域装配 + 52 层 V8 LLLite 姿态 0.8/0–0.7）→ 超分 → 质感 pass@2x**，一次提交全链。
+- 双人：传 `characters` 两项即固定走这条 V8 姿态线；`preset` 省略时默认 `sit-haystack`。
+- 单人：`character` + `pipeline="interaction"` + `preset` 必填，走**轻形态**（KSampler + 链式 LoRA + 52 层 V8 LLLite，无 RS 区域偏置开销；当前 `single-haystack`：单人草垛侧坐）。
+- 普通单人不传 `pipeline` 时走 V8 直出线；双人不再有普通 RS 分支。`ref` 不支持姿态 interaction；`hd` 在 interaction 下不额外加段（pass 已在 2x 域）。
 - 预设是冻结姿态资产，不是随便起名：要写新姿态先由主人授权离线编排，不能自己编 key。
 
 风格四轴已机械内置在模板质量前缀（场景级，单人双人同吃，不用写也不要自己手写这套词）：
@@ -67,8 +67,7 @@ pipeline=interaction 同时传。
 
 ## 双人
 
-双人同框必须传 characters，恰好两项，一律走区域隔离管线（模型不用管管线细节，
-也永远别向用户描述走没走「双人管线」之类的内部概念）。每项写 description（英文 tag/短语，规则同 prompt）：挂了角色的只写动作、表情、
+双人同框必须传 `characters`，恰好两项；**双人固定走 V8 + 52 层 LLLite 姿态线**，不再有普通 RS 分支，`preset` 省略时默认 `sit-haystack`。预设决定姿态与构图；模型不用传 `pipeline`。每项写 description（英文 tag/短语，规则同 prompt）：挂了角色的只写动作、表情、
 服装；普通人写清外貌。人数不用写。命名角色默认挂角色 LoRA（characters[].character）；仅当用户明确说
 「不挂 LoRA / 用 tag 直出」时才省 character 键、自己在 description 写外观特征。
 双人不支持顶层 character、style、ref；hd 可用。

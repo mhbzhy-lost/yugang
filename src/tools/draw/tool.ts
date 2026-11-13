@@ -14,7 +14,7 @@ import { recordMedia } from "../../egress/ledger.ts";
 import { runInteraction, runInteractionSingle, type InteractionPreset } from "./comfy.ts";
 
 const INTERACTION_PRESETS = JSON.parse(readFileSync(new URL("./interaction-presets.json", import.meta.url)).toString("utf8")) as Record<string, InteractionPreset>;
-import { ComfyBusy, ComfyExecutionFailed, runComfy, runMulti, type ComfyDraw, type DrawStage, type MultiPart } from "./comfy.ts";
+import { ComfyBusy, ComfyExecutionFailed, runComfy, type ComfyDraw, type DrawStage, type MultiPart } from "./comfy.ts";
 
 interface DrawArgs {
   prompt: string;
@@ -78,9 +78,6 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       if (!enabled()) throw new Error(deps.prompts.messages["draw_disabled"] ?? "draw_disabled");
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
-      // 机械提示区分管线（working_* 文案带不同耗时预期）：interaction / 双人 RS / 单人 fast / 单人默认
-      const workTool = args.pipeline === "interaction" ? "draw_interaction" : args.characters !== undefined ? "draw_rs" : args.fast === true ? "draw_fast" : "draw";
-      deps.onLongWork?.(workTool, round);
       const positive = typeof args.prompt === "string" ? args.prompt.trim() : "";
       // 自定义画图模式（2026-11-10）：用户明确要时 prompt 可为空串，内容全部由角色词表/机械前缀承担；
       // 只限长度，不退非空。
@@ -120,12 +117,15 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
           return { text: part.description.trim(), ...(book ? { role: { file: book.file, weight: book.weight, inject: book.inject } } : {}) };
         });
       }
+      const customSingle = multiParts === undefined && (positive.length === 0 || args.ref !== undefined);
+      // 机械提示区分管线：普通单/双人与姿态线合并；仅自定义单人保留直出提示。
+      deps.onLongWork?.(customSingle ? "draw" : "draw_interaction", round);
       if (round === undefined) throw new Error(deps.prompts.messages["draw_round_missing"] ?? "draw_round_missing");
       const previous = rounds.get(api.conversationId);
       if (previous?.pending) throw new Error(deps.prompts.messages["draw_inflight"] ?? "draw_inflight");
       if (previous?.round === round && previous.used) throw new Error(deps.prompts.messages["draw_used"] ?? "draw_used");
       if (previous?.round === round && previous.submitted) throw new Error(deps.prompts.messages["draw_uncertain"] ?? "draw_uncertain");
-      const ref = args.ref !== undefined ? prepareRef(args.ref) : undefined;
+      const ref = customSingle && args.ref !== undefined ? prepareRef(args.ref) : undefined;
       const state: RoundState = { round, pending: true, submitted: false, used: false };
       rounds.set(api.conversationId, state);
       // 提交前二次复核：comfy.ts 在真正 POST 前同步调 onSubmitted（其间无 await），
@@ -135,18 +135,16 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         const stageCb = deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined;
         const bp = deps.bypassOf?.(round);
         let png: Buffer;
-        if (args.pipeline === "interaction") {
-          if (args.ref !== undefined) throw new Error(deps.prompts.messages["draw_interaction_ref_unsupported"] ?? "interaction does not support ref");
-          if (!args.preset) throw new Error(deps.prompts.messages["draw_preset_required"] ?? "preset is required when pipeline=interaction");
-          const preset = INTERACTION_PRESETS[args.preset];
-          if (!preset) throw new Error(deps.prompts.messages["draw_preset_unknown"] ?? `unknown interaction preset: ${args.preset}`);
+        const useInteraction = !customSingle;
+        if (useInteraction) {
+          const presetName = args.preset ?? (multiParts ? "sit-haystack" : "single-haystack");
+          const preset = INTERACTION_PRESETS[presetName];
+          if (!preset) throw new Error(deps.prompts.messages["draw_preset_unknown"] ?? `unknown interaction preset: ${presetName}`);
           png = multiParts
-            ? await runInteraction(deps.comfyUrl, { prompt: positive, width, height, preset, parts: multiParts, label: args.preset }, onSubmitted)
-            : await runInteractionSingle(deps.comfyUrl, { prompt: positive, width, height, preset, part: { text: positive, ...(lora ? { role: lora } : {}) }, label: args.preset }, onSubmitted);
+            ? await runInteraction(deps.comfyUrl, { prompt: positive, width, height, preset, parts: multiParts, label: presetName }, onSubmitted)
+            : await runInteractionSingle(deps.comfyUrl, { prompt: positive, width, height, preset, part: { text: positive, ...(lora ? { role: lora } : {}) }, label: presetName }, onSubmitted);
         } else {
-          png = multiParts
-            ? await runMulti(deps.comfyUrl, { prompt: positive, width, height, parts: multiParts, framing: args.framing, spacing: args.spacing, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, onSubmitted)
-            : await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, hd: args.hd === true, fast: args.fast === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, onSubmitted, stageCb);
+          png = await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, hd: args.hd === true, fast: args.fast === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, onSubmitted, stageCb);
         }
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
