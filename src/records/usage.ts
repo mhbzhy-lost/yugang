@@ -5,8 +5,14 @@
  * 这里读出来、和上次的值求差、按天追加到 var/usage/<day>.jsonl。
  *
  * 存增量而不是累计值：按天按群直接 sum 就行，不用怕重复。
+ *
+ * **基线必须持久化**（2026-11-14 修复）：pi.usage 是持久化累计值，而旧实现的基线
+ * 只在进程内存。进程一重启，每个会话首轮都走「首次见到」分支把**全量历史累计**
+ * 当成本轮增量再写一遍，按天 sum 就彻底坏了（实测单日出现 3.8 亿 token 的假记录，
+ * 同一会话多次重启还会写出 cost 完全相同的重复条）。容器化后每次部署都重启，
+ * 这个旧 bug 从「偶发」变成「每次部署必发」。
  */
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { UsageState } from "@earendil-works/pi-durable";
 
@@ -72,11 +78,36 @@ export function localDay(at: number): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
+/** 读基线；缺失或坏了都回退空 Map，但坏了要告警（会丢一轮增量精度）。 */
+function loadBaseline(path: string): Map<string, UsageSnapshot> {
+  if (!existsSync(path)) return new Map();
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, UsageSnapshot>;
+    return new Map(Object.entries(raw));
+  } catch (error) {
+    console.error("[鱼缸] 用量基线读取失败，本轮增量可能不准", error instanceof Error ? error.message : error);
+    return new Map();
+  }
+}
+
+/** 原子写基线（tmp + rename）；写失败只告警，不阻断记账。 */
+function saveBaseline(path: string, last: Map<string, UsageSnapshot>): void {
+  try {
+    mkdirSync(join(path, ".."), { recursive: true });
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, JSON.stringify(Object.fromEntries(last)));
+    renameSync(tmp, path);
+  } catch (error) {
+    console.error("[鱼缸] 用量基线写入失败", error instanceof Error ? error.message : error);
+  }
+}
+
 export function createUsageLedger(root: string) {
   // 基线按「chat × conversation」记：人格切换（/切换人格）= 同一 chatKey 换新 conversation，
   // 累计值从旧会话的高位回落到新会话的低位是新会话的正常现象；按 chat 单维记会把
   // 回落全数钳零、整轮用量静默丢账（append 返回 null，usage.jsonl 和日志都不留痕）。
-  const last = new Map<string, UsageSnapshot>();
+  const baselinePath = join(root, "baseline.json");
+  const last = loadBaseline(baselinePath);
 
   return {
     /** 传入该会话的累计用量；只有增长时才落一行。返回写入的增量或 null。
@@ -86,13 +117,16 @@ export function createUsageLedger(root: string) {
       const previous = last.get(key);
       last.set(key, cumulative);
       if (!previous) {
-        // 首次见到这个会话：把它的历史累计也记一笔，否则重启前花的钱会丢
+        // 真正的首次（新群/新人格，或基线文件丢了）：此时累计值就是从 0 长起来的，
+        // 记一笔等于记增量。**重启不再走这里**——基线已从 baseline.json 加载。
         if (cumulative.total === 0 && cumulative.cost === 0) return null;
+        saveBaseline(baselinePath, last);
         return write(chat, cumulative, at, conv);
       }
 
       const delta = diffUsage(cumulative, previous);
       if (delta.total === 0 && delta.cost === 0) return null;
+      saveBaseline(baselinePath, last);
       return write(chat, delta, at, conv);
     },
   };
