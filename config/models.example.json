@@ -403,7 +403,7 @@
             "supportsDeveloperRole": false
           },
           "thinkingLevelMap": {
-            "off": null,
+            "off": "none",
             "minimal": null,
             "low": "low",
             "medium": "medium",

@@ -38,6 +38,10 @@ services:
       NAPCAT_UID: "501"
       NAPCAT_GID: "501"
       MODE: ws
+      # 快速登录：镜像 entrypoint 见到 ACCOUNT 就跑 `qq --no-sandbox -q $ACCOUNT`。
+      # **不设它每次重启都要重新扫码**，重启自愈（A2）就不成立。
+      # 值从 .env 的 PROTOCOL_QQ 插值（compose 自动读项目目录的 .env）。
+      ACCOUNT: "${PROTOCOL_QQ}"
       TZ: Asia/Shanghai
       LANG: C.UTF-8
     ports:
