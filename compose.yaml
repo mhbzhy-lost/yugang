@@ -49,11 +49,13 @@ services:
       - ./data/napcat/config:/app/napcat/config   # onebot11 / webui 配置
       - ./data/napcat/plugins:/app/napcat/plugins
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:6099/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      # 镜像里没有 node（NapCat 跑在 QQ 的 electron 里），用 curl。
+      # WebUI 根路径可能 404，只要 HTTP 有应答就说明服务活着。
+      test: ["CMD-SHELL", "curl -s -o /dev/null -m 5 http://127.0.0.1:6099/ || exit 1"]
       interval: 30s
-      timeout: 5s
+      timeout: 8s
       retries: 3
-      start_period: 60s
+      start_period: 90s
 
   fish:
     build:
@@ -78,6 +80,12 @@ services:
       ONEBOT_WS_URL: ws://napcat:3001
       SIXTY_BASE_URL: http://sixty:4399
       VIDEO_PYTHON: /opt/video-venv/bin/python
+      # 代理：.env 里是宿主 loopback，容器内必须改指宿主（否则 npm ci / 模型请求
+      # / 外部 HTTP 全部 ECONNREFUSED）。NO_PROXY 补上内网服务名与宿主别名，
+      # 让 napcat/sixty/socat 转发走直连，不绕代理。
+      HTTP_PROXY: http://host.docker.internal:7897
+      HTTPS_PROXY: http://host.docker.internal:7897
+      NO_PROXY: "localhost,127.0.0.1,::1,napcat,sixty,host.docker.internal,.bilibili.com,.hdslb.com,.bilivideo.com,.bilivideo.cn,.bilivideo.net,.b23.tv"
       # COMFYUI_URL 故意不覆盖：保持 .env 里的 http://127.0.0.1:18190，
       # 由 entrypoint 的 socat 转发到宿主机隧道（安全不变量不放宽）。
       # fish.config.json 用仓库根默认路径（仓库整目录挂载，原子写可用），
