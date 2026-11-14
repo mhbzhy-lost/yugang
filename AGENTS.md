@@ -406,7 +406,8 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 - 服务端：GPT-SoVITS 常驻本机（launchd 托管；9884 爱莉希雅 v4 自训 elysia、9881 桑多涅、9882 凯尔希；
   9880 为旧 v2 保留可回滚，9883 为落选 v2ProPlus 试听实例，保留 7 天后回收），依赖 `~/nltk_data` 的
   `cmudict` + `averaged_perceptron_tagger*`——**缺了会返回 200 + 0 字节空音频**（英文 g2p 抛 LookupError）
-- 语音实例由鱼缸启动链拉起（`npm run tts up`），plist `RunAtLoad=false` 不开机自启，`KeepAlive` 崩溃自愈；
+- 语音实例 plist 已改 **`RunAtLoad=true`**（2026-11-14 容器化：鱼不再拉 TTS，必须开机自启），`KeepAlive` 崩溃自愈；
+  仅三个活跃实例改了（elysia4 / kaltsit2coldB / sandrone2），遗留 plist 仍为 false；
   状态/拉起/收起统一走 `npm run tts [status|up|down]`，活跃实例集以 `fish.config.json` 的 `voices` 端口为准
   （单一事实源，换端口只改配置不改代码），遗留 plist 不参与拉起/收起
 - 空结果重试一次（第二次用 `text_language=auto`），合成超时默认 120 秒（`say_voice` 工具层覆盖 250 秒，
@@ -609,7 +610,12 @@ npm run creds show  # 凭据状态（只有长度）
 npm run login -- google-antigravity [--browser | --finish '<授权码>']  # Antigravity 登录（只有浏览器流程；openai-codex 同入口）
 npm run ping        # 模型连通性 + 用量（不打印 key）
 npm start          # 真跑（自动读 .env）——只在 macmini 上
-npm run deploy     # 部署：git pull + 平滑重启鱼（只在 macmini 上跑）
+npm run deploy     # 部署：git pull + 平滑重启鱼（宿主形态，只在 macmini 上跑；容器形态下拒绝）
+# 容器形态部署（见「容器部署」一节，在 macmini 的 ~/yugang 里跑）：
+#   git pull && docker compose restart fish                 只改代码，1–3 秒
+#   git pull && docker compose up -d --force-recreate fish   删/改名了源文件
+#   docker compose logs -f fish                             看日志
+#   docker compose exec fish node scripts/doctor.ts         容器内体检
 npm run tts [status|up|down]  # 语音实例状态/拉起/收起（macmini 上跑）
 node scripts/migrate-memes.ts [--dry]   # 存量表情包按规则补一级情绪词
 node scripts/retag-memes.ts [--dry]     # 用 flash 给缺一级词的表情包补词（只加那一个 tag）
@@ -639,6 +645,76 @@ mini 上并没有 `home-mac-connect` 这个 skill（今天有子代理在 mini �
 镜像默认浮动 tag `vikiboss/60s`，生产建议用 `SIXTY_IMAGE=vikiboss/60s@sha256:<digest>` 固定；健康检查端点是
 `GET /health`（返回 `ok`，60s 源码实际端点，没有 `/healthz`）。完整 runbook（起容器命令、探活、升级与回滚步骤）
 在 `docs/plans/2026-11-02-external-ammo.md` 的部署 runbook 附录；RSS/知乎日报走公网直连，无自建依赖。
+
+## 容器部署（2026-11-14 起）
+
+协议端与鱼跑在 **OrbStack 容器**里，不再把 NapCat 注入 macOS 的 QQ.app。完整设计与实测证据在
+`docs/plans/2026-11-14-dockerize-fish-napcat.md`。
+
+**三个服务**（`compose.yaml`）：`napcat`（官方镜像，QQ+NapCat 一体）/ `fish`（自建）/ `sixty`（新闻源）。
+**语音与 ComfyUI 留宿主机**：GPT-SoVITS 靠 launchd + MPS 加速，容器拿不到 Metal；ComfyUI 在 Windows，经宿主 SSH 隧道。
+
+### 镜像只是环境，源码与数据全外挂
+
+鱼是快速迭代项目，**源码不 baked**：
+
+```yaml
+volumes:
+  - .:/app                                    # 源码：git pull + restart 即完成部署
+  - ./.node_modules-linux:/app/node_modules    # Linux 依赖（已 gitignore）
+  - ./var:/data                               # 全部业务数据，原地不动
+```
+
+- **零 named volume**。OrbStack 的虚拟磁盘 `data.img.raw` 带 `com.apple.metadata:com_apple_backup_excludeItem`，
+  **Time Machine 不备份它**；全外挂才能让数据留在 TM 覆盖范围内
+- **依赖必须另开 `.node_modules-linux/`**，不能用仓库 `node_modules/`——后者是 macOS 二进制，sharp 加载不了。
+  lockfile 指纹变了由 `docker/entrypoint.sh` 自动 `npm ci`
+- 镜像里**既无源码也无依赖**，只有 node / ffmpeg / socat / python+av / heif-convert
+
+### 部署命令分两条
+
+```bash
+git pull && docker compose restart fish                  # 只改文件内容，实测 1–3 秒
+git pull && docker compose up -d --force-recreate fish    # 删/改名了源文件
+```
+
+VirtioFS 有约 3 秒属性缓存：长驻容器内宿主删除的文件会残留几秒，**新建容器立刻干净**。
+只改内容不受影响（读新 inode）。`docker compose build fish` 只在**运行时依赖变了**时才需要。
+
+### 容器模式开关与护栏
+
+单一开关 **`YUGANG_CONTAINER=1`**（compose 注入，不用 `process.platform` 猜，否则 Linux 开发机被误判）：
+
+- `restart` 工具不再 spawn 新鱼，直接退出由容器 restart 策略拉起（**防双实例撞号**，第 16 条）
+- `up` 不再拉协议端与 TTS；`deploy` / `down` / `tts` / `protocol` 在容器内明确拒绝
+- `deploy` 双向护栏：容器内拒绝；宿主机侧检测到 `yugang-fish` 容器在跑也拒绝
+- `doctor` 不查 `.env` 文件与本地 napcat 包，改查 sharp / socat / heif-convert / 宿主依赖连通
+
+### 宿主机依赖接法
+
+| 依赖 | 接法 |
+|---|---|
+| ComfyUI `:18190` | 容器内 **socat 转发** `127.0.0.1:18190` → `host.docker.internal:18190`。**`comfy.ts` 的 loopback 校验不放宽**（防 SSRF） |
+| TTS `:988x` | `fish.config.json` 的 `voices[*].url` → `http://host.docker.internal:988x`；`referWav` 保持宿主绝对路径（服务端自己读） |
+| provider 代理 `:7897` | `config/models.json` 的 `providers.*.proxy` → `http://host.docker.internal:7897` |
+| 60s `:4399` | compose 同网服务名 `http://sixty:4399` |
+| 协议端 | `ONEBOT_WS_URL=ws://napcat:3001`；napcat 的 WS 必须监听 **`0.0.0.0`**（宿主形态是 127.0.0.1） |
+
+**不写 `extra_hosts: host-gateway`**：会覆盖 OrbStack 自带的 `host.docker.internal` 映射（实测它本就直达宿主 loopback）。
+
+### 图像后端双实现
+
+macOS 用系统 `sips`（逐字未动）；其它平台用 **sharp worker**（`src/media/image-worker.ts`）。
+4 处调用点全是同步契约，所以用 `spawnSync` 起一个 worker 干完整件事（现状本就是逐档 spawn sips）。
+
+**HEIC 必须靠系统 `heif-convert`**：sharp 预编译包的 libheif 只带 AV1、没有 libde265，
+`format.heif.input` 报 true 但喲 HEIC 会 `bad seek`；ffmpeg 也只解网格首个瓦片。
+缺了会**静默丢图且不报错**，`doctor` 已加体检。
+
+### 回滚宿主形态
+
+数据原地未动，回滚不需反向拷贝：`docker compose down` → `~/napcat-restore/restore-working.sh`
+→ `clear-quarantine.sh` → `fish-restart-logged.sh`。若改过 `voices[*].url` / `proxy`，回滚时改回 `127.0.0.1`。
 
 ## 人格与指令
 
