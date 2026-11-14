@@ -1,7 +1,6 @@
 /**
  * prompt 只能是磁盘上的 markdown：
  *  - 模型看到的每一段文字都能追溯到 prompt/ 下的某个文件
- *  - src/ 里没有内嵌的 prompt
  *  - pi-durable 自带的注入（compaction）已关闭
  */
 import test from "node:test";
@@ -17,7 +16,6 @@ import { openFish } from "../src/harness.ts";
 import { auditPrompts, loadPrompts, parseMessageTable, renderTemplate } from "../src/prompt/index.ts";
 import { loadToolManifests, parseToolManifest, toolFullDescription } from "../src/tools/manifest.ts";
 import { mergeToolMessages, DISABLED_TOOL_PACKAGES } from "../src/tools/loader.ts";
-import { scanDir, scanSource } from "../src/prompt/lint.ts";
 import { makeReminderTask } from "../src/tools/remind/task.ts";
 import { REJECTION_CODES } from "../src/egress/policy.ts";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
@@ -117,21 +115,6 @@ test("pi-durable 的 compaction 已关掉", async () => {
   } finally {
     await fish.close();
   }
-});
-
-test("src/ 里没有内嵌 prompt", () => {
-  const violations = scanDir(join(ROOT, "src"));
-  assert.deepEqual(
-    violations.map((v) => `${v.file}: 中文 ${v.cjk} 字`),
-    [],
-    "有 prompt 字面量留在代码里，应该挪到 prompt/",
-  );
-});
-
-test("扫描器本身能抓到内嵌 prompt", () => {
-  const planted = 'const p = "你是一条鱼，要像群员一样说话，不要暴露自己是模型，也不要解释架构";';
-  const hits = scanSource(planted, "planted.ts");
-  assert.equal(hits.length, 1);
 });
 
 test("模板缺变量直接报错，不留半渲染的 prompt", () => {

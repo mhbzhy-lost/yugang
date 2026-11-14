@@ -7,7 +7,7 @@
  * src/tools/<name>/（TOOL.md 摘要与使用指南 + schema.json + messages.json 工具专属文案，
  * 唯一模型侧来源）。本脚本两处都列，并按 loader 的真实注册结果标出 eager/deferred；工具文案
  * 按归属分别列出（中心 prompt/messages.md 与各工具的 messages.json，后者已由 loader 合并
- * 进全局 messages 视图），最后照常扫描 src/ 的内嵌 prompt。
+ * 进全局 messages 视图）。
  * 只读仓库文件，不读 .env、不读凭据。
  */
 import { PROMPT_ROOT, REPO_ROOT } from "../src/paths.ts";
@@ -17,7 +17,6 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { auditPrompts, loadPrompts } from "../src/prompt/index.ts";
-import { scanDir } from "../src/prompt/lint.ts";
 import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
 import { loadToolSurface } from "../src/tools/index.ts";
 import { makeReminderTask } from "../src/tools/remind/task.ts";
@@ -111,7 +110,3 @@ console.log("\n== pi-durable 注入的 prompt\n");
 console.log("  compaction: 已禁用（默认会注入一段库自带的总结提示词）");
 console.log("  system prompt: 全部 section 来自本项目扩展（runtime / persona / tool_catalog / ops / people / watched）");
 
-// 顺手扫一遍源码，确认没有内嵌的 prompt 字面量
-const violations = scanDir(join(repoRoot, "src"));
-console.log(`\n== 源码内嵌扫描：${violations.length === 0 ? "干净" : `${violations.length} 处可疑`}`);
-for (const v of violations) console.log(`  ${v.file}: 中文 ${v.cjk} 字「${v.sample}…」`);

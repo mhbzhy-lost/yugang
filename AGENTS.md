@@ -111,8 +111,10 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
   每个工具的说明、参数 Schema、使用指南与工具专属回执文案唯一来自 `src/tools/<name>/TOOL.md`（见第 2 条）
 - 10 秒合并与入站 @ 的标注也一样：背景栏（`ctx_*`）、整组标记、要回的那一行、`@了你 / @了别人 / @了全体成员`
   全在 `prompt/messages.md`；`src/qq/debounce.ts` / `src/qq/gate.ts` 只负责拼装，不写文案
-- `src/` 里不允许出现大段 prompt 字面量。`npm test` 会扫描（阈值：单条字面量 ≥ 12 个汉字）；
-  `TOOL.md` 是唯一例外——它本来就是模型侧文字，只是随工具包放在 `src/tools/<name>/` 里
+- **模型可见的提示词不得写在 `src/` 里**（人格、运行时协议、工具说明一律进 `prompt/` 与 `TOOL.md`）。
+  这是**约定，靠审查守**；旧的「单条字面量 ≥ 12 汉字」机械扫描已于 2026-11-14 移除——
+  它把宿主 console 告警、错误回执这类**模型根本看不到的文字**也当成违规，误报多于抦截。
+  宿主日志文案仍建议放 `prompt/messages.md`（参考 `compact_fallback_log`），但不强制
 - 模板用 `{{name}}` 严格替换，缺变量直接抛错
 - 想加宿主/共享层文案，加进 `prompt/messages.md`；想加某个工具的专属回执，加进它目录下的
   `messages.json`（key 不许与中心文件或其它工具重复，loader 合并时撞车直接启动失败）；
@@ -158,7 +160,7 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
   继续走 `prompt/messages.md`。loader 启动时把两边合并成全局 messages 视图，消费侧统一
   `deps.prompts.messages["key"]`，任何 key 撞车（工具↔工具、工具↔中心）直接启动失败
 - 审查入口：`npm run prompts` 列出 prompt 文件、全部工具包（路径/sha256/摘要/Schema 属性/文案 key/eager/deferred）、
-  工具文案归属（中心条数 + 各工具块条数）、runtime 与 tool_catalog section、源码内嵌扫描结果
+  工具文案归属（中心条数 + 各工具块条数）、runtime 与 tool_catalog section
 
 ### 3. 能力面必须是可枚举的窄接口（2026-10 修订：主人解锁下有限自改）
 
@@ -601,7 +603,7 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
 
 ```bash
 npm test           # 174 项，含上面每条约束与新闻 R1–R12 竞态矩阵的兜底
-npm run prompts    # 列出 prompt 文件 + sha256 + 27 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属 + 内嵌扫描结果
+npm run prompts    # 列出 prompt 文件 + sha256 + 27 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属
 npm run smoke:news # 新闻 N1–N5 + 生产 runtime 竞态 smoke（真实模型、隔离 SQLite/凭据、虚构新闻源，不接 QQ）
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
