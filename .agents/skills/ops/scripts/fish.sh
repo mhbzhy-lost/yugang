@@ -28,9 +28,9 @@ case "$CMD" in
   usage)             remote "$PREFIX node scripts/ops.ts usage $* 2>&1" ;;
   probe)             remote "$PREFIX npm run probe 2>&1" ;;
   ping)              remote "$PREFIX npm run ping 2>&1" ;;
-  log)               N="${1:-40}"; remote "cd ~/yugang && tail -n $N var/fish-console.log 2>&1" ;;
+  log)               N="${1:-40}"; remote "cd ~/yugang && /usr/local/bin/docker compose logs --tail $N fish 2>&1" ;;
   ps)                remote 'ps aux | grep -E "src/index.ts|memes.ts" | grep -v grep' ;;
-  deploy)            remote "$PREFIX npm run deploy 2>&1" ;;
+  deploy)            remote "cd ~/yugang && git fetch origin main && git reset --hard FETCH_HEAD && /usr/local/bin/docker compose restart fish 2>&1" ;;
   memes)             remote "$PREFIX npm run memes status 2>&1" ;;
   help|--help|-h)
     cat <<'EOF'

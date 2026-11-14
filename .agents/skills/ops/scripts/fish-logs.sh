@@ -45,6 +45,14 @@ LINES="${3:-250}"
 BASE="$HOME/yugang"
 DB="$BASE/var/fish.db"
 CONSOLE="$BASE/var/fish-console.log"
+# 容器形态：控制台日志在 docker logs 里，宿主那个文件已停更。
+# 导成快照喂给下面的解析器（不加 --timestamps：鱼自己每行就带 [HH:MM:SS]，
+# 与旧 console 文件格式一致，解析逻辑一行不用改）。
+if [ -x /usr/local/bin/docker ] && /usr/local/bin/docker ps --format "{{.Names}}" 2>/dev/null | grep -qx yugang-fish; then
+  CONSOLE="$(mktemp -t fishconsole)"
+  trap 'rm -f "$CONSOLE"' EXIT
+  /usr/local/bin/docker logs yugang-fish > "$CONSOLE" 2>&1 || true
+fi
 PROTOCOL="$BASE/var/protocol/qq-console.log"
 CHATLOG="$BASE/var/chatlog"
 

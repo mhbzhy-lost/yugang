@@ -46,6 +46,29 @@ scripts/fish.sh help                 # 全部子命令（其它命令原样透�
 
 音色只认 `voices`，`.env` 里的 `TTS_*` 已经删了——**没有任何兜底**，没配就是那个会话没有语音能力。
 
+## 容器形态（2026-11-14 起，先看这节）
+
+鱼与协议端跑在 **OrbStack 容器**里，不再是宿主进程。三个服务：`yugang-napcat`（QQ+NapCat 官方镜像）/ `yugang-fish`（鱼）/ `yugang-60s`（新闻源）。语音与 ComfyUI 仍在宿主机侧（TTS 靠 launchd + MPS；ComfyUI 在 **WSL** `~/anima-prod`，经宿主 SSH 隧道 18190）。
+
+```bash
+ssh macmini
+cd ~/yugang
+/usr/local/bin/docker compose ps                    # 三服务状态
+/usr/local/bin/docker compose logs -f fish          # 看鱼日志（不再 tail var/fish-console.log）
+/usr/local/bin/docker compose exec fish node scripts/doctor.ts   # 容器内体检
+git pull && /usr/local/bin/docker compose restart fish           # 日常部署，1–3 秒
+```
+
+**源码与数据全外挂**（`.:/app`、`./.node_modules-linux:/app/node_modules`、`./var:/data`），零 named volume——所以改代码不用重建镜像，数据也仍在 Time Machine 覆盖内。
+
+**宿主机的 `npm run up` / `npm run deploy` / `npm start` 现在都会被护栏拒绝**（容器鱼在跑时再起一条会撞 pi-durable 的 id 计数器）。`npm run down` / `tts` / `protocol` 在容器内同样拒绝并提示正确入口。
+
+排查口径变化：
+- 鱼日志 → `docker compose logs fish`（`fish.sh log` 与 `fish-logs.sh` 已自动改走 docker logs）
+- 进程 → `docker compose exec fish pgrep -f src/index.ts`（宿主 `pgrep` 看不到容器鱼）
+- 协议端 → `docker compose logs napcat`；WebUI 在宿主 `127.0.0.1:6099`，WS 3001 **只在 compose 内网**不发布到宿主
+- 数据仍在宿主 `~/yugang/var/`，原话簿 / 用量 / 记忆的查法不变
+
 ## 拉起 / 收掉
 
 ```bash
