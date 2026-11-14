@@ -27,7 +27,9 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
 
-`draw` 使用 Windows ComfyUI 的固定 V8 API 工作流（`src/tools/draw/workflow.json` 单人/直出 + `workflow-rs.json` RS 区域，启动时结构契约校验：代码 rewiring 的角色节点缺位即拒启；不钉死 hash，模板迭代 = 改文件 + commit + deploy），
+`draw` 使用 **WSL 生产 ComfyUI**（`~/anima-prod`，2026-11-14 从 Windows 本机切过来，Windows 实例已删）的固定 V8 API 工作流
+（`src/tools/draw/workflow.json` 单人/直出 + `workflow-interaction-single.json` 单人交互 + `workflow-interaction.json` 双人交互；
+`workflow-rs.json` 已随 RS 死代码删除。启动时结构契约校验：代码 rewiring 的角色节点缺位即拒启；不钉死 hash，模板迭代 = 改文件 + commit + deploy），
 通过 `COMFYUI_URL` 指向 macmini 的 `127.0.0.1:18190` SSH 隧道；不接受模型传入工作流、节点、模型名或地址。
 **画图总开关是 `fish.config.json` 的 `drawEnabled`（布尔、缺省 true、effect=hot，资源闸）**：关闭时 draw 入口即拒（`draw_disabled` 文案），
 且单/双人管线的 `onSubmitted` 回调在标记 `submitted` 前再读一次热值并拒绝，堵住 /queue 查询与 ref 预处理期间关闭开关的窗口；
@@ -39,9 +41,10 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 `4x-AnimeSharp` 超分 lanczos 0.5（净 2 倍；单人 `fast` 快速模式初采样 28 步 + 质感 pass 8 步 + lanczos 0.3 净 1.2 倍，与 hd/双人/interaction 互斥）→ **质感 pass**（denoise 0.25 同域重采样，裸地板词 + 同内容，
 机械消除过扁平并加回真实感——M 组/L 组/P 组三夜实验定版）→ hd 第三倍纯放大（95/96/97，接 pass 之后）→ 输出（经 outbox 机械直发，模型不再调 say_media，见硬约束 4）。
 **没有脸修也没有手修**（主人裁定退役；手修 2026-11-13 摘除模板 41/42 节点，WSL 生产不装 Impact-Pack）。单人直出初采样与 pass 共用上述基础正负向词；姿态线使用独立模板。
-**V8 LoRA 与高清接线**（2026-11-13 修复）：单人姿态线与直出都使用 `AnimaLoRARemapTagLoader`（auto_remap=true、extend_to_new_layers=false）；双人初采样与 pass 的 RS 槽位都必须安装 `scripts/comfy-rs-remap-patch.py` 补丁，缺依赖/manifest 时拒绝加载，禁止静默错位。WSL ComfyUI 的 `extra_model_paths.yaml` 必须保留 Forge 目录 `/mnt/c/Users/mhbzhy/sd-webui-forge-neo/models/Lora` 的映射，覆盖角色词表里的文件；提交前按 ComfyUI 文件清单核对，缺文件拒绝提交，不能只检查节点加载成功。姿态 pass 的实验尺寸闸须用 `scripts/comfy-scene-canvas-patch.py` 补齐生产七种比例的 2 倍域。单人/双人姿态线 `hd` 均透传至 graph，在 2 倍 pass 解码后由 AnimeSharp 4x × lanczos 0.375 净放大至 3 倍，最终取 node 38。
+**V8 LoRA 与高清接线**（2026-11-13 修复）：单人姿态线与直出都使用 `AnimaLoRARemapTagLoader`（auto_remap=true、extend_to_new_layers=false）；双人初采样与 pass 的 RS 槽位都必须安装 `scripts/comfy-rs-remap-patch.py` 补丁，缺依赖/manifest 时拒绝加载，禁止静默错位。**LoRA 已全部本地化**（2026-11-14）：Forge（`sd-webui-forge-neo`，257G）已删除，其 Lora 目录 1.9G / 62 文件已迁入 WSL `~/anima-prod/models/loras`；`extra_model_paths.yaml` 现在只留 `anima: base_path: /home/mhbzhy/anima-prod/models`，**不得再引用 `/mnt/c/…forge…`**。提交前按 ComfyUI 文件清单核对词表 LoRA，缺文件拒绝提交，不能只检查节点加载成功。姿态 pass 的实验尺寸闸须用 `scripts/comfy-scene-canvas-patch.py` 补齐生产七种比例的 2 倍域。单人/双人姿态线 `hd` 均透传至 graph，在 2 倍 pass 解码后由 AnimeSharp 4x × lanczos 0.375 净放大至 3 倍，最终取 node 38。
 **宿主 bypass 接线**：单人直出/快速和单人姿态线在初采样、pass 正向末尾原样追加 `bypass` 与 `pbypass`；双人姿态线把 `bypass` 追加到两遍公共场景正向，把 `pbypass` 追加到两遍的两个角色槽位末尾。文本只由本轮宿主回调透传，不进入工具 Schema，不经 tag 归一化，轮结束清除。
-**姿态线能力合并（待本次样图验收）**：保留 V8 52 层 LLLite、Pose3D、RS 区域与 LoRA 1.0；初采样/pass 恢复 `dpmpp_2m / sgm_uniform`、CFG 4.5、30 步。初采样＝质量地板(含anime)+`detailed, intricate, film grain, depth of field`（2026-11-13 定稿，无四轴/赛璐璐），负向去 lips，pass 基础词；直出/fast 无 LLLite 不扁、保持各自基础词不共用。质感 pass 回老版普通 KSampler @2x＋角色 LoRA 串联，不挂 RS/LLLite（区域/姿态控制只属初采样高噪声段；低幅度第二遍挂它们无益，学术与社区共识一致）。双人 `framing/spacing` 透传到 `YugangPoseLayout`：先把冻结姿态及区域用同一中心/缩放适配普通主体尺度；apart 同步水平平移人物及其 owner 姿态像素；wide 调用真实 `RSCameraControl(distance=1, layout_sync=distance_and_roll)`，同样缩放姿态图。初采样和 pass 各从模型端施加一次 LLLite，区域 pipe 不再携带内部 auto pose，防止双挂。节点源码 `scripts/comfy-nodes/yugang_pose_layout.py` 安装到 WSL `custom_nodes/yugang_pose_layout/__init__.py`，更新后须在队列为空时重启 ComfyUI；未安装不能部署调用该 graph 的鱼。
+**姿态线能力合并（待本次样图验收）**：保留 V8 52 层 LLLite、Pose3D、RS 区域与 LoRA 1.0；初采样/pass 恢复 `dpmpp_2m / sgm_uniform`、CFG 4.5、30 步。初采样＝质量地板(含anime)+`detailed, intricate, film grain, depth of field`（2026-11-13 定稿，无四轴/赛璐璐），负向去 lips，pass 基础词；直出/fast 无 LLLite 不扁、保持各自基础词不共用。质感 pass 回老版普通 KSampler @2x＋角色 LoRA 串联，不挂 RS/LLLite（区域/姿态控制只属初采样高噪声段；低幅度第二遍挂它们无益，学术与社区共识一致）。双人 `framing/spacing` 透传到 `YugangPoseLayout`：先把冻结姿态及区域用同一中心/缩放适配普通主体尺度；apart 同步水平平移人物及其 owner 姿态像素；wide 调用真实 `RSCameraControl(distance=1, layout_sync=distance_and_roll)`，同样缩放姿态图。初采样和 pass 各从模型端施加一次 LLLite，区域 pipe 不再携带内部 auto pose，防止双挂。节点源码 `scripts/comfy-nodes/yugang_pose_layout.py` 安装到 WSL `custom_nodes/yugang_pose_layout/__init__.py`，更新后须在队列为空时重启 ComfyUI。
+**注意（2026-11-14 核实）**：当前三个 workflow **都不再引用 `YugangPoseLayout`**（上文双人 framing/spacing 的描述属历史方案）；双人交互实际靠 `RSMultiCharacter*` 链 + `ModelPatchLoader`，并需 `YugangStudyMetadata` / `YugangStudyCameraProject`（在 WSL `custom_nodes/yugang_study_support`）。部署前该核的是 **workflow 实际引用的节点**，不是本文里提到的名字。
 **约束**：pass 的 denoise 不许超 0.25 越界（M3 实测 0.35 唇形失控）；禁止把它改回超分前「修复」用途；
 禁止在 3 倍 latent 上跑任何扩散（旧 hd 事故：DiT 位置编码超域，高频砍到 ×0.55）。
 
@@ -84,8 +87,16 @@ draw 的 `character` / `style` / `characters[].character` 在 Schema 里是**普
 生产仍保留 30 步初采样、超分与 denoise=0.25 质感 pass；20 步直出只是实验规格。
 历史 RS 槽位 remap 补丁 `scripts/comfy-rs-remap-patch.py` 随 RS 复活重新生效
 （升级 comfyui-rs-multicharacter-sampler 节点包后必须重跑该脚本）。
-重启 ComfyUI 用 `scripts/comfy-restart-windows.ps1`（Windows 副本 `D:\ComfyUI-Anima\yugang-restart-comfyui.ps1`，
-Start-Process 独立进程树；WSL/ssh 会话里直接跑前台启动链会被会话回收带走）。
+**重启 ComfyUI（2026-11-14 起）用 Windows 计划任务 `Yugang-WSL-ComfyUI`**：`Stop-ScheduledTask` + `Start-ScheduledTask`。
+该任务用 `wsl.exe -d Ubuntu -u mhbzhy --exec /bin/bash -lc "… exec python main.py …"` **前台持有 Windows 侧调用者**，
+既是保活载体也是 supervisor（ComfyUI 退出→任务结束→RestartOnFailure 拉起）；触发器 AtLogOn + AtStartup。
+**为何必须这样**：WSL 已知 regression（microsoft/WSL#13416）——**最后一个 Windows 侧调用者退出后 15 秒拆发行版**，
+`setsid nohup`、`vmIdleTimeout=-1`、`loginctl enable-linger`、Linux 侧 systemd `sleep infinity` **全部无效**（社区实测）。
+旧的 `scripts/comfy-restart-windows.ps1` 面向已删除的 Windows 实例，**已失效**。
+
+**`--base-directory` 布局坑**：启动用 `--base-directory /home/mhbzhy/anima-prod`，但实体在 `~/anima-prod/ComfyUI/` 下。
+`custom_nodes` 与 `models` 的缺失子目录均需软链过去（已建：`custom_nodes` 1 个 + `models` 23 个，含 `diffusion_models`/`unet`）。
+**症状**：节点未注册报 unknown node type；模型目录缺失报 `value_not_in_list … not in []`。两者都是 HTTP 400，要读 `node_errors` 区分。
 
 **入口只注册**（2026-11-05）：`src/index.ts` 不写任何业务逻辑，只有 `app.use(...)`
 （消息链顺序）、`app.onFlush(...)`（debounce 整组提交）、`app.onStart/onStop(...)`
@@ -602,7 +613,7 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
 ## 命令
 
 ```bash
-npm test           # 174 项，含上面每条约束与新闻 R1–R12 竞态矩阵的兜底
+npm test           # 172 项，含上面每条约束与新闻 R1–R12 竞态矩阵的兜底
 npm run prompts    # 列出 prompt 文件 + sha256 + 27 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属
 npm run smoke:news # 新闻 N1–N5 + 生产 runtime 竞态 smoke（真实模型、隔离 SQLite/凭据、虚构新闻源，不接 QQ）
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息

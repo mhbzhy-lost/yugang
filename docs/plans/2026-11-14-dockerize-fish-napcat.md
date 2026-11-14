@@ -55,7 +55,7 @@ macmini (macOS 27.2.1, arm64, 宿主 uid 501)
 │   ├── ComfyUI SSH 隧道 → Windows :18190
 │   └── provider 代理 :7897
 └── 持久化
-    ├── named volume  yugang-data → /data   （fish.db+wal+shm / chatlog / usage / workspace / bili-*.json / look-off.marker）
+    ├── bind mount    ~/yugang/var → /data  （fish.db+wal+shm / chatlog / usage / workspace / bili-*.json / look-off.marker）
     ├── bind mount    ~/yugang/var/media → /media   （9.5G，宿主机可直接查看与投图）
     ├── bind mount    ~/yugang/config → /app/config （**目录**，含 auth.json + models.json）
     └── bind mount    ~/yugang/docker-runtime → /app/runtime-config （**目录**，含 fish.config.json）
@@ -154,9 +154,8 @@ git pull && docker compose up -d --force-recreate fish    # 新容器，无残�
 | 文件 | 职责 |
 |---|---|
 | `Dockerfile` | **只装运行时环境，不 baked 源码**（见 §3.3）。基底 node:26-slim 钉 digest；装 `ffmpeg`/`ffprobe`、`socat`、`python3-venv` + venv 内 `av`+`Pillow`、`procps`、`tzdata`、`ca-certificates`、`libheif-examples`+`libheif-plugin-libde265`（HEIC）；`npm ci --omit=dev` 只为给 node_modules volume 提供初值；uid/gid 501。**只拷 `package.json` `package-lock.json`** |
-| `compose.yaml` | 三服务、网络、卷、端口、`restart: unless-stopped`、`init: true`、`user: "501:501"`、`TZ=Asia/Shanghai`、`LANG=C.UTF-8`。**`.:/app` 源码挂载 + `yugang-node-modules:/app/node_modules`**（见 §3.3）。**默认不写 `extra_hosts`**（见 §3.1） |
+| `compose.yaml` | 三服务、网络、卷、端口、`restart: unless-stopped`、`init: true`、`user: "501:501"`、`TZ=Asia/Shanghai`、`LANG=C.UTF-8`。**`.:/app` 源码挂载 + `./.node_modules-linux:/app/node_modules` bind**（见 §3.3，零 named volume）。**默认不写 `extra_hosts`**（见 §3.1） |
 | `docker/entrypoint.sh` | **依赖对齐（lockfile 指纹变了才 `npm ci`）** → 起 socat（comfy）→ 等 napcat WS → `exec node --env-file-if-exists=.env src/index.ts`。`exec` 让信号直达；僵尸由 `init: true` 回收。**本脚本也来自源码挂载，改它不需重建镜像** |
-| `docker/healthcheck.mjs` | 纯 node TCP/HTTP 探测（slim 镜像无 `nc`），供 compose healthcheck 与验收复用 |
 | `.dockerignore` | 排除 `node_modules/ var/ .git/ .env config/auth.json config/models.json fish.config.json *.log .trash/` |
 | `src/media/image-ops.ts` | 图像操作双后端（§3.2） |
 | `docker-runtime/fish.config.json` | 宿主机侧运行目录，从现有 `fish.config.json` 迁入 |
@@ -409,7 +408,7 @@ npm run smoke:news
 docker compose exec fish npm run doctor
 docker compose exec fish date
 docker compose exec fish pgrep -f src/index.ts
-docker compose exec fish node docker/healthcheck.mjs
+docker compose exec fish node scripts/doctor.ts
 
 # 协议端只读探测（不发消息）
 node ~/napcat-restore/ob-probe.mjs
