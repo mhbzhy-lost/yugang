@@ -29,6 +29,16 @@ if (!process.env.MASTER_QQ) {
 // 容器形态：协议端是兄弟容器、TTS 在宿主机，两者都不该由鱼拉。
 const inContainer = process.env.YUGANG_CONTAINER === "1";
 
+// 容器内直接拒绝（2026-11-14）：旧实现只「跳过」协议端与 TTS，却仍会再 spawn 一条
+// `node src/index.ts`——`docker compose exec fish npm run up` 就能在同一个容器里凑出
+// 两条鱼共享 /data/fish.db，pi-durable 的 id 计数器必然撞号。鱼的启动由 entrypoint 负责。
+if (inContainer) {
+  console.error("[up] ✗ 容器内不跑 up。鱼由 entrypoint 启动，重启用：");
+  console.error("     docker compose restart fish        （在宿主机执行）");
+  console.error("     看日志：docker compose logs -f fish");
+  process.exit(1);
+}
+
 // 宿主机侧护栏：容器鱼在跑时绝不能再起一条宿主鱼。
 // pi-durable 的 id 计数器是进程内存值，两条鱼写同一 SQLite 必然撞号（AGENTS.md 第 16 条）。
 // 容器形态下 ./var 就是宿主 var，两边指的是同一个库。

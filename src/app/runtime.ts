@@ -14,6 +14,7 @@
  * 模型的正文、思考、tool 调用文本都不在这条链上。
  */
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { DATA_HOME, MEDIA_ROOT, PROMPT_ROOT, REPO_ROOT, WORKSPACE_ROOT } from "../paths.ts";
@@ -447,6 +448,22 @@ export function runtimeFish(): Fish {
 }
 
 export async function bootRuntime(): Promise<void> {
+  // 双实例的最后一道门（2026-11-14）：up/deploy 都有护栏，但宿主直接 `npm start` 或
+  // `node src/index.ts` 绕过了它们。容器形态下 ./var 就是宿主 var，两条鱼写同一库
+  // 必然撞号（AGENTS.md 第 16 条）。入口只注册不写逻辑，所以护栏放在这里。
+  if (process.env.YUGANG_CONTAINER !== "1") {
+    for (const bin of ["/usr/local/bin/docker", "/opt/homebrew/bin/docker"]) {
+      if (!existsSync(bin)) continue;
+      const ps = spawnSync(bin, ["ps", "--filter", "name=yugang-fish", "--format", "{{.Names}}"], { encoding: "utf8", timeout: 8000 });
+      const names = (ps.stdout ?? "").trim();
+      if (ps.status === 0 && names !== "") {
+        console.error(`[鱼缸] ✗ 容器鱼在跑（${names}），拒绝在宿主机再起一条——两边写同一个 var/fish.db 会撞号。`);
+        console.error("     看日志：docker compose logs -f fish；要回宿主形态：先 docker compose down。");
+        process.exit(1);
+      }
+      break;
+    }
+  }
   fish = await openFish({
   storage: await openNodeSqliteStorage(join(HOME, "fish.db")),
   models,

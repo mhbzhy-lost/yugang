@@ -5,7 +5,6 @@
 import { DATA_HOME as HOME, REPO_ROOT } from "../src/paths.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { Socket } from "node:net";
 import { join, resolve } from "node:path";
 import { newsTargetGroup, sixtyHealth } from "./lib/deps.ts";
 
@@ -72,7 +71,9 @@ if (inContainer) {
   // HEIC 解码：sharp 预编译包没有 libde265，必须靠系统 heif-convert。
   // 缺了只会丢 iPhone 原图（HEIC），其它格式正常——正是需要体检才能发现的那类缺口。
   check(spawnSync("sh", ["-c", "command -v heif-convert"]).status === 0, "heif-convert（HEIC 解码）", "镜像里装 libheif-examples + libheif-plugin-libde265");
-  check(await tcpReachable("127.0.0.1", 18190), "ComfyUI 127.0.0.1:18190（socat→宿主隧道）", "查 entrypoint 的 socat 与宿主机 SSH 隧道");
+  // 功能级而非 TCP：socat 无条件 accept，上游隧道断了 TCP 也连得上（旧实现因此假绿）。
+  // 必须经转发拿到真实 HTTP 应答，才说明 Windows 那侧的 ComfyUI 真的活着。
+  check(await comfyAlive("http://127.0.0.1:18190"), "ComfyUI 经 socat→宿主隧道可用", "查宿主 SSH 隧道与 Windows 侧 ComfyUI（socat 在听不代表上游通）");
 }
 
 for (const [ok, label, fix] of rows) {
@@ -82,19 +83,16 @@ for (const [ok, label, fix] of rows) {
 const failed = rows.filter(([ok, , fix]) => !ok && fix).length;
 console.log(failed === 0 ? "\n全都齐了，npm start" : `\n还有 ${failed} 项要补`);
 
-async function tcpReachable(host: string, port: number): Promise<boolean> {
-  return new Promise((done) => {
-    const s = new Socket();
-    const finish = (ok: boolean) => {
-      s.destroy();
-      done(ok);
-    };
-    s.setTimeout(2000);
-    s.once("connect", () => finish(true));
-    s.once("error", () => finish(false));
-    s.once("timeout", () => finish(false));
-    s.connect(port, host);
-  });
+/** ComfyUI 功能级探活：必须拿到真实 HTTP 应答，TCP 连得上不算（socat 无条件 accept）。 */
+async function comfyAlive(base: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${base}/system_stats`, { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return false;
+    const body = await res.json() as { system?: { comfyui_version?: string } };
+    return typeof body?.system?.comfyui_version === "string";
+  } catch {
+    return false;
+  }
 }
 
 async function reachable(url: string): Promise<boolean> {

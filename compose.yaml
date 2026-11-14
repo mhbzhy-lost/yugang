@@ -41,7 +41,9 @@ services:
       # 快速登录：镜像 entrypoint 见到 ACCOUNT 就跑 `qq --no-sandbox -q $ACCOUNT`。
       # **不设它每次重启都要重新扫码**，重启自愈（A2）就不成立。
       # 值从 .env 的 PROTOCOL_QQ 插值（compose 自动读项目目录的 .env）。
-      ACCOUNT: "${PROTOCOL_QQ}"
+      # 用 :? 而非 :- ——缺 PROTOCOL_QQ 时 compose 直接报错，
+      # 不静默插值成空串把快速登录关掉（那样每次重启都要人扫码）。
+      ACCOUNT: "${PROTOCOL_QQ:?PROTOCOL_QQ 未设置，napcat 无法快速登录}"
       TZ: Asia/Shanghai
       LANG: C.UTF-8
     ports:
@@ -116,7 +118,8 @@ services:
 
   sixty:
     # 新闻源。原为独立容器 60s，收进本栈统一管；不发布宿主端口（fish 走内网）。
-    image: vikiboss/60s:latest
+    # digest 固定（2026-11-14 实测可拉）：与 napcat 同口径，不用浮动 latest。
+    image: vikiboss/60s@sha256:4fb543c55bb0187325c564f6fc7759dbb6cb701229748f59fcd6589a6e8d11f4
     container_name: yugang-60s
     restart: unless-stopped
     environment:

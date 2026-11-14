@@ -118,8 +118,28 @@ function liveFishProcesses(): string[] {
   }
 }
 
+/**
+ * 容器鱼检测（2026-11-14）：OrbStack 容器内的进程**不在宿主 ps 里**，pgrep 看不见。
+ * 而容器形态下 `./var` 就是宿主 var，两边写的是同一个库——不补这一道，
+ * 容器鱼在跑时宿主跑 --approve/--delete 会看到 0 条活鱼、不要 --force 就直写库，
+ * 正好触发上面那个 id 计数器撞号事故。与 deploy.ts / up.ts 同款检测。
+ */
+function containerFish(): string[] {
+  for (const bin of ["/usr/local/bin/docker", "/opt/homebrew/bin/docker"]) {
+    try {
+      const out = execFileSync(bin, ["ps", "--filter", "name=yugang-fish", "--format", "{{.Names}}"], {
+        encoding: "utf8", timeout: 8000,
+      });
+      return out.split("\n").map((s) => s.trim()).filter(Boolean).map((n) => `docker: ${n}（容器鱼）`);
+    } catch {
+      continue; // 没装 docker 或 daemon 没跑，换下一个候选
+    }
+  }
+  return [];
+}
+
 if (writeMode) {
-  const live = liveFishProcesses();
+  const live = [...liveFishProcesses(), ...containerFish()];
   if (live.length > 0 && !args.includes("--force")) {
     console.error(
       [
