@@ -324,6 +324,36 @@ async function requireGraphLoras(base: string, graph: Graph): Promise<void> {
   if (missing.length) throw new Error(`ComfyUI LoRA files missing: ${missing.join(", ")}`);
 }
 
+/** 提交前核对模型文件清单（底模/CLIP/VAE/超分/姿态 patch）。缺文件 ComfyUI 只回 400，提前以明确错误拒绝。 */
+const MODEL_FILE_FIELDS: Record<string, string> = {
+  UNETLoader: "unet_name",
+  CLIPLoader: "clip_name",
+  VAELoader: "vae_name",
+  UpscaleModelLoader: "model_name",
+  ModelPatchLoader: "name",
+};
+async function requireGraphModelFiles(base: string, graph: Graph): Promise<void> {
+  const needed = new Map<string, Set<string>>();
+  for (const node of Object.values(graph)) {
+    const field = MODEL_FILE_FIELDS[node.class_type];
+    const value = field !== undefined ? node.inputs[field] : undefined;
+    if (typeof value === "string" && value !== "None") {
+      const set = needed.get(node.class_type) ?? new Set<string>();
+      set.add(value);
+      needed.set(node.class_type, set);
+    }
+  }
+  if (!needed.size) return;
+  const missing: string[] = [];
+  for (const [classType, files] of needed) {
+    const info = await (await request(`${base}/object_info/${classType}`)).json() as Record<string, { input?: { required?: Record<string, unknown[]> } }>;
+    const names = info[classType]?.input?.required?.[MODEL_FILE_FIELDS[classType]]?.[0];
+    if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) throw new Error("invalid ComfyUI model inventory");
+    for (const f of files) if (!names.includes(f)) missing.push(`${classType} ${f}`);
+  }
+  if (missing.length) throw new Error(`ComfyUI model files missing: ${missing.join(", ")}`);
+}
+
 async function imageBytes(response: Response): Promise<Buffer> {
   const size = Number(response.headers.get("content-length") ?? 0);
   if (!response.headers.get("content-type")?.toLowerCase().startsWith("image/png") || size > MAX_IMAGE || !response.body) throw new Error("invalid image response");
@@ -346,9 +376,26 @@ async function imageBytes(response: Response): Promise<Buffer> {
 
 type ComfyHistoryJob = { status?: { status_str?: string; completed?: boolean }; outputs?: Record<string, { images?: Array<{ filename?: string; subfolder?: string; type?: string }> }> };
 
+/** 4xx 拒绝时提取 node_errors 摘要：缺文件/未知节点在提交制式下只剩 "HTTP 400"，排障必须看到细节。 */
+function summarizeRejection(body: string): string {
+  try {
+    const parsed = JSON.parse(body) as {
+      node_errors?: Record<string, { class_type?: string; errors?: Array<{ input_name?: string; message?: string; details?: string }> }>;
+      error?: { type?: string; message?: string };
+    };
+    const parts: string[] = [];
+    for (const [id, node] of Object.entries(parsed.node_errors ?? {})) {
+      for (const e of node.errors ?? []) parts.push(`node ${id} ${node.class_type ?? ""}${e.input_name ? `.${e.input_name}` : ""}: ${e.details ?? e.message ?? ""}`.trim());
+    }
+    const head = parsed.error?.type ?? "";
+    const detail = [head, ...parts].filter(Boolean).join("; ");
+    return detail ? detail.slice(0, 300) : body.slice(0, 200);
+  } catch { return body.slice(0, 200); }
+}
+
 async function submitAndWait(base: string, graph: Graph, promptId: string, clientId: string, deadline: number): Promise<ComfyHistoryJob> {
   const response = await fetch(`${base}/prompt`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt: graph, prompt_id: promptId, client_id: clientId }), redirect: "error", signal: AbortSignal.timeout(15_000) });
-  if (response.status >= 400 && response.status < 500) throw new ComfyExecutionFailed(`ComfyUI rejected request (HTTP ${response.status})`);
+  if (response.status >= 400 && response.status < 500) throw new ComfyExecutionFailed(`ComfyUI rejected request (HTTP ${response.status}) ${summarizeRejection(await response.text().catch(() => ""))}`.trim());
   if (!response.ok) throw new Error(`ComfyUI HTTP ${response.status}`);
   const submitted = await response.json() as { prompt_id?: string };
   if (submitted.prompt_id !== promptId) throw new Error("unexpected ComfyUI prompt id");
@@ -381,13 +428,14 @@ interface ExecOpts {
   onSubmitted: () => void;
   onStage?: (s: DrawStage) => void;
 }
-/** 统一执行：queue 闸 + LoRA 核对 + 提交 + 轮询 + 取图。busy 由调用方持有。 */
+/** 统一执行：queue 闸 + 模型清单核对（LoRA 与模型文件）+ 提交 + 轮询 + 取图。busy 由调用方持有。 */
 async function execGraph(url: string, graph: Graph, opts: ExecOpts): Promise<Buffer> {
   const base = comfyUrl(url);
   const queue = await (await request(`${base}/queue`)).json() as { queue_running?: unknown[]; queue_pending?: unknown[] };
   if (!Array.isArray(queue.queue_running) || !Array.isArray(queue.queue_pending)) throw new Error("invalid ComfyUI queue");
   if (queue.queue_running.length || queue.queue_pending.length) throw new ComfyBusy("ComfyUI busy");
   await requireGraphLoras(base, graph);
+  await requireGraphModelFiles(base, graph);
   const id = randomUUID();
   const clientId = randomUUID();
   const sock = opts.onStage ? openStageSocket(base, clientId, id, opts.onStage) : undefined;
