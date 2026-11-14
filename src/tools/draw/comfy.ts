@@ -307,6 +307,19 @@ async function request(url: string, init: RequestInit = {}, timeout = 10_000): P
 }
 
 /** 提交前核对 LoRA 文件；重映射节点会把缺失降级成警告，宿主必须拒绝无 LoRA 出图。 */
+/** ComfyUI 模型清单两种形状：旧 [[文件…], 配置] 与新 ["COMBO", {options: [文件…]}]（0.44+ 部分节点）。 */
+function inventoryList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const [first, second] = raw;
+  if (Array.isArray(first) && first.every((n) => typeof n === "string")) return first;
+  if (first === "COMBO" && second !== null && typeof second === "object"
+    && Array.isArray((second as { options?: unknown }).options)
+    && (second as { options: unknown[] }).options.every((n) => typeof n === "string")) {
+    return (second as { options: string[] }).options;
+  }
+  return undefined;
+}
+
 async function requireGraphLoras(base: string, graph: Graph): Promise<void> {
   const needed = new Set<string>();
   for (const node of Object.values(graph)) {
@@ -317,9 +330,9 @@ async function requireGraphLoras(base: string, graph: Graph): Promise<void> {
     }
   }
   if (!needed.size) return;
-  const info = await (await request(`${base}/object_info/LoraLoader`)).json() as Record<string, { input?: { required?: { lora_name?: unknown[] } } }>;
-  const names = info.LoraLoader?.input?.required?.lora_name?.[0];
-  if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) throw new Error("invalid ComfyUI LoRA inventory");
+  const info = await (await request(`${base}/object_info/LoraLoader`)).json() as Record<string, { input?: { required?: { lora_name?: unknown } } }>;
+  const names = inventoryList(info.LoraLoader?.input?.required?.lora_name);
+  if (!names) throw new Error("invalid ComfyUI LoRA inventory");
   const missing = [...needed].filter((n) => !names.includes(n));
   if (missing.length) throw new Error(`ComfyUI LoRA files missing: ${missing.join(", ")}`);
 }
@@ -346,9 +359,9 @@ async function requireGraphModelFiles(base: string, graph: Graph): Promise<void>
   if (!needed.size) return;
   const missing: string[] = [];
   for (const [classType, files] of needed) {
-    const info = await (await request(`${base}/object_info/${classType}`)).json() as Record<string, { input?: { required?: Record<string, unknown[]> } }>;
-    const names = info[classType]?.input?.required?.[MODEL_FILE_FIELDS[classType]]?.[0];
-    if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) throw new Error("invalid ComfyUI model inventory");
+    const info = await (await request(`${base}/object_info/${classType}`)).json() as Record<string, { input?: { required?: Record<string, unknown> } }>;
+    const names = inventoryList(info[classType]?.input?.required?.[MODEL_FILE_FIELDS[classType]]);
+    if (!names) throw new Error("invalid ComfyUI model inventory");
     for (const f of files) if (!names.includes(f)) missing.push(`${classType} ${f}`);
   }
   if (missing.length) throw new Error(`ComfyUI model files missing: ${missing.join(", ")}`);
