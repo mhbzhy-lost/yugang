@@ -2,6 +2,8 @@ node_modules/
 # 容器用的 Linux 依赖目录（bind mount 到 /app/node_modules）。
 # 与上面 macOS 那份必须分开：sharp 等原生包的二进制跟平台绑定。
 .node_modules-linux/
+# 容器协议端数据（napcat 登录态与配置，含凭据，绝不入库）
+/data/
 /var/
 *.log
 .DS_Store
