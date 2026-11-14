@@ -82,8 +82,9 @@ news_topic: ▸ {{topic}}
 news_item: · {{summary}}（{{source}}）{{url}}
 news_closing: ——{{closing}}
 
-# 语音触发提示与工具超时（host 侧注入，不属于任何单个工具）
-voice_hint: [本轮要求] 必须使用 say_voice 回复，不要使用文字。
+# 工具超时（host 侧注入，不属于任何单个工具）
+# 语音已无机械触发提示（2026-11-14 主人裁定）：不再概率追加「必须使用 say_voice」任务行，
+# 用不用语音完全由模型按 say_voice/TOOL.md 自己判断。
 # @ 轮（必答轮）的看视频规范：机械上不再卡轮类型，改用这条要求约束模型
 video_answer_rule: [本轮要求] 只有 @ 你的这条消息明确要求你看/找一个 B 站视频时，才可以用 bili_hot 或 video；没被要求就别去看视频，也别分享视频链接。
 

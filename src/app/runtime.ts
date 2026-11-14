@@ -78,7 +78,7 @@ import { clearSeenLinks, recordSeenLinks } from "../egress/seen-links.ts";
 import { shouldSendWorkingReceipt } from "../working-receipt.ts";
 import type { Middleware } from "./app.ts";
 import { planInlineImages, planRoundImages, rewriteRoundForwardImages } from "../qq/round-images.ts";
-import { appendAnswerRules, appendVoiceHint, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
+import { appendAnswerRules, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
 import { buildNewsCandidateInput, renderNewsBroadcast, validateNewsDigest, type NewsCandidateInput, type NewsDigest } from "../external/news-broadcast.ts";
 import { createNewsJob, type NewsJob } from "../external/news-job.ts";
 import { createNewsFreeze, NewsFrozenError, splitNewsBurst } from "../external/news-freeze.ts";
@@ -138,13 +138,6 @@ function workingTextOf(tool: string): string {
     case "restart": return fish.prompts.messages["working_restart"] ?? "";
     default: return "";
   }
-}
-
-/** 主人或这个群特别关注的人？（机械匹配 QQ 号，不看模型怎么说） */
-function isVoiceVip(chatKey: string, userId: number | undefined): boolean {
-  if (userId === undefined) return false;
-  if (String(userId) === config.master) return true;
-  return watchedByChat.get(baseChatKey(chatKey))?.has(String(userId)) ?? false;
 }
 
 /**
@@ -1009,11 +1002,8 @@ export async function submitRound(input: {
   if (roundKind === "answer" && trigger.mentionsBot && watchRule.length > 0) {
     content = appendAnswerRules(content, [watchRule]);
   }
-  if (roundKind === "answer" && voiceConfigFor(mappingKeys.get(String(conv.id)) ?? chatKey) && isVoiceVip(chatKey, trigger.userId) && Math.random() < 0.3) {
-    const hint = fish.prompts.messages["voice_hint"] ?? "";
-    // 附加段之间统一空一行（decisions §5.2：[本轮要求] 段前是空行）
-    if (hint) content = appendVoiceHint(content, hint);
-  }
+  // 语音不再有机械提示（2026-11-14 主人裁定）：只有对方明确要求时才用 say_voice，
+  // 不再概率追加「必须使用 say_voice」任务行。用不用完全由模型按 TOOL.md 自己判断。
 
   // inline 附图：flushBurst 的 planRoundImages 已完成选图、压缩与编号（失败的跳过、
   // 不占编号）；content = 一个 text block，压缩 image blocks 按编号顺序在后（decisions §5.4）

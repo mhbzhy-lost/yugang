@@ -7,7 +7,7 @@
  * actual 一律从**生产导出的真实拼装入口**取得，不在测试里重写任何渲染/拼装逻辑：
  *  - answer / 私聊 / 三类合集 / 背景合集：`planRoundImages`(src/qq/round-images.ts) →
  *    `withContext`(src/qq/debounce.ts) → `rewriteRoundForwardImages` → `assembleRoundContent`
- *    → `appendVoiceHint` → `submitContentOf`（src/qq/round-input.ts），
+ *    → `appendAnswerRules` → `submitContentOf`（src/qq/round-input.ts），
  *    即 src/index.ts flushBurst(L1154-1185) + submitRound(L944-956) 的同一串调用；
  *  - open injection / shard / 零新增：真 `createEngageNext` 状态机（假时钟推进）触发
  *    onPhase(open, backlog) / onShard(items)，回调里调 `renderOpenMessageList` /
@@ -23,9 +23,8 @@
  * `compressed-1`（base64 Y29tcHJlc3NlZC0x / image/jpeg），绝不把原图字节交给模型。
  *
  * 已观测到的真实差异（保持失败、不迁就实现、不改权威模板，交回对应生产 repair）：
- *  1. answer_burst_voice：prompt/messages.md 的 `voice_hint` 仍是
- *     「（这一条必须用语音回：用 say_voice 发，别用文字。这是规则，不是建议）」，
- *     decisions §5.2 要求「[本轮要求] 必须使用 say_voice 回复，不要使用文字。」；
+ *  1. answer_burst_voice：语音提示的机械门已于 2026-11-14 移除，本节场景只剩 @ 轮视频规范；
+ *     场景 id 仅作历史标识保留，不再比对语音段。
  *  2. news：2026-11-07 起改为人格备料候选输入，模型经 news_prepare 提交结构化选材，
  *     不再把宿主成品交给模型用 say_words 重发；
  *  3. history_forward：换页尾巴是被压缩页输入的**逐字投影**，合集父消息行带
@@ -50,7 +49,6 @@ import { withContext, type BurstMessage, type RecentChatMessage } from "../src/q
 import { planRoundImages, rewriteRoundForwardImages } from "../src/qq/round-images.ts";
 import {
   appendAnswerRules,
-  appendVoiceHint,
   assembleRoundContent,
   backgroundTextOf,
   renderBrowseOpportunity,
@@ -163,8 +161,6 @@ interface AnswerRoundOptions {
   watched?: (userId: number | string) => boolean;
   /** @ 且提到「合集/转发」时补展开的最近合集（index.ts L1170-1179 的展开结果）。 */
   recentForward?: ForwardAttachment;
-  /** submitRound 的 0.3 语音门命中（index.ts L944-951）。 */
-  voiceHint?: boolean;
   /** @ 轮确定性追加的 `video_answer_rule`（index.ts 的 answer 轮规范段）。 */
   answerRule?: boolean;
 }
@@ -190,10 +186,9 @@ function answerRound(options: AnswerRoundOptions): { text: string; submit: strin
     tags: plan.tags,
     lookHint: plan.lookHint,
   }, messages);
-  // 规范段与语音段都由共享装配器拼：顺序与宿主一致（先 video_answer_rule，再语音提示）
+  // 规范段由共享装配器拼：顺序与宿主一致。语音提示的机械门已于 2026-11-14 移除，不再拼语音段。
   let text = assembled;
   if (options.answerRule === true) text = appendAnswerRules(text, [messages["video_answer_rule"] ?? ""]);
-  if (options.voiceHint === true) text = appendVoiceHint(text, messages["voice_hint"] ?? "");
   return { text, submit: submitContentOf(text, plan.blocks), blocks: plan.blocks };
 }
 
@@ -449,9 +444,9 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       inline: true, // GIF 不 inline、不占编号；背景里的 jpg 不属本轮整组，不触发 look 提示
       watched: (userId) => String(userId) === String(WATCHED),
       answerRule: true, // @ 轮确定性追加的看视频规范
-      voiceHint: true, // submitRound 的 0.3 语音门命中（主人/特别关注对象的 answer 轮）
+      // 语音提示的 0.3 概率门已于 2026-11-14 移除（主人裁定）：不再传 voiceHint
     });
-    return { ...round, via: "planRoundImages → withContext → assembleRoundContent → appendVoiceHint" };
+    return { ...round, via: "planRoundImages → withContext → assembleRoundContent" };
   },
 
   // 主人私聊（decisions §5.3，index.ts L2624：私聊直接取 withContext().content）
@@ -791,7 +786,7 @@ test("自由拍 shard 由真实路径触发；空拍自主轮走 onFreeIdle", ()
  */
 const REPAIR_NOTES: Record<string, string> = {
   answer_burst_voice:
-    "生产 repair 需要：prompt/messages.md 的 voice_hint 与 decisions §5.2 的 [本轮要求] 语音段文案不一致（appendVoiceHint 只搬 messages[voice_hint]）",
+    "语音提示的机械门已于 2026-11-14 移除（主人裁定），本场景只剩 @ 轮视频规范；场景 id 仅作历史标识",
   news:
     "生产 repair 需要：renderNewsBroadcast 的 {{source}} 用 NewsItem.source 枚举 id（people/ithome），decisions §5.7 要求中文来源署名（人民网/IT之家）；线上真实 entry 也是 id 形态（docs/reports/2026-11-04-turn-input-shapes.md §3.6）",
   history_forward:
