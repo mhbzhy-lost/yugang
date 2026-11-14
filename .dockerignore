@@ -1,0 +1,35 @@
+# 镜像里不该出现的东西：运行时数据、凭据、本机配置、历史现场。
+# 这些一律运行时挂载（见 compose.yaml），baked 进镜像会造成「改了配置不生效」
+# 和凭据泄漏到镜像层。
+node_modules/
+var/
+.git/
+.github/
+.trash/
+.pi/
+.opencode/
+.agents/
+
+# 凭据与本机配置（运行时挂目录）
+.env
+.env.*
+!.env.example
+config/auth.json
+config/models.json
+fish.config.json
+
+# 日志与备份
+*.log
+*.bak
+*.bak*
+*.orig
+
+# 开发期产物（容器只跑运行时）。docs/ 故意保留：主人的 read/grep 工具要能读仓库文档。
+test/
+coverage/
+*.tsbuildinfo
+
+# 容器自身定义不需要进镜像
+Dockerfile
+compose.yaml
+.dockerignore

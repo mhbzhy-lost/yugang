@@ -1,0 +1,118 @@
+# 鱼缸容器栈（macmini / OrbStack / linux-arm64）。
+#
+#   docker compose up -d                      # 起栈
+#   docker compose logs -f fish               # 看日志
+#   git pull && docker compose restart fish   # **日常部署：秒级，不重建镜像**
+#   docker compose build fish && docker compose up -d fish   # 只在运行时依赖变了才需要
+#
+# 核心设计：**Docker 只提供隔离环境，源码不 baked**。
+# 鱼是快速迭代项目，源码从宿主仓库 bind mount 进 /app，改代码只需 git pull + 重启容器。
+# 镜像里只有运行时环境（node / ffmpeg / socat / python+av / heif-convert）与 node_modules 初值。
+#
+# 三个服务：napcat（协议端，官方镜像）/ fish（鱼）/ sixty（新闻源）。
+# 语音不在这里：GPT-SoVITS 留宿主机 launchd + MPS 加速，容器拿不到 Metal。
+# ComfyUI 也不在这里：仍在 Windows，经宿主机 SSH 隧道，容器内由 socat 转发。
+#
+# 关键约束（改之前先读 docs/plans/2026-11-14-dockerize-fish-napcat.md）：
+#   • 依赖挂 `.node_modules-linux/`，**不能用仓库的 `node_modules/`**——后者是 macOS
+#     二进制，sharp 加载不了。lockfile 变化由 entrypoint 自动 npm ci 对齐
+#   • 仓库整目录挂载 → fish.config.json 是挂载目录里的普通文件，
+#     代码的 tmp+rename 原子写天然可用（单文件 bind mount 才会 EBUSY）
+#   • user 501:501 与宿主用户一致，否则写出的文件宿主机侧动不了
+#   • init: true 收僵尸（socat fork / 子进程）
+#   • TZ 必须是 Asia/Shanghai：宵禁 00:00–08:00 与 localDay() 切日都按本地时区
+#   • 不写 extra_hosts: host-gateway —— 那会覆盖 OrbStack 自带的
+#     host.docker.internal 映射（实测它本就直达宿主 loopback）
+
+name: yugang
+
+services:
+  napcat:
+    # digest 固定（2026-11-14 实测 linux/arm64，NapCat.Core 4.18.42 + Linux QQ 3.2.34-53644，
+    # 该 build 在 packet 偏移表内）。升级改 digest，不用浮动 latest。
+    image: mlikiowa/napcat-docker@sha256:696e9574a0f6fb2f86cbecba8a32048f2a5823117dc9b13c6c02637ad890fa8b
+    container_name: yugang-napcat
+    restart: unless-stopped
+    init: true
+    environment:
+      NAPCAT_UID: "501"
+      NAPCAT_GID: "501"
+      MODE: ws
+      TZ: Asia/Shanghai
+      LANG: C.UTF-8
+    ports:
+      # 只绑宿主 loopback：WebUI 用于扫码登录与改配置，不对局域网暴露。
+      # WS 3001 不发布到宿主——fish 走 compose 内网 ws://napcat:3001。
+      - "127.0.0.1:6099:6099"
+    volumes:
+      - ./data/napcat/qq:/app/.config/QQ          # 登录态（持久化，扫码一次）
+      - ./data/napcat/config:/app/napcat/config   # onebot11 / webui 配置
+      - ./data/napcat/plugins:/app/napcat/plugins
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:6099/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  fish:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: yugang-fish:latest
+    container_name: yugang-fish
+    restart: unless-stopped
+    init: true
+    user: "501:501"
+    depends_on:
+      - napcat
+      - sixty
+    # .env 提供必填项（MASTER_QQ / GROUPS / ONEBOT_TOKEN / PROTOCOL_QQ / COMFYUI_URL …）。
+    # 下面 environment 的值**胜过** env_file，用于覆盖容器内必须不同的地址。
+    env_file: .env
+    environment:
+      YUGANG_CONTAINER: "1"
+      YUGANG_HOME: /data
+      # MEDIA_ROOT 不覆盖：缺省从 DATA_HOME/media 派生 → /data/media → 宿主 ./var/media。
+      # 一条挂载就够，媒体与数据库同属 var/（能力保留：将来想把媒体放其它盘再设 MEDIA_ROOT）。
+      ONEBOT_WS_URL: ws://napcat:3001
+      SIXTY_BASE_URL: http://sixty:4399
+      VIDEO_PYTHON: /opt/video-venv/bin/python
+      # COMFYUI_URL 故意不覆盖：保持 .env 里的 http://127.0.0.1:18190，
+      # 由 entrypoint 的 socat 转发到宿主机隧道（安全不变量不放宽）。
+      # fish.config.json 用仓库根默认路径（仓库整目录挂载，原子写可用），
+      # 与宿主形态共用同一份配置，不需要 YUGANG_FISH_CONFIG 覆盖。
+      TZ: Asia/Shanghai
+      LANG: C.UTF-8
+    volumes:
+      - .:/app                                     # **源码挂载**：git pull + restart 即完成部署
+      # 依赖也外挂，但指向**独立的 Linux 依赖目录**：仓库的 node_modules/ 是 macOS
+      # 二进制（sharp），Linux 加载不了，所以另开一份。已 gitignore。
+      - ./.node_modules-linux:/app/node_modules
+      # 数据全部留宿主（主人 2026-11-14 裁定）：fish.db / chatlog / usage / media 原地不动。
+      # 理由：不可再生数据只有 ~350KB（记忆/会话映射/outbox/watch），bind mount 让它
+      # 白得 Time Machine 覆盖；而 OrbStack 的虚拟磁盘 data.img.raw 带
+      # com_apple_backup_excludeItem，**TM 明确不备份**，放 volume 就得另建备份作业。
+      # 零拷贝迁移（WAL  checkpoint 风险消失）、回滚即「停容器起宿主鱼」、运维工作流不变。
+      - ./var:/data
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "node +(--[^ ]+ +)*[^ ]*src/index\\.ts"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+
+  sixty:
+    # 新闻源。原为独立容器 60s，收进本栈统一管；不发布宿主端口（fish 走内网）。
+    image: vikiboss/60s:latest
+    container_name: yugang-60s
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+
+# **没有任何 named volume**（主人 2026-11-14：「那就直接都外挂吧」）。
+# 源码 / 依赖 / 数据 全部宿主 bind mount：
+#   • 一律在 Time Machine 覆盖范围内（OrbStack 虚拟磁盘带 backup_excludeItem，TM 不备份）
+#   • 宿主可直接查看 / 备份 / 清理，运维工作流不变
+#   • 零拷贝迁移，回滚即「停容器、起宿主鱼」
+#   • docker compose down -v 不会误删任何东西
