@@ -37,5 +37,5 @@ fish.config.json 受控字段白名单（生效时机逐字段标注）：
 | drawEnabled | 布尔 | 热加载 | 本地画图总开关（资源闸）：缺省 true；false 时 draw 入口即拒、真正提交前再复核一次，热生效不重启，用来临时让出 GPU。COMFYUI_URL 仍只作连接地址 |
 | voices | 对象 | 热加载 | 人格 → 语音配置：url 必填，referWav / referText / referLanguage / speed（0.5–2）可选 |
 | weeklyGroupId | 字符串 | 热加载 | 周报群号（纯数字），空串 = 不发；下次周报触发时按新值执行 |
-| thinkingLevel | 字符串 | 需重启 | 思考档位，只认 off / minimal / low / medium / high / xhigh / max |
+| thinking | 布尔 | 需重启 | 思考开关：false = 关思考，true = 该模型最低可用档。各 provider 的字段差异由 config/models.json 的 thinkingLevelMap 映射；关不掉时启动日志会告警 |
 | toolTimeoutSeconds | 数值 | 需重启 | 5–600，单次工具调用超时（秒） |

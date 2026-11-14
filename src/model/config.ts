@@ -93,6 +93,76 @@ export interface FishModelConfig {
   oauthClient?: { id: string; secret: string };
 }
 
+/** 与 fish-config 的 ThinkingLevel 结构一致（就地声明避开循环 import）。 */
+export type ResolvedThinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+/** 从低到高的候选顺序：true 取第一个可用的。 */
+const THINKING_ASC: readonly ResolvedThinking[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+function modelEntry(config: FishModelConfig): ProviderModelConfig | undefined {
+  return config.models.find((m) => m.id === config.modelId);
+}
+
+/**
+ * 思考两态 → 具体档位。provider 差异全部交给模型自带的 thinkingLevelMap。
+ *
+ *   false → "off"（发什么字段由 SDK 按 thinkingFormat 决定）
+ *   true  → 该模型 thinkingLevelMap 里**最低的非 null 档**；没配映射时回落 low
+ *
+ * 为何不再暴露七档：群聊只需要「开/关」，而七档里的中间值在各 provider 上语义不一，
+ * 反而容易配出「以为关了其实没关」（见 thinkingOffWarning）。
+ */
+export function resolveThinking(thinking: boolean, config: FishModelConfig): ResolvedThinking {
+  if (!thinking) return "off";
+  const map = modelEntry(config)?.thinkingLevelMap;
+  if (map) {
+    for (const level of THINKING_ASC) {
+      if (typeof map[level] === "string") return level;
+    }
+  }
+  return "low";
+}
+
+/**
+ * thinking=false 时该模型能不能真关思考；不能则返回告警文案。
+ *
+ * 背景（2026-11-14 实测）：pi-ai 的 openai-completions 兜底分支只在
+ * `typeof thinkingLevelMap.off === "string"` 时才发 reasoning_effort；
+ * 为 null/缺失时**什么都不发**，而不发字段的实际含义是「用服务端默认」
+ * （qwen4-max-preview 默认 xhigh）——于是 off 成了静默空档。
+ * 其它 thinkingFormat（zai / qwen / together 等）会主动发禁用字段，不受此影响。
+ */
+export function thinkingOffWarning(config: FishModelConfig): string | undefined {
+  const api = config.api || "openai-completions";
+  if (api !== "openai-completions") return undefined; // 其它 adapter 自己管思考
+  const md = modelEntry(config);
+  if (!md?.reasoning) return undefined;
+  const compat = md.compat ?? {};
+  const fmt = compat["thinkingFormat"];
+  const off = md.thinkingLevelMap?.["off"];
+  const label = `${config.providerId}/${config.modelId}`;
+  const offText = JSON.stringify(off) ?? "缺失";
+
+  // 这些格式在 off 时主动发禁用字段，与映射值无关
+  if (fmt === "zai" || fmt === "qwen" || fmt === "qwen-chat-template" || fmt === "together") return undefined;
+  // 这些格式用 `off !== null` 判定：null 是「显式声明不支持关」
+  if (fmt === "deepseek" || fmt === "openrouter" || fmt === "string-thinking") {
+    return off === null ? `${label} 声明不支持关思考（thinkingLevelMap.off=null），thinking=false 对它无效` : undefined;
+  }
+  if (fmt === "ant-ling") return `${label} 的 ant-ling 通道 off 时不发字段，thinking=false 关不掉`;
+  if (fmt === "chat-template") return undefined; // 由 buildChatTemplateValues 决定，不在此断言
+
+  // 兜底（无 thinkingFormat，含写了 "openai" 但 SDK 无此分支的情形）与 baseten
+  if (compat["supportsReasoningEffort"] !== true) {
+    return `${label} 未声明 supportsReasoningEffort，off 无字段可发；能不能关取决于服务端默认`;
+  }
+  if (typeof off !== "string") {
+    return `${label} 的 thinkingLevelMap.off 不是字符串（当前 ${offText}），SDK 将不发 reasoning_effort，` +
+      `服务端按默认档跑——thinking=false 实际关不掉，请把 off 映射成该 API 接受的关闭值`;
+  }
+  return undefined;
+}
+
 export interface FishModelsSelection {
   /** 主对话模型；必填。 */
   main: FishModelConfig;

@@ -56,7 +56,7 @@
     "perTopicInput": 20,
     "perTopicOutput": 5
   },
-  "thinkingLevel": "low",
+  "thinking": false,
   "compact": {
     "maxTokens": 100000,
     "byModel": {

@@ -18,7 +18,7 @@ import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { DATA_HOME, MEDIA_ROOT, PROMPT_ROOT, REPO_ROOT, WORKSPACE_ROOT } from "../paths.ts";
 import { addFishProvider, createFishModels } from "../model/models.ts";
-import { describeModel, loadFishModels } from "../model/config.ts";
+import { describeModel, loadFishModels, resolveThinking, thinkingOffWarning } from "../model/config.ts";
 import { cleanupStaleVideoTemps } from "../tools/video/tool.ts";
 import { isLookDisabled } from "../tools/look/tool.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -188,6 +188,13 @@ const config = {
 mkdirSync(config.mediaRoot, { recursive: true });
 
 const models = createFishModels(modelSelection.main);
+
+// 思考开关的机械体检：thinking=false 但该模型根本关不掉时明确告警。
+// 不告警的后果是「以为关了其实按服务端最高档跑」，回复慢而且查不出来。
+if (!fishConfig().config.thinking) {
+  const warn = thinkingOffWarning(modelSelection.main);
+  if (warn) console.warn(`[鱼缸] ⚠ 思考关不掉：${warn}`);
+}
 // 视觉模型可能是另一个 provider（例如主体走 codex 订阅、识图仍用 glm）：
 // 把它也挂进同一个 Models，否则 getModel 拿不到 → 看图直接判「服务不稳」
 if (modelSelection.vision.providerId !== modelSelection.main.providerId) {
@@ -444,9 +451,9 @@ export async function bootRuntime(): Promise<void> {
   storage: await openNodeSqliteStorage(join(HOME, "fish.db")),
   models,
   model: mainModel,
-  // 思考档位：off|minimal|low|medium|high|xhigh|max。最低可用思考档是 low
-  // （deepseek 的 minimal 映射为 null，等于不支持），缺省 off
-  thinkingLevel: fishConfig().config.thinkingLevel,
+  // 思考两态：false=关，true=该模型最低可用档。provider 差异由 thinkingLevelMap 映射，
+  // 不在这里硬编码任何 provider 的字段名。
+  thinkingLevel: resolveThinking(fishConfig().config.thinking, modelSelection.main),
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
   // 重耗时工具单独放宽：say_voice 要等 GPT-SoVITS 合成（默认超时 120s，覆盖 250s 含空响应重试一次的最坏 240s），
   // video 要下视频、抽帧、逐帧过视觉模型；全局 toolTimeoutSeconds 保持 30 不动

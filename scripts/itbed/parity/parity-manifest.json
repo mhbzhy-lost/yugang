@@ -12,7 +12,7 @@
   "gitHead": "cbf5c41d2f3811d67950f3cda0fd7b0293b0179b",
   "fishConfig": {
     "watchAmbientChance": 0.25,
-    "thinkingLevel": "off",
+    "thinking": false,
     "compact": {
       "maxTokens": 100000,
       "byModel": {

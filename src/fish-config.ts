@@ -13,10 +13,6 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { FISH_CONFIG_PATH } from "./paths.ts";
 
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-
-const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
 /** 搭话模式标记（兼容 harness 的 runtime 裁剪）：next = 开窗两态；free = 自由活动模式
  *  （专用白名单群恒可搭话、60 秒一拍合并）；非群会话（私聊 / worker）标 legacy 以裁掉
  *  runtime 的窗口协议小节（行为与历史一致），不再有开关语义。 */
@@ -208,8 +204,12 @@ export interface FishConfig {
   news: NewsConfig;
   /** 出站配速（秒）：outbox drain 同会话相邻两次实际发送的最小间隔，防连珠炮（0 = 关闭）。 */
   sendPacingSeconds: number;
-  /** 思考档位；启动时写进会话 agent，改完重启才生效。 */
-  thinkingLevel: ThinkingLevel;
+  /**
+   * 思考开关（两态）：false = 关思考，true = 该模型的**最低可用档**。
+   * 具体发什么字段由各 provider 的 thinkingLevelMap 映射（见 resolveThinking）。
+   * 启动时写进会话 agent，改完重启才生效。
+   */
+  thinking: boolean;
   /** 换页阈值：按实际请求 tokens，支持按模型覆盖。 */
   compact: CompactConfig;
   /** 单次工具调用超时（秒）：某个工具卡住超过这么久就报错，不再干等。 */
@@ -278,14 +278,6 @@ function numberIn(reason: string, min: number, max: number, floor = false) {
   };
 }
 
-/** 枚举校验：只认 values 里的字符串值，其余（含非字符串）拒绝并带上收到的值。 */
-function oneOf(body: string, values: readonly string[]) {
-  return (raw: unknown): FieldCheck => {
-    if (typeof raw === "string" && values.includes(raw)) return { ok: true, value: raw };
-    return { ok: false, reason: typeof raw === "string" ? `${body}：${raw}` : body };
-  };
-}
-
 function checkCompact(raw: unknown): FieldCheck {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "compact 必须是对象" };
   const c = raw as Record<string, unknown>;
@@ -338,6 +330,11 @@ function checkGifAutoCollect(raw: unknown): FieldCheck {
 function checkDrawEnabled(raw: unknown): FieldCheck {
   if (typeof raw === "boolean") return { ok: true, value: raw };
   return { ok: false, reason: "drawEnabled 必须是 true/false" };
+}
+
+function checkThinking(raw: unknown): FieldCheck {
+  if (typeof raw === "boolean") return { ok: true, value: raw };
+  return { ok: false, reason: "thinking 必须是 true/false（false=关思考，true=该模型最低档）" };
 }
 
 function checkVoices(raw: unknown): FieldCheck {
@@ -689,7 +686,7 @@ export const FISH_CONFIG_FIELDS: readonly FishConfigFieldSpec[] = [
   { name: "video", effect: "hot", check: checkVideoBlock },
   { name: "news", effect: "hot", check: checkNewsBlock },
   { name: "sendPacingSeconds", effect: "hot", check: numberIn("sendPacingSeconds 必须在 0–60", 0, 60) },
-  { name: "thinkingLevel", effect: "restart", check: oneOf("thinkingLevel 不认识", THINKING_LEVELS as readonly string[]) },
+  { name: "thinking", effect: "restart", check: checkThinking },
   { name: "compact", effect: "hot", check: checkCompact },
   { name: "toolTimeoutSeconds", effect: "restart", check: numberIn("toolTimeoutSeconds 必须在 5–600", 5, 600) },
   { name: "memeCooldownMinutes", effect: "hot", check: numberIn("memeCooldownMinutes 必须在 0–240", 0, 240) },
@@ -715,6 +712,11 @@ function parseFile(raw: unknown, problems: string[]): Partial<FishConfig> {
   for (const gone of ["engagement", "ambientMinIntervalSeconds", "watchAmbientChance"]) {
     if (src[gone] !== undefined) problems.push(`${gone} 已随 legacy 搭话判定下线，可删除`);
   }
+  // 思考档位改两态（2026-11-14）：七档抽象对群聊没意义，而且 off 在部分 provider 上
+  // 是静默空档（映射为 null 时 SDK 不发字段，服务端按默认高档跑）。
+  if (src["thinkingLevel"] !== undefined) {
+    problems.push("thinkingLevel 已改为 thinking: true/false（false=关，true=最低档），可删除");
+  }
 
   // 白名单循环：不在 FISH_CONFIG_FIELDS 里的顶层键一律不认；字段校验与告警文案只有这一份
   for (const spec of FISH_CONFIG_FIELDS) {
@@ -736,7 +738,7 @@ const DEFAULTS: FishConfig = {
   video: VIDEO_DEFAULTS,
   news: NEWS_DEFAULTS,
   sendPacingSeconds: 6,
-  thinkingLevel: "low",
+  thinking: false,
   compact: { maxTokens: 100_000, byModel: { "google-antigravity": 90_000 } },
   memeCooldownMinutes: 8,
   voices: {},

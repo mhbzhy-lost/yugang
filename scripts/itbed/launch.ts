@@ -385,7 +385,8 @@ async function main(): Promise<number> {
     ...(numOf(fishConfig["watchAmbientChance"]) !== undefined ? { WATCH_AMBIENT_CHANCE: String(numOf(fishConfig["watchAmbientChance"])) } : {}),
     ...(numOf(fishConfig["ambientMinIntervalSeconds"]) !== undefined ? { AMBIENT_MIN_INTERVAL_SECONDS: String(numOf(fishConfig["ambientMinIntervalSeconds"])) } : {}),
     ...(numOf(fishConfig["toolTimeoutSeconds"]) !== undefined ? { TOOL_TIMEOUT_SECONDS: String(numOf(fishConfig["toolTimeoutSeconds"])) } : {}),
-    ...(typeof fishConfig["thinkingLevel"] === "string" ? { THINKING_LEVEL: fishConfig["thinkingLevel"] } : {}),
+    // 思考已改两态（2026-11-14）：true=最低档，false=关
+    ...(typeof fishConfig["thinking"] === "boolean" ? { THINKING_LEVEL: fishConfig["thinking"] ? "low" : "off" } : {}),
     ...(numOf(compact["maxTokens"]) !== undefined ? { COMPACT_MAX_TOKENS: String(numOf(compact["maxTokens"])) } : {}),
   };
   console.log("[itbed] 注入 env：");
