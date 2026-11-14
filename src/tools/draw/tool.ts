@@ -9,6 +9,7 @@ import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { loraBook, styleBook } from "../characters.ts";
+import { normalizeInitViaWorker, usesSips } from "../../media/image-ops.ts";
 import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
 import { recordMedia } from "../../egress/ledger.ts";
 import { runInteraction, runInteractionSingle, type InteractionPreset } from "./comfy.ts";
@@ -193,8 +194,10 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
   });
 }
 
-/** 与旧通道相同：图片缩到受限像素预算，转换为 PNG。 */
+/** 与旧通道相同：图片缩到受限像素预算，转换为 PNG。
+ *  macOS 走 sips（参数逐字保留），其它平台走 sharp worker；否则容器内 ref 改图不可用。 */
 function normalizeInitImage(full: string): Buffer | null {
+  if (!usesSips()) return normalizeInitViaWorker(full);
   try {
     const probe = spawnSync("sips", ["-g", "pixelWidth", "-g", "pixelHeight", full], { timeout: 20_000 });
     const out = probe.status === 0 ? probe.stdout.toString() : "";

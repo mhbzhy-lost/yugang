@@ -9,9 +9,13 @@
  *   - 50KB 是上限不是目标：达标后不再压（该通道按图计费与字节无关，压小只丢清晰度）
  *
  * 只服务主会话 inline 附图路径；look/describe 链路保持自己的压缩语义，不用本模块。
- * 实现只用 macOS 自带 sips（本地开发机与生产 mini 都是 macOS，deploy 不装依赖）。
+ *
+ * 后端：macOS 走自带 sips（参数逐字保留，生产路径零行为变化）；
+ * 其它平台（Linux 容器）走 image-ops 的 sharp worker——sips 在 Linux 不存在，
+ * 若不接这条分支，压图会静默失败、模型一张图也看不到。规格常量两边共用。
  */
 import { spawnSync } from "node:child_process";
+import { shrinkViaWorker, usesSips } from "./image-ops.ts";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,6 +68,13 @@ function runSips(args: string[], source: string): Buffer | null {
 }
 
 export function shrinkForModel(input: { file: string }): ShrinkResult {
+  // 非 macOS：整个阶梯交给一个 sharp worker 进程干完（比逐档 spawn sips 更省）
+  if (!usesSips()) {
+    const r = shrinkViaWorker(input.file);
+    if (!r.ok) return { ok: false, reason: r.reason };
+    const buffer = Buffer.from(r.b64, "base64");
+    return r.floor ? { ok: true, buffer, mimeType: "image/jpeg", floor: true } : { ok: true, buffer, mimeType: "image/jpeg" };
+  }
   let raw: Buffer;
   try {
     raw = readFileSync(input.file);

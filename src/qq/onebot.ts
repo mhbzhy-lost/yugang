@@ -701,10 +701,19 @@ export class OneBot {
       const stem = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
       if (kind.convert) {
-        // HEIC/HEIF/BMP/TIFF：模型不认，用 macOS 自带 sips 归一化成 JPEG。
+        // HEIC/HEIF/BMP/TIFF：模型不认，归一化成 JPEG。
+        // macOS 走自带 sips（参数逐字保留）；其它平台走 sharp worker，否则容器内这类图直接丢。
         const raw = join(dir, `${stem}.${kind.ext}`);
         const jpg = join(dir, `${stem}.jpg`);
         writeFileSync(raw, bytes);
+        const { toJpegViaWorker, usesSips } = await import("../media/image-ops.ts");
+        if (!usesSips()) {
+          const buf = toJpegViaWorker(raw);
+          unlinkSync(raw);
+          if (!buf) return null;
+          writeFileSync(jpg, buf);
+          return { ref: `inbound/${stem}.jpg` };
+        }
         const { spawnSync } = await import("node:child_process");
         const sips = spawnSync("sips", ["-s", "format", "jpeg", raw, "--out", jpg], { timeout: 20000 });
         unlinkSync(raw);

@@ -32,7 +32,8 @@
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-durable": "1.4.0",
     "fast-xml-parser": "5.11.2",
-    "https-proxy-agent": "9.1.0"
+    "https-proxy-agent": "9.1.0",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

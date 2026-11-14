@@ -26,6 +26,7 @@ import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-d
 import { renderTemplate } from "../../prompt/index.ts";
 import { ledgerOf, recordLook } from "../../egress/ledger.ts";
 import { describeImage, isDescribeFiltered } from "../../media/describe.ts";
+import { lookShrinkViaWorker, usesSips } from "../../media/image-ops.ts";
 import { checkMemeSource } from "../../media/meme-store.ts";
 import { DEFAULT_LIMITS } from "../../egress/policy.ts";
 import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
@@ -342,8 +343,10 @@ function formatPngMetadata(bytes: Buffer, ref: string, emptyText: string, invali
   return `PNG 元数据（机械提取）\nref: ${ref}\n\n${body}`.slice(0, PNG_METADATA_LIMIT);
 }
 
-/** macOS sips 压缩：GIF 取首帧、超尺寸缩到 1280px，输出 JPEG；失败返回 null。 */
+/** 转述前压图：GIF 取首帧、长边归 1280px，输出 JPEG；失败返回 null。
+ *  macOS 走 sips（参数逐字保留），其它平台走 sharp worker。 */
 function shrink(file: string): Buffer | null {
+  if (!usesSips()) return lookShrinkViaWorker(file);
   try {
     const out = `${tmpdir()}/look-shrink-${Date.now()}-${Math.random().toString(16).slice(2, 6)}.jpg`;
     const res = spawnSync("sips", ["-s", "format", "jpeg", "-s", "formatOptions", "70", "-Z", "1280", file, "--out", out], { timeout: 20_000 });
