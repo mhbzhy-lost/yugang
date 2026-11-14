@@ -19,6 +19,15 @@ import { join } from "node:path";
 
 const QQ_BIN = "/Applications/QQ.app/Contents/MacOS/QQ";
 
+// 容器形态：协议端是兄弟容器（官方 NapCat 镜像），不存在「注入 QQ.app」这件事。
+// 明确拒绝，避免有人照旧文档在容器里跑 install 把环境搞坏。
+if (process.env.YUGANG_CONTAINER === "1") {
+  console.error("[protocol] ✗ 容器形态不用本命令。协议端由 compose 管：");
+  console.error("             docker compose logs -f napcat     # 看日志与二维码");
+  console.error("             docker compose restart napcat     # 重启协议端");
+  process.exit(1);
+}
+
 /**
  * NapCat 实际读配置的位置随平台不同（目录解析在 onebot-config.ts）：
  *  macOS：QQ 容器的 Application Support/QQ/NapCat/config（per-uin，登录后才有）

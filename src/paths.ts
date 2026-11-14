@@ -29,8 +29,8 @@ export const WORKSPACE_ROOT = resolve(process.env.WORKSPACE_ROOT ?? join(DATA_HO
 /** prompt 目录（人格书、共享文案、工具说明的源）。 */
 export const PROMPT_ROOT = resolve(process.env.PROMPT_ROOT ?? join(REPO_ROOT, "prompt"));
 
-/** 行为配置（热加载）。 */
-export const FISH_CONFIG_PATH = join(REPO_ROOT, "fish.config.json");
+/** 行为配置（热加载）。容器形态下该文件要可写挂载，故允许独立覆盖。 */
+export const FISH_CONFIG_PATH = resolve(process.env.YUGANG_FISH_CONFIG ?? join(REPO_ROOT, "fish.config.json"));
 
 /** 模型与凭据配置。 */
 export const MODELS_CONFIG_PATH = join(REPO_ROOT, "config", "models.json");

@@ -14,7 +14,7 @@
  * 补标用 config/models.json 的 models.vision（flash 级文本模型，别用 main 的订阅模型）。
  * 环境变量可覆盖：INDEX / AUTH / PROMPT / TAGS
  */
-import { DATA_HOME, REPO_ROOT } from "../src/paths.ts";
+import { MEDIA_ROOT, REPO_ROOT } from "../src/paths.ts";
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadFishModels } from "../src/model/config.ts";
@@ -31,7 +31,8 @@ const limitArg = args.indexOf("--limit");
 const limit = limitArg >= 0 ? Number(args[limitArg + 1] ?? "0") : 0;
 
 const root = REPO_ROOT;
-const indexPath = process.env["INDEX"] ?? join(DATA_HOME, "media", "memes", "index.json");
+// 媒体目录认 MEDIA_ROOT（唯一基准）：容器形态下它与 DATA_HOME 分开挂载。
+const indexPath = process.env["INDEX"] ?? join(MEDIA_ROOT, "memes", "index.json");
 const authPath = process.env["AUTH"] ?? join(root, "config", "auth.json");
 const modelsPath = join(root, "config", "models.json");
 const promptPath = process.env["PROMPT"] ?? join(root, "prompt", "meme-retag.md");

@@ -28,6 +28,13 @@ const PROBE_TIMEOUT_MS = 500;
 const LOAD_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 2_000;
 
+// 容器形态：TTS 留在宿主机（launchd 托管 + MPS 加速），容器里既没有 launchctl/plutil
+// 也拿不到 Metal。这里明确拒绝，而不是静默报「0 个实例」让人以为语音挂了。
+if (process.env.YUGANG_CONTAINER === "1") {
+  console.error("[tts] ✗ 语音服务在宿主机，不在容器里。去 macmini 宿主机执行：npm run tts " + (process.argv[2] ?? "status"));
+  process.exit(1);
+}
+
 type Instance = {
   label: string;
   path: string;

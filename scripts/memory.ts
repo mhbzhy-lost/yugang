@@ -107,7 +107,11 @@ if (!existsSync(DB_PATH)) {
  */
 function liveFishProcesses(): string[] {
   try {
-    const out = execFileSync("pgrep", ["-fl", "yugang/src/index.ts"], { encoding: "utf8" });
+    // 不得硬编码仓库路径：容器形态下 WORKDIR 不是 …/yugang，写死会让护栏静默失效。
+    // 也不能只匹配字串 `src/index.ts`：那会误中类型检查进程
+    // （`node …/tsc --noEmit … src/index.ts`）。这里要求它是 **node 的脚本参数**：
+    // node 后只允许跟 --选项，紧接的第一个非选项参数必须以 src/index.ts 结尾。
+    const out = execFileSync("pgrep", ["-fl", "node +(--[^ ]+ +)*[^ ]*src/index\\.ts"], { encoding: "utf8" });
     return out.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
   } catch {
     return []; // pgrep 无匹配时退出码 1

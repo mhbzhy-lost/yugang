@@ -12,7 +12,7 @@
  * 用法：node scripts/migrate-memes.ts [--dry]
  * 索引路径默认仓库 var/media/memes/index.json，可用 MEME_INDEX 覆盖。
  */
-import { DATA_HOME, PROMPT_ROOT } from "../src/paths.ts";
+import { MEDIA_ROOT, PROMPT_ROOT } from "../src/paths.ts";
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -64,7 +64,9 @@ const moods = promptTags
   .map((l) => l.trim())
   .filter((l) => l.length > 0 && !l.startsWith("#"));
 
-const indexUrl = process.env["MEME_INDEX"] ?? join(DATA_HOME, "media", "memes", "index.json");
+// 媒体目录认 MEDIA_ROOT（唯一基准）：容器形态下它与 DATA_HOME 分开挂载，
+// 写死 DATA_HOME/media 会指向不存在的路径。
+const indexUrl = process.env["MEME_INDEX"] ?? join(MEDIA_ROOT, "memes", "index.json");
 if (!existsSync(indexUrl)) {
   console.error(`找不到索引：${indexUrl}`);
   process.exit(1);

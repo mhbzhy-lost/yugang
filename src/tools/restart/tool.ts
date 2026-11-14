@@ -48,12 +48,18 @@ export function createRestartTool(manifest: ToolManifest, deps: ToolPackageDeps)
           JSON.stringify({ conversationId: String(api.conversationId), key: String(deps.now?.() ?? Date.now()) }),
         );
       } catch {}
-      const child = spawn("/bin/sh", ["-c", "sleep 3 && npm run up >> var/fish-console.log 2>&1"], {
-        cwd: root,
-        detached: true,
-        stdio: "ignore",
-      });
-      child.unref();
+      // 容器形态（YUGANG_CONTAINER=1）：**不能再 spawn 一条鱼**——pi-durable 的 id 计数器是
+      // 进程内存值，双写必然撞号（AGENTS.md 第 16 条的事故形态）；且 npm run up 会去拉
+      // 协议端与 TTS，而容器里协议端是兄弟容器、TTS 在宿主机。
+      // 直接退出，由容器 restart 策略拉起；日志走 docker compose logs。
+      if (process.env.YUGANG_CONTAINER !== "1") {
+        const child = spawn("/bin/sh", ["-c", "sleep 3 && npm run up >> var/fish-console.log 2>&1"], {
+          cwd: root,
+          detached: true,
+          stdio: "ignore",
+        });
+        child.unref();
+      }
       // 给出口工具一点时间把「这就重启」说出去再死
       setTimeout(() => doExit(0), 1500).unref?.();
       return { output: [{ type: "text", text: "ok: restarting" }] };

@@ -26,8 +26,11 @@ if (!process.env.MASTER_QQ) {
   process.exit(1);
 }
 
+// 容器形态：协议端是兄弟容器、TTS 在宿主机，两者都不该由鱼拉。
+const inContainer = process.env.YUGANG_CONTAINER === "1";
+
 // 1. 协议端
-if (process.env.PROTOCOL_CMD && !(await reachable(wsUrl))) {
+if (!inContainer && process.env.PROTOCOL_CMD && !(await reachable(wsUrl))) {
   console.log(`[up] 拉起协议端：${process.env.PROTOCOL_CMD}`);
   const child = spawn(process.env.PROTOCOL_CMD, { shell: true, stdio: "inherit" });
   children.push(child);
@@ -59,11 +62,14 @@ const fish = spawn(process.execPath, ["--env-file-if-exists=.env", join(REPO_ROO
 children.push(fish);
 recordFishPid(fish.pid); // 与 deploy 写同一个 var/up.pid（单一事实源，down 读它收鱼）
 
-// 5. 语音跟随：与起鱼并行拉起 TTS 实例（模型加载要 30-60s）；失败只告警，不阻塞鱼
-const tts = spawn(process.execPath, [join(import.meta.dirname, "tts.ts"), "up"], { stdio: "inherit" });
-tts.on("exit", (code) => {
-  if (code !== 0) console.warn(`[up] ⚠ 语音拉起未完全成功（tts up 退出码 ${code}），鱼不受影响`);
-});
+// 5. 语音跟随：与起鱼并行拉起 TTS 实例（模型加载要 30-60s）；失败只告警，不阻塞鱼。
+//    容器形态跳过：TTS 靠宿主机 launchd + MPS 加速，容器里没有 launchctl 也拿不到 Metal。
+if (!inContainer) {
+  const tts = spawn(process.execPath, [join(import.meta.dirname, "tts.ts"), "up"], { stdio: "inherit" });
+  tts.on("exit", (code) => {
+    if (code !== 0) console.warn(`[up] ⚠ 语音拉起未完全成功（tts up 退出码 ${code}），鱼不受影响`);
+  });
+}
 
 process.on("SIGINT", () => void stop(0));
 process.on("SIGTERM", () => void stop(0));

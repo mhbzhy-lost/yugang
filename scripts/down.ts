@@ -14,6 +14,13 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { pidFilePath } from "./lib/pidfile.ts";
 
+// 容器形态：收鱼由 docker compose stop 负责。本脚本依赖 lsof 取 cwd（macOS 无 /proc 的产物），
+// slim 镜像里没有 lsof，跑下去只会得到误导性的「没找到鱼」。
+if (process.env.YUGANG_CONTAINER === "1") {
+  console.error("[down] ✗ 容器内不用本命令。在宿主机执行：docker compose stop fish");
+  process.exit(1);
+}
+
 const REPO = REPO_ROOT;
 const PID_FILE = pidFilePath();
 /** TERM 后给它多久优雅退（与 deploy 收旧鱼的 16s 一致），超时才 KILL */

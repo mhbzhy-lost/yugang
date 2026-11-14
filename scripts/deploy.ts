@@ -10,12 +10,33 @@
  * 里没有 brew 的 node，直接 spawn("node") 会 No such file or directory。
  */
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, existsSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { recordFishPid } from "./lib/pidfile.ts";
 import { DATA_HOME, REPO_ROOT } from "../src/paths.ts";
 
 const LOG = join(DATA_HOME, "fish-console.log");
+
+// ── 容器形态护栏（两条，都是防「第二条鱼」）──────────────────────
+// pi-durable 的 id 计数器是进程内存值，两条鱼写同一 SQLite 必然撞号（AGENTS.md 第 16 条）。
+if (process.env.YUGANG_CONTAINER === "1") {
+  console.error("[deploy] ✗ 容器内不跑 deploy。部署 = 在宿主机重建镜像与容器：");
+  console.error("           docker compose build fish && docker compose up -d fish");
+  process.exit(1);
+}
+// 宿主机侧：容器栈在跑时，本脚本会用宿主机旧 var/fish.db 再起一条鱼 → 必须拒绝。
+// docker 不存在时无法检测，但那种机器上也不可能有容器鱼，故放行。
+const dockerBin = ["/usr/local/bin/docker", "/opt/homebrew/bin/docker"].find((p) => existsSync(p));
+if (dockerBin) {
+  const ps = spawnSync(dockerBin, ["ps", "--filter", "name=yugang-fish", "--format", "{{.Names}}"], { encoding: "utf8", timeout: 8000 });
+  const names = (ps.stdout ?? "").trim();
+  if (ps.status === 0 && names !== "") {
+    console.error(`[deploy] ✗ 检测到容器鱼在跑（${names}），拒绝在宿主机再起一条。`);
+    console.error("           容器形态部署：docker compose build fish && docker compose up -d fish");
+    console.error("           要回宿主机形态：先 docker compose down，再跑本命令。");
+    process.exit(1);
+  }
+}
 
 // 1. 拉代码；失败就停手，线上继续跑旧代码
 console.log("[deploy] git fetch origin main");
