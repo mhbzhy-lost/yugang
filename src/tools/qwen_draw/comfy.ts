@@ -54,9 +54,12 @@ function makeQwenGraph(args: QwenDrawArgs): Graph {
   if (args.ref) {
     // 参考图：vision tower 看图 + VAE encode 成 reference_latents（锚定构图的重绘语义）。
     // latent 尺寸由参考图按 resolution 等比决定，EmptyImage 尺寸链下线。
+    // wire 名必须是 dotted 路径 images.image_1：旧 API prompt 格式下 autogrow 聚合
+    // 只认 dynamic_paths（parse_class_inputs 按点分前缀聚合回 images dict）；裸 image_1
+    // 会在 execute() 收到多余 kwarg 直接 TypeError（2026-11-16 线上事故）。
     g["8"] = { class_type: "LoadImage", inputs: { image: args.ref.name, upload: "image" } };
     g["4"].inputs.vae = ["3", 0] as unknown as Link;
-    g["4"].inputs.image_1 = ["8", 0] as unknown as Link;
+    g["4"].inputs["images.image_1"] = ["8", 0] as unknown as Link;
     g["5"].inputs.latent_image = ["4", 2] as unknown as Link;
     delete g["10"];
     delete g["11"];
