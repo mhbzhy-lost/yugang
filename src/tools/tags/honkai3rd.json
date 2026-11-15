@@ -83,11 +83,11 @@
     "key": "cyrene",
     "group": "honkai3rd",
     "name": "大昔涟（德谬歌）",
-    "lora": "cyrene_anima_v1_29b.safetensors",
+    "lora": "cyrene_anima_v1.safetensors",
     "inject": "cyrenehsr, very long pink hair, pink hair with blue tips, purple eyes, pointy ears, hair ornament, hair flower, rose, diamond-shaped pupils",
     "weight": 1.0,
     "base": "Anima",
-    "source": "https://civitai.com/models/2965801",
+    "source": "https://civitai.com/models/2965801?modelVersionId=3360421",
     "match": [
       "cyrene",
       "cyrenehsr",
@@ -137,6 +137,461 @@
           "美好假日"
         ],
         "tags": "Cyrene Holiday Costume, diamond-shaped eyes, blue jacket, white jacket, open jacket, crop top, pleated skirt, gray skirt, blue headwear, hairclip, heart necklace, braid, long braid, shoulder bag, mem keychain"
+      }
+    ]
+  },
+  {
+    "key": "aglaea",
+    "group": "honkai3rd",
+    "name": "阿格莱雅（崩铁）",
+    "lora": "aglaea_anima_v1.safetensors",
+    "inject": "aglaea \\(honkai: star rail\\), laurel crown, hair ornament, hair flower, bare shoulders, white dress, greco-roman clothes, jewelry, bracelet, thigh strap, yellow nails",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2997844?modelVersionId=3400252",
+    "match": [
+      "aglaea",
+      "阿格莱雅",
+      "アグライア",
+      "aglaea (honkai: star rail)"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "aglaea \\(honkai: star rail\\), laurel crown, hair ornament, hair flower, bare shoulders, white dress, greco-roman clothes, jewelry, bracelet, thigh strap, yellow nails"
+      }
+    ]
+  },
+  {
+    "key": "castorice",
+    "group": "honkai3rd",
+    "name": "遐蝶（崩铁 · 默认）",
+    "lora": "castorice_anima_v2.safetensors",
+    "inject": "castorice \\(honkai: star rail\\), white dress, bare shoulders, black tiara, hair flower, hair ornament, purple gloves, elbow gloves, asymmetrical gloves, white thighhighs, butterfly",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2967825?modelVersionId=3392941",
+    "match": [
+      "castorice",
+      "遐蝶",
+      "カストリス",
+      "castorice (honkai: star rail)",
+      "castoricehsr"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "castorice \\(honkai: star rail\\), white dress, bare shoulders, black tiara, hair flower, hair ornament, purple gloves, elbow gloves, asymmetrical gloves, white thighhighs, butterfly"
+      }
+    ]
+  },
+  {
+    "key": "castorice_gossamer",
+    "group": "honkai3rd",
+    "name": "遐蝶·Gossamer Flutter（崩铁 · 二套）",
+    "lora": "castorice_anima_v2.safetensors",
+    "inject": "castorice \\(gossamer flutter\\) \\(honkai: star rail\\), purple dress, bare shoulders, detached sleeves, purple sleeves, butterfly hair ornament, hair ornament, butterfly, earrings",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2967825?modelVersionId=3392941",
+    "match": [
+      "castorice gossamer flutter",
+      "遐蝶 幻蝶",
+      "gossamer flutter",
+      "castorice (gossamer flutter)",
+      "castorice (gossamer flutter) (honkai: star rail)"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "castorice \\(gossamer flutter\\) \\(honkai: star rail\\), purple dress, bare shoulders, detached sleeves, purple sleeves, butterfly hair ornament, hair ornament, butterfly, earrings"
+      }
+    ]
+  },
+  {
+    "key": "evanescia",
+    "group": "honkai3rd",
+    "name": "绯英（崩铁）",
+    "lora": "evanescia_anima_v1.safetensors",
+    "inject": "evanesciahsr, white shirt, white jacket, black skirt, pleated skirt, black pantyhose, mismatched gloves, thigh strap, black boots, red bow, hair flower, hair bow, choker",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2951916?modelVersionId=3343363",
+    "match": [
+      "evanescia",
+      "绯英",
+      "緋英",
+      "エヴァネシア",
+      "evanescia (honkai: star rail)",
+      "evanesciahsr"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "evanesciahsr, white shirt, white jacket, black skirt, pleated skirt, black pantyhose, mismatched gloves, thigh strap, black boots, red bow, hair flower, hair bow, choker"
+      }
+    ]
+  },
+  {
+    "key": "evernight",
+    "group": "honkai3rd",
+    "name": "长夜月（崩铁）",
+    "lora": "evernight_anima_v1.safetensors",
+    "inject": "evernight \\(honkai: star rail\\), hair flower, black flower, hairclip, single earring, black dress, half-jacket, long sleeves, white shirt, single bare shoulder, black gloves, thigh strap",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2998373?modelVersionId=3400910",
+    "match": [
+      "evernight",
+      "长夜月",
+      "長夜月",
+      "nagayotsuki",
+      "evernight (honkai: star rail)"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "evernight \\(honkai: star rail\\), hair flower, black flower, hairclip, single earring, black dress, half-jacket, long sleeves, white shirt, single bare shoulder, black gloves, thigh strap"
+      }
+    ]
+  },
+  {
+    "key": "feixiao",
+    "group": "honkai3rd",
+    "name": "飞霄（崩铁）",
+    "lora": "feixiao_anima_v1.safetensors",
+    "inject": "feixiao \\(honkai: star rail\\), forehead jewel, earrings, chinese clothes, blue shirt, sleeveless, bare shoulders, white coat, open clothes, long sleeves, black gloves, white belt, black shorts, thigh strap",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2999718?modelVersionId=3402534",
+    "match": [
+      "feixiao",
+      "飞霄",
+      "飛霄",
+      "feixiao (honkai: star rail)"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "feixiao \\(honkai: star rail\\), forehead jewel, earrings, chinese clothes, blue shirt, sleeveless, bare shoulders, white coat, open clothes, long sleeves, black gloves, white belt, black shorts, thigh strap"
+      }
+    ]
+  },
+  {
+    "key": "himeko_nova",
+    "group": "honkai3rd",
+    "name": "姬子·旅立（崩铁）",
+    "lora": "himeko_nova_anima_v1.safetensors",
+    "inject": "himekonovahsr, white dress, red cape, epaulettes, asymmetrical gloves, earrings",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2861858?modelVersionId=3232879",
+    "match": [
+      "himeko nova",
+      "姬子 旅立",
+      "himeko (nova)",
+      "himeko nova (honkai: star rail)",
+      "himekonovahsr"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "himekonovahsr, white dress, red cape, epaulettes, asymmetrical gloves, earrings"
+      }
+    ]
+  },
+  {
+    "key": "hyacine",
+    "group": "honkai3rd",
+    "name": "风堇（崩铁 · 默认）",
+    "lora": "hyacine_anima_v2.safetensors",
+    "inject": "hyacine \\(honkai: star rail\\), red hat, beret, red dress, long sleeves, aqua bowtie, white pantyhose, hair ornament",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2967805?modelVersionId=3392402",
+    "match": [
+      "hyacine",
+      "风堇",
+      "ヒアンシー",
+      "hyacine (honkai: star rail)",
+      "hyacinehsr"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "hyacine \\(honkai: star rail\\), red hat, beret, red dress, long sleeves, aqua bowtie, white pantyhose, hair ornament"
+      }
+    ]
+  },
+  {
+    "key": "hyacine_cotton",
+    "group": "honkai3rd",
+    "name": "风堇·Warm Cotton Skies（崩铁 · 二套）",
+    "lora": "hyacine_anima_v2.safetensors",
+    "inject": "hyacine \\(warm cotton skies\\) \\(honkai: star rail\\), bare shoulders, red dress, pink dress, short sleeves, puffy sleeves, white gloves, hair bow, hair ornament, jewelry",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2967805?modelVersionId=3392402",
+    "match": [
+      "hyacine warm cotton skies",
+      "风堇 暖棉",
+      "warm cotton skies",
+      "hyacine (warm cotton skies)",
+      "hyacine (warm cotton skies) (honkai: star rail)"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "hyacine \\(warm cotton skies\\) \\(honkai: star rail\\), bare shoulders, red dress, pink dress, short sleeves, puffy sleeves, white gloves, hair bow, hair ornament, jewelry"
+      }
+    ]
+  },
+  {
+    "key": "hysilens",
+    "group": "honkai3rd",
+    "name": "海瑟音（崩铁）",
+    "lora": "hysilens_anima_v1.safetensors",
+    "inject": "hysilens \\(honkai: star rail\\), hair ornament, earrings, shrug \\(clothing\\), long sleeves, see-through clothes, red gloves, black gloves, asymmetrical gloves, dress, blue dress, black thighhighs, torn thighhighs",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2997849?modelVersionId=3400258",
+    "match": [
+      "hysilens",
+      "海瑟音",
+      "セイレンス",
+      "hysilens (honkai: star rail)"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "hysilens \\(honkai: star rail\\), hair ornament, earrings, shrug \\(clothing\\), long sleeves, see-through clothes, red gloves, black gloves, asymmetrical gloves, dress, blue dress, black thighhighs, torn thighhighs"
+      }
+    ]
+  },
+  {
+    "key": "kuchiba",
+    "group": "honkai3rd",
+    "name": "朽葉（崩铁）",
+    "lora": "kuchiba_anima_v1.safetensors",
+    "inject": "kuchibahsr, black jacket, black gloves, turtleneck, long sleeves, black belt, necklace, earrings, white skirt, pleated skirt, single thighhigh, thigh boots, asymmetrical footwear, black footwear",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2965858?modelVersionId=3360495",
+    "match": [
+      "kuchiba",
+      "朽叶",
+      "朽葉",
+      "kuchiba (honkai: star rail)",
+      "kuchibahsr"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "kuchibahsr, black jacket, black gloves, turtleneck, long sleeves, black belt, necklace, earrings, white skirt, pleated skirt, single thighhigh, thigh boots, asymmetrical footwear, black footwear"
+      }
+    ]
+  },
+  {
+    "key": "nihilux",
+    "group": "honkai3rd",
+    "name": "虚照（崩铁 · baseout）",
+    "lora": "nihilux_anima_v2.safetensors",
+    "inject": "nihiluxhsr, baseout, glasses, black hat, white coat, grey vest, black skirt, pantyhose, black gloves",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2891823?modelVersionId=3339404",
+    "match": [
+      "nihilux",
+      "虚照",
+      "nihiluxhsr",
+      "nihilux (honkai: star rail)"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "nihiluxhsr, baseout, glasses, black hat, white coat, grey vest, black skirt, pantyhose, black gloves"
+      }
+    ]
+  },
+  {
+    "key": "nihilux_aha",
+    "group": "honkai3rd",
+    "name": "虚照·Aha（崩铁 · ahaout）",
+    "lora": "nihilux_anima_v2.safetensors",
+    "inject": "nihiluxhsr, ahaout, crown, red dress, white dress, detached sleeves, asymmetrical sleeves, thigh boots",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2891823?modelVersionId=3339404",
+    "match": [
+      "nihilux aha",
+      "虚照 阿哈",
+      "ahaout",
+      "nihilux (aeon aha)",
+      "nihilux (aeon aha) (honkai: star rail)"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "nihiluxhsr, ahaout, crown, red dress, white dress, detached sleeves, asymmetrical sleeves, thigh boots"
+      }
+    ]
+  },
+  {
+    "key": "pearl",
+    "group": "honkai3rd",
+    "name": "帕尔（崩铁）",
+    "lora": "pearl_anima_v2.safetensors",
+    "inject": "pearl \\(honkai: star rail\\), headpiece, forehead jewel, x hair ornament, shell hair ornament, black choker, frilled choker, detached collar, white dress, blue dress, two-tone dress, sleeveless dress, detached sleeves, wide sleeves, white sleeves, frilled sleeves, bow, clam shell, high heels",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2876019?modelVersionId=3440283",
+    "match": [
+      "pearl hsr",
+      "帕尔",
+      "パール",
+      "pearl (honkai: star rail)",
+      "pearlhsr"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "pearl \\(honkai: star rail\\), headpiece, forehead jewel, x hair ornament, shell hair ornament, black choker, frilled choker, detached collar, white dress, blue dress, two-tone dress, sleeveless dress, detached sleeves, wide sleeves, white sleeves, frilled sleeves, bow, clam shell, high heels"
+      }
+    ]
+  },
+  {
+    "key": "rappa",
+    "group": "honkai3rd",
+    "name": "乱破（崩铁）",
+    "lora": "rappa_anima_v1.safetensors",
+    "inject": "rappa \\(honkai: star rail\\), baseball cap, horned headwear, red jacket, open jacket, cropped jacket, asymmetrical sleeves, white shirt, tied shirt, crop top, fishnet top, black shorts, white belt, fingerless gloves, fishnet bridal gauntlets, red arm warmers, wrist belt, thigh strap, boots",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/3027795?modelVersionId=3438950",
+    "match": [
+      "rappa",
+      "乱破",
+      "ラッパ",
+      "rappa (honkai: star rail)"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "rappa \\(honkai: star rail\\), baseball cap, horned headwear, red jacket, open jacket, cropped jacket, asymmetrical sleeves, white shirt, tied shirt, crop top, fishnet top, black shorts, white belt, fingerless gloves, fishnet bridal gauntlets, red arm warmers, wrist belt, thigh strap, boots"
+      }
+    ]
+  },
+  {
+    "key": "robin_summeretto",
+    "group": "honkai3rd",
+    "name": "知更鸟·晴歌（崩铁）",
+    "lora": "robinsummer_anima_v1.safetensors",
+    "inject": "robinsumerettohsr, white bikini, sarong, starfish hair ornament, necklace, choker, sunflower, navel",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2875742?modelVersionId=3249663",
+    "match": [
+      "robin summeretto",
+      "知更鸟 晴歌",
+      "晴歌",
+      "robinsumerettohsr",
+      "robin (summeretto) (honkai: star rail)"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "robinsumerettohsr, white bikini, sarong, starfish hair ornament, necklace, choker, sunflower, navel"
+      }
+    ]
+  },
+  {
+    "key": "sparxie",
+    "group": "honkai3rd",
+    "name": "火花（崩铁 · 默认）",
+    "lora": "sparxie_anima_v2.safetensors",
+    "inject": "sparxie \\(honkai: star rail\\), mini top hat, rabbit hat ornament, black hat, long sleeves, black gloves, black choker, dress, bow, frills",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2964573?modelVersionId=3396425",
+    "match": [
+      "sparxie",
+      "火花",
+      "sparxie (honkai: star rail)",
+      "sparxiehsr"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "sparxie \\(honkai: star rail\\), mini top hat, rabbit hat ornament, black hat, long sleeves, black gloves, black choker, dress, bow, frills"
+      }
+    ]
+  },
+  {
+    "key": "sparxie_candy",
+    "group": "honkai3rd",
+    "name": "火花·Candy-Coated Waves（崩铁 · 二套）",
+    "lora": "sparxie_anima_v2.safetensors",
+    "inject": "sparxie \\(candy-coated waves\\) \\(honkai: star rail\\), sunglasses, eyewear on head, heart-shaped eyewear, black choker, long sleeves, black shirt, off shoulder, red skirt, plaid skirt, hair ribbon, hairclip, jewelry",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2964573?modelVersionId=3396425",
+    "match": [
+      "sparxie candy coated waves",
+      "火花 糖果",
+      "candy-coated waves",
+      "sparxie (candy-coated waves)",
+      "sparxie (candy-coated waves) (honkai: star rail)"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "sparxie \\(candy-coated waves\\) \\(honkai: star rail\\), sunglasses, eyewear on head, heart-shaped eyewear, black choker, long sleeves, black shirt, off shoulder, red skirt, plaid skirt, hair ribbon, hairclip, jewelry"
+      }
+    ]
+  },
+  {
+    "key": "the_herta",
+    "group": "honkai3rd",
+    "name": "大黑塔（崩铁）",
+    "lora": "theherta_anima_v1.safetensors",
+    "inject": "the herta \\(honkai: star rail\\), witch hat, black hat, hat flower, purple flower, bare shoulders, black dress, strapless dress, detached sleeves, long sleeves, key necklace, choker, black pantyhose, purple nails",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2997836?modelVersionId=3400243",
+    "match": [
+      "the herta",
+      "大黑塔",
+      "マダム・ヘルタ",
+      "the herta (honkai: star rail)",
+      "h3rta"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "the herta \\(honkai: star rail\\), witch hat, black hat, hat flower, purple flower, bare shoulders, black dress, strapless dress, detached sleeves, long sleeves, key necklace, choker, black pantyhose, purple nails"
+      }
+    ]
+  },
+  {
+    "key": "yaoguang",
+    "group": "honkai3rd",
+    "name": "爻光（崩铁）",
+    "lora": "yaoguang_anima_v1.safetensors",
+    "inject": "yaoguanghsr, hair ornament, white dress, sleeveless dress, earrings, bracelet, blue nails",
+    "weight": 1.0,
+    "base": "Anima",
+    "source": "https://civitai.com/models/2962601?modelVersionId=3356451",
+    "match": [
+      "yaoguang",
+      "爻光",
+      "ヤオグアン",
+      "yaoguang (honkai: star rail)",
+      "yaoguanghsr"
+    ],
+    "sections": [
+      {
+        "title": "默认服装",
+        "tags": "yaoguanghsr, hair ornament, white dress, sleeveless dress, earrings, bracelet, blue nails"
       }
     ]
   }
