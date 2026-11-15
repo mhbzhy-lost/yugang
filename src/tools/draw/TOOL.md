@@ -65,16 +65,9 @@ light particles 会把整图压成 pastel 洗白；detailed skin shading、subtl
 
 ## 单人位置
 
-仅单人从零画（姿态线）可用 `placement_x` / `placement_y` 声明人物在画面里的位置；默认 center + middle（居中），
-不传就是现状。**只在用户明确表达位置意图时传**（「站在左边」「人物靠右一点」「放在画面左边」「天空多留点」「人物放上面一点」这类话）。
-
-- placement_x：left / center / right——人物整体在画面左半或右半（默认居中）。
-- placement_y：up / middle / down——**构图重心**上下移，不是俯仰视角：up = 人物偏上、脚下地面/前景占多；
-  down = 人物偏下、头顶天空/留白占多。
-- 水平与垂直可组合（如 placement_x=left + placement_y=down = 人物在左下区域）。
-- 位置由姿态骨架引导落实，**不要同时在 prompt 里堆 on the left / standing on the left side 之类的位置词**；
-  传了 placement 就让工具干活。
-- fast、ref、双人 characters 没有位置引导，同传会被拒。
+暂无位置引导参数（E5–E9/E20 实验证死全部软引导路线，单人线已回退 KSampler 形态）。
+Regional 硬条件自训落地后再开放；在册机制与实验记录见 docs/plans/2026-11-15-single-pose-placement.md。
+用户表达位置意图时只能在 prompt 里写位置词，效果有限属已知限制。
 
 ## 双人
 

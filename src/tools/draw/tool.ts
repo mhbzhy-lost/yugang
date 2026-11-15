@@ -28,8 +28,6 @@ interface DrawArgs {
   characters?: Array<{ character?: string; description: string }>;
   framing?: "normal" | "wide";
   spacing?: "together" | "apart";
-  placement_x?: "left" | "center" | "right";
-  placement_y?: "up" | "middle" | "down";
 }
 
 const RATIO_SIZES = {
@@ -92,8 +90,6 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       if (args.fast === true && (args.hd === true || args.characters !== undefined)) throw new Error(deps.prompts.messages["draw_fast_scope"] ?? "draw_fast_scope");
       if ((args.framing !== undefined && !["normal", "wide"].includes(args.framing)) || (args.spacing !== undefined && !["together", "apart"].includes(args.spacing))) throw new Error(deps.prompts.messages["draw_composition"] ?? "draw_composition");
       if (args.characters === undefined && (args.framing !== undefined || args.spacing !== undefined)) throw new Error(deps.prompts.messages["draw_composition_multi"] ?? "draw_composition_multi");
-      if ((args.placement_x !== undefined && !["left", "center", "right"].includes(args.placement_x)) || (args.placement_y !== undefined && !["up", "middle", "down"].includes(args.placement_y))) throw new Error(deps.prompts.messages["draw_placement_enum"] ?? "draw_placement_enum");
-      if ((args.placement_x !== undefined || args.placement_y !== undefined) && (args.fast === true || args.ref !== undefined || args.characters !== undefined)) throw new Error(deps.prompts.messages["draw_placement_conflict"] ?? "draw_placement_conflict");
       const ratio = args.ratio ?? "3:4";
       if (typeof ratio !== "string" || !Object.hasOwn(RATIO_SIZES, ratio)) throw new Error(deps.prompts.messages["draw_ratio"] ?? "draw_ratio");
       const [width, height] = RATIO_SIZES[ratio];
@@ -149,7 +145,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
           if (!preset) throw new Error(renderTemplate(deps.prompts.messages["draw_preset_unknown"] ?? "{{key}}", { key: presetName }));
           png = multiParts
             ? await runInteraction(deps.comfyUrl, { prompt: positive, width, height, preset, parts: multiParts, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass, framing: args.framing, spacing: args.spacing }, onSubmitted, context.abortSignal)
-            : await runInteractionSingle(deps.comfyUrl, { prompt: positive, width, height, preset, part: { text: "", ...(lora ? { role: lora } : {}) }, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass, placementX: args.placement_x, placementY: args.placement_y }, onSubmitted, context.abortSignal);
+            : await runInteractionSingle(deps.comfyUrl, { prompt: positive, width, height, preset, part: { text: "", ...(lora ? { role: lora } : {}) }, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, onSubmitted, context.abortSignal);
         } else {
           png = await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, hd: args.hd === true, fast: args.fast === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, onSubmitted, stageCb, context.abortSignal);
         }
