@@ -77,6 +77,24 @@
           "apart"
         ],
         "description": "仅双人可用。默认 together：两人靠近，适合牵手、拥抱、依偎。只有用户明确要求两人相隔且无身体接触动作时选 apart；不得把远景误解为两人彼此远离"
+      },
+      "placement_x": {
+        "type": "string",
+        "enum": [
+          "left",
+          "center",
+          "right"
+        ],
+        "description": "仅单人从零画可用，默认 center。用户明确要求人物靠左或靠右时选 left/right；fast、ref、双人都不能用"
+      },
+      "placement_y": {
+        "type": "string",
+        "enum": [
+          "up",
+          "middle",
+          "down"
+        ],
+        "description": "仅单人从零画可用，默认 middle。构图重心：up=人物偏上+地面前景多，down=人物偏下+天空留白多；不是俯仰视角。与 placement_x 可组合"
       }
     },
     "required": [

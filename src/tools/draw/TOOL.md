@@ -43,7 +43,7 @@ style=<风格 key> 挂全局画风 LoRA，**仅直出/fast 生效**（姿态线�
 
 V8 姿态线：**CPU 编排姿态（离线 authoring 的 scene_json 预设）+ 初采样（双人 RS 剪影区域引导姿态/位置/隔离；姿态 adapter 已摘）→ 超分 → 质感 pass@2x**，一次提交全链。
 - 双人：传 `characters` 两项即固定走这条 V8 姿态线（预设内部默认 `sit-haystack`，不对外暴露）。
-- 单人默认：走**轻形态 V8 姿态线**（RS 采样器 + Pose3D 剪影分域 + 链式 LoRA，2026-11-15 E6 验证形态：人物词只在剪影内生效，姿态引导恢复；当前 `single-haystack`：单人草垛侧坐）。仅 `fast: true`（快速直出）或 `ref`（改图直出）走直出；`pipeline`/`preset` 不再对外暴露。
+- 单人默认：走**轻形态 V8 姿态线**（KSampler + Pose3D + 链式 LoRA；当前 `single-haystack`：单人草垛侧坐；姿态引导暂靠 prompt 描述，LLLite 已摘）。仅 `fast: true`（快速直出）或 `ref`（改图直出）走直出；`pipeline`/`preset` 不再对外暴露。
 - 普通单人和双人都不再有第二条默认生产线。`ref` 走直出改图；姿态线不接 ref；`hd: true` 在姿态线的 2 倍 pass 结束后再纯放大至净 3 倍，不在 3 倍域执行扩散。
 - 双人构图：`framing=wide` 恢复 RS Camera 的远景提示与区域缩放，同一缩放同时作用于姿态图；普通景别不接 Camera。`spacing=apart` 同步平移人物区域和对应姿态，适用于无接触动作的分离场景。
 - 姿态线初采样与 pass 均为 30 步、CFG 4.5、dpmpp_2m / sgm_uniform；质量地板与真实感细节词由工具自动加（初采样细节更多、pass 基础），负向内置，均不需你写。
@@ -60,6 +60,19 @@ light particles 会把整图压成 pastel 洗白；detailed skin shading、subtl
 明显更慢）；平时不传，默认 2 倍。单人和双人通用。
 
 用户明确要「快一点 / 赶时间 / 随便画画」时传 fast: true（单人 V8 直出快速模式：初采样 28 步 + 质感 pass 8 步 + 净超分 1.2x，明显更快，细节少于单人姿态线）；平时不传。fast 不能与 hd、双人 characters 同时传。
+
+## 单人位置
+
+仅单人从零画（姿态线）可用 `placement_x` / `placement_y` 声明人物在画面里的位置；默认 center + middle（居中），
+不传就是现状。**只在用户明确表达位置意图时传**（「站在左边」「人物靠右一点」「放在画面左边」「天空多留点」「人物放上面一点」这类话）。
+
+- placement_x：left / center / right——人物整体在画面左半或右半（默认居中）。
+- placement_y：up / middle / down——**构图重心**上下移，不是俯仰视角：up = 人物偏上、脚下地面/前景占多；
+  down = 人物偏下、头顶天空/留白占多。
+- 水平与垂直可组合（如 placement_x=left + placement_y=down = 人物在左下区域）。
+- 位置由姿态骨架引导落实，**不要同时在 prompt 里堆 on the left / standing on the left side 之类的位置词**；
+  传了 placement 就让工具干活。
+- fast、ref、双人 characters 没有位置引导，同传会被拒。
 
 ## 双人
 
