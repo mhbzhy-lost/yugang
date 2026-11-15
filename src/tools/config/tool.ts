@@ -135,7 +135,11 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
     let candidate = raw;
     if (typeof candidate === "string") {
       const text = candidate.trim();
-      if (text.startsWith("{") || text.startsWith("[")) {
+      // 有些模型会把无类型的 value 参数统一序列化成字符串；布尔值必须先还原，
+      // 否则 checkThinking/checkDrawEnabled 等严格类型校验会把 "false" 当成非法文本。
+      if (text === "true" || text === "false") {
+        candidate = text === "true";
+      } else if (text.startsWith("{") || text.startsWith("[")) {
         try { candidate = JSON.parse(text); } catch { /* 交给原字段校验报形状错误 */ }
       }
     }
