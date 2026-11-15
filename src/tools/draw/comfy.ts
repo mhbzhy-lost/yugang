@@ -31,7 +31,7 @@ for (const [id, cls] of INTERACTION_TEMPLATE_CONTRACT) {
 
 const SINGLE_TEMPLATE = JSON.parse(readFileSync(new URL("./workflow-interaction-single.json", import.meta.url)).toString("utf8")) as Graph;
 const SINGLE_TEMPLATE_CONTRACT: Array<[string, string]> = [
-  ["1", "UNETLoader"], ["5", "RSMultiCharacterPose3D"], ["6", "ModelPatchLoader"], ["36", "AnimaLLLiteApply"],
+  ["1", "UNETLoader"], ["5", "RSMultiCharacterPose3D"],
   ["11", "KSampler"], ["27", "KSampler"], ["22", "ImageUpscaleWithModel"], ["23", "ImageScaleBy"], ["38", "SaveImage"],
 ];
 for (const [id, cls] of SINGLE_TEMPLATE_CONTRACT) {
@@ -213,8 +213,9 @@ export function makeInteractionGraph(args: InteractionDraw): Graph {
   g["5"].inputs.building_pipe = ["3", 0];
   g["13"].inputs.scene_info = ["35", 6];
   g["60"] = { class_type: "YugangPoseLayout", inputs: { character_pipe: ["7", 0], pose_image: ["35", 0], owner_a: ["35", 1], owner_b: ["35", 2], base_prompt: initialPrompt, framing: args.framing ?? "normal", spacing: args.spacing ?? "together", canvas_aspect: args.width / args.height } };
-  g["75"] = { class_type: "AnimaLLLiteApply", inputs: { strength: 0.8, start_percent: 0., end_percent: 0.7, model: ["8", 0], model_patch: ["34", 0], image: ["60", 2] } };
-  Object.assign(g["11"].inputs, { model: ["75", 0], character_pipe: ["60", 0], prompt: ["60", 1] });
+  // 初采样 LLLite 已摘（2026-11-15 主人裁定：pose adapter 实测无效——开关对成图无区别，剪影 mask 才是姿态引导主力；
+  // 双人线同理，RS 剪影区域继续承担姿态/位置，模型链直连底模）。
+  Object.assign(g["11"].inputs, { character_pipe: ["60", 0], prompt: ["60", 1] });
   // 老版 pass：普通 KSampler + 角色 LoRA 串联，不挂 RS/LLLite。
   const passDesc = args.parts.map((p) => partDesc(p, args.pbypass)).join(", ");
   let passModel: Link = ["8", 0];
@@ -258,7 +259,7 @@ export function makeInteractionSingleGraph(args: {
   else delete g["4"];
   const modelOut: Link = hasRole ? ["4", 0] : ["1", 0];
   const clipOut: Link = hasRole ? ["4", 1] : ["2", 0];
-  g["36"].inputs.model = modelOut;
+  g["11"].inputs.model = modelOut;
   g["27"].inputs.model = modelOut;
   for (const id of ["7", "8", "25", "26"]) g[id].inputs.clip = clipOut;
   g["5"].inputs.scene_json = args.preset.scene_json;

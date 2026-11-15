@@ -292,12 +292,6 @@
       "scale_by": 0.5
     }
   },
-  "34": {
-    "class_type": "ModelPatchLoader",
-    "inputs": {
-      "name": "rs_reference/anima_pose/anima_v8_3dpose.safetensors"
-    }
-  },
   "35": {
     "class_type": "YugangStudyCameraProject",
     "inputs": {

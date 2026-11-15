@@ -51,12 +51,6 @@
       "scene_json": "{\n  \"version\": 2,\n  \"width\": 1280,\n  \"height\": 720,\n  \"mask_mode\": \"visible\",\n  \"outline\": true,\n  \"camera\": {\n    \"position\": [\n      0.0,\n      1.3334878875142908,\n      5.23003530042881\n    ],\n    \"target\": [\n      0.0,\n      1.3334878875142908,\n      4.23003530042881\n    ],\n    \"fov\": 38.0\n  },\n  \"people\": [\n    {\n      \"id\": 1,\n      \"position\": [\n        0.0,\n        0.0,\n        0.0\n      ],\n      \"rotation\": [\n        0.0,\n        0.0,\n        0.0\n      ],\n      \"scale\": 1.0,\n      \"bulk\": 1.0,\n      \"joints\": {\n        \"left_shoulder\": [\n          -16.899315358757562,\n          -50.990328779501404,\n          21.21524090917419\n        ],\n        \"left_elbow\": [\n          2.016092209244914,\n          0.7582765139192823,\n          -34.525332904249545\n        ],\n        \"right_shoulder\": [\n          -16.905474763156054,\n          -50.99028326840505,\n          21.215261681512924\n        ],\n        \"right_elbow\": [\n          0.3466398517210887,\n          0.7582203254346714,\n          -34.52538225346238\n        ],\n        \"left_hip\": [\n          5.989761885982859,\n          -7.134996355592626,\n          -90.39162716301429\n        ],\n        \"left_knee\": [\n          9.65930023069991e-14,\n          14.296288442786567,\n          91.32559809567289\n        ],\n        \"right_hip\": [\n          9.039282468981437,\n          -7.190659351607159,\n          -90.39902673015852\n        ],\n        \"right_knee\": [\n          0.0018770334595030857,\n          17.338272933939393,\n          91.37190687078254\n        ],\n        \"neck\": [\n          10.0,\n          0.0,\n          0.0\n        ],\n        \"head\": [\n          12.0,\n          0.0,\n          0.0\n        ]\n      }\n    }\n  ]\n}"
     }
   },
-  "6": {
-    "class_type": "ModelPatchLoader",
-    "inputs": {
-      "name": "rs_reference/anima_pose/anima_v8_3dpose.safetensors"
-    }
-  },
   "7": {
     "class_type": "CLIPTextEncode",
     "inputs": {
@@ -89,7 +83,7 @@
     "class_type": "KSampler",
     "inputs": {
       "model": [
-        "36",
+        "1",
         0
       ],
       "positive": [
@@ -235,26 +229,6 @@
       "vae": [
         "3",
         0
-      ]
-    }
-  },
-  "36": {
-    "class_type": "AnimaLLLiteApply",
-    "inputs": {
-      "strength": 0.8,
-      "start_percent": 0,
-      "end_percent": 0.7,
-      "model": [
-        "4",
-        0
-      ],
-      "model_patch": [
-        "6",
-        0
-      ],
-      "image": [
-        "5",
-        5
       ]
     }
   },

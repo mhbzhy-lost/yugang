@@ -43,7 +43,14 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 **没有脸修也没有手修**（主人裁定退役；手修 2026-11-13 摘除模板 41/42 节点，WSL 生产不装 Impact-Pack）。单人直出初采样与 pass 共用上述基础正负向词；姿态线使用独立模板。
 **V8 LoRA 与高清接线**（2026-11-13 修复）：单人姿态线与直出都使用 `AnimaLoRARemapTagLoader`（auto_remap=true、extend_to_new_layers=false）；双人初采样与 pass 的 RS 槽位都必须安装 `scripts/comfy-rs-remap-patch.py` 补丁，缺依赖/manifest 时拒绝加载，禁止静默错位。**LoRA 已全部本地化**（2026-11-14）：Forge（`sd-webui-forge-neo`，257G）已删除，其 Lora 目录 1.9G / 62 文件已迁入 WSL `~/anima-prod/models/loras`；`extra_model_paths.yaml` 现在只留 `anima: base_path: /home/mhbzhy/anima-prod/models`，**不得再引用 `/mnt/c/…forge…`**。提交前按 ComfyUI 文件清单核对词表 LoRA，缺文件拒绝提交，不能只检查节点加载成功。姿态 pass 的实验尺寸闸须用 `scripts/comfy-scene-canvas-patch.py` 补齐生产七种比例的 2 倍域。单人/双人姿态线 `hd` 均透传至 graph，在 2 倍 pass 解码后由 AnimeSharp 4x × lanczos 0.375 净放大至 3 倍，最终取 node 38。
 **宿主 bypass 接线**：单人直出/快速和单人姿态线在初采样、pass 正向末尾原样追加 `bypass` 与 `pbypass`；双人姿态线把 `bypass` 追加到两遍公共场景正向，把 `pbypass` 追加到两遍的两个角色槽位末尾。文本只由本轮宿主回调透传，不进入工具 Schema，不经 tag 归一化，轮结束清除。
-**姿态线能力合并（待本次样图验收）**：保留 V8 52 层 LLLite、Pose3D、RS 区域与 LoRA 1.0；初采样/pass 恢复 `dpmpp_2m / sgm_uniform`、CFG 4.5、30 步。初采样＝质量地板(含anime)+`detailed, intricate, film grain, depth of field`（2026-11-13 定稿，无四轴/赛璐璐），负向去 lips，pass 基础词；直出/fast 无 LLLite 不扁、保持各自基础词不共用。质感 pass 回老版普通 KSampler @2x＋角色 LoRA 串联，不挂 RS/LLLite（区域/姿态控制只属初采样高噪声段；低幅度第二遍挂它们无益，学术与社区共识一致）。双人 `framing/spacing` 透传到 `YugangPoseLayout`：先把冻结姿态及区域用同一中心/缩放适配普通主体尺度；apart 同步水平平移人物及其 owner 姿态像素；wide 调用真实 `RSCameraControl(distance=1, layout_sync=distance_and_roll)`，同样缩放姿态图。初采样和 pass 各从模型端施加一次 LLLite，区域 pipe 不再携带内部 auto pose，防止双挂。节点源码 `scripts/comfy-nodes/yugang_pose_layout.py` 安装到 WSL `custom_nodes/yugang_pose_layout/__init__.py`，更新后须在队列为空时重启 ComfyUI。
+**姿态线能力合并（LLLite 已于 2026-11-15 摘除）**：初采样的 pose adapter（anima_v8_3dpose，主人自训 52 层版）
+经实测开关对成图无区别（E5b 对照：strength 0/0.8/1.2 三态同图）——Anima 上 ControlNet 谱系社区实测仅 tile/repair 类有效，
+姿态/位置引导的真实主力是 RS 剪影区域（提示词分域）。摘除后：双人线模型链直连底模（node 75/34 删），
+单人线 node 36/6 删（姿态图不再被模型侧消费，单人初采样纯文本；位置/姿态引导待 RS 单槽方案落地后统一恢复）。
+模板节点 contract 同步收案；质感 pass 仍不挂任何控制（低幅度重采样无益）。
+双人 `framing/spacing` 透传到 `YugangPoseLayout`：先把冻结姿态及区域用同一中心/缩放适配普通主体尺度；
+apart 同步水平平移人物及其 owner 姿态像素；wide 调用真实 `RSCameraControl(distance=1, layout_sync=distance_and_roll)`，同样缩放姿态图。
+节点源码 `scripts/comfy-nodes/yugang_pose_layout.py` 安装到 WSL `custom_nodes/yugang_pose_layout/__init__.py`，更新后须在队列为空时重启 ComfyUI。
 **注意（2026-11-14 核实）**：当前三个 workflow **都不再引用 `YugangPoseLayout`**（上文双人 framing/spacing 的描述属历史方案）；双人交互实际靠 `RSMultiCharacter*` 链 + `ModelPatchLoader`，并需 `YugangStudyMetadata` / `YugangStudyCameraProject`（在 WSL `custom_nodes/yugang_study_support`）。部署前该核的是 **workflow 实际引用的节点**，不是本文里提到的名字。
 **排障规程（2026-11-15 事故教训）**：排查 ComfyUI 管线性能/规格问题，下结论前必须齐三样证据：① `nvidia-smi`——GPU 型号/显存总量与当前驻留（5090D 32GB；ComfyUI 0.44 dynamic VRAM + async weight offloading 下，同进程切换多套管线会累积权重驻留、步间搬权重，单步 it/s 可漂移 3–5 倍，冷启动/探测连跑的耗时不能代表稳态）；② ComfyUI 日志 progress bar 分步耗时（`tr '\r' '\n'` 后看 it/s，区分稳态与漂移段）；③ 实验定稿的实际提交图 `~/anima-prod/<实验目录>/graph.json`（规格唯一事实源，实验产物目录每张图都带 initial/final 的 mtime 可算各阶段耗时）。与生产模板逐字段对齐后才能谈"规格被改过"——2026-11-15 曾凭"总耗时对不上"误把直出 fast 的 28+8 当成姿态线规格险些改回废弃参数，真因是 pass 去 RS/LLLite 的提速已落实 + 探测进程 VRAM 换页假象。
 **约束**：pass 的 denoise 不许超 0.25 越界（M3 实测 0.35 唇形失控）；禁止把它改回超分前「修复」用途；
