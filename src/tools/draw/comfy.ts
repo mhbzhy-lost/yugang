@@ -288,10 +288,16 @@ export function makeInteractionSingleGraph(args: {
   const hasRole = args.part.role !== undefined;
   if (hasRole) g["4"] = loraLoader(["1", 0], ["2", 0], args.part.role!.file, args.part.role!.weight);
   else delete g["4"];
-  const modelOut: Link = hasRole ? ["4", 0] : ["1", 0];
   const clipOut: Link = hasRole ? ["4", 1] : ["2", 0];
-  g["11"].inputs.model = modelOut;
-  g["27"].inputs.model = modelOut;
+  // 初采样与双人线对齐：角色 LoRA 挂 RS 槽位（41，与分域协同），模型直连底模；
+  // 全局链（4）只服务 pass（普通 KSampler 无分域，LoRA 全局挂）。
+  if (hasRole) {
+    g["41"].inputs.character1_lora = args.part.role!.file;
+    g["41"].inputs.character1_lora_strength = args.part.role!.weight;
+    g["41"].inputs.character1_lora_clip_strength = args.part.role!.weight;
+  }
+  g["11"].inputs.model = ["1", 0];
+  g["27"].inputs.model = hasRole ? ["4", 0] : ["1", 0];
   for (const id of ["25", "26"]) g[id].inputs.clip = clipOut;
   g["5"].inputs.scene_json = applyPlacement(args.preset.scene_json, args.placementX ?? "center", args.placementY ?? "middle", args.width / args.height);
   g["40"].inputs.character1 = characterText;
