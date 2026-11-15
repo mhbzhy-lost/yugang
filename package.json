@@ -26,11 +26,16 @@
     "login": "node --env-file-if-exists=.env scripts/login.ts",
     "tts": "node --env-file-if-exists=.env scripts/tts.ts",
     "deps": "node --env-file-if-exists=.env scripts/deps.ts",
-    "smoke:news": "node scripts/news-real-model-smoke.ts && node scripts/news-runtime-smoke.ts"
+    "smoke:news": "node scripts/news-real-model-smoke.ts && node scripts/news-runtime-smoke.ts",
+    "itbed": "node scripts/itbed/driver.ts --all",
+    "itbed:all": "node scripts/itbed/driver.ts --all",
+    "itbed:self-test": "node scripts/itbed/driver.ts --self-test",
+    "itbed:smoke": "node scripts/itbed/launch.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "1.4.0",
-    "@earendil-works/pi-durable": "1.4.0",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-durable": "1.5.2",
+    "@earendil-works/pi-schema": "1.5.2",
     "fast-xml-parser": "5.11.2",
     "https-proxy-agent": "9.1.0",
     "sharp": "^0.35.5"

@@ -166,10 +166,10 @@ function isPortFree(port: number): Promise<boolean> {
   });
 }
 
-/** 找一个「连续三端口全空闲」的基址；给了 preferred 就只验证它（占用即报错）。 */
+/** 找一个「连续四端口全空闲」的基址；给了 preferred 就只验证它（占用即报错）。 */
 async function findFreePortBase(preferred: number | undefined): Promise<number> {
   if (preferred !== undefined) {
-    for (const port of [preferred, preferred + 1, preferred + 2]) {
+    for (const port of [preferred, preferred + 1, preferred + 2, preferred + 3]) {
       if (!(await isPortFree(port))) throw new Error(`端口 ${port} 被占用（--port-base ${preferred} 不可用）`);
     }
     return preferred;
@@ -177,9 +177,9 @@ async function findFreePortBase(preferred: number | undefined): Promise<number> 
   const start = 4400 + 3 * Math.floor(Math.random() * 500);
   for (let attempt = 0; attempt < 60; attempt++) {
     const base = start + 3 * attempt;
-    if ((await isPortFree(base)) && (await isPortFree(base + 1)) && (await isPortFree(base + 2))) return base;
+    if ((await isPortFree(base)) && (await isPortFree(base + 1)) && (await isPortFree(base + 2)) && (await isPortFree(base + 3))) return base;
   }
-  throw new Error("找不到连续三个空闲端口（4400-6200 段耗尽？）");
+  throw new Error("找不到连续四个空闲端口（4400-6200 段耗尽？）");
 }
 
 function readJsonFile(path: string): unknown {
@@ -192,7 +192,7 @@ interface ReadyInfo {
   readyAt: string;
   pid: number;
   sandbox: string;
-  ports: { napcat: number; sixty: number; bili: number };
+  ports: { napcat: number; sixty: number; bili: number; model?: number };
   outbound: string;
   log: string;
   groupId: number;
@@ -287,7 +287,7 @@ function waitProcessExit(proc: ChildProcess, timeoutMs: number): Promise<boolean
 /** SIGTERM → 宽限等待 → SIGKILL 兜底；返回是否动用了 SIGKILL。 */
 async function stopLaunch(proc: ChildProcess): Promise<boolean> {
   if (proc.exitCode !== null || proc.signalCode !== null) return false;
-  proc.kill("SIGTERM"); // launch 的 serve 处理器会按原 teardown 顺序收掉鱼与三个 faux
+  proc.kill("SIGTERM"); // launch 的 serve 处理器会按原 teardown 顺序收掉鱼与四个 faux
   if (await waitProcessExit(proc, SIGTERM_GRACE_MS)) return false;
   console.log("[itbed-driver] launch 25s 未退，SIGKILL 兜底（fish/faux 可能残留，见端口探测告警）");
   proc.kill("SIGKILL");
@@ -490,7 +490,7 @@ async function runScenario(options: ScenarioRunOptions): Promise<ScenarioRunResu
     abortReason: "",
     controller: new AbortController(),
   };
-  const watchdog = setTimeout(() => {
+  let watchdog = setTimeout(() => {
     ctx.aborted = true;
     ctx.abortReason = `watchdog ${budgetMs}ms 超时`;
     ctx.controller.abort();
@@ -516,7 +516,7 @@ async function runScenario(options: ScenarioRunOptions): Promise<ScenarioRunResu
       sandboxDir,
       // launch 自保上限：比驱动器看门狗早 15s 触发，保证 SIGTERM 链路走它自己的 teardown
       "--serve-max-ms",
-      String(Math.max(30_000, budgetMs - (Date.now() - startedAt) - 15_000)),
+      String(Math.max(30_000, budgetMs + 15_000)),
     ];
     if (Object.keys(scenario.configOverride).length > 0) {
       launchArgs.push("--config-patch", JSON.stringify(scenario.configOverride));
@@ -536,8 +536,17 @@ async function runScenario(options: ScenarioRunOptions): Promise<ScenarioRunResu
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`${message}\n${launch.tailLines(20).map((line) => `    | ${clip(redact(line), 200)}`).join("\n")}`);
     }
-    ctx.t0 = Date.now(); // t0 = ready 时刻：atMs/窗口全部相对它
-    console.log(`[itbed-driver] ready（${((ctx.t0 - startedAt) / 1000).toFixed(1)}s）：napcat=${ready.ports.napcat} sixty=${ready.ports.sixty} bili=${ready.ports.bili} outbound=${ready.outbound}`);
+    // 启动耗时不应吞掉场景预算：ready 后重新开始完整预算和看门狗。
+    clearTimeout(watchdog);
+    ctx.t0 = Date.now();
+    ctx.deadline = ctx.t0 + budgetMs;
+    watchdog = setTimeout(() => {
+      ctx.aborted = true;
+      ctx.abortReason = `watchdog ${budgetMs}ms 超时`;
+      ctx.controller.abort();
+    }, budgetMs);
+    watchdog.unref();
+    console.log(`[itbed-driver] ready（${((ctx.t0 - startedAt) / 1000).toFixed(1)}s）：napcat=${ready.ports.napcat} sixty=${ready.ports.sixty} bili=${ready.ports.bili} model=${ready.ports.model ?? "?"} outbound=${ready.outbound}`);
 
     sampler = new LogSampler(ready.log, ctx);
     sampler.start();
@@ -670,7 +679,7 @@ function printHelp(): void {
       "  node scripts/itbed/driver.ts --all [目录]       顺序跑目录下全部 *.json（缺省 scripts/itbed/scenarios）\n" +
       "  node scripts/itbed/driver.ts --self-test        纯逻辑自测（不联网、不起进程）\n" +
       "选项：\n" +
-      "  --port-base N      指定 launch 端口基（缺省自动找连续 3 个空闲端口）\n" +
+      "  --port-base N      指定 launch 端口基（缺省自动找连续 4 个空闲端口）\n" +
       "  --sandbox-root D   sandbox 根目录（缺省 var/itbed/scenarios；同一场景并发跑请各自指定）\n" +
       "  --keep-sandbox     通过也保留 sandbox 目录（缺省仅失败保留现场）\n" +
       "  --timeout-ms N     单场景总预算（缺省 180000，硬上限 180000）\n" +

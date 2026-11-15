@@ -43,6 +43,7 @@ import {
 } from "../qq/debounce.ts";
 import { replaceWatched, type WatchedMap } from "../qq/watch-state.ts";
 import { MEMORY_ENGAGE_KIND, type CompactResult } from "../compact.ts";
+import type { TtsConfig } from "../tts.ts";
 import { makeReminderTask } from "../tools/remind/task.ts";
 import type { RoundKind, RoundTrigger } from "../tools/types.ts";
 import { setLookDisabled } from "../tools/look/tool.ts";
@@ -146,7 +147,7 @@ function workingTextOf(tool: string): string {
  * 只有 fish.config 的 voices 里明确配了这个人格，才有语音能力——没有兜底。
  * 兜底就是串音：任何没配音色的人格都会去用默认音色（长征机用爱莉声音开口）。
  */
-function voiceConfigFor(chatKey: string): { url: string; referWav?: string; referText?: string; referLanguage?: string } | undefined {
+function voiceConfigFor(chatKey: string): TtsConfig | undefined {
   return pickVoice(fishConfig().config.voices, chatKey);
 }
 
@@ -890,9 +891,8 @@ async function salvagePlainReply(
     console.log(`[鱼缸] ${chatKey} ${tpl ? renderTemplate(tpl, { reason }) : `兜底放弃：${reason}`}`);
   };
   try {
-    const view = await conv.viewState(ctx);
-    const entries = view.value.entries as readonly { id?: number; kind?: string; model?: unknown }[];
-    view.dispose();
+    const view = await conv.context(ctx);
+    const entries = view.entries as readonly { id?: number; kind?: string; model?: unknown }[];
     // 优先按 settle 给出的 answer entry id 直取本轮末条 assistant（多轮工具调用时它就是最后一条回复）
     let text = "";
     const answered = entries.find((entry) => entry.id === round.answerEntryId);
@@ -1567,10 +1567,9 @@ interface StructuredTurn {
 
 /** 会话的结构化历史：fish.inbound（群友原话）+ fish.outbound（鱼发的话），文本截 200 字。 */
 async function structuredHistoryOf(conv: Conversation): Promise<StructuredTurn[]> {
-  const view = await conv.viewState(ctx);
-  try {
-    const turns: StructuredTurn[] = [];
-    for (const entry of view.value.entries) {
+  const view = await conv.context(ctx);
+  const turns: StructuredTurn[] = [];
+  for (const entry of view.entries) {
       if (entry.kind === MEMORY_INBOUND_KIND) {
         const data = entry.data as Partial<MemoryInbound> | undefined;
         const text = typeof data?.text === "string" ? data.text.trim().slice(0, 200) : "";
@@ -1599,26 +1598,19 @@ async function structuredHistoryOf(conv: Conversation): Promise<StructuredTurn[]
         });
       }
     }
-    return turns;
-  } finally {
-    view.dispose();
-  }
+  return turns;
 }
 
 /** 最近一条 fish.outbound（/评 指向型的降级目标）：从 transcript 尾部倒找。 */
 async function lastOutboundOf(conv: Conversation): Promise<{ entryId: number; data: OutboundPayload } | undefined> {
-  const view = await conv.viewState(ctx);
-  try {
-    for (let index = view.value.entries.length - 1; index >= 0; index--) {
-      const entry = view.value.entries[index];
+  const view = await conv.context(ctx);
+  for (let index = view.entries.length - 1; index >= 0; index--) {
+      const entry = view.entries[index];
       if (entry?.kind === "fish.outbound") {
         return { entryId: entry.id as number, data: entry.data as OutboundPayload };
       }
     }
-    return undefined;
-  } finally {
-    view.dispose();
-  }
+  return undefined;
 }
 
 /** 当日该会话的 chatlog 总条数（in+out，含鱼）：/评 范围型统计口径之一。 */

@@ -17,9 +17,9 @@
  *        YUGANG_HOME/MEDIA_ROOT/WORKSPACE_ROOT → sandbox 内路径；PROMPT_ROOT → runtime/prompt；
  *        token 类（MODELSCOPE_KEY 等）parity 里是占位符，不注入、不落 sandbox——不把真实
  *        token 复制进 sandbox。
- *   4. 启动顺序：先三个 faux 服务（等 /health 全绿，仍从仓库根起）再 spawn `npm start`。
- *      鱼的 cwd 是 <sandbox>/runtime：里面只有符号链接（package.json/src/config/prompt/
- *      node_modules → 仓库本体；var → sandbox/var）与生成的 fish.config.json，零复制——
+ *   4. 启动顺序：先四个 faux 服务（含确定性模型，等 /health 全绿，仍从仓库根起）再 spawn `npm start`。
+ *      鱼的 cwd 是 <sandbox>/runtime：里面只有符号链接（package.json/src/prompt/
+ *      node_modules → 仓库本体；var → sandbox/var）与生成的 fish.config.json、faux config，零复制——
  *      凭据/模型配置只经 config/ 链接按需读取；不放 .env，--env-file-if-exists 直接跳过，
  *      仓库真实 token 不进鱼进程。npm run 把脚本 cwd 固定在 package.json 所在目录且不
  *      realpath（2026-11-03 实测 npm 11.17.0：符号链接目录下 script-cwd 停在 runtime），
@@ -35,7 +35,7 @@
  *   端口分配：napcat=base、60s=base+1、bili=base+2（缺省 4400/4401/4402）。
  *   缺省（无 --serve）：冒烟闭环自动跑完并限时退出。
  *   --serve/--no-smoke（Task I3，驱动器 driver.ts 消费）：等鱼连上 faux NapCat 后打印一行
- *   `[itbed-ready] {JSON}`（含 sandbox、三 faux 端口、outbound/log 路径、注入 URL、测试群号），
+ *   `[itbed-ready] {JSON}`（含 sandbox、四 faux 端口、outbound/log 路径、注入 URL、测试群号），
  *   并写 <sandbox>/itbed-ready.json；然后挂住等待——不注入冒烟消息、不自行退出；
  *   SIGTERM/SIGINT（或鱼退出 / --serve-max-ms 上限）触发后按原有 teardown 顺序收摊。
  *   默认无参冒烟行为保持不变。
@@ -46,8 +46,8 @@
  *   - fish.config 的 voices/memeCooldown/ammo/news 只认文件——runtime 覆盖层已被鱼按 cwd
  *     读取，「以环境变量可表达的字段为限」的旧边界解除；
  *   - 工具相对 cwd 的 var/ 写入（draw/look/restart/config 等）经 runtime/var → sandbox/var
- *     链接落 sandbox，不再碰仓库 var/；config/ 是符号链接，config 工具写 models.json 会
- *     写穿仓库本体（IT bed 避开写模型配置的场景）；runtime 不链接 scripts/，video 工具按
+ *     链接落 sandbox，不再碰仓库 var/；config/ 是 sandbox 内 faux 配置，config 工具不会写穿仓库；
+ *     runtime 不链接 scripts/，video 工具按
  *     cwd 找 scripts/video-frames.py 会落空（IT bed 已知降级面）；
  *   - 仓库 .env 不再经 env-file 进入鱼进程（runtime 无 .env）：其中唯一的真实 token
  *     MODELSCOPE_KEY 此前实际随 env-file 进入 IT bed 进程 env（src 未消费），现在彻底不进。
@@ -95,8 +95,8 @@ if (hasFlag("help")) {
       "用法：node scripts/itbed/launch.ts [--sandbox-dir <dir>] [--port-base 4400]\n" +
       "                    [--config-patch '{\"compact\":{\"maxTokens\":100000}}' | @file.json]\n" +
       "                    [--serve | --no-smoke] [--serve-max-ms 600000]\n" +
-      "端口：napcat=base、60s=base+1、bili=base+2。\n" +
-      "鱼的 cwd=<sandbox>/runtime（仓库 package.json/src/config/prompt/node_modules 与 var 的符号链接 + 覆盖层，零复制）。\n" +
+      "端口：napcat=base、60s=base+1、bili=base+2、model=base+3。\n" +
+      "鱼的 cwd=<sandbox>/runtime（仓库 package.json/src/prompt/node_modules 与 var 的符号链接，config 使用 sandbox faux 配置）。\n" +
       "缺省：冒烟闭环（注入 @鱼 → 等出站 → 收摊退出）。\n" +
       "--serve/--no-smoke：等鱼连上后打印 [itbed-ready] {JSON} 行并写 <sandbox>/itbed-ready.json，\n" +
       "挂住等 SIGTERM/SIGINT（鱼退出/上限也触发）；结束按原有顺序收摊。供驱动器（driver.ts）使用。",
@@ -109,6 +109,7 @@ const PORT_BASE = num(argValue("port-base"), 4400);
 const NAPCAT_PORT = PORT_BASE;
 const SIXTY_PORT = PORT_BASE + 1;
 const BILI_PORT = PORT_BASE + 2;
+const MODEL_PORT = PORT_BASE + 3;
 
 /** --config-patch：内联 JSON 或 @文件路径。 */
 function loadConfigPatch(): Record<string, unknown> {
@@ -264,11 +265,11 @@ async function teardown(reason: string): Promise<void> {
     signalProcess("fish", "SIGKILL");
     await waitExit("fish", 2_000);
   }
-  for (const name of ["napcat", "sixty", "bili"]) {
+  for (const name of ["napcat", "sixty", "bili", "model"]) {
     signalProcess(name, "SIGTERM");
   }
-  await Promise.all(["napcat", "sixty", "bili"].map((name) => waitExit(name, 3_000)));
-  for (const name of ["napcat", "sixty", "bili"]) {
+  await Promise.all(["napcat", "sixty", "bili", "model"].map((name) => waitExit(name, 3_000)));
+  for (const name of ["napcat", "sixty", "bili", "model"]) {
     if (managed.has(name)) {
       signalProcess(name, "SIGKILL");
       await waitExit(name, 2_000);
@@ -278,7 +279,7 @@ async function teardown(reason: string): Promise<void> {
 
 /** 收摊后的退出态一行表（冒烟与 serve 共用）。 */
 function exitSummary(): string {
-  return ["fish", "napcat", "sixty", "bili"]
+  return ["fish", "napcat", "sixty", "bili", "model"]
     .map((name) => {
       const record = exitRecords.get(name);
       return `${name}: ${record !== undefined ? `code=${record.code}${record.signal !== null ? ` signal=${record.signal}` : ""}` : "仍在运行"}`;
@@ -335,9 +336,25 @@ async function main(): Promise<number> {
   const runtimeDir = join(SANDBOX_DIR, "runtime");
   mkdirSync(runtimeDir, { recursive: true });
   symlinkSync(join(REPO_ROOT, "package.json"), join(runtimeDir, "package.json"), "file");
-  for (const name of ["src", "config", "prompt", "node_modules"]) {
+  mkdirSync(join(runtimeDir, "config"), { recursive: true });
+  for (const name of ["src", "prompt", "node_modules"]) {
     symlinkSync(join(REPO_ROOT, name), join(runtimeDir, name), "dir");
   }
+  writeFileSync(join(runtimeDir, "config", "models.json"), `${JSON.stringify({
+    models: {
+      main: { provider: "itbed-faux", model: "itbed-faux" },
+      vision: { provider: "itbed-faux", model: "itbed-faux" },
+      vision_fallback: { provider: "itbed-faux", model: "itbed-faux" },
+    },
+    providers: {
+      "itbed-faux": {
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${MODEL_PORT}/v1`,
+        models: [{ id: "itbed-faux", reasoning: false, input: ["text", "image"], contextWindow: 100000, maxTokens: 4096 }],
+      },
+    },
+  }, null, 2)}\n`);
+  writeFileSync(join(runtimeDir, "config", "auth.json"), `${JSON.stringify({ "itbed-faux": { type: "api_key", key: "itbed-faux-key" } }, null, 2)}\n`);
   symlinkSync(join("..", "var"), join(runtimeDir, "var"), "dir"); // cwd 相对 var/ 写入（restart/draw/look 等）落 sandbox
   console.log(`[itbed] runtime cwd：${runtimeDir}（仓库符号链接 + sandbox/var，零复制）`);
   console.log(`[itbed] sandbox：${SANDBOX_DIR}`);
@@ -369,6 +386,7 @@ async function main(): Promise<number> {
     SIXTY_BASE_URL: `http://127.0.0.1:${SIXTY_PORT}`,
     BILI_BASE_URL: `http://127.0.0.1:${BILI_PORT}`,
     // 独立 sandbox
+    YUGANG_ROOT: runtimeDir,
     YUGANG_HOME: sbVar,
     MEDIA_ROOT: join(sbVar, "media"),
     WORKSPACE_ROOT: join(sbVar, "workspace"),
@@ -407,8 +425,9 @@ async function main(): Promise<number> {
   ], REPO_ROOT, process.env, join(SANDBOX_DIR, "logs", "napcat.log"));
   spawnManaged("sixty", nodeBin, [join(SCRIPTS_ITBED, "faux", "sixty.ts"), "--port", String(SIXTY_PORT)], REPO_ROOT, process.env, join(SANDBOX_DIR, "logs", "sixty.log"));
   spawnManaged("bili", nodeBin, [join(SCRIPTS_ITBED, "faux", "bili.ts"), "--port", String(BILI_PORT)], REPO_ROOT, process.env, join(SANDBOX_DIR, "logs", "bili.log"));
+  spawnManaged("model", nodeBin, [join(SCRIPTS_ITBED, "faux", "model.ts"), "--port", String(MODEL_PORT)], REPO_ROOT, process.env, join(SANDBOX_DIR, "logs", "model.log"));
 
-  async function waitHealth(name: "napcat" | "sixty" | "bili", port: number): Promise<void> {
+  async function waitHealth(name: "napcat" | "sixty" | "bili" | "model", port: number): Promise<void> {
     const deadline = Date.now() + HEALTH_TIMEOUT_MS;
     for (;;) {
       if (Date.now() > deadline) throw new Error(`${name} ${HEALTH_TIMEOUT_MS}ms 内未就绪（/health 不绿）`);
@@ -430,6 +449,7 @@ async function main(): Promise<number> {
   await waitHealth("napcat", NAPCAT_PORT);
   await waitHealth("sixty", SIXTY_PORT);
   await waitHealth("bili", BILI_PORT);
+  await waitHealth("model", MODEL_PORT);
 
   // —— 4. spawn npm start（cwd=runtime：npm 11.17.0 实测不 realpath package root，脚本
   //       cwd 停在符号链接目录，鱼按 cwd 读 runtime 覆盖层；spawn env 胜出 env-file）——
@@ -474,7 +494,7 @@ async function main(): Promise<number> {
       pid: process.pid,
       sandbox: SANDBOX_DIR,
       runtime: runtimeDir,
-      ports: { napcat: NAPCAT_PORT, sixty: SIXTY_PORT, bili: BILI_PORT },
+      ports: { napcat: NAPCAT_PORT, sixty: SIXTY_PORT, bili: BILI_PORT, model: MODEL_PORT },
       outbound: outboundPath,
       log: fishLogPath,
       groupId: TEST_GROUP_ID,

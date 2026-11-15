@@ -27,6 +27,7 @@ import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
 import { recordMedia } from "../src/egress/ledger.ts";
 import { loadPrompts } from "../src/prompt/index.ts";
 import { personaOf, pickVoice } from "../src/qq/voice-route.ts";
+import { synthesizeToMedia, type TtsConfig } from "../src/tts.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
@@ -175,4 +176,78 @@ test("音色按人格隔离：没配音色的人格拿不到别人的声音", ()
 
   assert.equal(personaOf("qq:group:5278#长征机"), "长征机");
   assert.equal(personaOf("qq:private:2928390812"), "默认");
+});
+
+test("TTS 单实例按模型与参考音频串行热切", async () => {
+  const mediaRoot = mkdtempSync(join(tmpdir(), "yg-tts-hot-"));
+  const calls: { path: string; body: Record<string, unknown> }[] = [];
+  let active = 0;
+  let maxActive = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    active++;
+    maxActive = Math.max(maxActive, active);
+    try {
+      calls.push({ path: new URL(url).pathname, body });
+      if (url.endsWith("/set_model")) {
+        if (body.gpt_model_path === "/fail.ckpt") {
+          return new Response(JSON.stringify({ code: 1, message: "bad model" }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ code: 0, message: "Success" }), { status: 200 });
+      }
+      if (url.endsWith("/change_refer")) return new Response(JSON.stringify({ code: 0, message: "Success" }), { status: 200 });
+      return new Response(Buffer.alloc(4096, 1), { status: 200 });
+    } finally {
+      active--;
+    }
+  }) as typeof fetch;
+
+  const a: TtsConfig = {
+    url: "http://tts-hot-switch.test",
+    gptModel: "/a.ckpt",
+    sovitsModel: "/a.pth",
+    referWav: "/a.wav",
+    referText: "甲",
+  };
+  const b: TtsConfig = {
+    ...a,
+    gptModel: "/b.ckpt",
+    sovitsModel: "/b.pth",
+    referWav: "/b.wav",
+    referText: "乙",
+  };
+
+  try {
+    await Promise.all([
+      synthesizeToMedia(a, "第一句", mediaRoot),
+      synthesizeToMedia(b, "第二句", mediaRoot),
+    ]);
+    assert.equal(maxActive, 1, "同一 TTS 服务的切模和合成必须串行");
+    assert.deepEqual(calls.slice(0, 6).map((call) => call.path), [
+      "/set_model", "/change_refer", "/", "/set_model", "/change_refer", "/",
+    ]);
+    assert.equal(calls[0]?.body.gpt_model_path, "/a.ckpt");
+    assert.equal(calls[3]?.body.gpt_model_path, "/b.ckpt");
+    assert.equal(calls[1]?.body.refer_wav_path, "/a.wav");
+    assert.equal(calls[4]?.body.refer_wav_path, "/b.wav");
+
+    let before = calls.length;
+    await synthesizeToMedia(b, "第三句", mediaRoot);
+    assert.equal(calls.slice(before).filter((call) => call.path === "/set_model").length, 0, "同模型不应重复加载");
+
+    before = calls.length;
+    await assert.rejects(
+      () => synthesizeToMedia({ ...a, gptModel: "/fail.ckpt" }, "失败", mediaRoot),
+      /tts_control_failed/,
+    );
+    assert.equal(calls.slice(before).filter((call) => call.path === "/").length, 0, "切模失败不得继续合成");
+    await assert.rejects(
+      () => synthesizeToMedia({ url: a.url } as TtsConfig, "缺配置", mediaRoot),
+      /tts_profile_incomplete/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

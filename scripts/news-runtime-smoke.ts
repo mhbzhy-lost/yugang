@@ -49,12 +49,12 @@ const originalDrain = fish.drain;
 fish.drain = async () => 0;
 
 async function holdAbsorb(): Promise<{ entered: Promise<void>; release: () => void; restore: () => void }> {
-  const original = conv.viewState;
+  const original = conv.context;
   let enteredResolve!: () => void;
   let releaseResolve!: () => void;
   const entered = new Promise<void>((resolve) => { enteredResolve = resolve; });
   const held = new Promise<void>((resolve) => { releaseResolve = resolve; });
-  conv.viewState = async (...args: Parameters<typeof conv.viewState>): ReturnType<typeof conv.viewState> => {
+  conv.context = async (...args: Parameters<typeof conv.context>): ReturnType<typeof conv.context> => {
     enteredResolve();
     await held;
     return original.apply(conv, args);
@@ -62,17 +62,13 @@ async function holdAbsorb(): Promise<{ entered: Promise<void>; release: () => vo
   return {
     entered,
     release: () => releaseResolve(),
-    restore: () => { conv.viewState = original; },
+    restore: () => { conv.context = original; },
   };
 }
 
 async function assistantCount(): Promise<number> {
-  const view = await conv.viewState(BACKGROUND_CONTEXT);
-  try {
-    return view.value.entries.filter((entry) => entry.kind === "pi.assistant").length;
-  } finally {
-    view.dispose();
-  }
+  const view = await conv.context(BACKGROUND_CONTEXT);
+  return view.entries.filter((entry) => entry.kind === "pi.assistant").length;
 }
 
 async function waitFor(check: () => Promise<boolean>, timeoutMs = 90_000): Promise<void> {

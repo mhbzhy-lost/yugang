@@ -68,8 +68,8 @@ test("群档案写进 transcript，身份只锚定群号与成员 QQ 号", async
         { nickname: "李四", userId: "2001" },
       ],
     });
-    const view = await conv.viewState(ctx);
-    const entry = view.value.entries.find((e) => e.kind === "fish.group-profile");
+    const view = await conv.context(ctx);
+    const entry = view.entries.find((e) => e.kind === "fish.group-profile");
     assert.ok(entry, "没有写群档案");
     const text = JSON.stringify(entry.model ?? "");
     // 身份只用群号与人数锚定，不写群名/群主昵称等外部文本
@@ -80,7 +80,6 @@ test("群档案写进 transcript，身份只锚定群号与成员 QQ 号", async
     assert.match(text, /2001/);
     assert.doesNotMatch(text, /张三/);
     assert.doesNotMatch(text, /李四/);
-    view.dispose();
   } finally {
     await open.close();
   }
@@ -105,13 +104,12 @@ test("look 能看图，越界和不存在都被拦", async () => {
     ]);
     await (await root.submit({ type: "input", content: "看图" }, ctx)).wait(ctx);
 
-    const view = await root.viewState(ctx);
-    const result = view.value.entries.filter((e) => e.kind === "pi.tool-result").at(-1);
+    const view = await root.context(ctx);
+    const result = view.entries.filter((e) => e.kind === "pi.tool-result").at(-1);
     const content = JSON.stringify(result?.model ?? "");
     // 新契约：图不进主会话，look 返回的是描述文字（faux 模型的文本回复），不再有 image 块
     assert.ok(content.includes("toolName\":\"look\""), "look 结果存在");
     assert.ok(!content.includes("image/"), "主会话不应出现图片块");
-    view.dispose();
 
     faux.setResponses([
       fauxAssistantMessage([fauxToolCall("look", { ref: "/etc/passwd" })], { stopReason: "toolUse" }),
@@ -119,10 +117,9 @@ test("look 能看图，越界和不存在都被拦", async () => {
     ]);
     await (await root.submit({ type: "input", content: "再看" }, ctx)).wait(ctx);
 
-    const after = await root.viewState(ctx);
-    const denied = JSON.stringify(after.value.entries.filter((e) => e.kind === "pi.tool-result").at(-1)?.model ?? "");
+    const after = await root.context(ctx);
+    const denied = JSON.stringify(after.entries.filter((e) => e.kind === "pi.tool-result").at(-1)?.model ?? "");
     assert.match(denied, /只能看群里的图/);
-    after.dispose();
   } finally {
     await open.close();
   }

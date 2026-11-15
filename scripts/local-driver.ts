@@ -192,9 +192,8 @@ async function main(): Promise<void> {
       scriptTrigger.set(String(submission.id), { messageId: id, mentionsBot: false, userId: MASTER, kind: "injection", browseWindow: `free-driver-${id}`, browseTopic: topic });
       const settled = await submission.wait(ctx);
       await fish.drain([conv.id]);
-      const view = await conv.viewState(ctx);
-      const entries = view.value.entries as readonly { id?: number; kind?: string; model?: unknown }[];
-      view.dispose();
+      const view = await conv.context(ctx);
+      const entries = view.entries as readonly { id?: number; kind?: string; model?: unknown }[];
       let bare = "";
       for (const entry of entries) {
         if (entry.kind !== "pi.assistant") continue;
@@ -311,9 +310,8 @@ async function main(): Promise<void> {
     await fish.drain([conv.id]);
     // 零出口轮的可观测化：取本轮末条 assistant 的正文（生产里 answer 轮有 salvagePlainReply
     // 兜底补发，ambient 轮本来允许沉默；driver 都打出来供观察，不冒充真实出口）
-    const view = await conv.viewState(ctx);
-    const entries = view.value.entries as readonly { id?: number; kind?: string; model?: unknown }[];
-    view.dispose();
+    const view = await conv.context(ctx);
+    const entries = view.entries as readonly { id?: number; kind?: string; model?: unknown }[];
     let bare = "";
     for (const entry of entries) {
       if (entry.kind !== "pi.assistant") continue;

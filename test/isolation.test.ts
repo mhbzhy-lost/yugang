@@ -112,8 +112,8 @@ test("从思考里抄来的话被拒，且以 tool 错误返回", async () => {
 
     assert.deepEqual(outbox, ["刚在听你们聊"], "抄袭的那条必须被拦下，下一轮重说的那条要放行");
 
-    const view = await root.viewState(ctx);
-    const results = view.value.entries.filter((e) => e.kind === "pi.tool-result");
+    const view = await root.context(ctx);
+    const results = view.entries.filter((e) => e.kind === "pi.tool-result");
     const rejected = results.find((e) => JSON.stringify(e.model ?? "").includes("抄"));
     assert.ok(rejected, "拒绝原因没有以 tool 错误回给模型");
   } finally {

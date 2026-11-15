@@ -193,6 +193,23 @@ export function compactTokenLimitOf(config: CompactConfig, provider: string, mod
   return config.byModel[`${provider}/${modelId}`] ?? config.byModel[provider] ?? config.maxTokens;
 }
 
+export interface VoiceConfig {
+  /** 单实例热切服务地址。 */
+  url: string;
+  /** GPT 模型绝对路径；缺失时拒绝启用该音色。 */
+  gptModel: string;
+  /** SoVITS 模型绝对路径；缺失时拒绝启用该音色。 */
+  sovitsModel: string;
+  /** 参考音频绝对路径；缺失时拒绝启用该音色。 */
+  referWav: string;
+  /** 参考音频原文；缺失时拒绝启用该音色。 */
+  referText: string;
+  /** 参考音频语种，默认 zh。 */
+  referLanguage?: string;
+  /** 语速倍率（0.5–2.0），缺省原速。 */
+  speed?: number;
+}
+
 export interface FishConfig {
   /** next 搭话开窗参数：closed/open 节拍、积压与背景上限、nudge 阈值。 */
   engage: EngageConfig;
@@ -230,8 +247,8 @@ export interface FishConfig {
    * 不再兼作停用手段。G0/G1 实验期用它原子让出/收回鱼的 GPU 使用权。
    */
   drawEnabled: boolean;
-  /** 按人格配置的语音：人格名 → TTS 参数。没有条目的人格没有语音能力。speed 为可选语速倍率（0.5–2.0，缺省原速）。 */
-  voices: Record<string, { url: string; referWav?: string; referText?: string; referLanguage?: string; speed?: number }>;
+  /** 按人格配置的语音：人格名 → 单实例热切配置。缺字段时该音色 fail closed。 */
+  voices: Record<string, VoiceConfig>;
   /** 周报发到哪个群；空 = 不发。 */
   weeklyGroupId?: string;
 }
@@ -339,20 +356,30 @@ function checkThinking(raw: unknown): FieldCheck {
 
 function checkVoices(raw: unknown): FieldCheck {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "voices 必须是对象" };
-  const voices: Record<string, { url: string; referWav?: string; referText?: string; referLanguage?: string; speed?: number }> = {};
+  const voices: Record<string, VoiceConfig> = {};
   for (const [persona, value] of Object.entries(raw as Record<string, unknown>)) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, reason: `voices.${persona} 必须是对象` };
     const v = value as Record<string, unknown>;
     const url = typeof v["url"] === "string" ? v["url"].trim() : "";
     if (!url) return { ok: false, reason: `voices.${persona}.url 缺失` };
+    const gptModel = typeof v["gptModel"] === "string" ? v["gptModel"].trim() : "";
+    if (!gptModel) return { ok: false, reason: `voices.${persona}.gptModel 缺失` };
+    const sovitsModel = typeof v["sovitsModel"] === "string" ? v["sovitsModel"].trim() : "";
+    if (!sovitsModel) return { ok: false, reason: `voices.${persona}.sovitsModel 缺失` };
+    const referWav = typeof v["referWav"] === "string" ? v["referWav"].trim() : "";
+    if (!referWav) return { ok: false, reason: `voices.${persona}.referWav 缺失` };
+    const referText = typeof v["referText"] === "string" ? v["referText"].trim() : "";
+    if (!referText) return { ok: false, reason: `voices.${persona}.referText 缺失` };
     const speedRaw = num(v["speed"]);
     const speed = speedRaw !== undefined && speedRaw >= 0.5 && speedRaw <= 2 ? speedRaw : undefined;
     if (speedRaw !== undefined && speed === undefined) return { ok: false, reason: `voices.${persona}.speed 必须在 0.5–2.0` };
     voices[persona] = {
       url,
-      ...(typeof v["referWav"] === "string" ? { referWav: v["referWav"] } : {}),
-      ...(typeof v["referText"] === "string" ? { referText: v["referText"] } : {}),
-      ...(typeof v["referLanguage"] === "string" ? { referLanguage: v["referLanguage"] } : {}),
+      gptModel,
+      sovitsModel,
+      referWav,
+      referText,
+      ...(typeof v["referLanguage"] === "string" && v["referLanguage"].trim() ? { referLanguage: v["referLanguage"].trim() } : {}),
       ...(speed !== undefined ? { speed } : {}),
     };
   }

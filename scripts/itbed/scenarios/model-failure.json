@@ -1,0 +1,32 @@
+{
+  "name": "model_failure",
+  "configOverride": {
+    "salvagePlainReply": false,
+    "engage": { "freeBrowseChance": 0 }
+  },
+  "steps": [
+    {
+      "inject": {
+        "kind": "group",
+        "groupId": 424242,
+        "at": ["bot"],
+        "text": "模型故障测试"
+      },
+      "awaitMs": 1000
+    }
+  ],
+  "expects": [
+    {
+      "kind": "outbound",
+      "count": 0,
+      "withinMs": 60000,
+      "desc": "faux 模型失败时不伪造出站"
+    },
+    {
+      "kind": "log",
+      "match": "模型",
+      "withinMs": 60000,
+      "desc": "模型失败留在 fish 日志中"
+    }
+  ]
+}

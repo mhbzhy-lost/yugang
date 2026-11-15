@@ -1,0 +1,26 @@
+{
+  "name": "answer_echo",
+  "configOverride": {
+    "salvagePlainReply": false,
+    "engage": { "freeBrowseChance": 0 }
+  },
+  "steps": [
+    {
+      "inject": {
+        "kind": "group",
+        "groupId": 424242,
+        "at": ["bot"],
+        "text": "IT bed 回声测试"
+      },
+      "awaitMs": 1000
+    }
+  ],
+  "expects": [
+    {
+      "kind": "outbound",
+      "match": "IT bed 已收到",
+      "withinMs": 60000,
+      "desc": "faux 模型调用 say_words 后由 NapCat 收到出站"
+    }
+  ]
+}

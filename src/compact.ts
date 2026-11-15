@@ -530,7 +530,7 @@ function activeMembers(counted: CountedEntry[]): string[] {
 }
 
 /**
- * 从 pi.reset head 提取上一页剖面（字段级合并的输入）：reset 后 viewState 的首个 entry
+ * 从 pi.reset head 提取上一页剖面（字段级合并的输入）：reset 后 active context 的首个 entry
  * 就是携带换页文本的 pi.reset（head: self，model 里是那条 user message）；卡片条目行
  * 按状态词（进行中/已完结/未兑现/已兑现）机械回读，只留还开着的条目。旧页是叙事摘要 /
  * 机械降级页 / 解析不出条目时返回 undefined——按首换页处理，不报错不阻塞。
@@ -539,17 +539,13 @@ function activeMembers(counted: CountedEntry[]): string[] {
  */
 async function extractPreviousProfile(conversation: Conversation): Promise<PreviousProfile | undefined> {
   try {
-    const view = await conversation.viewState(ctx);
+    const view = await conversation.context(ctx);
     let text = "";
     let at: number | undefined;
-    try {
-      const head = view.value.entries.find((entry) => entry.kind === "pi.reset");
-      if (head) {
-        text = entryText(head.model);
-        at = entryTimestamp(head);
-      }
-    } finally {
-      view.dispose();
+    const head = view.entries.find((entry) => entry.kind === "pi.reset");
+    if (head) {
+      text = entryText(head.model);
+      at = entryTimestamp(head);
     }
     const threads: ProfileItem[] = [];
     const promises: ProfileItem[] = [];
@@ -575,7 +571,7 @@ async function extractPreviousProfile(conversation: Conversation): Promise<Previ
 /**
  * 开窗弹药栏（T13）的剖面来源：当前页 pi.reset head 里上一页剖面还开着的未兑现承诺
  * 与话头（T12 字段，quote 逐字、锚点原样）。开窗时刻会话空闲（injection 轮已过 busy
- * 检查），viewState 只读快照随时可取——提取失败 / 无旧剖面 / 无开条目一律返回空数组，
+ * 检查），active context 只读快照随时可取——提取失败 / 无旧剖面 / 无开条目一律返回空数组，
  * 不报错不阻塞开窗注入（弹药栏是可选增强，宁缺勿错）。
  */
 export interface ProfileAmmo {
@@ -711,9 +707,8 @@ function entryTimestamp(entry: { kind: string; model?: unknown; data?: unknown }
  */
 /** 最近一次普通模型请求的实际上下文：input + cacheRead；错误/无 usage 时不猜 token。 */
 async function latestRequestTokens(conversation: Conversation): Promise<number | undefined> {
-  const view = await conversation.viewState(ctx);
-  try {
-    for (const entry of [...view.value.entries].reverse()) {
+  const view = await conversation.context(ctx);
+  for (const entry of [...view.entries].reverse()) {
       if (entry.kind !== "pi.assistant") continue;
       const messages = Array.isArray(entry.model) ? entry.model : [entry.model];
       for (const message of [...messages].reverse()) {
@@ -723,18 +718,14 @@ async function latestRequestTokens(conversation: Conversation): Promise<number |
         }
       }
     }
-    return undefined;
-  } finally {
-    view.dispose();
-  }
+  return undefined;
 }
 
 async function renderCountedEntries(conversation: Conversation, self: { nickname: string; userId: string } = { nickname: "Elysia", userId: "" }): Promise<CountedEntry[]> {
-  const view = await conversation.viewState(ctx);
+  const view = await conversation.context(ctx);
   const counted: CountedEntry[] = [];
 
-  try {
-    for (const entry of view.value.entries) {
+  for (const entry of view.entries) {
       if (isEmptyErrorAssistant(entry)) continue;
       if (entry.kind === "pi.user" || entry.kind === MEMORY_INBOUND_KIND) {
         const text = entryText(entry.model);
@@ -786,9 +777,6 @@ async function renderCountedEntries(conversation: Conversation, self: { nickname
         });
       }
     }
-  } finally {
-    view.dispose();
-  }
 
   return counted;
 }
@@ -837,13 +825,12 @@ export interface MemoryTranscript {
  * 不经抽取器。
  */
 export async function renderMemoryTranscript(conversation: Conversation): Promise<MemoryTranscript> {
-  const view = await conversation.viewState(ctx);
+  const view = await conversation.context(ctx);
   const lines: string[] = [];
   const subjects = new Map<string, string>();
   const inboundTexts: string[] = [];
 
-  try {
-    for (const entry of view.value.entries) {
+  for (const entry of view.entries) {
       if (entry.kind === MEMORY_INBOUND_KIND) {
         const data = entry.data as Partial<MemoryInbound> | undefined;
         const text = typeof data?.text === "string" ? data.text.trim() : "";
@@ -874,9 +861,6 @@ export async function renderMemoryTranscript(conversation: Conversation): Promis
         }
       }
     }
-  } finally {
-    view.dispose();
-  }
 
   return {
     transcript: lines.join("\n"),

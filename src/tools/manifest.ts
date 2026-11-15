@@ -18,8 +18,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Type, type TSchema } from "@earendil-works/pi-ai";
-import type { TUnsafe } from "typebox";
+import { unsafe, type Schema } from "@earendil-works/pi-schema";
 import { ENUM_FROM_KEY, type ManifestLoadContext, type ToolManifest, type ToolParametersSchema } from "./types.ts";
 
 /** 工具名约束：现有下划线命名，如 gpt_image、meme_add、tool_search。 */
@@ -185,8 +184,8 @@ export function toolFullDescription(manifest: ToolManifest): string {
 }
 
 /** 把 manifest 的对象 Schema 标注成 args 静态类型；运行时是同一个对象，不再有第二份参数定义。 */
-export function manifestParameters<T>(manifest: ToolManifest): TUnsafe<T> {
-  return Type.Unsafe<T>(manifest.parameters as unknown as TSchema);
+export function manifestParameters<T>(manifest: ToolManifest): Schema<T> {
+  return unsafe<T>(manifest.parameters as unknown as Schema);
 }
 
 /** 唯一受控的动态扩展：x-yugang-enum-from: "memeTags" → 当前词表的 enum；空词表退化为普通字符串。 */

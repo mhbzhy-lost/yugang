@@ -1,7 +1,7 @@
 # IT bed 测试设施（scripts/itbed/）
 
 本地集成测试环境（IT bed）的脚本与设施，计划见 `docs/plans/2026-11-03-itbed.md`。
-当前进度：**Task I0（parity 清单与校验）已交付**；I1 起的 faux NapCat / sandbox 启动器 / 场景驱动器在本目录继续追加。
+当前进度：parity 清单与校验、faux NapCat / 60s / B 站、sandbox 启动器、确定性 faux 模型和场景驱动器均已接通；场景入口为 `npm run itbed:self-test`、`npm run itbed:smoke`、`npm run itbed:all`。
 
 ---
 
@@ -13,7 +13,7 @@ IT bed 的口径是「与生产上层能力一致」，一致性靠**清单 + �
 |---|---|
 | prompt/、src/、personas | 同 repo 同 commit（manifest 记 macmini HEAD，check 时对本地 HEAD） |
 | fish.config.json | manifest 存 macmini 快照（含 ambient=120、compact 阈值、voices 音色名等），场景可覆盖压缩时窗 |
-| .env | manifest 存键清单与值（token 类脱敏），I2 启动器沿用它拼 sandbox 的 .env（GROUPS/master 沿用、ONEBOT_* 换 faux 值） |
+| .env | manifest 存键清单与值（token 类脱敏）；IT bed 不把生产 `.env` 或 `config/auth.json` 带入 sandbox，协议/模型/TTS 均使用 faux 或隔离配置 |
 
 ### 文件
 
@@ -22,6 +22,16 @@ IT bed 的口径是「与生产上层能力一致」，一致性靠**清单 + �
 | `parity/pull-parity.ts` | 从 macmini 只读拉取，生成 `parity/parity-manifest.json` |
 | `parity/check-parity.ts` | 本地工作区 vs manifest 三项比对，输出逐项表 |
 | `parity/parity-manifest.json` | 快照本体（入库；不含任何 secret） |
+
+### 本地场景
+
+```bash
+npm run itbed:self-test
+npm run itbed:smoke
+npm run itbed:all
+```
+
+`launch.ts` 每次重建独立 sandbox，生成 faux provider 的 `config/models.json` 与 dummy auth，启动四个本地服务：NapCat、60s、B 站和确定性模型。场景失败时保留 sandbox、fish.log、launch.log 与 outbound.jsonl；成功场景默认清理。当前场景目录在 `scripts/itbed/scenarios/`。
 
 ### 怎么重新拉取
 

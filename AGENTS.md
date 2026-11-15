@@ -411,22 +411,19 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 
 ### 14. 语音
 
-- **音色只认 `fish.config.json` 的 `voices[人格名]`**，没有任何兜底；没配 = 该会话没有语音能力
+- **音色只认 `fish.config.json` 的 `voices[人格名]`**，没有任何兜底；没配 = 该会话没有语音能力。单实例热切模式下 `url`、`gptModel`、`sovitsModel`、`referWav`、`referText` 均必填，缺任一项 fail closed，不沿用服务端上一人格状态
 - 人格解析必须走带 `#人格` 后缀的映射键（`mappingKeys`），`chatKeys` 只存剥离人格的 base 键给路由用
 - 触发提示：**没有机械提示**（2026-11-14 主人裁定，删除了旧 0.3 概率追加的 `[本轮要求] 必须使用 say_voice 回复` 任务行）。
   语音只在**对方明确要求**时用（「用语音说」「发条语音」这类），少数情形可由模型自己判断（对方正用语音聊、情绪浓、短话更适合出声）；
   其余时候用文字。策略文案唯一源是 `src/tools/say_voice/TOOL.md`
 - 出口限制：一轮一条附件（图/表情包/语音互斥）、台词 ≤200 字、超长/含失败一律以 tool 错误返回
-- 服务端：GPT-SoVITS 常驻本机（launchd 托管；9884 爱莉希雅 v4 自训 elysia、9881 桑多涅、9882 凯尔希；
-  9880 为旧 v2 保留可回滚，9883 为落选 v2ProPlus 试听实例，保留 7 天后回收），依赖 `~/nltk_data` 的
+- 服务端：GPT-SoVITS 目标为只保留一个 launchd 常驻实例（默认 9884 爱莉希雅 v4），其它人格由同一进程的 `/set_model` 与 `/change_refer` 热切，不停止/重启实例。旧端口 plist 在远程切换完成前仍只作遗留记录，不属于本地代码验收范围；依赖 `~/nltk_data` 的
   `cmudict` + `averaged_perceptron_tagger*`——**缺了会返回 200 + 0 字节空音频**（英文 g2p 抛 LookupError）
-- 语音实例 plist 已改 **`RunAtLoad=true`**（2026-11-14 容器化：鱼不再拉 TTS，必须开机自启），`KeepAlive` 崩溃自愈；
-  仅三个活跃实例改了（elysia4 / kaltsit2coldB / sandrone2），遗留 plist 仍为 false；
-  状态/拉起/收起统一走 `npm run tts [status|up|down]`，活跃实例集以 `fish.config.json` 的 `voices` 端口为准
-  （单一事实源，换端口只改配置不改代码），遗留 plist 不参与拉起/收起
+- 语音实例 plist 由 launchd 托管、`RunAtLoad=true`、`KeepAlive` 崩溃自愈；目标只保留 `elysia4` 为活跃实例，
+  状态/拉起/收起统一走 `npm run tts [status|up|down]`，活跃端口以 `fish.config.json` 的 `voices` 为准，遗留 plist 不参与拉起/收起
 - 空结果重试一次（第二次用 `text_language=auto`），合成超时默认 120 秒（`say_voice` 工具层覆盖 250 秒，
   覆盖空响应重试一次的最坏情况）
-- 语速：`voices` 条目支持可选 `speed`（语速倍率 0.5–2.0，缺省不传 = 原速），如凯尔希 0.9
+- 语速：`voices` 条目支持可选 `speed`（语速倍率 0.5–2.0，缺省不传 = 原速），如凯尔希 0.9；模型/参考音频切换和合成共用进程内互斥
 
 ### 15. 可观测性
 
@@ -709,7 +706,7 @@ VirtioFS 有约 3 秒属性缓存：长驻容器内宿主删除的文件会残�
 | 依赖 | 接法 |
 |---|---|
 | ComfyUI `:18190` | 容器内 **socat 转发** `127.0.0.1:18190` → `host.docker.internal:18190`。**`comfy.ts` 的 loopback 校验不放宽**（防 SSRF） |
-| TTS `:988x` | `fish.config.json` 的 `voices[*].url` → `http://host.docker.internal:988x`；`referWav` 保持宿主绝对路径（服务端自己读） |
+| TTS `:9884` | `fish.config.json` 的 `voices[*].url` → `http://host.docker.internal:9884`；`gptModel`/`sovitsModel`/`referWav` 保持宿主绝对路径（服务端自己读） |
 | provider 代理 `:7897` | `config/models.json` 的 `providers.*.proxy` → `http://host.docker.internal:7897` |
 | 60s `:4399` | compose 同网服务名 `http://sixty:4399` |
 | 协议端 | `ONEBOT_WS_URL=ws://napcat:3001`；napcat 的 WS 必须监听 **`0.0.0.0`**（宿主形态是 127.0.0.1） |

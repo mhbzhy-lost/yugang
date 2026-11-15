@@ -299,13 +299,11 @@ async function openHarness(existing?: { clock?: Clock }): Promise<Harness> {
 }
 
 async function toolCalls(conv: Conversation): Promise<string[]> {
-  const view = await conv.viewState(ctx);
+  const view = await conv.context(ctx);
   try {
     const calls: string[] = [];
-    for (const entry of view.value.entries) if (entry.kind === "pi.assistant") deepToolCalls(entry.model, calls);
+    for (const entry of view.entries) if (entry.kind === "pi.assistant") deepToolCalls(entry.model, calls);
     return calls;
-  } finally {
-    view.dispose();
   }
 }
 

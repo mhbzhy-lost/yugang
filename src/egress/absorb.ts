@@ -11,8 +11,8 @@ import { rememberSecrets } from "./ledger.ts";
 const seen = new Map<string, number>();
 
 export async function absorbSecrets(conversation: Conversation, clearAfter = false): Promise<void> {
-  const view = await conversation.viewState(BACKGROUND_CONTEXT);
-  const entries = view.value.entries;
+  const view = await conversation.context(BACKGROUND_CONTEXT);
+  const entries = view.entries;
   const from = seen.get(conversation.id) ?? 0;
 
   const texts: string[] = [];
@@ -32,7 +32,6 @@ export async function absorbSecrets(conversation: Conversation, clearAfter = fal
   if (texts.length > 0) rememberSecrets(conversation.id, texts);
   if (clearAfter) rememberSecrets(conversation.id, []);
   seen.set(conversation.id, entries.length);
-  view.dispose();
 }
 
 function flatten(model: unknown): string {

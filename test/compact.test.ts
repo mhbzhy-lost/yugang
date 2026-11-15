@@ -108,12 +108,11 @@ test("到 token 阈值才压，完整消息不被截断并写到 pi.reset 里", 
     assert.equal(done.compacted, true, "到 token 阈值应该压");
     assert.ok((done.tokens ?? 0) >= 2_700);
 
-    const view = await root.viewState(ctx);
-    const reset = view.value.entries.find((e) => e.kind === "pi.reset");
+    const view = await root.context(ctx);
+    const reset = view.entries.find((e) => e.kind === "pi.reset");
     assert.ok(reset, "没有写入 pi.reset");
     assert.match(JSON.stringify(reset.model ?? ""), /「刚在刷手机」（未兑现）/, "handoff 没进 reset");
     assert.ok(JSON.stringify(reset).includes(longMessage), "触发阈值的长消息被截断了");
-    view.dispose();
 
     // 换页之后，上下文从备忘开始，旧对话不再在活跃 transcript 里
     const after = await renderTranscript(root);

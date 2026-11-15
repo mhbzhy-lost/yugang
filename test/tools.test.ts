@@ -97,14 +97,13 @@ test("say_* 每轮硬上限 3 次调用：四工具任意组合第 4 次拒，�
     assert.deepEqual(outbox.map((o) => o.text), ["头一句", "", "第三句"], "一轮内前三次开口落进 outbox（纯图那条无字）");
     assert.equal(outbox[1]?.media, "gen/a.png", "say_media 那次应带图");
 
-    const view = await root.viewState(ctx);
-    const results = view.value.entries.filter((e) => e.kind === "pi.tool-result");
+    const view = await root.context(ctx);
+    const results = view.entries.filter((e) => e.kind === "pi.tool-result");
     assert.ok(
       results.some((e) => JSON.stringify(e.model ?? "").includes("开口 3 次") ||
         JSON.stringify(e.model ?? "").includes("就此打住")),
       "第 4 次调用的拒绝没有以 tool 错误回给模型（say_once 文案）",
     );
-    view.dispose();
 
     // 下一轮（新的一轮）恢复：上限按轮计，不株连。
     // 生产行为对齐：index.ts 在每条消息前 resetRun，这里同样重置轮内记账

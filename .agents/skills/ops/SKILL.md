@@ -38,13 +38,13 @@ scripts/fish.sh help                 # 全部子命令（其它命令原样透�
 
 **行为参数在 `fish.config.json`**（mini 仓库根，gitignore，模板 `fish.config.example`，mtime 热加载）：
 `ambientMinIntervalSeconds` / `watchAmbientChance` / `thinkingLevel` / `compact` /
-`memeCooldownMinutes` / `toolTimeoutSeconds` / `voices`（人格 → TTS 地址与参考音频）。
+`memeCooldownMinutes` / `toolTimeoutSeconds` / `voices`（人格 → 单实例 TTS 地址、模型路径与参考音频）。
 优先级：`fish.config.json` > `.env` > 内置默认；文件写坏时保留上一次的有效值。
 `compact` 只按 tokens 换页：`maxTokens` 缺省 100000，`byModel` 可按 provider 或 provider/model 覆盖，
 `google-antigravity` 缺省 90000；最近一次真实请求 input+cacheRead 达阈值后，等完整轮次结束再换页，
 不截断消息。旧 `maxEntries/maxChars` 已停用。config 的 set 支持对象 JSON 字符串与点路径修改。
 
-音色只认 `voices`，`.env` 里的 `TTS_*` 已经删了——**没有任何兜底**，没配就是那个会话没有语音能力。
+音色只认 `voices`，`.env` 里的 `TTS_*` 已经删了——**没有任何兜底**，没配或缺少 `gptModel`/`sovitsModel`/`referWav`/`referText` 就是那个会话没有语音能力；多个音色共用一个常驻服务并按请求热切。
 
 ## 容器形态（2026-11-14 起，先看这节）
 
@@ -162,12 +162,13 @@ node scripts/ops.ts probe
 
 ## 语音没声音怎么查
 
-1. `lsof -i :9880` / `:9881` —— TTS 实例在不在；不在就 `launchctl kickstart -k gui/$(id -u)/com.yugang.tts`（或 `.sandrone`）
+1. `lsof -i :9884` —— 默认单实例 TTS 在不在；不在就 `launchctl kickstart -k gui/$(id -u)/com.yugang.tts.elysia4`
 2. `tail ~/tts/tts.log` 有 `LookupError … Resource 'cmudict' not found` —— **NLTK 数据丢了**：
    `~/tts/GPT-SoVITS/.venv/bin/python -m nltk.downloader -d ~/nltk_data cmudict`
    （缺了会返回 200 + 0 字节空音频，日志里只有一行 `[鱼缸] 语音合成失败`）
 3. 鱼日志有 `voice_off` —— 这个会话的人格在 `fish.config.json` 的 `voices` 里没有条目（没配就是没语音，不是 bug）
-4. 鱼日志有 `voice_too_long` / `voice_with_media` / `say_media_used` —— 出口闸拦的，看 `src/tools/say/TOOL.md`
+4. 鱼日志有 `voice_too_long` / `voice_with_media` / `say_media_used` —— 出口闸拦的，看 `src/tools/say_voice/TOOL.md`
+5. 鱼日志有 `tts_profile_incomplete` / `tts_reference_incomplete` —— 配置缺模型或参考音频，按 `fish.config.json` 的 voices 补齐；不要手工让服务端沿用上一人格状态
 
 ## 合集（合并转发）看不了怎么查
 

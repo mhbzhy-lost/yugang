@@ -1,16 +1,15 @@
 /**
- * 语音服务管理：macmini 上多个 GPT-SoVITS 实例由 launchd 托管
- * （~/Library/LaunchAgents/com.yugang.tts*.plist，RunAtLoad=false 不开机自启，
- * KeepAlive 崩溃自愈）。实例随鱼缸启动链拉起（scripts/up.ts、scripts/deploy.ts
- * 都会顺带跑一次本脚本的 up），本脚本也给人一个统一运维入口：
+ * 语音服务管理：macmini 上 GPT-SoVITS 由 launchd 托管。
+ * 生产目标是一个常驻实例（默认爱莉希雅 v4），其它人格由鱼通过 /set_model 热切，
+ * 不再为每个人格各自常驻一个进程。遗留 plist 仍可被扫描，但不属于活跃集：
  *
  *   npm run tts              # = tts status：实例表格；活跃集有异常 exit 1
  *   npm run tts status
  *   npm run tts up           # 活跃集内未监听的实例 load + kickstart，等模型加载（≤90s/实例）；已监听跳过
  *   npm run tts down         # 卸载活跃集（仅人显式调用；遗留 plist 一律不碰）
  *
- * 活跃集 = 仓库根 fish.config.json 的 voices[*].url 端口（生产权威定义，随部署
- * 走配置；换端口只改配置不改代码）。plist 全量扫描展示，按 -p 端口标记活跃/遗留，
+ * 活跃集 = 仓库根 fish.config.json 的 voices[*].url 端口（生产权威定义，目标为单一端口，
+ * 随部署走配置；换端口只改配置不改代码）。plist 全量扫描展示，按 -p 端口标记活跃/遗留，
  * 遗留实例不参与健康判定、不被 up/down 触碰。
  *
  * 本地开发机没有 fish.config.json：status/up 提示一句后 exit 0，down 拒绝 exit 1。

@@ -1,0 +1,26 @@
+{
+  "name": "zero_output",
+  "configOverride": {
+    "salvagePlainReply": false,
+    "engage": { "freeBrowseChance": 0 }
+  },
+  "steps": [
+    {
+      "inject": {
+        "kind": "group",
+        "groupId": 424242,
+        "at": ["bot"],
+        "text": "零出口测试"
+      },
+      "awaitMs": 1000
+    }
+  ],
+  "expects": [
+    {
+      "kind": "outbound",
+      "count": 0,
+      "withinMs": 60000,
+      "desc": "模型正文不经出口工具时不向 faux NapCat 发消息"
+    }
+  ]
+}

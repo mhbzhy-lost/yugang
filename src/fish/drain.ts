@@ -24,18 +24,14 @@ export function installDrain(state: FishBase & { harness: Harness }): DrainParts
   async function outboundEntryIdOf(conversationId: ConversationId, key: string): Promise<number | undefined> {
     const conversation = await harness.conversation(conversationId, ctx);
     if (!conversation) return undefined;
-    const view = await conversation.viewState(ctx);
-    try {
-      let found: number | undefined;
-      for (const entry of view.value.entries) {
-        if (entry.kind === "fish.outbound" && (entry.data as { key?: unknown } | undefined)?.key === key) {
-          found = entry.id as number;
-        }
+    const view = await conversation.context(ctx);
+    let found: number | undefined;
+    for (const entry of view.entries) {
+      if (entry.kind === "fish.outbound" && (entry.data as { key?: unknown } | undefined)?.key === key) {
+        found = entry.id as number;
       }
-      return found;
-    } finally {
-      view.dispose();
     }
+    return found;
   }
 
   /** drain 后记 sentmap（决策 11b）：每条实际发出的 QQ 消息 id → outbound entryId，30 天滚动

@@ -344,17 +344,13 @@ async function compactHistoryScene(submit: HistoryHarnessOptions["submit"]): Pro
     faux.setResponses([fauxAssistantMessage('{"threads":[{"quote":"并列第一这招最省事","anchor":"2123920686","status":"open"}],"promises":[{"quote":"我待会儿去看看","status":"open"}],"mood":"轻松闲聊"}')]);
     const compacted = await fish.compact(root);
     assert.equal(compacted.compacted, true, "真实 compact 未触发");
-    const view = await root.viewState(ctx);
-    try {
-      const reset = view.value.entries.find((entry) => entry.kind === "pi.reset");
+    const view = await root.context(ctx);
+    const reset = view.entries.find((entry) => entry.kind === "pi.reset");
       assert.ok(reset, "真实 compact 没有写入 pi.reset");
       return {
         text: resetText(reset.model),
         via: "openFish + root.submit(fish.inbound) + say_words/fish.outbound + fish.compact → pi.reset",
       };
-    } finally {
-      view.dispose();
-    }
   } finally {
     await fish.close();
   }

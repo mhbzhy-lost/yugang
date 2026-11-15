@@ -440,9 +440,9 @@ try {
     clearMemeImportRound(String(sub.id));
     await fish!.drain([conv.id]); // 宿主职责：outbox → recording emit（与生产 index.ts 对齐）
 
-    const view = await conv.viewState(ctx);
-    const fresh = view.value.entries.slice(seenEntries);
-    seenEntries = view.value.entries.length;
+    const view = await conv.context(ctx);
+    const fresh = view.entries.slice(seenEntries);
+    seenEntries = view.entries.length;
     const requests = fresh.filter((e) => e.kind === "pi.assistant").length;
     const toolCalls: { name: string; args: string }[] = [];
     const toolResults: { name: string; ok: boolean; summary: string }[] = [];
@@ -455,7 +455,6 @@ try {
       toolsAdded.push(...toolsAddedOf(e as { kind?: string; model?: unknown }));
       if (e.kind === "fish.outbound") outboundEntries++;
     }
-    view.dispose();
     const report: RoundReport = {
       stage,
       requests,
@@ -831,8 +830,8 @@ try {
             const sub2 = await conv2.submit({ type: "input", content: hostLine("小明", "100001", `你有能读文件的工具吗？有的话读 ${SAND_NOTE} 给我看内容。`, { messageId: 6001 }) }, ctx);
             const settled2 = await sub2.wait(ctx);
             await fish2.drain([conv2.id]);
-            const view2 = await conv2.viewState(ctx);
-            const entries2 = view2.value.entries;
+            const view2 = await conv2.context(ctx);
+            const entries2 = view2.entries;
             const results2: string[] = [];
             for (const e of entries2) {
               const tr = toolResultOf(e as { kind?: string; model?: unknown });
@@ -841,7 +840,6 @@ try {
             const calls2acc: { name: string; args: string }[] = [];
             for (const e of entries2) if (e.kind === "pi.assistant") deepToolCalls((e as { model?: unknown }).model, calls2acc);
             const requests2 = entries2.filter((e) => e.kind === "pi.assistant").length;
-            view2.dispose();
             ev({
               stage: "nomaster",
               tools: agent2.tools.map((t) => t.name),
