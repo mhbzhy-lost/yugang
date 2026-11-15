@@ -280,23 +280,18 @@ export function makeInteractionSingleGraph(args: {
   const commonPrompt = /^1girl(?:\s|,)/i.test(args.prompt) ? args.prompt : `1girl, solo, ${args.prompt}`;
   const desc = [args.part.role ? escapeInjected(normalizeTagForm(multiRoleTags(args.part))) : "", normalizeTagForm(args.part.text)].filter(Boolean).join(", ");
   const suffix = (args.bypass ? `, ${args.bypass}` : "") + (args.pbypass ? `, ${args.pbypass}` : "");
-  // RS 形态（E6 验证）：人物词进 40 槽位（只在 Pose3D 剪影内生效），场景/质量词进公共 prompt，
-  // pass（27）保持全量合成无分域；位置参数（placement）待硬条件落地后再接（E7：分域拉力不足 10 个点）。
-  const characterText = desc ? `1girl, solo, ${desc}` : "1girl, solo";
-  const positive = `${floorPos}${INTERACTION_STYLE}${normalizeTagForm(commonPrompt)}${suffix}`;
+  // RS 形态（E6 接线）+ E20 严格对照定稿（2026-11-15）：角色词必须进公共 prompt 全图生效——
+  // 进 40 槽位会被分域削弱（V2 实验：槽位词 LoRA 还原崩坏，公共词正常）；
+  // LoRA 走全局链（node 4，V2 验证形态），41 槽位恒 None。
+  // 位置参数（placement）待硬条件落地后再接（E7：分域拉力不足 10 个点）。
+  const characterText = "1girl, solo";
+  const positive = `${floorPos}${INTERACTION_STYLE}${normalizeTagForm(commonPrompt)}${desc ? `, ${desc}` : ""}${suffix}`;
   const passPositive = `${floorPos}${normalizeTagForm(commonPrompt)}, ${desc}${suffix}`;
   const hasRole = args.part.role !== undefined;
   if (hasRole) g["4"] = loraLoader(["1", 0], ["2", 0], args.part.role!.file, args.part.role!.weight);
   else delete g["4"];
   const clipOut: Link = hasRole ? ["4", 1] : ["2", 0];
-  // 初采样与双人线对齐：角色 LoRA 挂 RS 槽位（41，与分域协同），模型直连底模；
-  // 全局链（4）只服务 pass（普通 KSampler 无分域，LoRA 全局挂）。
-  if (hasRole) {
-    g["41"].inputs.character1_lora = args.part.role!.file;
-    g["41"].inputs.character1_lora_strength = args.part.role!.weight;
-    g["41"].inputs.character1_lora_clip_strength = args.part.role!.weight;
-  }
-  g["11"].inputs.model = ["1", 0];
+  g["11"].inputs.model = hasRole ? ["4", 0] : ["1", 0];
   g["27"].inputs.model = hasRole ? ["4", 0] : ["1", 0];
   for (const id of ["25", "26"]) g[id].inputs.clip = clipOut;
   g["5"].inputs.scene_json = applyPlacement(args.preset.scene_json, args.placementX ?? "center", args.placementY ?? "middle", args.width / args.height);
