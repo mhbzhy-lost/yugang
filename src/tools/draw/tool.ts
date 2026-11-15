@@ -1,5 +1,4 @@
 /** 固定 ComfyUI 工作流：出图经 outbox 机械直发（主人裁定 2026-11-13），模型不能提交节点图。 */
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +9,7 @@ import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { loraBook, styleBook } from "../characters.ts";
 import { normalizeInitViaWorker, usesSips } from "../../media/image-ops.ts";
+import { spawnCapture } from "../../media/spawn-capture.ts";
 import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
 import { recordMedia } from "../../egress/ledger.ts";
 import { runInteraction, runInteractionSingle, type InteractionPreset } from "./comfy.ts";
@@ -48,7 +48,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
   // 画图总开关（fish.config.json 的 drawEnabled，热加载，资源闸）：缺省视为开；每次现读，
   // 入口与提交前各复核一次，关闭期间让出 GPU。
   const enabled = () => (deps.drawEnabled?.() ?? true) !== false;
-  const prepareRef = (raw: string): { png: Buffer; strength: number } => {
+  const prepareRef = async (raw: string, signal?: AbortSignal): Promise<{ png: Buffer; strength: number }> => {
     const ref = raw.trim().replace(/^\[|\]$/g, "");
     const full = resolve(root, ref);
     const rel = relative(root, full).split(sep).join("/");
@@ -62,7 +62,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
     if (!st.isFile()) throw err(deps.prompts.messages["draw_ref_missing"]);
     if (!REF_EXTS.has(extname(full).toLowerCase())) throw err(deps.prompts.messages["draw_ref_type"]);
     if (st.size > 20 * 1024 * 1024) throw err(deps.prompts.messages["draw_ref_big"]);
-    const png = normalizeInitImage(real);
+    const png = await normalizeInitImage(real, signal);
     if (!png) throw err(deps.prompts.messages["draw_ref_broken"]);
     return { png, strength: 0.45 };
   };
@@ -128,7 +128,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       if (previous?.pending) throw new Error(deps.prompts.messages["draw_inflight"] ?? "draw_inflight");
       if (previous?.round === round && previous.used) throw new Error(deps.prompts.messages["draw_used"] ?? "draw_used");
       if (previous?.round === round && previous.submitted) throw new Error(deps.prompts.messages["draw_uncertain"] ?? "draw_uncertain");
-      const ref = useDirect && args.ref !== undefined ? prepareRef(args.ref) : undefined;
+      const ref = useDirect && args.ref !== undefined ? await prepareRef(args.ref, context.abortSignal) : undefined;
       const state: RoundState = { round, pending: true, submitted: false, used: false };
       rounds.set(api.conversationId, state);
       // 提交前二次复核：comfy.ts 在真正 POST 前同步调 onSubmitted（其间无 await），
@@ -144,11 +144,14 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
           const preset = INTERACTION_PRESETS[presetName];
           if (!preset) throw new Error(renderTemplate(deps.prompts.messages["draw_preset_unknown"] ?? "{{key}}", { key: presetName }));
           png = multiParts
-            ? await runInteraction(deps.comfyUrl, { prompt: positive, width, height, preset, parts: multiParts, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass, framing: args.framing, spacing: args.spacing }, onSubmitted)
-            : await runInteractionSingle(deps.comfyUrl, { prompt: positive, width, height, preset, part: { text: "", ...(lora ? { role: lora } : {}) }, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, onSubmitted);
+            ? await runInteraction(deps.comfyUrl, { prompt: positive, width, height, preset, parts: multiParts, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass, framing: args.framing, spacing: args.spacing }, onSubmitted, context.abortSignal)
+            : await runInteractionSingle(deps.comfyUrl, { prompt: positive, width, height, preset, part: { text: "", ...(lora ? { role: lora } : {}) }, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, onSubmitted, context.abortSignal);
         } else {
-          png = await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, hd: args.hd === true, fast: args.fast === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, onSubmitted, stageCb);
+          png = await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, hd: args.hd === true, fast: args.fast === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, onSubmitted, stageCb, context.abortSignal);
         }
+        // 出图后、落盘/入队前的取消闸：超时晚到的图不再写 gen/ 也不再入 outbox；
+        // submitted 保持 true（作业已被接受），本轮重试吃 draw_uncertain，不重 POST。
+        context.abortSignal?.throwIfAborted();
         const dir = join(root, "gen");
         mkdirSync(dir, { recursive: true });
         const file = `${Date.now()}-${randomUUID()}.png`;
@@ -195,11 +198,12 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
 }
 
 /** 与旧通道相同：图片缩到受限像素预算，转换为 PNG。
- *  macOS 走 sips（参数逐字保留），其它平台走 sharp worker；否则容器内 ref 改图不可用。 */
-function normalizeInitImage(full: string): Buffer | null {
+ *  macOS 走 sips（参数逐字保留，改异步 spawn 以消费取消信号，不再阻塞 watchdog），
+ *  其它平台走 sharp worker（同步契约，自带底层 timeout）；否则容器内 ref 改图不可用。 */
+async function normalizeInitImage(full: string, signal?: AbortSignal): Promise<Buffer | null> {
   if (!usesSips()) return normalizeInitViaWorker(full);
   try {
-    const probe = spawnSync("sips", ["-g", "pixelWidth", "-g", "pixelHeight", full], { timeout: 20_000 });
+    const probe = await spawnCapture("sips", ["-g", "pixelWidth", "-g", "pixelHeight", full], { timeoutMs: 20_000, signal });
     const out = probe.status === 0 ? probe.stdout.toString() : "";
     const w = Number(/pixelWidth:\s*(\d+)/.exec(out)?.[1]);
     const h = Number(/pixelHeight:\s*(\d+)/.exec(out)?.[1]);
@@ -209,7 +213,7 @@ function normalizeInitImage(full: string): Buffer | null {
     const tmp = join(tmpdir(), `draw-init-${randomUUID()}.png`);
     let buf: Buffer;
     try {
-      const conv = spawnSync("sips", ["-s", "format", "png", "-z", String(side(h * scale)), String(side(w * scale)), full, "--out", tmp], { timeout: 30_000 });
+      const conv = await spawnCapture("sips", ["-s", "format", "png", "-z", String(side(h * scale)), String(side(w * scale)), full, "--out", tmp], { timeoutMs: 30_000, signal });
       if (conv.status !== 0) return null;
       buf = readFileSync(tmp);
     } finally { rmSync(tmp, { force: true }); }

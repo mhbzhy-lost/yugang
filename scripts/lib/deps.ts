@@ -15,6 +15,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DATA_HOME, REPO_ROOT } from "../../src/paths.ts";
 
 export interface ExecResult {
   status: number | null;
@@ -22,20 +23,29 @@ export interface ExecResult {
   stderr: string;
 }
 
-export type Exec = (command: string, args: string[]) => ExecResult;
+export interface ExecOptions {
+  cwd?: string;
+}
 
-export const defaultExec: Exec = (command, args) =>
-  spawnSync(command, args, { encoding: "utf8" });
+export type Exec = (command: string, args: string[], options?: ExecOptions) => ExecResult;
+
+export const defaultExec: Exec = (command, args, options = {}) =>
+  spawnSync(command, args, { encoding: "utf8", cwd: options.cwd ?? REPO_ROOT });
 
 /** docker 命令单独加超时：镜像拉不动时不能让部署无限挂住。 */
 const DOCKER_TIMEOUT_MS = 120_000;
-const dockerExec: Exec = (command, args) =>
-  spawnSync(command, args, { encoding: "utf8", timeout: DOCKER_TIMEOUT_MS, killSignal: "SIGTERM" });
+const dockerExec: Exec = (command, args, options = {}) =>
+  spawnSync(command, args, {
+    encoding: "utf8",
+    cwd: options.cwd ?? REPO_ROOT,
+    timeout: DOCKER_TIMEOUT_MS,
+    killSignal: "SIGTERM",
+  });
 
 /** 读 fish.config.json 的 news.targetGroup；读不到/为空 = 新闻未启用。 */
 export function newsTargetGroup(): string {
   try {
-    const config = JSON.parse(readFileSync("fish.config.json", "utf8")) as {
+    const config = JSON.parse(readFileSync(join(REPO_ROOT, "fish.config.json"), "utf8")) as {
       news?: { targetGroup?: unknown };
     };
     return typeof config.news?.targetGroup === "string" ? config.news.targetGroup.trim() : "";
@@ -69,7 +79,7 @@ export function findDocker(exec: Exec = defaultExec, env: NodeJS.ProcessEnv = pr
       if (existsSync(candidate)) return candidate;
       continue;
     }
-    if (exec(candidate, ["--version"]).status === 0) return candidate;
+    if (exec(candidate, ["--version"], { cwd: REPO_ROOT }).status === 0) return candidate;
   }
   return undefined;
 }
@@ -143,7 +153,7 @@ export async function ensureSixtyService(options: SixtyOptions = {}): Promise<bo
     return false;
   }
 
-  const run = (args: string[]): ExecResult => exec(docker, args);
+  const run = (args: string[]): ExecResult => exec(docker, args, { cwd: REPO_ROOT });
   const inspect = run(["inspect", "-f", "{{.State.Running}}", container]);
   if (inspect.status === 0) {
     const running = inspect.stdout.trim() === "true";
@@ -183,9 +193,9 @@ export async function ensureSixtyService(options: SixtyOptions = {}): Promise<bo
   return false;
 }
 
-/** package-lock 摘要（写进 var/.deps-lock，锁文件没变就不重复 npm install）。 */
+/** package-lock 摘要（写进 DATA_HOME/.deps-lock，锁文件没变就不重复 npm install）。 */
 function lockHash(): string {
-  return createHash("sha256").update(readFileSync("package-lock.json", "utf8")).digest("hex");
+  return createHash("sha256").update(readFileSync(join(REPO_ROOT, "package-lock.json"), "utf8")).digest("hex");
 }
 
 /**
@@ -195,10 +205,11 @@ function lockHash(): string {
 export function ensureNodeDeps(options: { exec?: Exec; log?: (message: string) => void } = {}): boolean {
   const exec = options.exec ?? defaultExec;
   const log = options.log ?? ((message: string) => console.log(`[deps] ${message}`));
-  const marker = join("var", ".deps-lock");
+  const marker = join(DATA_HOME, ".deps-lock");
+  const nodeModules = join(REPO_ROOT, "node_modules");
   const hash = lockHash();
   try {
-    if (existsSync("node_modules") && existsSync(marker) && readFileSync(marker, "utf8").trim() === hash) {
+    if (existsSync(nodeModules) && existsSync(marker) && readFileSync(marker, "utf8").trim() === hash) {
       log("Node 依赖已是最新（package-lock 未变）");
       return true;
     }
@@ -207,13 +218,13 @@ export function ensureNodeDeps(options: { exec?: Exec; log?: (message: string) =
   }
 
   log("安装 Node 依赖：npm install --omit=dev");
-  const installed = exec("npm", ["install", "--omit=dev", "--no-audit", "--no-fund"]);
+  const installed = exec("npm", ["install", "--omit=dev", "--no-audit", "--no-fund"], { cwd: REPO_ROOT });
   if (installed.status !== 0) {
     log(`Node 依赖安装失败：${installed.stderr.trim() || installed.stdout.trim()}`);
     return false;
   }
   try {
-    mkdirSync("var", { recursive: true });
+    mkdirSync(DATA_HOME, { recursive: true });
     writeFileSync(marker, hash);
   } catch {
     // marker 写不进去只影响下次跳过，不影响本次

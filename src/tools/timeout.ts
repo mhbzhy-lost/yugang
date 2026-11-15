@@ -4,7 +4,14 @@
  * 为什么不在「整轮」上设超时：一轮里可能连着画图、查词、看三张图，
  * 每步都正常但加起来超过一分钟——那不该被砍。卡死的通常是单个工具，
  * 所以把上限加在工具粒度上。
+ *
+ * 取消语义（2026-11）：每次 execute 造一个 AbortController，经 chord 的
+ * withAbortSignal 并进第三参数 context（宿主取消与本次超时任一生效），工具内的
+ * HTTP/WS/子进程与出口提交都消费合并后的 signal。Promise.race 只做 watchdog：
+ * 超时先 abort 再 reject，底层 Promise 继续跑但已被取消围栏拦住副作用；晚到的
+ * 失败在这里 catch 并记日志，不产生未处理 rejection。
  */
+import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from "@earendil-works/chord/context";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { extractLinks, recordSeenLinks } from "../egress/seen-links.ts";
 
@@ -13,12 +20,29 @@ export function withToolTimeout<T extends ToolRegistration>(tool: T, timeoutMs: 
   return {
     ...tool,
     execute: (async (...args: unknown[]) => {
+      const controller = new AbortController();
+      const parent = (args[2] ?? BACKGROUND_CONTEXT) as Context;
+      const callArgs = [...args];
+      callArgs[2] = withAbortSignal(controller.signal, parent);
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      const watchdog = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          // 先取消再报错：工具内的 fetch/子进程/出口提交立刻看见 abort，
+          // 晚到的执行不得再提交副作用（say-shared 的取消闸消费同一个 signal）。
+          controller.abort(new Error(message));
+          reject(new Error(message));
+        }, timeoutMs);
       });
       try {
-        return await Promise.race([original.apply(tool, args), timeout]);
+        const work = (async () => original.apply(tool, callArgs))();
+        // watchdog 先 reject 后没人再消费 work：晚到失败必须就地 catch/记录，
+        // 否则是未处理 rejection（正常路径的失败仍由 race 原样抛给调用方）。
+        work.catch((error: unknown) => {
+          if (controller.signal.aborted) {
+            console.error(`[鱼缸] 工具 ${tool.name} 超时取消后晚到失败:`, error instanceof Error ? error.message : error);
+          }
+        });
+        return await Promise.race([work, watchdog]);
       } finally {
         if (timer) clearTimeout(timer);
       }

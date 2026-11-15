@@ -156,8 +156,8 @@ export interface ToolPackageDeps {
   mentionPolicyOf?: (conversationId: string, userId: number | undefined, kind: RoundKind) => "allow" | "not_group" | "not_privileged";
   /** 语音合成配置（按会话现取：一个会话一个人格，音色跟着人格走）。 */
   ttsOf?: (conversationId: string) => import("../tts.ts").TtsConfig | undefined;
-  /** 语音合成实现；测试可注入桩，线上用 synthesizeToMedia。 */
-  ttsSynthesize?: (config: import("../tts.ts").TtsConfig, text: string, mediaRoot: string) => Promise<{ ref: string; bytes: Buffer }>;
+  /** 语音合成实现；测试可注入桩，线上用 synthesizeToMedia。signal 是工具超时/宿主取消的合并信号（可选，桩可忽略）。 */
+  ttsSynthesize?: (config: import("../tts.ts").TtsConfig, text: string, mediaRoot: string, signal?: AbortSignal) => Promise<{ ref: string; bytes: Buffer }>;
   /** 新闻备料窄接口：宿主核验 run/attempt/会话、候选与截止，并原子保存成品。 */
   newsPrepare?: (input: {
     runId: string;

@@ -54,8 +54,9 @@ export function createSayVoiceTool(manifest: ToolManifest, deps: ToolPackageDeps
       const ts = now();
       let voice: string;
       try {
-        // 空响应重试一次的逻辑在 tts.ts（第二次用 text_language=auto 兜底）
-        const synth = await (deps.ttsSynthesize ?? synthesizeToMedia)(tts, spoken, limits.mediaRoot);
+        // 空响应重试一次的逻辑在 tts.ts（第二次用 text_language=auto 兜底）；
+        // 合并后的取消信号透传给合成，超时晚到的合成不再重试/落盘/入队
+        const synth = await (deps.ttsSynthesize ?? synthesizeToMedia)(tts, spoken, limits.mediaRoot, context.abortSignal);
         voice = synth.ref;
       } catch (error) {
         console.error("[鱼缸] 语音合成失败", error instanceof Error ? error.message : error);

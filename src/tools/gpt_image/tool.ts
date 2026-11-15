@@ -72,9 +72,15 @@ export function createGptImageTool(manifest: ToolManifest, deps: ToolPackageDeps
       }
       if (!deps.gptImage) throw new Error(deps.prompts.messages["gpt_image_unconfigured"] ?? "gpt_image_unconfigured");
 
-      // 参考图：只允许 mediaRoot 内的图片，读成 data URL 交给 edits 端点
+      // 参考图：只允许 mediaRoot 内的图片，读成 data URL 交给 edits 端点。
+      // Schema 的 maxItems 不是唯一防线：execute 层机械复核张数，超限按 bad_ref 语义整批拒。
+      const imageRefs = args.images ?? [];
+      if (imageRefs.length > MAX_REFERENCE_IMAGES) {
+        const ref = (imageRefs[MAX_REFERENCE_IMAGES] ?? "").trim().replace(/^\[|\]$/g, "");
+        throw new Error(renderTemplate(deps.prompts.messages["gpt_image_bad_ref"] ?? "{{ref}}", { ref }));
+      }
       const references: string[] = [];
-      for (const raw of args.images ?? []) {
+      for (const raw of imageRefs) {
         const ref = raw.trim().replace(/^\[|\]$/g, "");
         const full = resolve(root, ref);
         if (full !== root && !full.startsWith(root + sep)) {
@@ -121,6 +127,7 @@ export function createGptImageTool(manifest: ToolManifest, deps: ToolPackageDeps
           params,
           ...(references.length > 0 ? { images: references } : {}),
           mediaRoot: deps.mediaRoot,
+          signal: context.abortSignal,
           ...(deps.gptImage.proxy === undefined ? {} : { proxy: deps.gptImage.proxy }),
           ...(deps.gptImage.apiBaseUrl === undefined ? {} : { baseUrl: deps.gptImage.apiBaseUrl }),
         }).catch((error: unknown) => {
@@ -152,6 +159,7 @@ export function createGptImageTool(manifest: ToolManifest, deps: ToolPackageDeps
         params,
         ...(references.length > 0 ? { images: references } : {}),
         mediaRoot: deps.mediaRoot,
+        signal: context.abortSignal,
         ...(deps.gptImage.proxy === undefined ? {} : { proxy: deps.gptImage.proxy }),
       }).catch((error: unknown) => {
         if (error instanceof Error && error.message === "gpt_image_no_auth") {

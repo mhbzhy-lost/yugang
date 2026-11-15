@@ -5,7 +5,12 @@
  */
 
 import { isLookDisabled } from "../tools/look/tool.ts";
+import { DEFAULT_LIMITS } from "../egress/policy.ts";
+import { readBoundedFile, sniffImageMagic, toJpegViaWorker, usesSips } from "../media/image-ops.ts";
 import { renderForwardAttachment, type ForwardAttachment, type ForwardChildMessage, type QuotedMessage } from "./model-input.ts";
+
+/** 入站图片下载超时（毫秒）：AbortSignal 覆盖连接与整个 body 读取，慢链接/挂死连接不会无限占用。 */
+const DOWNLOAD_TIMEOUT_MS = 30_000;
 
 export interface OneBotSegment {
   type: string;
@@ -664,7 +669,10 @@ export class OneBot {
     }
   }
 
-  /** 把图片落盘到 mediaRoot/inbound，返回相对引用。 */
+  /** 把图片落盘到 mediaRoot/inbound，返回相对引用。
+   *  入站机械边界：只认 http/https 直链或已存在的本地绝对路径；下载禁默认重定向、带
+   *  AbortSignal 超时、content-length 预检 + 流式累计字节上限；本地文件有界读取；
+   *  魔数认真实格式；任何异常/部分写入/转换失败都在 finally 里清掉半成品。 */
   async downloadImage(segment: OneBotSegment, mediaRoot: string): Promise<IncomingImage | null> {
     const data = segment.data ?? {};
     // 直链优先：NapCat 的 file 字段常是内部名（xxx.image）而不是可读路径；
@@ -679,51 +687,57 @@ export class OneBot {
       if (p.startsWith("/") && existsSync(p)) localPath = p;
     }
     if (!source && !localPath) return null;
+    const maxBytes = DEFAULT_LIMITS.maxMediaBytes;
     try {
-      const { mkdirSync, writeFileSync, existsSync, unlinkSync } = await import("node:fs");
+      const { mkdirSync, writeFileSync, existsSync, rmSync } = await import("node:fs");
       const { join } = await import("node:path");
       const dir = join(mediaRoot, "inbound");
       mkdirSync(dir, { recursive: true });
 
-      let bytes: Uint8Array;
-      if (source) {
-        const res = await fetch(source);
-        if (!res.ok) return null;
-        bytes = new Uint8Array(await res.arrayBuffer());
-      } else {
-        const { readFile } = await import("node:fs/promises");
-        bytes = new Uint8Array(await readFile(localPath));
-      }
+      const bytes = source ? await fetchBounded(source, maxBytes) : readBoundedFile(localPath, maxBytes);
+      if (!bytes || bytes.length === 0) return null;
 
       // 按魔数认真实格式，按真实扩展名落盘；伪装扩展名会让 look 按 MIME 表发错标数据。
-      const kind = sniffImage(bytes);
+      const kind = sniffImageMagic(bytes);
       if (!kind) return null;
       const stem = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-
-      if (kind.convert) {
-        // HEIC/HEIF/BMP/TIFF：模型不认，归一化成 JPEG。
-        // macOS 走自带 sips（参数逐字保留）；其它平台走 sharp worker，否则容器内这类图直接丢。
-        const raw = join(dir, `${stem}.${kind.ext}`);
-        const jpg = join(dir, `${stem}.jpg`);
-        writeFileSync(raw, bytes);
-        const { toJpegViaWorker, usesSips } = await import("../media/image-ops.ts");
-        if (!usesSips()) {
-          const buf = toJpegViaWorker(raw);
-          unlinkSync(raw);
-          if (!buf) return null;
-          writeFileSync(jpg, buf);
+      const raw = join(dir, `${stem}.${kind.ext}`);
+      const jpg = join(dir, `${stem}.jpg`);
+      const name = `${stem}.${kind.ext}`;
+      const final = join(dir, name);
+      // kept = 本次真正要留下的成品；其余路径（原始件/半成品/失败件）一律在 finally 清掉。
+      let kept = "";
+      try {
+        if (kind.convert) {
+          // HEIC/HEIF/BMP/TIFF：模型不认，归一化成 JPEG。
+          // macOS 走自带 sips（参数逐字保留）；其它平台走 sharp worker，否则容器内这类图直接丢。
+          writeFileSync(raw, bytes);
+          if (!usesSips()) {
+            const buf = toJpegViaWorker(raw);
+            if (!buf || buf.length === 0) return null;
+            writeFileSync(jpg, buf);
+            kept = jpg;
+            return { ref: `inbound/${stem}.jpg` };
+          }
+          const { spawnSync } = await import("node:child_process");
+          const sips = spawnSync("sips", ["-s", "format", "jpeg", raw, "--out", jpg], { timeout: 20000 });
+          if (sips.status !== 0 || !existsSync(jpg)) return null;
+          kept = jpg;
           return { ref: `inbound/${stem}.jpg` };
         }
-        const { spawnSync } = await import("node:child_process");
-        const sips = spawnSync("sips", ["-s", "format", "jpeg", raw, "--out", jpg], { timeout: 20000 });
-        unlinkSync(raw);
-        if (sips.status !== 0 || !existsSync(jpg)) return null;
-        return { ref: `inbound/${stem}.jpg` };
+        writeFileSync(final, bytes);
+        kept = final;
+        return { ref: `inbound/${name}` };
+      } finally {
+        for (const file of [raw, jpg, final]) {
+          if (file === kept) continue;
+          try {
+            rmSync(file, { force: true });
+          } catch {
+            /* 清不掉也不阻塞入站 */
+          }
+        }
       }
-
-      const name = `${stem}.${kind.ext}`;
-      writeFileSync(join(dir, name), bytes);
-      return { ref: `inbound/${name}` };
     } catch {
       return null;
     }
@@ -742,23 +756,54 @@ export class OneBot {
   }
 }
 
-// 魔数嗅探：返回真实扩展名；convert 标记需要 sips 归一化为 JPEG 的格式。
-// png/jpg/gif/webp 模型直收（已实测），其余一律转 JPEG。
-function sniffImage(b: Uint8Array): { ext: string; convert?: "jpeg" } | null {
-  const at = (off: number, ascii: string) =>
-    ascii.length <= b.length - off &&
-    [...ascii].every((ch, i) => b[off + i] === ch.charCodeAt(0));
-  if (at(0, "\x89PNG")) return { ext: "png" };
-  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { ext: "jpg" };
-  if (at(0, "GIF8")) return { ext: "gif" };
-  if (at(0, "RIFF") && at(8, "WEBP")) return { ext: "webp" };
-  if (at(0, "BM")) return { ext: "bmp", convert: "jpeg" };
-  if (at(0, "II\x2a\x00") || at(0, "MM\x00\x2a")) return { ext: "tiff", convert: "jpeg" };
-  if (at(4, "ftyp")) {
-    const brand = String.fromCharCode(...b.slice(8, 12)).toLowerCase();
-    if (["heic", "heix", "hevc", "heif", "mif1", "msf1"].includes(brand)) return { ext: "heic", convert: "jpeg" };
+/** 入站图片下载（机械边界）：只允许 http/https；禁默认重定向（redirect: "error"，3xx 一律失败）；
+ *  AbortSignal 超时覆盖连接与整个 body 读取；content-length 预检 + ReadableStream 实际累计
+ *  字节上限（谎报长度/压缩传输/无限流都挡得住）。任何失败返回 null，不留半成品。 */
+async function fetchBounded(url: string, maxBytes: number): Promise<Uint8Array | null> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
   }
-  return null;
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  try {
+    const res = await fetch(parsed, { redirect: "error", signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    if (!res.ok) return null;
+    const declared = Number(res.headers.get("content-length") ?? "");
+    if (Number.isFinite(declared) && declared > maxBytes) return null;
+    const body = res.body;
+    if (!body) return null;
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || value.byteLength === 0) continue;
+        total += value.byteLength;
+        if (total > maxBytes) return null;
+        chunks.push(value);
+      }
+    } finally {
+      // 超限/异常都要把流关掉，不让连接挂着继续收字节。
+      try {
+        await reader.cancel();
+      } catch {
+        /* 已关则罢 */
+      }
+    }
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, off);
+      off += chunk.byteLength;
+    }
+    return out;
+  } catch {
+    return null;
+  }
 }
 
 function sleep(ms: number): Promise<void> {

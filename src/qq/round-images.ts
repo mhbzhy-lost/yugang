@@ -68,7 +68,8 @@ export function rewriteRoundForwardImages(
  * 开窗批（shard 引用原文）共用的核心。inline 关闭时返回空（fallback 模式）。
  * GIF 走抽帧多 block（网关对 image/gif 只解码首帧，2026-11-06 实测；帧数记进
  * gifFrames 供调用方渲染「·动图N帧」后缀）；抽帧失败降级首帧单张。缺失文件
- * 不编号；压缩失败的跳过、不占编号。GIF 占 1 个编号、N 个 block。
+ * 不编号；压缩失败的跳过、不占编号。GIF 占 1 个编号、N 个 block，后续图按逻辑序号
+ * 连续编号（不随帧 block 数跳号）。
  */
 export interface InlineImagePlan extends Pick<RoundImagePlan, "numbers" | "blocks" | "tags"> {
   /** GIF 路径 → 实际抽到的帧数（静态图不进这张表）。 */
@@ -89,11 +90,14 @@ export function planInlineImages(
   const gifFrames = new Map<string, number>();
   if (!inline) return { numbers, blocks, tags, gifFrames };
   const eligible = refs.filter((ref) => ref && existsSync(join(mediaRoot, ref)));
+  // 逻辑编号计数器：每张图（含 GIF）只占 1 个号；不能用 blocks.length 推编号，
+  // 否则 GIF 抽帧后后续静态图的编号会按帧数跳号
+  let numbered = 0;
   for (const ref of eligible.slice(0, INLINE_IMAGE_MAX)) {
     if (ref.toLowerCase().endsWith(".gif")) {
       const plan = gifFramesOf(join(mediaRoot, ref), GIF_MAX_FRAMES);
       if (plan.frames.length === 0) continue;
-      const n = blocks.length + 1;
+      const n = ++numbered;
       numbers.set(ref, n);
       for (const frame of plan.frames) blocks.push({ type: "image", data: frame, mimeType: "image/jpeg" });
       gifFrames.set(ref, plan.frames.length);
@@ -102,7 +106,7 @@ export function planInlineImages(
     }
     const image = inlineImageOf(join(mediaRoot, ref), shrink);
     if (!image.ok) continue;
-    const n = blocks.length + 1;
+    const n = ++numbered;
     numbers.set(ref, n);
     blocks.push({ type: "image", data: image.buffer.toString("base64"), mimeType: image.mimeType });
     tags.push(imageCompressedTagOf(n, messages));

@@ -326,8 +326,17 @@ export function newPendingId(): string {
   return newId("p");
 }
 
+/** bidi/零宽/BOM 不可见格式字符（与 external/sanitize.ts 的 BIDI_RE+ZERO_WIDTH_RE 同口径）：
+ *  肉眼不可见、能改变视觉顺序，常被用来夹带关键词或伪装注入。 */
+const INVISIBLE_RE = /[\u00AD\u061C\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g;
+
+/** 抽取（safeShort）/存储（cleanText）/渲染（sectionSafe）三层统一先移除不可见字符，再过各自既有过滤。 */
+export function stripInvisible(value: string): string {
+  return value.replace(INVISIBLE_RE, "");
+}
+
 export function cleanText(value: string): string {
-  return value.replace(/[\u0000-\u001F\u007F]/g, "").trim();
+  return stripInvisible(value).replace(/[\u0000-\u001F\u007F]/g, "").trim();
 }
 
 /** 去重用归一化：去空白与标点，忽略大小写。 */

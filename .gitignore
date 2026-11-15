@@ -8,6 +8,8 @@ node_modules/
 *.log
 .DS_Store
 config/auth.json
+# 凭据文件的跨进程锁与原子写临时文件（tmp 里是明文凭据，同样绝不入库）
+config/auth.json.*
 config/models.json
 .env
 .pi/

@@ -26,7 +26,7 @@ import { renderTemplate } from "../../prompt/index.ts";
 import { OutboxDoc } from "../../store.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { ammoCurfewAt, ammoShareGateOf, assertMentions, assertShareAllowed, chargeSayRound, enqueueOutbound, normalizeTextInput, OutboundEntry, peekSayRound, prefixAmmoLink, registerAmmoShare, resolveQuoteArg, resolveSayContext, stripOutboundLinks, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
+import { ammoCurfewAt, ammoShareGateOf, assertMentions, assertShareAllowed, chargeSayRound, enqueueOutbound, normalizeTextInput, OutboundEntry, peekSayRound, prefixAmmoLink, registerAmmoShare, resolveQuoteArg, resolveSayContext, stripOutboundLinks, throwIfSayCancelled, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 对应（quote 是 schema 已移除的旧布尔，运行时容忍）；
  *  运行时 Schema 只有 manifest 这一份。 */
@@ -146,7 +146,10 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
         // appendEntry + outbox push；所需字段在事务内拷成纯值——事务返回后 result.item
         // 是已分离的 doc proxy，不能再读（amro_submit 同款教训：只读 status）
         let claimed: { id: string; bvid: string } | undefined;
+        // 取消围栏（与 enqueueOutbound 同款）：超时/宿主取消后不得晚提交 claim 与 outbox
+        throwIfSayCancelled(context);
         const outcome = await api.commit(async (tx) => {
+          throwIfSayCancelled(context);
           const doc = await tx.doc(ExternalAmmoDoc);
           const result = applyAmmoClaim(doc, ammoId, gate.windowId, ts);
           if (result.status !== "ok") return result;
@@ -158,6 +161,7 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
           box.queue.push({ ...payload, status: "queued", attempts: 0 });
           return result;
         }, context);
+        throwIfSayCancelled(context);
         if (outcome.status === "missing") {
           throw new Error(renderTemplate(deps.prompts.messages["ammo_missing"] ?? "", { id: ammoId }));
         }
@@ -182,7 +186,9 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
           await enqueueOutbound(api, payload, context);
         } else {
           // 分享过视频：池记账与 outbound entry / outbox 同一次提交，任一环失败整体回滚
+          throwIfSayCancelled(context);
           await api.commit(async (tx) => {
+            throwIfSayCancelled(context);
             // 去重表按 chatKey 绑定（同群换人格也共享历史）
             const pool = await tx.doc(VideoPoolDoc, videoPoolKeyOf(deps.chatKeyOf?.(String(api.conversationId)), api.conversationId));
             for (const bvid of sharedBvids) {
@@ -201,6 +207,7 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
             const box = await tx.doc(OutboxDoc, api.conversationId);
             box.queue.push({ ...payload, status: "queued", attempts: 0 });
           }, context);
+          throwIfSayCancelled(context);
         }
       }
 

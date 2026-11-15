@@ -21,6 +21,7 @@
  * 格式正确、尺寸边界正确、质量档位正确、失败形状正确。
  */
 import { spawnSync } from "node:child_process";
+import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 
 /** 与 shrink-image.ts 共用同一套规格常量，两个后端不许各写一份。 */
@@ -91,4 +92,60 @@ export function normalizeInitViaWorker(file: string): Buffer | null {
 export function toJpegViaWorker(file: string): Buffer | null {
   const r = runWorker("jpeg", { file });
   return r.ok ? Buffer.from(r.b64, "base64") : null;
+}
+
+/**
+ * 魔数嗅探（入站落盘与 look 读取共用的唯一实现，语义与历史 onebot.sniffImage 逐字一致）：
+ * 返回真实扩展名；convert 标记需要归一化成 JPEG 的格式（模型不认 bmp/tiff/heic）。
+ * png/jpg/gif/webp 模型直收（已实测）。只看文件头，不信扩展名——伪装扩展名会被这里挡下。
+ */
+export function sniffImageMagic(b: Uint8Array): { ext: string; convert?: "jpeg" } | null {
+  const at = (off: number, ascii: string) =>
+    ascii.length <= b.length - off &&
+    [...ascii].every((ch, i) => b[off + i] === ch.charCodeAt(0));
+  if (at(0, "\x89PNG")) return { ext: "png" };
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { ext: "jpg" };
+  if (at(0, "GIF8")) return { ext: "gif" };
+  if (at(0, "RIFF") && at(8, "WEBP")) return { ext: "webp" };
+  if (at(0, "BM")) return { ext: "bmp", convert: "jpeg" };
+  if (at(0, "II\x2a\x00") || at(0, "MM\x00\x2a")) return { ext: "tiff", convert: "jpeg" };
+  if (at(4, "ftyp")) {
+    const brand = String.fromCharCode(...b.slice(8, 12)).toLowerCase();
+    if (["heic", "heix", "hevc", "heif", "mif1", "msf1"].includes(brand)) return { ext: "heic", convert: "jpeg" };
+  }
+  return null;
+}
+
+/**
+ * 有界读取（入站本地文件与 look 共用的机械边界）：只读普通文件，最多 maxBytes 字节。
+ * 超限 / 非普通文件 / 读不全（读取途中被截断或换掉）一律返回 null，调用方 fail-closed。
+ * 先 fstat 定格大小再按它读满：即使文件在读取途中增长，也读不出超过上限的字节。
+ */
+export function readBoundedFile(file: string, maxBytes: number): Buffer | null {
+  let fd: number;
+  try {
+    fd = openSync(file, "r");
+  } catch {
+    return null;
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > maxBytes) return null;
+    const buf = Buffer.alloc(st.size);
+    let off = 0;
+    while (off < buf.length) {
+      const n = readSync(fd, buf, off, buf.length - off, off);
+      if (n <= 0) return null;
+      off += n;
+    }
+    return buf;
+  } catch {
+    return null;
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      /* 已关则罢 */
+    }
+  }
 }

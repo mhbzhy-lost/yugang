@@ -493,10 +493,10 @@ export async function bootRuntime(): Promise<void> {
   ...(visionFallbackModel ? { visionFallbackModel } : {}),
   promptRoot: config.promptRoot,
   mediaRoot: config.mediaRoot,
-  // 搜索凭据：与模型凭据同源（config/auth.json 的 deepseek 条目），缺了工具会以可读错误回应
+  // 搜索凭据：与主模型凭据同源（modelSelection.main.credentialsPath 的 deepseek 条目），缺了工具会以可读错误回应
   searchKey: (() => {
     try {
-      return (JSON.parse(readFileSync("config/auth.json", "utf8") as { deepseek?: { key?: string } }).deepseek?.key) ?? undefined;
+      return (JSON.parse(readFileSync(modelSelection.main.credentialsPath, "utf8") as { deepseek?: { key?: string } }).deepseek?.key) ?? undefined;
     } catch {
       return undefined;
     }
@@ -508,11 +508,11 @@ export async function bootRuntime(): Promise<void> {
         provider: modelSelection.image.provider,
         model: modelSelection.image.modelId,
         ...(modelSelection.image.proxy ? { proxy: modelSelection.image.proxy } : {}),
-        // 官方 API key 只服务动图通道（Codex 订阅后端不开 GIF）：从 auth.json 的 openai 条目读，
+        // 官方 API key 只服务动图通道（Codex 订阅后端不开 GIF）：从主模型 credentialsPath 的 openai 条目读，
         // 缺了不报错——GIF 请求会得到「未配置 API key」的可读回执
         ...(() => {
           try {
-            const key = (JSON.parse(readFileSync("config/auth.json", "utf8") as { openai?: { key?: string } }).openai?.key) ?? undefined;
+            const key = (JSON.parse(readFileSync(modelSelection.main.credentialsPath, "utf8") as { openai?: { key?: string } }).openai?.key) ?? undefined;
             return key ? { apiKey: key } : {};
           } catch {
             return {};

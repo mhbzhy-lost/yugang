@@ -1,6 +1,7 @@
 import type { RoundScope } from "./scope.ts";
 import {
   MEMORY_CAPS,
+  stripInvisible,
   type FeedbackFactMeta,
   type MemoryFact,
   type MemoryPerson,
@@ -167,11 +168,11 @@ export function renderMemorySection(
 }
 
 /**
- * section-safe 处理：移除控制字符、空字节与 `<...>` 标记。
+ * section-safe 处理：移除 bidi/零宽/BOM 不可见字符、控制字符、空字节与 `<...>` 标记。
  * 记忆内容不能闭合 `<memory>` 或伪造新的 section 标记。
  */
 function sectionSafe(text: string): string {
-  return text
+  return stripInvisible(text)
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
     .replace(/<[^<>\n]*>/g, "")
     .trim();

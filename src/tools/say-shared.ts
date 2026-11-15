@@ -331,13 +331,29 @@ export function takeAmmoShare(key: string): { id: string; windowId: string } | u
   return ammo;
 }
 
-/** 把 payload 落进 outbox（和 transcript entry 同一次提交）：宿主崩了也不会丢，重启后接着发。 */
+/**
+ * 取消闸：context 携带的 abortSignal（工具超时包装层经 withAbortSignal 并入，
+ * 宿主取消同源）已中止时抛出。超时后晚到的 execute 不得再提交出口副作用；
+ * 这个错误只会出现在已被 watchdog 丢弃的晚到路径或宿主取消的轮里，
+ * 模型侧看到的仍是 tool_timeout 文案，不新增模型可见文案。
+ */
+export function throwIfSayCancelled(context: unknown): void {
+  const signal = (context as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+  signal?.throwIfAborted();
+}
+
+/** 把 payload 落进 outbox（和 transcript entry 同一次提交）：宿主崩了也不会丢，重启后接着发。
+ *  取消围栏：提交前、事务内（commit 可能排队，真正执行时超时可能已发生）、提交后
+ *  各核一次 abortSignal——say_* 超时不得晚提交副作用，也不得在取消后回报成功。 */
 export async function enqueueOutbound(api: SayApi, payload: OutboundPayload, context: unknown): Promise<void> {
+  throwIfSayCancelled(context);
   await api.commit(async (tx) => {
+    throwIfSayCancelled(context);
     await tx.appendEntry(OutboundEntry, api.conversationId, { data: payload });
     const box = await tx.doc(OutboxDoc, api.conversationId);
     box.queue.push({ ...payload, status: "queued", attempts: 0 });
   }, context);
+  throwIfSayCancelled(context);
 }
 
 /** meme-inbox/ 是否包含这个媒体引用：本地待收目录不是出口的图源（必须先 look + meme_add 进库）。 */

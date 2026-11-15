@@ -131,7 +131,13 @@ export interface MultiPart {
 
 const MAX_IMAGE = 25 * 1024 * 1024;
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** 可取消的轮询间隔：取消时立刻 reject（清掉 timer 与监听），不再白等。 */
+const pause = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+  if (signal?.aborted) { reject(signal.reason); return; }
+  const onAbort = () => { clearTimeout(timer); reject(signal!.reason); };
+  const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
+  signal?.addEventListener("abort", onAbort, { once: true });
+});
 
 function validateParts(parts: MultiPart[]): void {
   if (parts.length !== 2) throw new Error("invalid multi parts count");
@@ -289,19 +295,27 @@ function makeStageTracker(promptId: string, onStage: (s: DrawStage) => void): (m
     } catch { /* 非 JSON 帧忽略 */ }
   };
 }
-function openStageSocket(base: string, clientId: string, promptId: string, onStage: (s: DrawStage) => void): { close: () => void } {
+function openStageSocket(base: string, clientId: string, promptId: string, onStage: (s: DrawStage) => void, signal?: AbortSignal): { close: () => void } {
   try {
     const ws = new WebSocket(`${base.replace("http", "ws")}/ws?clientId=${clientId}`);
     ws.binaryType = "arraybuffer";
     const onMessage = makeStageTracker(promptId, onStage);
     ws.addEventListener("message", (e) => onMessage((e as MessageEvent).data));
     ws.addEventListener("error", () => {});
-    return { close: () => { try { ws.close(); } catch { /* closed */ } } };
+    const shut = () => { try { ws.close(); } catch { /* closed */ } };
+    // 取消时主动关 WS：进度监听不留在已取消的调用上
+    if (signal) {
+      if (signal.aborted) { shut(); return { close: () => {} }; }
+      signal.addEventListener("abort", shut, { once: true });
+      return { close: () => { signal.removeEventListener("abort", shut); shut(); } };
+    }
+    return { close: shut };
   } catch { return { close: () => {} }; }
 }
 
-async function request(url: string, init: RequestInit = {}, timeout = 10_000): Promise<Response> {
-  const res = await fetch(url, { ...init, redirect: "error", signal: AbortSignal.timeout(timeout) });
+async function request(url: string, init: RequestInit = {}, timeout = 10_000, signal?: AbortSignal): Promise<Response> {
+  const deadline = AbortSignal.timeout(timeout);
+  const res = await fetch(url, { ...init, redirect: "error", signal: signal ? AbortSignal.any([deadline, signal]) : deadline });
   if (!res.ok) throw new Error(`ComfyUI HTTP ${res.status}`);
   return res;
 }
@@ -320,7 +334,7 @@ function inventoryList(raw: unknown): string[] | undefined {
   return undefined;
 }
 
-async function requireGraphLoras(base: string, graph: Graph): Promise<void> {
+async function requireGraphLoras(base: string, graph: Graph, signal?: AbortSignal): Promise<void> {
   const needed = new Set<string>();
   for (const node of Object.values(graph)) {
     if (node.class_type === "AnimaLoRARemapTagLoader") {
@@ -330,7 +344,7 @@ async function requireGraphLoras(base: string, graph: Graph): Promise<void> {
     }
   }
   if (!needed.size) return;
-  const info = await (await request(`${base}/object_info/LoraLoader`)).json() as Record<string, { input?: { required?: { lora_name?: unknown } } }>;
+  const info = await (await request(`${base}/object_info/LoraLoader`, {}, 10_000, signal)).json() as Record<string, { input?: { required?: { lora_name?: unknown } } }>;
   const names = inventoryList(info.LoraLoader?.input?.required?.lora_name);
   if (!names) throw new Error("invalid ComfyUI LoRA inventory");
   const missing = [...needed].filter((n) => !names.includes(n));
@@ -345,7 +359,7 @@ const MODEL_FILE_FIELDS: Record<string, string> = {
   UpscaleModelLoader: "model_name",
   ModelPatchLoader: "name",
 };
-async function requireGraphModelFiles(base: string, graph: Graph): Promise<void> {
+async function requireGraphModelFiles(base: string, graph: Graph, signal?: AbortSignal): Promise<void> {
   const needed = new Map<string, Set<string>>();
   for (const node of Object.values(graph)) {
     const field = MODEL_FILE_FIELDS[node.class_type];
@@ -359,7 +373,7 @@ async function requireGraphModelFiles(base: string, graph: Graph): Promise<void>
   if (!needed.size) return;
   const missing: string[] = [];
   for (const [classType, files] of needed) {
-    const info = await (await request(`${base}/object_info/${classType}`)).json() as Record<string, { input?: { required?: Record<string, unknown> } }>;
+    const info = await (await request(`${base}/object_info/${classType}`, {}, 10_000, signal)).json() as Record<string, { input?: { required?: Record<string, unknown> } }>;
     const names = inventoryList(info[classType]?.input?.required?.[MODEL_FILE_FIELDS[classType]]);
     if (!names) throw new Error("invalid ComfyUI model inventory");
     for (const f of files) if (!names.includes(f)) missing.push(`${classType} ${f}`);
@@ -406,32 +420,36 @@ function summarizeRejection(body: string): string {
   } catch { return body.slice(0, 200); }
 }
 
-async function submitAndWait(base: string, graph: Graph, promptId: string, clientId: string, deadline: number): Promise<ComfyHistoryJob> {
-  const response = await fetch(`${base}/prompt`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt: graph, prompt_id: promptId, client_id: clientId }), redirect: "error", signal: AbortSignal.timeout(15_000) });
+async function submitAndWait(base: string, graph: Graph, promptId: string, clientId: string, deadline: number, signal?: AbortSignal): Promise<ComfyHistoryJob> {
+  // POST 只发一次：已被接受的作业不重投；提交后取消只停本地等待，
+  // 服务端作业照跑（submitted 保持 true，本轮 draw_uncertain 不可重试）。
+  const submitTimeout = AbortSignal.timeout(15_000);
+  const response = await fetch(`${base}/prompt`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt: graph, prompt_id: promptId, client_id: clientId }), redirect: "error", signal: signal ? AbortSignal.any([submitTimeout, signal]) : submitTimeout });
   if (response.status >= 400 && response.status < 500) throw new ComfyExecutionFailed(`ComfyUI rejected request (HTTP ${response.status}) ${summarizeRejection(await response.text().catch(() => ""))}`.trim());
   if (!response.ok) throw new Error(`ComfyUI HTTP ${response.status}`);
   const submitted = await response.json() as { prompt_id?: string };
   if (submitted.prompt_id !== promptId) throw new Error("unexpected ComfyUI prompt id");
   while (Date.now() < deadline) {
-    const history = await (await request(`${base}/history/${promptId}`)).json() as Record<string, ComfyHistoryJob>;
+    signal?.throwIfAborted();
+    const history = await (await request(`${base}/history/${promptId}`, {}, 10_000, signal)).json() as Record<string, ComfyHistoryJob>;
     const job = history[promptId];
     if (job) {
       if (job.status?.status_str !== "success" || job.status.completed !== true) throw new ComfyExecutionFailed("ComfyUI execution failed");
       return job;
     }
-    await pause(1500);
+    await pause(1500, signal);
   }
   throw new Error("ComfyUI history timeout");
 }
 
-async function fetchImage(base: string, job: ComfyHistoryJob, node: string, type: "temp" | "output"): Promise<Buffer> {
+async function fetchImage(base: string, job: ComfyHistoryJob, node: string, type: "temp" | "output", signal?: AbortSignal): Promise<Buffer> {
   const images = job.outputs?.[node]?.images;
   if (!Array.isArray(images) || images.length !== 1) throw new Error("invalid ComfyUI output");
   const image = images[0];
   if (image.type !== type || !image.filename || !/^[A-Za-z0-9_.-]+\.png$/.test(image.filename)) throw new Error("invalid ComfyUI output path");
   if (type === "temp" && image.subfolder) throw new Error("invalid ComfyUI output path");
   const query = new URLSearchParams({ filename: image.filename, type, subfolder: type === "output" ? (image.subfolder ?? "") : "" });
-  return imageBytes(await request(`${base}/view?${query}`, {}, type === "output" ? 60_000 : 30_000));
+  return imageBytes(await request(`${base}/view?${query}`, {}, type === "output" ? 60_000 : 30_000, signal));
 }
 
 interface ExecOpts {
@@ -440,26 +458,30 @@ interface ExecOpts {
   outputType: "temp" | "output";
   onSubmitted: () => void;
   onStage?: (s: DrawStage) => void;
+  /** 工具超时/宿主取消的合并信号；提交前取消 = 未提交（可重试），提交后取消 = 状态不明（不重 POST）。 */
+  signal?: AbortSignal;
 }
 /** 统一执行：queue 闸 + 模型清单核对（LoRA 与模型文件）+ 提交 + 轮询 + 取图。busy 由调用方持有。 */
 async function execGraph(url: string, graph: Graph, opts: ExecOpts): Promise<Buffer> {
   const base = comfyUrl(url);
-  const queue = await (await request(`${base}/queue`)).json() as { queue_running?: unknown[]; queue_pending?: unknown[] };
+  const queue = await (await request(`${base}/queue`, {}, 10_000, opts.signal)).json() as { queue_running?: unknown[]; queue_pending?: unknown[] };
   if (!Array.isArray(queue.queue_running) || !Array.isArray(queue.queue_pending)) throw new Error("invalid ComfyUI queue");
   if (queue.queue_running.length || queue.queue_pending.length) throw new ComfyBusy("ComfyUI busy");
-  await requireGraphLoras(base, graph);
-  await requireGraphModelFiles(base, graph);
+  await requireGraphLoras(base, graph, opts.signal);
+  await requireGraphModelFiles(base, graph, opts.signal);
   const id = randomUUID();
   const clientId = randomUUID();
-  const sock = opts.onStage ? openStageSocket(base, clientId, id, opts.onStage) : undefined;
+  const sock = opts.onStage ? openStageSocket(base, clientId, id, opts.onStage, opts.signal) : undefined;
   try {
+    // 提交前最后一道取消闸：已取消就不 POST（onSubmitted 不执行，submitted 保持 false 可重试）
+    opts.signal?.throwIfAborted();
     opts.onSubmitted();
-    const job = await submitAndWait(base, graph, id, clientId, Date.now() + opts.deadline);
-    return await fetchImage(base, job, opts.outputNode, opts.outputType);
+    const job = await submitAndWait(base, graph, id, clientId, Date.now() + opts.deadline, opts.signal);
+    return await fetchImage(base, job, opts.outputNode, opts.outputType, opts.signal);
   } finally { sock?.close(); }
 }
 
-export async function runComfy(url: string, args: ComfyDraw, onSubmitted: () => void, onStage?: (s: DrawStage) => void): Promise<Buffer> {
+export async function runComfy(url: string, args: ComfyDraw, onSubmitted: () => void, onStage?: (s: DrawStage) => void, signal?: AbortSignal): Promise<Buffer> {
   if (busy) throw new ComfyBusy("ComfyUI busy");
   busy = true;
   try {
@@ -471,23 +493,23 @@ export async function runComfy(url: string, args: ComfyDraw, onSubmitted: () => 
       form.set("image", new Blob([new Uint8Array(args.ref.png)], { type: "image/png" }), name);
       form.set("type", "input");
       form.set("overwrite", "false");
-      const upload = await (await request(`${base}/upload/image`, { method: "POST", body: form }, 30_000)).json() as { name?: string; subfolder?: string; type?: string };
+      const upload = await (await request(`${base}/upload/image`, { method: "POST", body: form }, 30_000, signal)).json() as { name?: string; subfolder?: string; type?: string };
       if (upload.name !== name || upload.subfolder || upload.type !== "input") throw new Error("unexpected ComfyUI upload path");
     }
-    return await execGraph(url, makeGraph(args, name), { deadline: 240_000, outputNode: "9", outputType: "temp", onSubmitted, onStage });
+    return await execGraph(url, makeGraph(args, name), { deadline: 240_000, outputNode: "9", outputType: "temp", onSubmitted, onStage, signal });
   } finally { busy = false; }
 }
 
-export async function runInteraction(url: string, args: InteractionDraw, onSubmitted: () => void): Promise<Buffer> {
+export async function runInteraction(url: string, args: InteractionDraw, onSubmitted: () => void, signal?: AbortSignal): Promise<Buffer> {
   if (busy) throw new ComfyBusy("ComfyUI busy");
   busy = true;
-  try { return await execGraph(url, makeInteractionGraph(args), { deadline: 1_500_000, outputNode: "38", outputType: "output", onSubmitted }); }
+  try { return await execGraph(url, makeInteractionGraph(args), { deadline: 1_500_000, outputNode: "38", outputType: "output", onSubmitted, signal }); }
   finally { busy = false; }
 }
 
-export async function runInteractionSingle(url: string, args: Parameters<typeof makeInteractionSingleGraph>[0], onSubmitted: () => void): Promise<Buffer> {
+export async function runInteractionSingle(url: string, args: Parameters<typeof makeInteractionSingleGraph>[0], onSubmitted: () => void, signal?: AbortSignal): Promise<Buffer> {
   if (busy) throw new ComfyBusy("ComfyUI busy");
   busy = true;
-  try { return await execGraph(url, makeInteractionSingleGraph(args), { deadline: 1_500_000, outputNode: "38", outputType: "output", onSubmitted }); }
+  try { return await execGraph(url, makeInteractionSingleGraph(args), { deadline: 1_500_000, outputNode: "38", outputType: "output", onSubmitted, signal }); }
   finally { busy = false; }
 }

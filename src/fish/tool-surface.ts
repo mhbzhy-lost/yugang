@@ -109,7 +109,10 @@ export async function installToolSurface(base: FishBase): Promise<ToolSurfacePar
   }
 
   // 单次工具调用超时（默认 30 秒）：卡住的通常是某一个工具，不是整轮。
-  // withToolTimeout 用展开拷贝包装：deferred / callers / parameters / description 原样保留。
+  // withToolTimeout 用展开拷贝包装：deferred / callers / parameters / description 原样保留；
+  // 每次 execute 造独立 AbortController，经 chord withAbortSignal 并进第三参数 context
+  //（宿主取消与本次超时任一生效），超时先 abort 再报错，工具内的 HTTP/WS/子进程与
+  // say_* 的 outbox 提交都消费合并后的 signal，晚到副作用被取消闸拦住。
   // withSeenLinkHarvest 在工具返回后把 URL 登记进本轮白名单（say_words 出口校验消费）。
   const toolTimeoutMs = (options.toolTimeoutSeconds ?? 30) * 1000;
   const toolTimeoutMessage = prompts.messages["tool_timeout"] ?? "tool_timeout";

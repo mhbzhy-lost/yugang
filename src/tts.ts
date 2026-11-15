@@ -33,8 +33,10 @@ export interface SynthResult {
   ref: string;
 }
 
-/** 合成一段话，落盘到 <mediaRoot>/voice/，返回相对引用。 */
-export async function synthesizeToMedia(config: TtsConfig, text: string, mediaRoot: string): Promise<SynthResult> {
+/** 合成一段话，落盘到 <mediaRoot>/voice/，返回相对引用。
+ *  signal（可选）：工具超时/宿主取消的合并信号，与每次请求的合成超时 AbortSignal.any 合并；
+ *  取消后不再重试、不落盘（晚到的副作用围栏）。 */
+export async function synthesizeToMedia(config: TtsConfig, text: string, mediaRoot: string, signal?: AbortSignal): Promise<SynthResult> {
   if (!config.url) throw new Error("tts_not_configured");
   // 服务端偶发返回 200 + 0 字节（日志里能看到 LookupError，混合中英文时更常见）。
   // 同一句话重发一次通常就好了，所以这里对空结果重试一次，再用 auto 语种兜一次。
@@ -45,11 +47,12 @@ export async function synthesizeToMedia(config: TtsConfig, text: string, mediaRo
     if (config.referWav) body["prompt_language"] = config.referLanguage ?? "zh";
     if (config.speed !== undefined) body["speed"] = config.speed;
 
+    const timeout = AbortSignal.timeout(config.timeoutMs ?? 120_000);
     const response = await fetch(config.url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(config.timeoutMs ?? 120_000),
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
     });
     if (!response.ok) throw new Error(`tts_http_${response.status}`);
     return Buffer.from(await response.arrayBuffer());
@@ -57,10 +60,13 @@ export async function synthesizeToMedia(config: TtsConfig, text: string, mediaRo
 
   let bytes = await attempt("zh");
   if (bytes.length < 1024) {
+    signal?.throwIfAborted();
     console.error("[鱼缸] tts empty, retry:", bytes.length, "B /", text.length, "chars");
     bytes = await attempt("auto");
   }
   if (bytes.length < 1024) throw new Error("tts_empty");
+  // 取消后不落盘：语音文件也是副作用，超时晚到的合成结果不再写进 media/voice/
+  signal?.throwIfAborted();
 
   const dir = join(mediaRoot, "voice");
   mkdirSync(dir, { recursive: true });

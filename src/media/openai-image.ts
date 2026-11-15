@@ -30,6 +30,8 @@ export interface OpenAIImageRequest {
   baseUrl?: string;
   proxy?: string;
   timeoutMs?: number;
+  /** 工具超时/宿主取消的合并信号；与请求超时 AbortSignal.any 合并。后端已接受的请求不重 POST。 */
+  signal?: AbortSignal;
   fetchImpl?: typeof fetch;
 }
 
@@ -79,11 +81,12 @@ export async function generateOpenAIImages(request: OpenAIImageRequest): Promise
     });
   }
 
+  const timeout = AbortSignal.timeout(request.timeoutMs ?? 240_000);
   const response = await doFetch(url, {
     method: "POST",
     headers,
     body,
-    signal: AbortSignal.timeout(request.timeoutMs ?? 240_000),
+    signal: request.signal ? AbortSignal.any([timeout, request.signal]) : timeout,
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
@@ -96,6 +99,8 @@ export async function generateOpenAIImages(request: OpenAIImageRequest): Promise
   const entries = (parsed.data ?? []).filter((item) => typeof item.b64_json === "string");
   if (entries.length === 0) throw new Error("gpt_image_empty");
 
+  // 取消后不落盘：超时晚到的图不再写进 gen/（后端可能仍在算，状态不明，不重 POST）
+  request.signal?.throwIfAborted();
   const outDir = join(request.mediaRoot, "gen");
   mkdirSync(outDir, { recursive: true });
   const files: string[] = [];

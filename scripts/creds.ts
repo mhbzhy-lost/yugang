@@ -3,15 +3,16 @@
  *
  * 凭据落在 config/auth.json（和 models.json 同目录，已被 gitignore，权限 600）。
  *
- *   npm run creds import { MODELS_CONFIG_PATH } from "../src/paths.ts";
-import            # 从 ~/pi-config/pi/auth.json 导一次（之后不再依赖它）
+ *   npm run creds import            # 从 ~/pi-config/pi/auth.json 导一次（之后不再依赖它）
  *   npm run creds import -- --from /path/to/auth.json --force
  *   npm run creds show              # 看看每个 provider 有没有 key
  *   npm run creds clear             # 删掉本地凭据文件
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { MODELS_CONFIG_PATH } from "../src/paths.ts";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { withCredentialFileLock, writeCredentialFileSync } from "../src/auth/credentials.ts";
 
 const MODELS = MODELS_CONFIG_PATH;
 const TARGET = join(dirname(MODELS), "auth.json");
@@ -44,9 +45,8 @@ if (command === "import") {
     process.exit(1);
   }
 
-  mkdirSync(dirname(TARGET), { recursive: true });
-  writeFileSync(TARGET, `${JSON.stringify(out, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(TARGET, 0o600);
+  // 与鱼 / login 共用同一把跨进程锁：导入不会和正在进行的 OAuth 刷新互相覆盖
+  await withCredentialFileLock(TARGET, () => writeCredentialFileSync(TARGET, out));
   console.log(`✓ 写入 ${TARGET}（权限 600）`);
   for (const [provider, entry] of Object.entries(out)) {
     console.log(`  ${provider}: 已导入 / ${entry.key.length} 字符`);
@@ -69,7 +69,7 @@ if (command === "import") {
     console.log("本来就没有");
     process.exit(0);
   }
-  unlinkSync(TARGET);
+  await withCredentialFileLock(TARGET, () => unlinkSync(TARGET));
   console.log(`✓ 已删除 ${TARGET}`);
 } else {
   console.error(`不认识的命令：${command}`);

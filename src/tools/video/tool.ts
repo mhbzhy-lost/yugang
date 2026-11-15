@@ -25,7 +25,6 @@
  *
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest（factory 只消费它，不再有第二份运行时定义）。
  */
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,6 +37,7 @@ import { rememberViewedVideoTitle } from "../../external/video-pool.ts";
 import { loadFishConfig } from "../../fish-config.ts";
 import { renderTemplate } from "../../prompt/index.ts";
 import { describeImage } from "../../media/describe.ts";
+import { spawnCapture } from "../../media/spawn-capture.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import { REPO_ROOT } from "../../paths.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
@@ -105,16 +105,16 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
   const pythonPath = process.env["VIDEO_PYTHON"] ?? join(homedir(), "tts", ".venv-video", "bin", "python");
   const scriptPath = join(REPO_ROOT, "scripts", "video-frames.py");
 
-  async function getJson(url: string): Promise<any> {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    try {
-      const res = await doFetch(url, { headers: HEADERS, signal: ctrl.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.json();
-    } finally {
-      clearTimeout(timer);
-    }
+  /** 每请求超时与调用方取消（工具超时/宿主取消）合并；底层 fetch 消费同一个 signal。 */
+  const mergedSignal = (signal?: AbortSignal): AbortSignal => {
+    const timeout = AbortSignal.timeout(timeoutMs);
+    return signal ? AbortSignal.any([timeout, signal]) : timeout;
+  };
+
+  async function getJson(url: string, signal?: AbortSignal): Promise<any> {
+    const res = await doFetch(url, { headers: HEADERS, signal: mergedSignal(signal) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
   }
 
   /** 弹幕 XML → {time, text}[]；拿不到返回空数组（不影响主流程）。XML 经 bili-client 取。 */
@@ -163,9 +163,10 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
     return dedup.slice(0, frameCount);
   }
 
-  function extractFrames(bvid: string, cid: string, timestamps: number[], outDir: string): Frame[] {
+  async function extractFrames(bvid: string, cid: string, timestamps: number[], outDir: string, signal?: AbortSignal): Promise<Frame[]> {
     if (!existsSync(pythonPath) || !existsSync(scriptPath)) return [];
-    const result = spawnSync(
+    // 异步 spawn：不再阻塞事件循环（watchdog 能按时触发），超时/取消经 signal 交给底层 kill
+    const result = await spawnCapture(
       pythonPath,
       [
         scriptPath,
@@ -178,14 +179,14 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         "--out",
         outDir,
       ],
-      { encoding: "utf8", timeout: 90_000, maxBuffer: 8 * 1024 * 1024 },
+      { timeoutMs: 90_000, signal, maxBytes: 8 * 1024 * 1024 },
     );
     if (result.status !== 0) {
-      const why = (result.stderr ?? "").split("\n").filter(Boolean).slice(-2).join(" / ");
+      const why = result.stderr.toString("utf8").split("\n").filter(Boolean).slice(-2).join(" / ");
       console.warn("[鱼缸] 抽帧失败:", why || `exit ${result.status}`);
       return [];
     }
-    const line = (result.stdout ?? "").trim().split("\n").filter(Boolean).pop() ?? "";
+    const line = result.stdout.toString("utf8").trim().split("\n").filter(Boolean).pop() ?? "";
     try {
       const parsed = JSON.parse(line) as Frame[];
       return Array.isArray(parsed) ? parsed : [];
@@ -211,6 +212,8 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
       deps.onLongWork?.("video", round);
+      // 合并后的取消信号：本工具内的直连 fetch / 抽帧子进程 / 视觉描述都消费它
+      const signal = context.abortSignal;
 
       // 策略在调用侧，工具不做轮类型授权：能不能看由 prompt 的 `[本轮要求]` 与宿主给的
       // 工具面决定。这里只留纯资源闸——每轮成功观看数上限（video.browseMaxViewsPerRound，
@@ -232,7 +235,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         // 短链先展开
         let target = raw;
         if (/^https?:\/\/b23\.tv\//.test(raw)) {
-          const res = await doFetch(raw, { headers: HEADERS, redirect: "follow" });
+          const res = await doFetch(raw, { headers: HEADERS, redirect: "follow", signal: mergedSignal(signal) });
           target = res.url;
         }
         const bv = target.match(/BV[0-9A-Za-z]{10}/)?.[0];
@@ -242,6 +245,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
           if (opusId) {
             const opus = await getJson(
               `https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/detail?timezone_offset=-480&id=${opusId}`,
+              signal,
             );
             const item = opus?.data?.item;
             if (opus?.code !== 0 || !item) throw new Error("opus failed");
@@ -273,11 +277,11 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
               const described = await Promise.all(
                 pics.map(async (url, index) => {
                   try {
-                    const res = await doFetch(url, { headers: HEADERS });
+                    const res = await doFetch(url, { headers: HEADERS, signal: mergedSignal(signal) });
                     if (!res.ok) return null;
                     const bytes = Buffer.from(await res.arrayBuffer());
                     // 被内容审核拒/描述失败的单张图直接跳过，不影响其它图
-                    const described = await describeImage(deps, bytes.toString("base64"), res.headers.get("content-type")?.split(";")[0] ?? "image/jpeg");
+                    const described = await describeImage(deps, bytes.toString("base64"), res.headers.get("content-type")?.split(";")[0] ?? "image/jpeg", signal);
                     return described.ok ? `[图${index + 1}] ${described.text.replace(/\s+/g, " ").slice(0, 200)}` : null;
                   } catch {
                     return null;
@@ -338,7 +342,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         if (deps.models && deps.visionModel && cid) {
           const timestamps = pickTimestamps(danmaku, capSeconds);
           const framesStartedAt = Date.now();
-          const frames = extractFrames(bv, cid, timestamps, tmp);
+          const frames = await extractFrames(bv, cid, timestamps, tmp, signal);
           const grabMs = Date.now() - framesStartedAt;
           if (frames.length > 0) {
             const described = await Promise.all(
@@ -346,7 +350,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
                 try {
                   const bytes = readFileSync(frame.path);
                   // 被内容审核拒/描述失败的帧优雅跳过（不整轮失败），其余帧照常
-                  const described = await describeImage(deps, bytes.toString("base64"), "image/jpeg");
+                  const described = await describeImage(deps, bytes.toString("base64"), "image/jpeg", signal);
                   if (!described.ok) return null;
                   return { time: frame.time, line: `[${fmtTime(frame.time)}] ${described.text.replace(/\s+/g, " ").slice(0, 220)}` };
                 } catch {

@@ -27,6 +27,7 @@ import {
   MEMORY_CAPS,
   MEMORY_EXPIRE_PER_PAGE,
   MEMORY_EXPIRE_QUOTE_CHARS,
+  stripInvisible,
   type ExtractSignals,
   type FactSource,
   type MemoryPatch,
@@ -427,12 +428,13 @@ function asArray(value: unknown): unknown[] {
 }
 
 /**
- * 通用短文本过滤：trim、限长、拒绝换行/控制字符、`<>` 标记、明显注入与隐私模式。
+ * 通用短文本过滤：先移除 bidi/零宽/BOM 不可见字符，再 trim、限长、拒绝换行/控制字符、
+ * `<>` 标记、明显注入与隐私模式（长度与模式匹配都作用于移除后的可见文本，防夹带绕过）。
  * 不合格返回 undefined（该条丢弃）。
  */
 function safeShort(value: unknown, max: number, extraInjections: readonly RegExp[] = INJECTION_RES): string | undefined {
   if (typeof value !== "string") return undefined;
-  const text = value.trim();
+  const text = stripInvisible(value).trim();
   if (text.length === 0 || text.length > max) return undefined;
   if (/[\u0000-\u001F\u007F]/.test(text)) return undefined;
   if (text.includes("<") || text.includes(">")) return undefined;

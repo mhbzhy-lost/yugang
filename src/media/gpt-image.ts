@@ -42,6 +42,8 @@ export interface GptImageRequest {
   mediaRoot: string;
   /** 超时，默认 180 秒（实测单张 14–27 秒）。 */
   timeoutMs?: number;
+  /** 工具超时/宿主取消的合并信号；与请求超时 AbortSignal.any 合并。后端已接受的请求不重 POST。 */
+  signal?: AbortSignal;
   fetchImpl?: typeof fetch;
   /** provider 级代理（只有 OpenAI 需要翻墙时才有意义）；非法值会回落到直连。 */
   proxy?: string;
@@ -59,11 +61,21 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
     throw new Error("gpt_image_bad_auth");
   }
 
-  // 提前一分钟刷新：生图一次十几秒，别让 token 在请求途中过期
+  // 提前一分钟刷新：生图一次十几秒，别让 token 在请求途中过期。
+  // 刷新整段放在 modify 回调里（跨进程锁内）并在锁里复核过期时间：并发请求 / 进程只刷新一次，
+  // 不会把已经轮换掉的 refresh token 再用一遍，也不会拿旧快照盖掉别人刚写的凭据。
   if (Number(credential.expires) - Date.now() < 60_000) {
-    const refreshed = await refreshTokens(credential, undefined, doFetch);
-    await store.modify(request.provider, async () => refreshed);
-    credential = refreshed;
+    const post = await store.modify(request.provider, async (current) => {
+      if (!current || current.type !== "oauth") return undefined;
+      const latest = current as OAuthCredential;
+      if (Number(latest.expires) - Date.now() >= 60_000) return undefined; // 别人刚刷新过
+      return await refreshTokens(latest, request.signal, doFetch);
+    });
+    if (!post || post.type !== "oauth") throw new Error("gpt_image_no_auth");
+    credential = post as OAuthCredential;
+    if (typeof credential.access !== "string" || typeof credential.accountId !== "string") {
+      throw new Error("gpt_image_bad_auth");
+    }
   }
 
   // prompt 以 request.prompt 为准；params 里其余字段原样透传（model 由调用方按 models.image 填）
@@ -80,6 +92,7 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
     body["images"] = request.images.map((image_url) => ({ image_url }));
   }
 
+  const timeout = AbortSignal.timeout(request.timeoutMs ?? 180_000);
   const response = await doFetch(request.images && request.images.length > 0 ? EDIT_ENDPOINT : GEN_ENDPOINT, {
     method: "POST",
     headers: {
@@ -91,7 +104,7 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
       accept: "application/json",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(request.timeoutMs ?? 180_000),
+    signal: request.signal ? AbortSignal.any([timeout, request.signal]) : timeout,
   });
 
   if (!response.ok) {
@@ -107,6 +120,8 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
   const entries = (parsed.data ?? []).filter((item) => typeof item.b64_json === "string");
   if (entries.length === 0) throw new Error("gpt_image_empty");
 
+  // 取消后不落盘：超时晚到的图不再写进 gen/（后端可能仍在算，状态不明，不重 POST）
+  request.signal?.throwIfAborted();
   const outDir = join(request.mediaRoot, "gen");
   mkdirSync(outDir, { recursive: true });
   const files: string[] = [];

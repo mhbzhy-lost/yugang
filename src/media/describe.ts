@@ -48,7 +48,7 @@ type AttemptOutcome =
 const RATE_LIMIT_WAITS_MS = [2_500, 6_000] as const;
 const MAX_ATTEMPTS = 3;
 
-export async function describeImage(deps: DescribeDeps, base64: string, mimeType: string): Promise<DescribeResult> {
+export async function describeImage(deps: DescribeDeps, base64: string, mimeType: string, signal?: AbortSignal): Promise<DescribeResult> {
   if (!deps.models || !deps.visionModel) return { ok: false, reason: "failed" };
   // streamSimple 只接受完整 model 对象：传 {provider, modelId} 引用会让
   // pi-ai 内部 model.input 取不到而抛错（describe 永远失败 → 退回原图 → 卡死）
@@ -56,8 +56,10 @@ export async function describeImage(deps: DescribeDeps, base64: string, mimeType
   if (!model) return { ok: false, reason: "failed" };
   const promptText = deps.prompts.messages["look_describe"] ?? "描述这张图";
 
-  const first = await describeWithModel(deps.models, model, promptText, base64, mimeType);
+  const first = await describeWithModel(deps.models, model, promptText, base64, mimeType, signal);
   if (first.ok) return first;
+  // 已取消（工具超时/宿主取消）：不再走兜底，晚到的描述不重试
+  if (signal?.aborted) return first;
 
   // 兜底：没配就是无兜底（行为与原来一致）；配成和主模型同一个也不值得再试
   const ref = deps.visionFallbackModel;
@@ -68,7 +70,7 @@ export async function describeImage(deps: DescribeDeps, base64: string, mimeType
     return first;
   }
   console.warn(`[鱼缸] 主看图倒下（${first.reason}），走兜底`);
-  const second = await describeWithModel(deps.models, fallback, promptText, base64, mimeType);
+  const second = await describeWithModel(deps.models, fallback, promptText, base64, mimeType, signal);
   if (second.ok) {
     console.log("[鱼缸] 看图走兜底 ok");
     return second;
@@ -77,23 +79,27 @@ export async function describeImage(deps: DescribeDeps, base64: string, mimeType
   return { ok: false, reason: second.reason === "filtered" ? "fallback_filtered" : "fallback_failed" };
 }
 
-/** 单模型一轮完整尝试：按失败分类走不同退避；终局只有 filtered / failed 两种。 */
+/** 单模型一轮完整尝试：按失败分类走不同退避；终局只有 filtered / failed 两种。
+ *  signal 透传给每次 streamSimple 请求；已取消时不再重试/退避，直接 failed。 */
 async function describeWithModel(
   models: Models,
   model: ChatModel,
   promptText: string,
   base64: string,
   mimeType: string,
+  signal?: AbortSignal,
 ): Promise<{ ok: true; text: string } | { ok: false; reason: "filtered" | "failed" }> {
   let rateLimitStrikes = 0;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const outcome = await attemptOnce(models, model, promptText, base64, mimeType);
+    if (signal?.aborted) return { ok: false, reason: "failed" };
+    const outcome = await attemptOnce(models, model, promptText, base64, mimeType, signal);
     if (outcome.ok) return outcome;
     if (outcome.kind === "content_filtered") {
       // 内容审核是确定性拒绝：重试纯浪费还拖慢轮次，立即放弃
       console.warn(`[鱼缸] 看图被滤 content_filtered ${outcome.detail}`.trim());
       return { ok: false, reason: "filtered" };
     }
+    if (signal?.aborted) return { ok: false, reason: "failed" };
     if (attempt === MAX_ATTEMPTS) {
       console.warn(`[鱼缸] 看图放弃 ${outcome.kind} 第${attempt}次 ${outcome.detail}`.trim());
       break;
@@ -116,10 +122,11 @@ async function attemptOnce(
   promptText: string,
   base64: string,
   mimeType: string,
+  signal?: AbortSignal,
 ): Promise<AttemptOutcome> {
   try {
     // 显式 maxTokens：不传时服务端用一个很小的默认额度，推理模型的思考内容会把额度吃光，
-    // 正文变空——表现就是「识图时好时坏」。
+    // 正文变空——表现就是「识图时好时坏」。signal：取消时中断在途请求。
     const stream = models.streamSimple(model, {
       messages: [
         {
@@ -131,7 +138,7 @@ async function attemptOnce(
         },
       ],
       maxTokens: 1500,
-    });
+    }, signal ? { signal } : undefined);
     const message = await stream.result();
     const text = message.content
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
