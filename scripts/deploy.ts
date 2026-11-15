@@ -187,7 +187,7 @@ const ttsExit = new Promise<number | null>((resolve) => tts.once("exit", (code) 
 
 // 6. 验证：只看启动前日志偏移之后的内容，避免误读旧鱼的「已连接」横幅。
 await sleep(8000);
-const alive = fishProcessIdentity(fish.pid) !== undefined;
+const fishAlive = fishProcessIdentity(fish.pid) !== undefined;
 let tail = "";
 try {
   const logBytes = readFileSync(LOG);
@@ -195,7 +195,7 @@ try {
 } catch {
   tail = "";
 }
-if (!alive || !tail.includes("已连接")) {
+if (!fishAlive || !tail.includes("已连接")) {
   console.error("[deploy] ✗ 新鱼没起来或没有「已连接」横幅，启动后的日志：");
   console.error(tail.trim());
   process.exit(1);
