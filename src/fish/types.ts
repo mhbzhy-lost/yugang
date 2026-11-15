@@ -27,6 +27,8 @@ export type SentMessageIds = (number | string)[];
 
 /** 人格名的「默认」哨兵：默认人格的会话键不带后缀，也不另外选扩展。 */
 export const DEFAULT_PERSONA = "默认";
+/** 单次模型运行最多进行的工具轮数，防止模型在工具结果上无限自循环。 */
+export const AGENT_MAX_TURNS = 16;
 
 export interface GroupProfile {
   groupId: string;

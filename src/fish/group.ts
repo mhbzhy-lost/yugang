@@ -12,7 +12,7 @@ import { renderTemplate } from "../prompt/index.ts";
 import { memoryKeyOf } from "../memory/scope.ts";
 import type { FishBase } from "./base.ts";
 import { GroupProfileEntry } from "./docs.ts";
-import { DEFAULT_PERSONA, type GroupProfile } from "./types.ts";
+import { AGENT_MAX_TURNS, DEFAULT_PERSONA, type GroupProfile } from "./types.ts";
 
 export interface GroupParts {
   group(groupKey: string, profile?: GroupProfile, persona?: string): Promise<Conversation>;
@@ -55,6 +55,7 @@ export function installGroup(
             // 默认人格不传 extensions：跟 host 钉住的默认选择，存量会话行为不变
             agent: {
               model: options.model,
+              maxTurns: AGENT_MAX_TURNS,
               ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
               cwd,
               ...(extension ? { extensions: [extension] } : {}),

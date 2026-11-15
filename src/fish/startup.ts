@@ -10,7 +10,7 @@ import { configure, type ConversationId, type Harness } from "@earendil-works/pi
 import { ChatsDoc } from "../store.ts";
 import type { FishBase } from "./base.ts";
 import type { ExtensionParts } from "./extensions.ts";
-import { DEFAULT_PERSONA } from "./types.ts";
+import { AGENT_MAX_TURNS, DEFAULT_PERSONA } from "./types.ts";
 
 export async function installStartupMigrations(
   state: FishBase & ExtensionParts & { harness: Harness },
@@ -45,6 +45,7 @@ export async function installStartupMigrations(
       await harness.commit(async (tx) => {
         await configure(tx, id as ConversationId, {
           model: options.model,
+          maxTurns: AGENT_MAX_TURNS,
           ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
         });
       }, ctx);

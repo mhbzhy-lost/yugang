@@ -43,6 +43,7 @@ const LIST_BUDGET = 700;
 const DETAIL_BUDGET = 1200;
 const RELATED_LIMIT = 3;
 const SIBLING_LIMIT = 4;
+const MAX_KEYWORD_LENGTH = 200;
 let cache: Row[] | null = null;
 
 function load(csvPath: string): Row[] {
@@ -163,6 +164,9 @@ export function createTagsTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const rows = deps.tagsCsv ? load(deps.tagsCsv) : [];
       if (rows.length === 0) throw new Error(messages["tags_empty"] ?? "tags_empty");
       const keyword = (args.keyword ?? "").trim();
+      if ([...keyword].length > MAX_KEYWORD_LENGTH) {
+        throw new Error(messages["tags_keyword_too_long"] ?? "tags_keyword_too_long");
+      }
       const lowered = keyword.toLowerCase().replace(/\s+/g, "_");
 
       // 1) 总表：不带 keyword、或 lora/词表/列表，或直接给组名。

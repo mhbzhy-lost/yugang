@@ -1,5 +1,6 @@
 {
   "tags_empty": "词表还没就绪（danbooru.csv 没读到），稍后再试",
+  "tags_keyword_too_long": "关键词太长了，请只传一个角色名、LoRA key 或 danbooru tag，不要把上一条回执整段拼回来",
   "tags_none": "词表里没有「{{keyword}}」；想挑 LoRA 就不传关键词，直接查空或查 lora",
   "tags_kind_character": "角色",
   "tags_kind_style": "风格",
