@@ -54,7 +54,7 @@
   "8": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, shiny skin, abs, oily skin, airbrushed, subsurface scattering, sketch, pencil lines, stray lines, rough lines, unfinished lineart",
+      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, shiny skin, abs, sketch",
       "clip": [
         "4",
         1
@@ -175,7 +175,7 @@
   "26": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, shiny skin, abs, oily skin, airbrushed, subsurface scattering, sketch, pencil lines, stray lines, rough lines, unfinished lineart",
+      "text": "low quality, worst quality, score_1, score_2, score_3, early, old, monochrome, shiny skin, abs, sketch",
       "clip": [
         "4",
         1
