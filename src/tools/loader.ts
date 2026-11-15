@@ -37,6 +37,7 @@ import { createBiliHotTool } from "./bili_hot/tool.ts";
 import { createBiliVideoTool } from "./bili_video/tool.ts";
 import { createConfigTool } from "./config/tool.ts";
 import { createDrawTool } from "./draw/tool.ts";
+import { createQwenDrawTool } from "./qwen_draw/tool.ts";
 import { createGptImageTool } from "./gpt_image/tool.ts";
 import { createGrepTool } from "./grep/tool.ts";
 import { createLookTool } from "./look/tool.ts";
@@ -61,7 +62,7 @@ import { createVideoTool } from "./video/tool.ts";
 import { createWatchTool } from "./watch/tool.ts";
 import { createWriteTool } from "./write/tool.ts";
 
-/** 25 个工具包的 Node factory；与 src/tools/<name>/TOOL.md 一一对应，两边都不允许孤儿。 */
+/** 26 个工具包的 Node factory；与 src/tools/<name>/TOOL.md 一一对应，两边都不允许孤儿。 */
 const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
   ammo_list: createAmmoListTool,
   ammo_submit: createAmmoSubmitTool,
@@ -77,6 +78,7 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
   meme_import: createMemeImportTool,
   now: createNowTool,
   news_prepare: createNewsPrepareTool,
+  qwen_draw: createQwenDrawTool,
   react: createReactTool,
   read: createReadTool,
   remind: createRemindTool,

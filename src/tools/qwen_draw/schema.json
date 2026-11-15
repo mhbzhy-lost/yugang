@@ -1,0 +1,36 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "画面描述，自然语言完整句子（中文或英文都行，不是 danbooru tag）：主体放句首，再写场景、光线、风格；要图里出现文字时用引号框住内容（如招牌写「鱼缸咖啡」）。800 字以内"
+      },
+      "resolution": {
+        "type": "integer",
+        "enum": [1024, 2048],
+        "description": "分辨率档：1024 标准域（约 1MP，快）/ 2048 原生 2K 高清（约一分钟）；不填默认 1024。带 ref 时是重绘的目标域（Anima 底图高清增强用 2048）"
+      },
+      "ratio": {
+        "type": "string",
+        "enum": ["1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16"],
+        "description": "画面宽高比（2.1 官方七种）：方图 1:1、竖图 3:4/2:3/9:16、横图 4:3/3:2/16:9；不填默认 1:1。带 ref 时无效（沿用参考图比例）"
+      },
+      "fast": {
+        "type": "boolean",
+        "description": "true 用 turbo 速度档（8 步，更快、细节略降）；不填用质量档（25 步）"
+      },
+      "ref": {
+        "type": "string",
+        "description": "参考图路径（inbound/… 群里的图或 gen/… 自己画的图，png/jpg/webp）：2.1 会真的看图并锚定构图重绘——改内容、换风格、提分辨率都靠它；不填从零画"
+      },
+      "seed": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4294967295,
+        "description": "随机种子：想复现同一张图时填上次的结果；不填每次随机"
+      }
+    },
+    "required": ["prompt"]
+  }
+}

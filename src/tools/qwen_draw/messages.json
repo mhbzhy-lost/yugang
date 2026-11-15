@@ -1,0 +1,14 @@
+{
+  "qwen_prompt": "画面描述要写成自然语言句子（中文或英文），1–800 字，不能为空；这不是 danbooru tag 工具",
+  "qwen_resolution": "分辨率档只认 1024 或 2048",
+  "qwen_ratio": "比例只认 1:1、4:3、3:4、3:2、2:3、16:9、9:16",
+  "qwen_fast": "fast 开关必须是 true 或 false",
+  "qwen_seed": "seed 是 0 到 4294967295 的整数",
+  "qwen_ref_outside": "参考图只能用这一轮群里的图（inbound/…）或你自己画过的图（gen/…）：{{ref}}",
+  "qwen_ref_missing": "找不到这张参考图：{{ref}}",
+  "qwen_ref_type": "参考图只认 png/jpg/jpeg/webp（不认 gif/heic）：{{ref}}",
+  "qwen_ref_big": "这张参考图太大（20MB 以内）：{{ref}}",
+  "qwen_done": "gen/{{file}} — 画好了，已经自动发出去了，不用再发",
+  "qwen_done_fallback": "gen/{{file}} — 画好了，但自动发送没成功，用 say_media 把它发出去",
+  "qwen_failed": "Qwen 画图没成功"
+}

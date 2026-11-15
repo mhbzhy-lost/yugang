@@ -4,6 +4,8 @@ description: 本地 Stable Diffusion 画图/改图，快且免费；出图后自
 ---
 
 用本地显卡画一张图（出图后自动发出）：快、免费，但机器关机或排队超时会失败。
+用户消息里出现 **qwen-image** 关键词（或明确要「Qwen 画的」）时改用 qwen_draw——那是另一条
+自然语言管线；本工具只吃 danbooru tag，别把两种写法混着用。
 
 画法两种：
 - 从零画：不填 ref，按 prompt 画；ratio 选横图/方图/竖图，默认 3:4。

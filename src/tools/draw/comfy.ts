@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-type Node = { class_type: string; inputs: Record<string, unknown> };
-type Graph = Record<string, Node>;
+export type Node = { class_type: string; inputs: Record<string, unknown> };
+export type Graph = Record<string, Node>;
 type Link = [string, number];
 
 // 三条管线各持一个静态 JSON 模板；本文件只做「参数注入 + 统一执行」。
@@ -479,7 +479,7 @@ async function fetchImage(base: string, job: ComfyHistoryJob, node: string, type
   return imageBytes(await request(`${base}/view?${query}`, {}, type === "output" ? 60_000 : 30_000, signal));
 }
 
-interface ExecOpts {
+export interface ExecOpts {
   deadline: number;
   outputNode: string;
   outputType: "temp" | "output";
@@ -489,7 +489,7 @@ interface ExecOpts {
   signal?: AbortSignal;
 }
 /** 统一执行：queue 闸 + 模型清单核对（LoRA 与模型文件）+ 提交 + 轮询 + 取图。busy 由调用方持有。 */
-async function execGraph(url: string, graph: Graph, opts: ExecOpts): Promise<Buffer> {
+export async function execGraph(url: string, graph: Graph, opts: ExecOpts): Promise<Buffer> {
   const base = comfyUrl(url);
   const queue = await (await request(`${base}/queue`, {}, 10_000, opts.signal)).json() as { queue_running?: unknown[]; queue_pending?: unknown[] };
   if (!Array.isArray(queue.queue_running) || !Array.isArray(queue.queue_pending)) throw new Error("invalid ComfyUI queue");
@@ -508,21 +508,26 @@ async function execGraph(url: string, graph: Graph, opts: ExecOpts): Promise<Buf
   } finally { sock?.close(); }
 }
 
+/** 把参考图字节上传到 ComfyUI input（yugang-ref-<uuid> 专用名，供 LoadImage 消费；清理交给计划任务）。
+ *  ext 只认 ComfyUI LoadImage 原生支持的 png/jpg/jpeg/webp，由调用方保证。 */
+export async function uploadRefImage(url: string, data: Buffer, ext: "png" | "jpg" | "jpeg" | "webp", signal?: AbortSignal): Promise<string> {
+  const base = comfyUrl(url);
+  const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+  const name = `yugang-ref-${randomUUID()}.${ext}`;
+  const form = new FormData();
+  form.set("image", new Blob([new Uint8Array(data)], { type: mime }), name);
+  form.set("type", "input");
+  form.set("overwrite", "false");
+  const upload = await (await request(`${base}/upload/image`, { method: "POST", body: form }, 30_000, signal)).json() as { name?: string; subfolder?: string; type?: string };
+  if (upload.name !== name || upload.subfolder || upload.type !== "input") throw new Error("unexpected ComfyUI upload path");
+  return name;
+}
+
 export async function runComfy(url: string, args: ComfyDraw, onSubmitted: () => void, onStage?: (s: DrawStage) => void, signal?: AbortSignal): Promise<Buffer> {
   if (busy) throw new ComfyBusy("ComfyUI busy");
   busy = true;
   try {
-    let name: string | undefined;
-    if (args.ref) {
-      const base = comfyUrl(url);
-      name = `yugang-ref-${randomUUID()}.png`;
-      const form = new FormData();
-      form.set("image", new Blob([new Uint8Array(args.ref.png)], { type: "image/png" }), name);
-      form.set("type", "input");
-      form.set("overwrite", "false");
-      const upload = await (await request(`${base}/upload/image`, { method: "POST", body: form }, 30_000, signal)).json() as { name?: string; subfolder?: string; type?: string };
-      if (upload.name !== name || upload.subfolder || upload.type !== "input") throw new Error("unexpected ComfyUI upload path");
-    }
+    const name = args.ref ? await uploadRefImage(url, args.ref.png, "png", signal) : undefined;
     return await execGraph(url, makeGraph(args, name), { deadline: 240_000, outputNode: "9", outputType: "temp", onSubmitted, onStage, signal });
   } finally { busy = false; }
 }
