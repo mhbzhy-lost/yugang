@@ -31,9 +31,8 @@ for (const [id, cls] of INTERACTION_TEMPLATE_CONTRACT) {
 
 const SINGLE_TEMPLATE = JSON.parse(readFileSync(new URL("./workflow-interaction-single.json", import.meta.url)).toString("utf8")) as Graph;
 const SINGLE_TEMPLATE_CONTRACT: Array<[string, string]> = [
-  ["1", "UNETLoader"], ["5", "RSMultiCharacterPose3D"],
-  ["40", "RSMultiCharacterPrompt"], ["41", "RSMultiCharacterLoRA"], ["42", "RSMultiCharacterPosition"], ["43", "RSMultiCharacterFinalize"],
-  ["11", "RSMultiCharacterSampler"], ["27", "KSampler"], ["22", "ImageUpscaleWithModel"], ["23", "ImageScaleBy"], ["38", "SaveImage"],
+  ["1", "UNETLoader"],
+  ["11", "KSampler"], ["27", "KSampler"], ["22", "ImageUpscaleWithModel"], ["23", "ImageScaleBy"], ["38", "SaveImage"],
 ];
 for (const [id, cls] of SINGLE_TEMPLATE_CONTRACT) {
   if (SINGLE_TEMPLATE[id]?.class_type !== cls) throw new Error(`draw single workflow contract mismatch: node ${id} != ${cls}`);
@@ -236,7 +235,9 @@ export function makeInteractionGraph(args: InteractionDraw): Graph {
   return g;
 }
 
-/** 单人姿态：workflow-interaction-single.json 模板 + 注入（RS 采样器 + 剪影分域，2026-11-15 E6 验证形态）。 */
+/** 单人姿态：workflow-interaction-single.json 模板 + 注入（KSampler + 全局 LoRA + 全图词，2026-11-15 E20 定稿回退）。
+ *  单人 RS 链已退：E5–E9 证分域拉力不足以控位，E20 又证槽位词被分域削弱致 LoRA 还原崩坏；
+ *  RS 链留给双人线（它真正的战场）。placement 机制（applyPlacement）保留待 Regional 自训落地后接。 */
 /** 单人位置枚举的偏移量（2026-11-15 E 组实验定稿，docs/plans/2026-11-15-single-pose-placement.md）：
  *  水平 dx 必须按 canvas aspect 归一化（垂直 fov 固定、画面宽 = 视野高 3.6m × aspect，
  *  E4 实测固定世界 dx 在窄画面被放大至出画；dx = 0.684 × aspect 时四种比例质心均落 0.30/0.70）；
@@ -265,10 +266,7 @@ export function makeInteractionSingleGraph(args: {
   prompt: string; width: number; height: number; seed?: number; passSeed?: number;
   preset: InteractionPreset; part: MultiPart; label: string; hd?: boolean;
   bypass?: string; pbypass?: string;
-  placementX?: PlacementX; placementY?: PlacementY;
 }): Graph {
-  if (args.placementX !== undefined && !["left", "center", "right"].includes(args.placementX)) throw new Error("invalid placement x");
-  if (args.placementY !== undefined && !["up", "middle", "down"].includes(args.placementY)) throw new Error("invalid placement y");
   if (args.part.text.length > 800) throw new Error("invalid single part text");
   if (args.part.role !== undefined && (!/^[\w .@()-]+\.safetensors$/.test(args.part.role.file) || !Number.isFinite(args.part.role.weight) || args.part.role.weight < 0.4 || args.part.role.weight > 1.1)) throw new Error("invalid single role");
   if (!Number.isInteger(args.width) || !Number.isInteger(args.height) || args.width % 8 !== 0 || args.height % 8 !== 0) throw new Error("invalid single canvas");
@@ -280,26 +278,21 @@ export function makeInteractionSingleGraph(args: {
   const commonPrompt = /^1girl(?:\s|,)/i.test(args.prompt) ? args.prompt : `1girl, solo, ${args.prompt}`;
   const desc = [args.part.role ? escapeInjected(normalizeTagForm(multiRoleTags(args.part))) : "", normalizeTagForm(args.part.text)].filter(Boolean).join(", ");
   const suffix = (args.bypass ? `, ${args.bypass}` : "") + (args.pbypass ? `, ${args.pbypass}` : "");
-  // RS 形态（E6 接线）+ E20 严格对照定稿（2026-11-15）：角色词必须进公共 prompt 全图生效——
-  // 进 40 槽位会被分域削弱（V2 实验：槽位词 LoRA 还原崩坏，公共词正常）；
-  // LoRA 走全局链（node 4，V2 验证形态），41 槽位恒 None。
-  // 位置参数（placement）待硬条件落地后再接（E7：分域拉力不足 10 个点）。
-  const characterText = "1girl, solo";
+  // E20 定稿（B0 形态）：全图词 + 全局 LoRA——单人无分域，角色词全图生效是唯一验证通过的形态。
   const positive = `${floorPos}${INTERACTION_STYLE}${normalizeTagForm(commonPrompt)}${desc ? `, ${desc}` : ""}${suffix}`;
   const passPositive = `${floorPos}${normalizeTagForm(commonPrompt)}, ${desc}${suffix}`;
   const hasRole = args.part.role !== undefined;
   if (hasRole) g["4"] = loraLoader(["1", 0], ["2", 0], args.part.role!.file, args.part.role!.weight);
   else delete g["4"];
+  const modelOut: Link = hasRole ? ["4", 0] : ["1", 0];
   const clipOut: Link = hasRole ? ["4", 1] : ["2", 0];
-  g["11"].inputs.model = hasRole ? ["4", 0] : ["1", 0];
-  g["27"].inputs.model = hasRole ? ["4", 0] : ["1", 0];
-  for (const id of ["25", "26"]) g[id].inputs.clip = clipOut;
-  g["5"].inputs.scene_json = applyPlacement(args.preset.scene_json, args.placementX ?? "center", args.placementY ?? "middle", args.width / args.height);
-  g["40"].inputs.character1 = characterText;
-  g["11"].inputs.prompt = positive;
-  g["11"].inputs.negative_prompt = neg;
-  g["11"].inputs.width = args.width;
-  g["11"].inputs.height = args.height;
+  g["11"].inputs.model = modelOut;
+  g["27"].inputs.model = modelOut;
+  for (const id of ["7", "8", "25", "26"]) g[id].inputs.clip = clipOut;
+  g["7"].inputs.text = positive;
+  g["8"].inputs.text = neg;
+  g["10"].inputs.width = args.width;
+  g["10"].inputs.height = args.height;
   g["11"].inputs.seed = seed;
   g["27"].inputs.seed = passSeed;
   g["25"].inputs.text = passPositive;
