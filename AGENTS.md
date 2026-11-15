@@ -48,6 +48,11 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 姿态/位置引导的真实主力是 RS 剪影区域（提示词分域）。摘除后：双人线模型链直连底模（node 75/34 删），
 单人线 node 36/6 删（姿态图不再被模型侧消费，单人初采样纯文本；位置/姿态引导待 RS 单槽方案落地后统一恢复）。
 模板节点 contract 同步收案；质感 pass 仍不挂任何控制（低幅度重采样无益）。
+**单人线接回 RS 剪影链（2026-11-15 E6 验证后同日落地）**：单人初采样不再纯文本——模板加 40 Prompt(单槽)/41 LoRA(槽位恒 None，角色仍走 AnimaLoRARemapTagLoader)/42 Position(box 仅兑底，被剪影覆盖)/43 Finalize，
+node 11 换 RSMultiCharacterSampler（人物词进 40 槽位、场景/质量词进公共 prompt、layout_method=regional、自建 latent 不接 latent_image），
+14 VAEDecode 接 `[11,1]`（LATENT 路；第 0 路是 IMAGE）。剪影 mask 成为区域实体（E6 机制：Position box 仅在无剪影时兑底）。
+**全线 pose_control=masks_only**（2026-11-15）：auto 的 adapter 路径对 3.8B 本就静默降级，显式关死防版本升级语义漂移；
+pose_strength/start/end 死参数同步删除。位置引导（placement）参数面不暴露——E7 证明分域拉力仅约 10 个百分点，待自训 Regional LLLite 硬条件后再接。
 双人 `framing/spacing` 透传到 `YugangPoseLayout`：先把冻结姿态及区域用同一中心/缩放适配普通主体尺度；
 apart 同步水平平移人物及其 owner 姿态像素；wide 调用真实 `RSCameraControl(distance=1, layout_sync=distance_and_roll)`，同样缩放姿态图。
 节点源码 `scripts/comfy-nodes/yugang_pose_layout.py` 安装到 WSL `custom_nodes/yugang_pose_layout/__init__.py`，更新后须在队列为空时重启 ComfyUI。

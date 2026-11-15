@@ -43,7 +43,7 @@ style=<风格 key> 挂全局画风 LoRA，**仅直出/fast 生效**（姿态线�
 
 V8 姿态线：**CPU 编排姿态（离线 authoring 的 scene_json 预设）+ 初采样（双人 RS 剪影区域引导姿态/位置/隔离；姿态 adapter 已摘）→ 超分 → 质感 pass@2x**，一次提交全链。
 - 双人：传 `characters` 两项即固定走这条 V8 姿态线（预设内部默认 `sit-haystack`，不对外暴露）。
-- 单人默认：走**轻形态 V8 姿态线**（KSampler + Pose3D + 链式 LoRA；当前 `single-haystack`：单人草垛侧坐；姿态引导暂靠 prompt 描述，LLLite 已摘）。仅 `fast: true`（快速直出）或 `ref`（改图直出）走直出；`pipeline`/`preset` 不再对外暴露。
+- 单人默认：走**轻形态 V8 姿态线**（RS 采样器 + Pose3D 剪影分域 + 链式 LoRA，2026-11-15 E6 验证形态：人物词只在剪影内生效，姿态引导恢复；当前 `single-haystack`：单人草垛侧坐）。仅 `fast: true`（快速直出）或 `ref`（改图直出）走直出；`pipeline`/`preset` 不再对外暴露。
 - 普通单人和双人都不再有第二条默认生产线。`ref` 走直出改图；姿态线不接 ref；`hd: true` 在姿态线的 2 倍 pass 结束后再纯放大至净 3 倍，不在 3 倍域执行扩散。
 - 双人构图：`framing=wide` 恢复 RS Camera 的远景提示与区域缩放，同一缩放同时作用于姿态图；普通景别不接 Camera。`spacing=apart` 同步平移人物区域和对应姿态，适用于无接触动作的分离场景。
 - 姿态线初采样与 pass 均为 30 步、CFG 4.5、dpmpp_2m / sgm_uniform；质量地板与真实感细节词由工具自动加（初采样细节更多、pass 基础），负向内置，均不需你写。

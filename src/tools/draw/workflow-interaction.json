@@ -129,10 +129,7 @@
   "4": {
     "class_type": "RSMultiCharacterPose3D",
     "inputs": {
-      "pose_control": "auto",
-      "pose_strength": 0.8,
-      "pose_start": 0.0,
-      "pose_end": 0.7,
+      "pose_control": "masks_only",
       "scene_json": "{}",
       "building_pipe": [
         "3",

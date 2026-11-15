@@ -32,7 +32,8 @@ for (const [id, cls] of INTERACTION_TEMPLATE_CONTRACT) {
 const SINGLE_TEMPLATE = JSON.parse(readFileSync(new URL("./workflow-interaction-single.json", import.meta.url)).toString("utf8")) as Graph;
 const SINGLE_TEMPLATE_CONTRACT: Array<[string, string]> = [
   ["1", "UNETLoader"], ["5", "RSMultiCharacterPose3D"],
-  ["11", "KSampler"], ["27", "KSampler"], ["22", "ImageUpscaleWithModel"], ["23", "ImageScaleBy"], ["38", "SaveImage"],
+  ["40", "RSMultiCharacterPrompt"], ["41", "RSMultiCharacterLoRA"], ["42", "RSMultiCharacterPosition"], ["43", "RSMultiCharacterFinalize"],
+  ["11", "RSMultiCharacterSampler"], ["27", "KSampler"], ["22", "ImageUpscaleWithModel"], ["23", "ImageScaleBy"], ["38", "SaveImage"],
 ];
 for (const [id, cls] of SINGLE_TEMPLATE_CONTRACT) {
   if (SINGLE_TEMPLATE[id]?.class_type !== cls) throw new Error(`draw single workflow contract mismatch: node ${id} != ${cls}`);
@@ -235,12 +236,39 @@ export function makeInteractionGraph(args: InteractionDraw): Graph {
   return g;
 }
 
-/** 单人姿态：workflow-interaction-single.json 模板 + 注入（KSampler + LLLite，无 RS）。 */
+/** 单人姿态：workflow-interaction-single.json 模板 + 注入（RS 采样器 + 剪影分域，2026-11-15 E6 验证形态）。 */
+/** 单人位置枚举的偏移量（2026-11-15 E 组实验定稿，docs/plans/2026-11-15-single-pose-placement.md）：
+ *  水平 dx 必须按 canvas aspect 归一化（垂直 fov 固定、画面宽 = 视野高 3.6m × aspect，
+ *  E4 实测固定世界 dx 在窄画面被放大至出画；dx = 0.684 × aspect 时四种比例质心均落 0.30/0.70）；
+ *  垂直 dy 恒定（0.45 → 质心±13% 画面高）。 */
+const PLACEMENT_DX_NORM = 0.684;
+const PLACEMENT_DY = 0.45;
+type PlacementX = "left" | "center" | "right";
+type PlacementY = "up" | "middle" | "down";
+
+/** 按位置枚举机械派生 scene_json：水平平移人物世界 x，垂直同向平移相机双 y（视线保持水平、
+ *  地平线不动，只移构图重心）。center/middle 不触碰字符串（保字节级零回归）。 */
+function applyPlacement(sceneJson: string, placementX: PlacementX, placementY: PlacementY, aspect: number): string {
+  const dx = placementX === "left" ? -PLACEMENT_DX_NORM * aspect : placementX === "right" ? PLACEMENT_DX_NORM * aspect : 0;
+  const dy = placementY === "up" ? -PLACEMENT_DY : placementY === "down" ? PLACEMENT_DY : 0;
+  if (dx === 0 && dy === 0) return sceneJson;
+  const scene = JSON.parse(sceneJson) as { people: Array<{ position: number[] }>; camera: { position: number[]; target: number[] } };
+  if (dx) scene.people[0].position[0] = Math.round((scene.people[0].position[0] + dx) * 1e6) / 1e6;
+  if (dy) {
+    scene.camera.position[1] = Math.round((scene.camera.position[1] + dy) * 1e6) / 1e6;
+    scene.camera.target[1] = Math.round((scene.camera.target[1] + dy) * 1e6) / 1e6;
+  }
+  return JSON.stringify(scene);
+}
+
 export function makeInteractionSingleGraph(args: {
   prompt: string; width: number; height: number; seed?: number; passSeed?: number;
   preset: InteractionPreset; part: MultiPart; label: string; hd?: boolean;
   bypass?: string; pbypass?: string;
+  placementX?: PlacementX; placementY?: PlacementY;
 }): Graph {
+  if (args.placementX !== undefined && !["left", "center", "right"].includes(args.placementX)) throw new Error("invalid placement x");
+  if (args.placementY !== undefined && !["up", "middle", "down"].includes(args.placementY)) throw new Error("invalid placement y");
   if (args.part.text.length > 800) throw new Error("invalid single part text");
   if (args.part.role !== undefined && (!/^[\w .@()-]+\.safetensors$/.test(args.part.role.file) || !Number.isFinite(args.part.role.weight) || args.part.role.weight < 0.4 || args.part.role.weight > 1.1)) throw new Error("invalid single role");
   if (!Number.isInteger(args.width) || !Number.isInteger(args.height) || args.width % 8 !== 0 || args.height % 8 !== 0) throw new Error("invalid single canvas");
@@ -252,7 +280,10 @@ export function makeInteractionSingleGraph(args: {
   const commonPrompt = /^1girl(?:\s|,)/i.test(args.prompt) ? args.prompt : `1girl, solo, ${args.prompt}`;
   const desc = [args.part.role ? escapeInjected(normalizeTagForm(multiRoleTags(args.part))) : "", normalizeTagForm(args.part.text)].filter(Boolean).join(", ");
   const suffix = (args.bypass ? `, ${args.bypass}` : "") + (args.pbypass ? `, ${args.pbypass}` : "");
-  const positive = `${floorPos}${INTERACTION_STYLE}${normalizeTagForm(commonPrompt)}, ${desc}${suffix}`;
+  // RS 形态（E6 验证）：人物词进 40 槽位（只在 Pose3D 剪影内生效），场景/质量词进公共 prompt，
+  // pass（27）保持全量合成无分域；位置参数（placement）待硬条件落地后再接（E7：分域拉力不足 10 个点）。
+  const characterText = desc ? `1girl, solo, ${desc}` : "1girl, solo";
+  const positive = `${floorPos}${INTERACTION_STYLE}${normalizeTagForm(commonPrompt)}${suffix}`;
   const passPositive = `${floorPos}${normalizeTagForm(commonPrompt)}, ${desc}${suffix}`;
   const hasRole = args.part.role !== undefined;
   if (hasRole) g["4"] = loraLoader(["1", 0], ["2", 0], args.part.role!.file, args.part.role!.weight);
@@ -261,12 +292,13 @@ export function makeInteractionSingleGraph(args: {
   const clipOut: Link = hasRole ? ["4", 1] : ["2", 0];
   g["11"].inputs.model = modelOut;
   g["27"].inputs.model = modelOut;
-  for (const id of ["7", "8", "25", "26"]) g[id].inputs.clip = clipOut;
-  g["5"].inputs.scene_json = args.preset.scene_json;
-  g["7"].inputs.text = positive;
-  g["8"].inputs.text = neg;
-  g["10"].inputs.width = args.width;
-  g["10"].inputs.height = args.height;
+  for (const id of ["25", "26"]) g[id].inputs.clip = clipOut;
+  g["5"].inputs.scene_json = applyPlacement(args.preset.scene_json, args.placementX ?? "center", args.placementY ?? "middle", args.width / args.height);
+  g["40"].inputs.character1 = characterText;
+  g["11"].inputs.prompt = positive;
+  g["11"].inputs.negative_prompt = neg;
+  g["11"].inputs.width = args.width;
+  g["11"].inputs.height = args.height;
   g["11"].inputs.seed = seed;
   g["27"].inputs.seed = passSeed;
   g["25"].inputs.text = passPositive;
