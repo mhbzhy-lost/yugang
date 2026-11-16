@@ -1,6 +1,17 @@
 # 3.8B Regional LLLite 自训方案（placement 硬条件）
 
-日期：2026-11-15 立项。前置结论：E5–E9 证死全部软引导（LLLite pose / 无消费平移 / Position box / 剪影+分域默认墙 / 拉满墙），placement 唯一路是模型级颜色区域条件。社区参照：Sen-sou/Anima-LLLite-Regional-Controlnet（580 图 4400 步起步，社区验证「adhere 惊人准确」）与 toyxyz anima_regional_4335（RGB 实例色图，黑底未分配）。
+日期：2026-11-15 立项，2026-11-16 数据就绪。前置结论：E5–E9 证死全部软引导（LLLite pose / 无消费平移 / Position box / 剪影+分域默认墙 / 拉满墙），placement 唯一路是模型级颜色区域条件。社区参照：Sen-sou/Anima-LLLite-Regional-Controlnet（580 图 4400 步起步，社区验证「adhere 惊人准确」）与 toyxyz anima_regional_4335（RGB 实例色图，黑底未分配）。
+
+## 进度（2026-11-16）
+
+- **打标完成**：1199 姿态，有效 1157（96.5%）。管线脚本与核心数据已收进仓库
+  `scripts/regional-training/`（含 `data/pose-tags-raw.json`、`data/manifest.json`、README）。
+- **训练对构造完成**：分层采样 412 姿态 × 4 变体 → 掩码校验滤除出界 → **1464 对**
+  （`random.seed(20261115)` 确定性可复现）。体位分布：standing 140 / misc（动作态）140 /
+  sitting 48 / lying 47 / kneeling 23 / crouching 13 / **squatting 1**。
+  ⚠️ squatting 严重偏科（库裡仅 1 条），训练后蹲姿贴合度需重点验证，必要时补姿态。
+- **control 区域图**：1464 张已渲染（17MB，可由 manifest 确定性重建，不入 git）。
+- **下一步**：GPU 批量生成对照图（~1464 张 × ~15s ≈ 6h，等主人指定队列空闲窗口）→ 训练。
 
 ## 目标
 
@@ -11,7 +22,8 @@
 ### 1. 姿态采样（依赖打标产物 pose-tags-raw.json）
 - 按 tag 分层采样：每基础体位（standing/sitting/lying/kneeling/crouching...）配额均衡，避免 Sen-sou「近景偏科→远景不贴」同款教训
 - confident=false 与 failed 条目剔除
-- 计划规模：~800 姿态 × 4 随机变体 ≈ 3200 训练对（Sen-sou 580→4400 步起步，我们 3200 起步余量充足）
+- 实际规模：412 姿态 × 4 随机变体 → 1464 训练对（原计划 ~800×4≈3200，受体位库分布限制
+  实采 412；Sen-sou 580→4400 步起步，1464 对余量仍充足）。采样确定性 seed 20261115。
 
 ### 2. 场景随机化（每姿态变体）
 - 人物位置：画面水平 0.1–0.9 / 垂直重心 0.3–0.8 均匀随机（E2 公式反解世界坐标）
@@ -25,7 +37,7 @@
 ### 4. 对照图生成（GPU 批量，唯一重活）
 - 纯文本生成（无任何区域条件）：生产正向词骨架 + 姿态 tag 化 caption + 场景词池
 - graph：单人直出形态（fast 规格 28 步即可——训练数据不需要 pass 质感）
-- ~3200 张 × ~15s ≈ 13 小时 GPU；分批提交生产 ComfyUI（队列空闲窗口）
+- ~1464 张 × ~15s ≈ 6 小时 GPU；分批提交生产 ComfyUI（队列空闲窗口）
 - **caption 一致性**：caption 直接复用生成时的正向词（image/caption 自洽，无打标偏差）
 
 ### 5. 训练对组装
@@ -45,8 +57,9 @@ train-regional/
 ## 信息缺口（待主人补充）
 
 1. v8 pose adapter 训练用的 sd-scripts fork / 命令行 / 层配置（52 层怎么进 LLLite target）
-2. 训练机（WSL 5090D 32GB？）与训练窗口（生产 ComfyUI 能否同期服务）
-3. GPU 生成对照图的算力窗口（夜间队列空闲？）
+   ——权重已归档 `~/anima-prod/archive/anima_v8_3dpose.safetensors` 供结构参考
+2. ~~训练机~~ 已确认 WSL 5090D 32GB；训练窗口（生产 ComfyUI 能否同期服务）待定
+3. GPU 生成对照图的算力窗口（夜间队列空闲？）——**当前唯一阻塞项，等主人指定**
 
 ## 验证方案（训练完成判定）
 
