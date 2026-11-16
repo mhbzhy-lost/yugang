@@ -26,6 +26,11 @@ cd "$TRAIN/sd-scripts"
   --num_cpu_threads_per_process 4 --mixed_precision bf16 \
   anima_train_control_net_lllite.py \
   --pretrained_model_name_or_path "$BASE" \
+  --qwen3 /home/mhbzhy/anima-prod/models/text_encoders/qwen_3_06b_base.safetensors \
+  --t5_tokenizer_path /home/mhbzhy/anima-v8-train/sd-scripts/configs/t5_old \
+  --vae /home/mhbzhy/anima-prod/models/vae/qwen_image_vae.safetensors \
+  --attn_mode torch \
+  --save_model_as safetensors \
   --dataset_config "$WORK/train.toml" \
   --output_dir "$WORK/out" \
   --output_name anima_regional_38b \
