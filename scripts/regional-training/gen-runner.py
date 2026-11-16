@@ -53,7 +53,7 @@ for i, m in enumerate(todo):
             n["inputs"]["text"] = m["caption"]
     for nid, n in g.items():  # seed（KSampler）
         if n["class_type"] == "KSampler":
-            n["inputs"]["seed"] = 100000 + m["pose_idx"] * 10 + int(m["id"][-1])
+            n["inputs"]["seed"] = 100000 + int(m["pose_idx"]) * 10 + int(m["id"][-1])
     for nid, n in g.items():  # 输出前缀
         if n["class_type"] == "SaveImage":
             n["inputs"]["filename_prefix"] = f"regional-data/{m['id']}"
@@ -63,7 +63,7 @@ for i, m in enumerate(todo):
         if imgs:
             # 图在 ComfyUI output 目录，复制到同步目录
             import shutil
-            src = Path.home() / "anima-prod/ComfyUI/output" / imgs[0]["subfolder"] / imgs[0]["filename"]
+            src = Path.home() / "anima-prod/output" / imgs[0]["subfolder"] / imgs[0]["filename"]
             dst = OUTDIR / f"{m['id']}.png"
             shutil.copy(src, dst)
             m["image"] = str(dst)
