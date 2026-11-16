@@ -48,18 +48,59 @@ train-regional/
   caption/  <id>.txt     ← 生成正向词
 ```
 
-## 训练配置（Sen-sou 实测起点 + 52 层对齐）
+## 训练环境（2026-11-16 勘察就绪，全部复用 v8 当年环境）
 
-- cond_emb_dim 32 / lllite_cond_dim 64 / lllite_mlp_dim 64 / target self_attn_qkv / resblocks 4 / ASPP enabled
-- lr 3e-4 / AdamW8bit / bf16 / epoch 8 起（对照 Sen-sou 4400–9280 步）
-- **层结构对齐 v8 pose adapter 的 52 层配置（待主人提供当时训练参数）**
+- **sd-scripts fork**：`/home/mhbzhy/anima-v8-train/sd-scripts`，commit `cb70b96858477e716a2096292ab8aab433277f38`
+  （与归档权重 metadata 的 `modelspec.implementation_version` 精确一致，kohya-ss/sd-scripts）
+- **训练脚本**：`anima_train_control_net_lllite.py`（Anima LLLite 专用）
+- **venv**：`/home/mhbzhy/anima-v8-train/venv`，torch 2.11.0+cu128，CUDA 可用
+- **底模**：`/home/mhbzhy/anima-prod/models/checkpoints/DeltaMix 3.8B V8.safetensors`
+- **v8 参考指标**：8000 步 / 2h24m / 1.08s/it 稳态 / avr_loss 0.159→0.0895 / 无 NaN/OOM / seed 42 / batch 1
 
-## 信息缺口（待主人补充）
+## LLLite 配置（从归档权重 metadata 精确反解，非猜测）
 
-1. v8 pose adapter 训练用的 sd-scripts fork / 命令行 / 层配置（52 层怎么进 LLLite target）
-   ——权重已归档 `~/anima-prod/archive/anima_v8_3dpose.safetensors` 供结构参考
-2. ~~训练机~~ 已确认 WSL 5090D 32GB；训练窗口（生产 ComfyUI 能否同期服务）待定
-3. GPU 生成对照图的算力窗口（夜间队列空闲？）——**当前唯一阻塞项，等主人指定**
+归档 `~/anima-prod/archive/anima_v8_3dpose.safetensors`（183MB / 1476 张量）的 metadata 完整记录了训练配置：
+
+```
+cond_emb_dim=64  lllite_cond_dim=128  lllite_mlp_dim=64  cond_resblocks=4
+use_aspp=true  aspp_dilations=1,2,4,8（network 模块内定）
+target_layers=self_attn_qkv（preset 展开为 atomic self_attn_q_pre,self_attn_kv_pre）
+cond_in_channels=3  version=2  inpaint_masked_input=false
+```
+
+**52 层结构**：52 个 DiT block（0–51）× self_attn q/k/v 各注入 LLLite（每 proj 9 张量）
++ 共享 conditioning1（72 张量：conv1[64,3,4,4]→conv2[64,64,3,3]→conv3[128,64,4,4]
++ ASPP(128) → proj[64,128,1,1] → out_norm[64]）。1476 = 52×3×9 + 72 ✓。
+target_layers=self_attn_qkv 即覆盖全部 52 层，无需额外层范围参数。
+
+**训练脚本 LLLite 参数名**（`add_anima_lllite_arguments`，括号内为脚本默认值，v8 实际值见上）：
+`--cond_emb_dim`(32) `--lllite_mlp_dim`(64) `--lllite_target_layers`(self_attn_q)
+`--lllite_cond_dim`(64) `--lllite_cond_resblocks`(1) `--lllite_use_aspp`(flag)
+`--lllite_cond_in_channels`(3) `--lllite_multiplier`(1.0) `--lllite_dropout`(None)
+`--network_weights`(resume 用)
+
+## 标准训练参数（v8 日志未存 CLI，按 Sen-sou/计划选定，待 smoke 验证）
+
+lr 3e-4 / AdamW8bit / cosine / warmup 100 / bf16 / gradient_checkpointing / cache_latents /
+8000 步（v8 参考）/ seed 42 / batch 1 / save+sample every 1000。
+**这些是选定值不是 v8 恢复值**——v8 的 lr/optimizer/scheduler 未落日志，smoke 跑通后按 loss 曲线调。
+草稿见 `scripts/regional-training/train.toml` + `train.sh`。
+
+## 数据布局（v8 dataset.toml 同款）
+
+每个分辨率 bucket 一个 `[[datasets]]`（enable_bucket=false / batch 1 / num_repeats 1 / 无增强）：
+`image_dir=<bucket>/target`（生成图）+ `conditioning_data_dir=<bucket>/condition`（control 图）
++ `.txt` caption（caption_extension=".txt" / shuffle_caption=false）。
+本批数据统一 3:4 竖构图（scene 768×1024 → 生成图 1088×1456），单 bucket [768,1024] 即可
+（control 原生分辨率，LLLite loader 自动 resize condition 到 target）。
+
+## 信息缺口（状态更新）
+
+1. ~~v8 sd-scripts fork / 层配置~~ **已解决**：环境/commit/LLLite 参数全部反解就绪（见上）。
+   仅剩 lr/optimizer 等标准参数未落日志，按 Sen-sou 选定 + smoke 验证。
+2. ~~训练机~~ 已确认 WSL 5090D 32GB；训练在生成完成后起（避免与生成争 GPU）。
+3. ~~GPU 生成窗口~~ **已启动**（2026-11-16 11:08，1462 张 detached 运行，~8h）。
+   鱼的 drawEnabled 已热关让出 GPU。
 
 ## 验证方案（训练完成判定）
 

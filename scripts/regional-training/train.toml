@@ -1,0 +1,24 @@
+# Regional LLLite 3.8B 训练数据配置（草稿）
+# 数据组装后填实路径：生成图 → target/，control 图 → condition/，caption → 同名 .txt
+# 本批数据统一 3:4 竖构图（scene 768×1024 → 生成图 1088×1456），单 bucket 即可。
+# LLLite loader 自动把 condition resize 到 target bucket 分辨率。
+# 布局与 v8 当年 dataset_train.toml 同款（enable_bucket=false / batch 1 / 无增强）。
+
+[general]
+caption_extension = ".txt"
+shuffle_caption = false
+
+[[datasets]]
+resolution = [768, 1024]
+batch_size = 1
+enable_bucket = false
+
+  [[datasets.subsets]]
+  image_dir = "/home/mhbzhy/anima-regional-train/dataset/768x1024/target"
+  conditioning_data_dir = "/home/mhbzhy/anima-regional-train/dataset/768x1024/condition"
+  num_repeats = 1
+  caption_dropout_rate = 0.0
+  caption_tag_dropout_rate = 0.0
+  flip_aug = false
+  color_aug = false
+  random_crop = false
