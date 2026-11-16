@@ -27,42 +27,6 @@
 name: yugang
 
 services:
-  napcat:
-    # digest 固定（2026-11-14 实测 linux/arm64，NapCat.Core 4.18.42 + Linux QQ 3.2.34-53644，
-    # 该 build 在 packet 偏移表内）。升级改 digest，不用浮动 latest。
-    image: mlikiowa/napcat-docker@sha256:696e9574a0f6fb2f86cbecba8a32048f2a5823117dc9b13c6c02637ad890fa8b
-    container_name: yugang-napcat
-    restart: unless-stopped
-    init: true
-    environment:
-      NAPCAT_UID: "501"
-      NAPCAT_GID: "501"
-      MODE: ws
-      # 快速登录：镜像 entrypoint 见到 ACCOUNT 就跑 `qq --no-sandbox -q $ACCOUNT`。
-      # **不设它每次重启都要重新扫码**，重启自愈（A2）就不成立。
-      # 值从 .env 的 PROTOCOL_QQ 插值（compose 自动读项目目录的 .env）。
-      # 用 :? 而非 :- ——缺 PROTOCOL_QQ 时 compose 直接报错，
-      # 不静默插值成空串把快速登录关掉（那样每次重启都要人扫码）。
-      ACCOUNT: "${PROTOCOL_QQ:?PROTOCOL_QQ 未设置，napcat 无法快速登录}"
-      TZ: Asia/Shanghai
-      LANG: C.UTF-8
-    ports:
-      # 只绑宿主 loopback：WebUI 用于扫码登录与改配置，不对局域网暴露。
-      # WS 3001 不发布到宿主——fish 走 compose 内网 ws://napcat:3001。
-      - "127.0.0.1:6099:6099"
-    volumes:
-      - ./data/napcat/qq:/app/.config/QQ          # 登录态（持久化，扫码一次）
-      - ./data/napcat/config:/app/napcat/config   # onebot11 / webui 配置
-      - ./data/napcat/plugins:/app/napcat/plugins
-    healthcheck:
-      # 镜像里没有 node（NapCat 跑在 QQ 的 electron 里），用 curl。
-      # WebUI 根路径可能 404，只要 HTTP 有应答就说明服务活着。
-      test: ["CMD-SHELL", "curl -s -o /dev/null -m 5 http://127.0.0.1:6099/ || exit 1"]
-      interval: 30s
-      timeout: 8s
-      retries: 3
-      start_period: 90s
-
   fish:
     build:
       context: .
@@ -73,7 +37,6 @@ services:
     init: true
     user: "501:501"
     depends_on:
-      - napcat
       - sixty
     # .env 提供必填项（MASTER_QQ / GROUPS / ONEBOT_TOKEN / PROTOCOL_QQ / COMFYUI_URL …）。
     # 下面 environment 的值**胜过** env_file，用于覆盖容器内必须不同的地址。
@@ -83,7 +46,7 @@ services:
       YUGANG_HOME: /data
       # MEDIA_ROOT 不覆盖：缺省从 DATA_HOME/media 派生 → /data/media → 宿主 ./var/media。
       # 一条挂载就够，媒体与数据库同属 var/（能力保留：将来想把媒体放其它盘再设 MEDIA_ROOT）。
-      ONEBOT_WS_URL: ws://napcat:3001
+      ONEBOT_WS_URL: ws://host.docker.internal:3001
       SIXTY_BASE_URL: http://sixty:4399
       VIDEO_PYTHON: /opt/video-venv/bin/python
       # 代理：.env 里是宿主 loopback，容器内必须改指宿主（否则 npm ci / 模型请求
