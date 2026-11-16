@@ -671,11 +671,12 @@ mini 上并没有 `home-mac-connect` 这个 skill（今天有子代理在 mini �
 
 ## 容器部署（2026-11-14 起）
 
-协议端与鱼跑在 **OrbStack 容器**里，不再把 NapCat 注入 macOS 的 QQ.app。完整设计与实测证据在
-`docs/plans/2026-11-14-dockerize-fish-napcat.md`。
+**鱼与新闻源跑在 OrbStack 容器**（`fish` / `sixty`）；**协议端 QQ+NapCat 于 2026-11-16 回退 mac native 宿主**
+（Linux QQ 容器风控频繁掉线，一天两次 ErrCode 3/1；native mac QQ 更稳）。容器化原始设计见
+`docs/plans/2026-11-14-dockerize-fish-napcat.md`，回退见 `docs/plans/2026-11-16-revert-native-qq.md`。
 
-**三个服务**（`compose.yaml`）：`napcat`（官方镜像，QQ+NapCat 一体）/ `fish`（自建）/ `sixty`（新闻源）。
-**语音与 ComfyUI 留宿主机**：GPT-SoVITS 靠 launchd + MPS 加速，容器拿不到 Metal；ComfyUI 在 Windows，经宿主 SSH 隧道。
+**两个容器服务**（`compose.yaml`）：`fish`（自建）/ `sixty`（新闻源）。**协议端 native QQ+NapCat 在宿主**（见下「native 协议端」）。
+**语音与 ComfyUI 留宿主机**：GPT-SoVITS 靠 launchd + MPS（语音 2026-11-16 已下线，voices 清空）；ComfyUI 在 **WSL**，经宿主 SSH 隧道。
 
 ### 镜像只是环境，源码与数据全外挂
 
@@ -721,9 +722,22 @@ VirtioFS 有约 3 秒属性缓存：长驻容器内宿主删除的文件会残�
 | TTS `:9884` | `fish.config.json` 的 `voices[*].url` → `http://host.docker.internal:9884`；`gptModel`/`sovitsModel`/`referWav` 保持宿主绝对路径（服务端自己读） |
 | provider 代理 `:7897` | `config/models.json` 的 `providers.*.proxy` → `http://host.docker.internal:7897` |
 | 60s `:4399` | compose 同网服务名 `http://sixty:4399` |
-| 协议端 | `ONEBOT_WS_URL=ws://napcat:3001`；napcat 的 WS 必须监听 **`0.0.0.0`**（宿主形态是 127.0.0.1） |
+| 协议端 | `ONEBOT_WS_URL=ws://host.docker.internal:3001`；native NapCat 监听宿主 **`127.0.0.1:3001`**（host.docker.internal 直达 loopback，不需 0.0.0.0） |
 
 **不写 `extra_hosts: host-gateway`**：会覆盖 OrbStack 自带的 `host.docker.internal` 映射（实测它本就直达宿主 loopback）。
+
+### native 协议端（2026-11-16 回退）
+
+QQ+NapCat 注入形态跑在宿主，鱼容器经 `ws://host.docker.internal:3001` 连它。**通用方法见 `mac-qq-napcat` skill**（脱敏参数化）；本项目专属值：
+
+- **工作版组合**：App Store QQ **7.0.2 build 53644**（在 NapCat packet 表内；54395 表外图片链路断）+ NapCat **4.18.41**（4.18.42 被 AMFI 杀）。鱼号 **3768557204**。
+- **注入用 v1.8**（`~/napcat-restore/nc-install-v18.mjs`，加载器进 bundle）；**不用 restore-working.sh 旧注入**（main 指 bundle 外被 QQ 忽略）。
+- **快照/脚本**在 `~/napcat-restore/`；恢复脚本 `restore-native-qq.sh`（自动化部分）+ GUI 放行 Gatekeeper（Sequoia 必须 GUI，「任何来源」）。
+- **真实配置目录**：`~/Library/Containers/com.tencent.qq/Data/Library/Application Support/QQ/NapCat/config/onebot11_3768557204.json`（host=127.0.0.1 port=3001 token=.env ONEBOT_TOKEN；`npm run token` 在 darwin 写这里）。
+- **版本硬锁**：`chflags -R uchg /Applications/QQ.app` + `…/Data/Documents/napcat`（配置/登录态目录不锁）；App Store 自动更新已关。解锁 `chflags -R nouchg`。
+- **开机自启**：`~/Library/LaunchAgents/com.yugang.qq-native.plist`（gui/501 域，`bootstrap gui/501` 装载，KeepAlive={SuccessfulExit=false}）。
+- **鱼 WS 无自动重连**：native QQ 重启后鱼会失聪，需人工 `docker compose restart fish`。
+- **排查**：`pgrep -x QQ`（RSS 32KB=Gatekeeper 冻死）；日志 `~/napcat-restore/qq-restored.log`；`node ~/napcat-restore/ob-probe.mjs` 验登录态；WebUI 宿主 `127.0.0.1:6099`。
 
 ### 图像后端双实现
 
@@ -734,10 +748,12 @@ macOS 用系统 `sips`（逐字未动）；其它平台用 **sharp worker**（`s
 `format.heif.input` 报 true 但喲 HEIC 会 `bad seek`；ffmpeg 也只解网格首个瓦片。
 缺了会**静默丢图且不报错**，`doctor` 已加体检。
 
-### 回滚宿主形态
+### 回滚到容器 napcat
 
-数据原地未动，回滚不需反向拷贝：`docker compose down` → `~/napcat-restore/restore-working.sh`
-→ `clear-quarantine.sh` → `fish-restart-logged.sh`。若改过 `voices[*].url` / `proxy`，回滚时改回 `127.0.0.1`。
+数据原地未动。回滚（native → 容器）：先 `launchctl bootout gui/501/com.yugang.qq-native` + 移走 plist
+（否则 pkill 被 KeepAlive 复活互挤）→ `pkill -x QQ` → `chflags -R nouchg` 解锁 QQ.app/napcat →
+`cp ~/napcat-restore/compose.yaml.pre-native-revert compose.yaml`（用备份，不用 git checkout）→ `docker compose up -d napcat fish sixty`。
+容器 Linux QQ 登录态可能已被顶掉，预期需重扫码。详见 `mac-qq-napcat` skill 回滚段。
 
 ## 人格与指令
 

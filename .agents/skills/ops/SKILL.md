@@ -48,12 +48,12 @@ scripts/fish.sh help                 # 全部子命令（其它命令原样透�
 
 ## 容器形态（2026-11-14 起，先看这节）
 
-鱼与协议端跑在 **OrbStack 容器**里，不再是宿主进程。三个服务：`yugang-napcat`（QQ+NapCat 官方镜像）/ `yugang-fish`（鱼）/ `yugang-60s`（新闻源）。语音与 ComfyUI 仍在宿主机侧（TTS 靠 launchd + MPS；ComfyUI 在 **WSL** `~/anima-prod`，经宿主 SSH 隧道 18190）。
+**鱼与新闻源在 OrbStack 容器**（`yugang-fish` / `yugang-60s`）；**协议端 QQ+NapCat 于 2026-11-16 回退 mac native 宿主**（Linux QQ 容器风控频繁掉线）。语音已下线；ComfyUI 在 **WSL** `~/anima-prod`，经宿主 SSH 隧道 18190。native 协议端搭建/恢复见 `mac-qq-napcat` skill。
 
 ```bash
 ssh macmini
 cd ~/yugang
-/usr/local/bin/docker compose ps                    # 三服务状态
+/usr/local/bin/docker compose ps                    # 容器服务状态（fish/sixty）
 /usr/local/bin/docker compose logs -f fish          # 看鱼日志（不再 tail var/fish-console.log）
 /usr/local/bin/docker compose exec fish node scripts/doctor.ts   # 容器内体检
 git pull && /usr/local/bin/docker compose restart fish           # 日常部署，1–3 秒
@@ -66,7 +66,9 @@ git pull && /usr/local/bin/docker compose restart fish           # 日常部署�
 排查口径变化：
 - 鱼日志 → `docker compose logs fish`（`fish.sh log` 与 `fish-logs.sh` 已自动改走 docker logs）
 - 进程 → `docker compose exec fish pgrep -f src/index.ts`（宿主 `pgrep` 看不到容器鱼）
-- 协议端 → `docker compose logs napcat`；WebUI 在宿主 `127.0.0.1:6099`，WS 3001 **只在 compose 内网**不发布到宿主
+- 协议端（native 宿主）→ `pgrep -x QQ`（RSS 恒 32KB=Gatekeeper 冻死）；日志 `~/napcat-restore/qq-restored.log`；`node ~/napcat-restore/ob-probe.mjs` 验登录态（user_id=3768557204 online:true）；WebUI 宿主 `127.0.0.1:6099`，WS 宿主 `127.0.0.1:3001`（鱼经 host.docker.internal 连）
+- **鱼失聪但协议端全绿** → native QQ 重启后鱼 WS 无重连，`docker compose restart fish`；fish healthcheck 只 pgrep，失聪仍显示 healthy，排查先探 3001
+- entrypoint「等不到协议端…查 docker compose logs napcat」提示已退役（napcat 容器没了），实际查 native QQ / qq-restored.log
 - 数据仍在宿主 `~/yugang/var/`，原话簿 / 用量 / 记忆的查法不变
 
 ## 拉起 / 收掉
