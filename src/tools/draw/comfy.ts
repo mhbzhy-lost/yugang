@@ -175,7 +175,8 @@ export interface InteractionDraw {
   spacing?: "together" | "apart";
 }
 
-// 姿态线初采样＝质量地板(含anime)+真实感细节词（无四轴/赛璐璐）；负向去 lips；pass 基础词。
+// 姿态线初采样＝质量地板(含anime)+真实感细节词（无四轴/赛璐璐）；负向去 lips；
+// pass 同挂风格词（2026-11-17 E24b A/B 定罪：裸地板词 pass 吃背景虚化+漂瞳色，风格词 pass 保留）。
 const INTERACTION_NEGATIVE = String(INTERACTION_TEMPLATE["11"].inputs.negative_prompt);
 const INTERACTION_STYLE = "detailed, intricate, film grain, depth of field, ";
 
@@ -189,7 +190,7 @@ export function makeInteractionGraph(args: InteractionDraw): Graph {
   const seed = args.seed ?? randomBytes(4).readUInt32BE(0);
   const passSeed = args.passSeed ?? randomBytes(4).readUInt32BE(0);
   const commonPrompt = /^2girls(?:\s|,)/i.test(args.prompt) ? args.prompt : `2girls, ${args.prompt}`;
-  const fullPrompt = floorPos + normalizeTagForm(commonPrompt) + (args.bypass ? `, ${args.bypass}` : "");
+  const fullPrompt = floorPos + INTERACTION_STYLE + normalizeTagForm(commonPrompt) + (args.bypass ? `, ${args.bypass}` : "");
   const initialPrompt = floorPos + INTERACTION_STYLE + normalizeTagForm(commonPrompt) + (args.bypass ? `, ${args.bypass}` : "");
   for (let i = 0; i < 2; i++) {
     const part = args.parts[i];
@@ -280,7 +281,7 @@ export function makeInteractionSingleGraph(args: {
   const suffix = (args.bypass ? `, ${args.bypass}` : "") + (args.pbypass ? `, ${args.pbypass}` : "");
   // E20 定稿（B0 形态）：全图词 + 全局 LoRA——单人无分域，角色词全图生效是唯一验证通过的形态。
   const positive = `${floorPos}${INTERACTION_STYLE}${normalizeTagForm(commonPrompt)}${desc ? `, ${desc}` : ""}${suffix}`;
-  const passPositive = `${floorPos}${normalizeTagForm(commonPrompt)}, ${desc}${suffix}`;
+  const passPositive = `${floorPos}${INTERACTION_STYLE}${normalizeTagForm(commonPrompt)}, ${desc}${suffix}`;
   const hasRole = args.part.role !== undefined;
   if (hasRole) g["4"] = loraLoader(["1", 0], ["2", 0], args.part.role!.file, args.part.role!.weight);
   else delete g["4"];
