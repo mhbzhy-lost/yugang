@@ -13,6 +13,41 @@
 - **control 区域图**：1464 张已渲染（17MB，可由 manifest 确定性重建，不入 git）。
 - **下一步**：GPU 批量生成对照图（~1464 张 × ~15s ≈ 6h，等主人指定队列空闲窗口）→ 训练。
 
+## 进度（2026-11-17）：v2 位置控制证伪，根因 = 训练数据位置多样性塌缩
+
+- **v1/v2 训练完成**：v1 8000 步 loss≈0.136（`out-v1/`，control↔target 错位作废归档）；
+  v2 改用 rembg(isnet-anime) 从 target 分割 control（`segment-controls.py`，1464/1464），
+  8000 步 loss≈0.134，产物 `anima_regional_38b_v2.safetensors`（174.66MB）已入 ComfyUI。
+- **E21 生产形态四变体（center/left/right/up）目检无区别**；E22 消融排除 prompt 与 LoRA
+  （生产词·无 LoRA IoU 0.914）；E23 发现 preset 木偶剪影面积仅 0.04（训练 p10=0.149）。
+- **E24b 尺度修复实验**：preset 剪影实心放大 ×2.2（area 0.186 入训练分布）center 版
+  IoU 0.663、dx +0.006；但 left 版（cx 0.307）gen cx 0.458、dx +0.151——向中心衰减。
+  边界补测 cx 0.404→gen 0.530、cx 0.598→gen 0.508：**所有生成 cx 坍缩 0.50±0.03，
+  与 mask 位置无关**。center「跟随」与 E22 高 IoU 均为中心先验巧合。
+- **根因定罪**：condition-v2 剪影 cx 分布 mean 0.497 / **std 0.043** / range [0.316, 0.667]，
+  位置在训练数据里近似常量 → 模型 shortcut learning 忽略剪影位置（loss 照降，
+  形状/姿态信息有用、位置信息无用）。代码链无翻转（`AnimaLLLiteApply`→
+  `comfy/ldm/anima/lllite.py` 仅 bicubic upscale+center crop），`flip_aug=false`，排除镜像。
+  mask 实际控制的是姿态/外形（同 seed 换 mask 发型姿态全变），位置无效。
+- **E25 全面筛查（跑着）**：14 变体一次性摸全失败面——位置 X 极端（0.25/0.75）、
+  位置 Y（0.30/0.70）、**尺度（area 0.03/0.05 大背景小人物、0.45 大人物）**、
+  组合 OOD（左上角、小人物偏左）、真实 rembg 剪影对照（中心/左移）、
+  strength 1.0/end 1.0 欠驱动消融、prompt 位置词交互、strength 0 纯先验基线。
+  产物 `output/interaction/e25/`，指标 + 14 宫格目检。主人裁定：先测全再重训，
+  避免每次重训只解决一点问题；构图必须覆盖大背景小人物。
+- **v3 增广方向（待 E25 定标）**：target+control 同步随机平移（位置变有信息量）
+  + 同步缩放（面积覆盖 0.03–0.5，含大背景小人物）+ 边缘复制填充，caption 不动；
+  增广范围以 E25 失败面为准，一次训全。
+- **独立发现：质感 pass 裸地板词吃虚化**（E24b A/B 同 seed 对照）：裸词 pass 背景
+  虚化被刷锐、瞳色粉→蓝漂移；带风格/DoF 词 pass 保留虚化与瞳色。生产 pass 现用
+  裸词（M/L/P 三夜实验定版），是否修订待主人裁定，与 regional 问题解耦。
+- **运维事故（同日）**：macmini 内存耗尽致 QQ 冻死掉线。根因航拍视频壁纸喂大
+  VTDecoderXPCService 泄漏（11-16 jetsam 案底 91.88GB 页计数）+ OrbStack VM 8GB 气球。
+  已修：纯黑静态壁纸、OrbStack 3GB、telegraf 改 ps 直读 + 看门狗 v4
+  （压缩器>4GB/swap>80%/可用<10% 拍快照，VTDecoder>2GB 自动杀）。监控在 macmini
+  `~/memwatch/`（metrics.jsonl + snapshots.log），jetsam 案底在
+  `/Library/Logs/DiagnosticReports/Retired/`。
+
 ## 目标
 
 训练 3.8B（DeltaMix V8，52 层）的 Regional LLLite adapter：输入「纯色人形区域图」，硬约束人物（含多区域时的区域归属）画在指定位置。训练完成后接入单人姿态线（placement 参数面上线），并为将来多区域控制留路。
