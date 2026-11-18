@@ -170,7 +170,7 @@
         0
       ],
       "seed": 0,
-      "steps": 30,
+      "steps": 16,
       "cfg": 4.5,
       "sampler_name": "dpmpp_2m",
       "scheduler": "sgm_uniform",
