@@ -15,6 +15,8 @@
 
 ## 进度（2026-11-17）：v2 位置控制证伪，根因 = 训练数据位置多样性塌缩
 
+> **2026-11-18 起本线收口至 `docs/plans/2026-11-18-regional-v4-staged-plan.md`**（S1/S2 能力实验、伪影教训与 v4 阶段计划 G1–G5 的唯一权威文档），本文以下内容为历史存档。
+
 - **v1/v2 训练完成**：v1 8000 步 loss≈0.136（`out-v1/`，control↔target 错位作废归档）；
   v2 改用 rembg(isnet-anime) 从 target 分割 control（`segment-controls.py`，1464/1464），
   8000 步 loss≈0.134，产物 `anima_regional_38b_v2.safetensors`（174.66MB）已入 ComfyUI。
