@@ -37,6 +37,7 @@ export interface RecentChatMessage {
   text: string;
   quoted?: QuotedMessage;
   forward?: ForwardAttachment;
+  videoRefs?: readonly string[];
   /** 这条消息 @ 的其他人（不含 @鱼/@全体）：渲染「接收对象是…，不是你」。 */
   mentionTargets?: readonly string[];
   /** 指向性标签专用：引用作者昵称与「是不是鱼自己」（不携带完整 quoted）。 */
@@ -169,6 +170,7 @@ export function createDebouncer(options: DebouncerOptions): Debouncer {
         ...(msg.messageId !== undefined ? { messageId: msg.messageId } : {}),
         ...(msg.arrivalSeq !== undefined ? { arrivalSeq: msg.arrivalSeq } : {}),
         mentionTargets: mentionTargetsOf(msg.mentions),
+        ...((msg.videos?.length || msg.quoted?.videos?.length) ? { videoRefs: [...(msg.videos ?? []), ...(msg.quoted?.videos ?? [])].map((v) => v.ref) } : {}),
         ...((quoted ?? msg.quoted) !== undefined ? { quoted: quoted ?? msg.quoted } : {}),
         ...((forward ?? msg.forward) !== undefined ? { forward: forward ?? msg.forward } : {}),
         ...(payload !== undefined ? { payload } : {}),
@@ -333,6 +335,7 @@ export interface ContextOptions {
  * 前缀契约结构，T4 的 quoteIds 窗口与 T12 的逐字引用校验都认它。
  */
 export interface SeenMessage {
+  videoRefs?: readonly string[];
   messageId?: number | string;
   arrivalSeq?: number;
   at?: number;
@@ -348,11 +351,12 @@ export interface RoundContext {
 }
 
 /** 锚点结构现算：id / 序号 / 时间缺什么就不带什么，不另存。 */
-function seenOf(line: { messageId?: number | string; arrivalSeq?: number; at?: number; nickname: string; text: string }): SeenMessage {
+function seenOf(line: { messageId?: number | string; arrivalSeq?: number; at?: number; nickname: string; text: string; videoRefs?: readonly string[] }): SeenMessage {
   return {
     ...(line.messageId !== undefined ? { messageId: line.messageId } : {}),
     ...(line.arrivalSeq !== undefined ? { arrivalSeq: line.arrivalSeq } : {}),
     ...(line.at !== undefined ? { at: line.at } : {}),
+    ...(line.videoRefs?.length ? { videoRefs: line.videoRefs } : {}),
     author: line.nickname,
     text: line.text,
   };

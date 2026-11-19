@@ -44,6 +44,7 @@ export async function installToolSurface(base: FishBase): Promise<ToolSurfacePar
     ...(options.comfyUrl === undefined ? {} : { comfyUrl: options.comfyUrl }),
     ...(options.tagsCsv === undefined ? {} : { tagsCsv: options.tagsCsv }),
     ...(options.triggerOf ? { triggerOf: options.triggerOf } : {}),
+    ...(options.downloadVideo ? { downloadVideo: options.downloadVideo } : {}),
     ...(options.bypassOf ? { bypassOf: options.bypassOf } : {}),
     ...(options.mentionPolicyOf ? { mentionPolicyOf: options.mentionPolicyOf } : {}),
     // 末条自言禁言（决策 24）：宿主事实回调，say_* 的 ambient/injection 轮素材分享校验消费

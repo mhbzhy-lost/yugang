@@ -49,6 +49,7 @@ export interface QuotedMessage {
   userId: string;
   text: string;
   images: readonly string[];
+  videos?: readonly import("../media/inbound-video.ts").VideoAttachment[];
   forward?: ForwardAttachment;
   /** 被引的这条是不是鱼自己发的（由入站解析按 self_id 机械判定）：用于「接收对象」标签。 */
   fromSelf?: boolean;
@@ -233,7 +234,8 @@ export function renderQuotedOriginal(
       return frames !== undefined ? gifTagOf(n, ref, frames, messages) : imageTagOf(n, ref, messages);
     })
     .join(" ");
-  const text = [lineText(quoted.text), images].filter((part) => part.length > 0).join(" ");
+  const videos = (quoted.videos ?? []).map((v) => renderTemplate(messages["video_attachment"], { ref: v.ref, name: v.name })).join(" ");
+  const text = [lineText(quoted.text), images, videos].filter((part) => part.length > 0).join(" ");
   if (!who && !text) {
     return renderTemplate(messages["quoted_read_failed"] ?? "[引用原文][m:{{id}}]（读取失败）", { id: quoted.id });
   }

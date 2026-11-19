@@ -20,6 +20,18 @@ export const VIDEO_TOPICS: readonly string[] = ["二次元", "游戏", "军事",
 
 // roundId → 本轮实际成功观看的 BV 集合：只活在当前 browse 轮，宿主轮末整份清掉。
 const viewedByRound = new Map<string, Set<string>>();
+const resourcesByRound = new Map<string, Set<string>>();
+
+/** 两个来源共用观看额度；BV 身份集合继续只用于 B 站分享。 */
+export function recordVideoResource(roundId: unknown, resource: string): void {
+  const key = String(roundId);
+  const set = resourcesByRound.get(key) ?? new Set<string>();
+  set.add(resource);
+  resourcesByRound.set(key, set);
+}
+export function viewedResourceCount(roundId: unknown): number {
+  return resourcesByRound.get(String(roundId))?.size ?? 0;
+}
 
 /** browse 轮内登记一条实际成功观看的视频（T4 的 video 工具消费）；同轮重复登记幂等。 */
 export function recordViewedVideo(roundId: unknown, bvid: string): void {
@@ -30,6 +42,7 @@ export function recordViewedVideo(roundId: unknown, bvid: string): void {
     viewedByRound.set(key, set);
   }
   set.add(bvid);
+  recordVideoResource(roundId, `bili:${bvid}`);
 }
 
 /** 当前轮已实际观看的 BV 集合（video 的每轮观看上限据此计数）；没登记过 = 空集。 */
@@ -40,4 +53,5 @@ export function viewedVideoOf(roundId: unknown): ReadonlySet<string> {
 /** 轮末清理（宿主 submitRound 的 settle finally 调用）：viewed 只属于当前 browse 轮，跨轮不残留。 */
 export function clearViewedVideos(roundId: unknown): void {
   viewedByRound.delete(String(roundId));
+  resourcesByRound.delete(String(roundId));
 }

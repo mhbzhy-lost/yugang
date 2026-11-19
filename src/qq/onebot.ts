@@ -4,6 +4,7 @@
  * 展开合并转发（限一层，文本进上下文、子图走同一落盘路径）。
  */
 
+import { InboundVideoStore, isVideoName, type VideoAttachment, type QqVideoSource } from "../media/inbound-video.ts";
 import { isLookDisabled } from "../tools/look/tool.ts";
 import { DEFAULT_LIMITS } from "../egress/policy.ts";
 import { readBoundedFile, sniffImageMagic, toJpegViaWorker, usesSips } from "../media/image-ops.ts";
@@ -26,6 +27,7 @@ export interface OneBotEvent {
   user_id?: number;
   group_id?: number;
   target_id?: number;
+  file?: { id?: string; name?: string; size?: number; busid?: number };
   message_id?: number | string;
   raw_message?: string;
   message?: string | OneBotSegment[];
@@ -77,6 +79,9 @@ export type IncomingMessage = {
   messageId?: number | string;
   /** 已落盘的图片引用；进站文本里也会带 [图片 inbound/xxx.png]。 */
   images: IncomingImage[];
+  /** 协议产生的附件引用，不能从普通正文反推。 */
+  videos?: VideoAttachment[];
+  videoSegments?: OneBotSegment[];
   /** 收消息时临时用来下载的原始段，处理完就清空。 */
   imageSegments: OneBotSegment[];
   /** reply 段引用的消息 id；#onFrame 据此水合结构化 quoted（不再替换文本占位），
@@ -111,6 +116,8 @@ export interface SendOptions {
 
 /** OneBot 客户端选项：出站配速与逐条发送回调（宿主在构造时接线）。 */
 export interface OneBotOptions {
+  /** 视频只在白名单群登记；缺省不开放此入口。 */
+  videoGroupAllowed?: (groupId: number) => boolean;
   /** 出站配速（秒）：同会话相邻两次**物理消息**实际发送的最小间隔（0 = 关闭）；传函数则每次现取（热加载）。
    *  等待在每条消息实际发送前按会话键（qq:group:<id> / qq:private:<id>）进行，发送成功才记钟——
    *  一条 payload 拆出的多条物理消息彼此同样隔开，配速不再停留在 outbox 条目级。 */
@@ -152,6 +159,9 @@ export class OneBot {
   #forwardImageSlots = new WeakMap<ForwardChildMessage, number[]>();
 
   #mediaRoot?: string;
+  readonly videos?: InboundVideoStore;
+  #videoGroupAllowed?: (groupId: number) => boolean;
+  #videoEvents = new Map<string, number>();
 
   /** 出站配速（秒）现取器；缺省未配置 = 不等待。 */
   #pacingSeconds?: number | (() => number);
@@ -168,6 +178,8 @@ export class OneBot {
     this.#url = url;
     this.#token = token;
     this.#mediaRoot = mediaRoot;
+    this.videos = mediaRoot ? new InboundVideoStore(mediaRoot) : undefined;
+    this.#videoGroupAllowed = options.videoGroupAllowed;
     this.#pacingSeconds = options.pacingSeconds;
     this.#onSent = options.onSent;
     this.#onPoke = options.onPoke;
@@ -214,16 +226,25 @@ export class OneBot {
       if (frame.self_id) this.#selfId = frame.self_id;
       return;
     }
+    const upload = frame.post_type === "notice" && frame.notice_type === "group_upload";
     if (frame.post_type === "notice") {
-      this.#schedulePokeReply(frame);
-      return;
+      if (!upload || !frame.group_id || !frame.user_id || frame.user_id === (frame.self_id || this.#selfId) || !frame.file?.id || !this.#videoGroupAllowed?.(frame.group_id)) {
+        this.#schedulePokeReply(frame);
+        return;
+      }
+      frame.post_type = "message";
+      frame.message_type = "group";
+      frame.message = [{ type: "file", data: { file_id: frame.file.id, name: frame.file.name, size: frame.file.size, busid: frame.file.busid } }];
     }
     if (frame.post_type !== "message") return;
     // 消息帧自己带 self_id：先落缓存，parseEvent 也优先认它（刚连上时缓存还是 0）
     if (frame.self_id) this.#selfId = frame.self_id;
+    const arrivalSeq = ++this.#arrivalSeq;
+    const messageSegments = typeof frame.message === "string" ? parseCqSegments(frame.message) : frame.message;
+    if (Array.isArray(messageSegments)) frame.message = messageSegments;
     const parsed = parseEvent(frame, this.#selfId);
     if (!parsed) return;
-    parsed.arrivalSeq = ++this.#arrivalSeq;
+    parsed.arrivalSeq = arrivalSeq;
 
     // @ 别人的名字：段里往往只有 QQ 号，这里用群成员名单补成「昵称(QQ)」，
     // 让模型看得出这句话是对谁说的（进而知道不是在叫自己）。
@@ -260,7 +281,7 @@ export class OneBot {
         // 有的实现把被引消息给成 CQ 字符串而不是段数组；统一成段数组，否则一律「看不到内容」
         const rawQuoted = quoted?.data?.message ?? quoted?.message;
         const quotedMessage = typeof rawQuoted === "string"
-          ? [{ type: "text", data: { text: rawQuoted.replace(/\[CQ:[^\]]+\]/g, " ").trim() } }]
+          ? parseCqSegments(rawQuoted)
           : rawQuoted;
         if (Array.isArray(quotedMessage)) {
           const fwd = quotedMessage.find((s: OneBotSegment) => s?.type === "forward");
@@ -318,6 +339,7 @@ export class OneBot {
             userId: senderId(quoted),
             text: [cardToken, quotedText].filter(Boolean).join(" "),
             images: savedList,
+            ...(parsed.groupId && this.#videoGroupAllowed?.(parsed.groupId) ? { videos: this.#registerVideos(parsed.chatKey, Array.isArray(quotedMessage) ? quotedMessage : []) } : {}),
             ...(senderId(quoted) === String(this.#selfId) ? { fromSelf: true } : {}),
           };
         }
@@ -348,10 +370,23 @@ export class OneBot {
       this.#syncForwardImages(parsed);
     }
     parsed.imageSegments = [];
+    if (parsed.groupId && this.#videoGroupAllowed?.(parsed.groupId) && parsed.videoSegments?.length) {
+      parsed.videos = this.#registerVideos(parsed.chatKey, parsed.videoSegments);
+      for (let i = 0; i < parsed.videoSegments.length; i++) parsed.text = parsed.text.replace(`[视频#${i}]`, "");
+      const now = Date.now();
+      for (const [key, at] of this.#videoEvents) if (now - at > 10 * 60_000) this.#videoEvents.delete(key);
+      const keys = parsed.videos.map((v) => `${parsed.chatKey}:${v.ref}`);
+      const duplicate = keys.length > 0 && keys.every((key) => this.#videoEvents.has(key));
+      for (const key of keys) this.#videoEvents.set(key, now);
+      if (duplicate && (upload || (!parsed.text.trim() && !parsed.mentionsBot && !parsed.replyIds.length))) return;
+    } else if (parsed.videoSegments?.length) {
+      for (let i = 0; i < parsed.videoSegments.length; i++) parsed.text = parsed.text.replace(`[视频#${i}]`, "");
+    }
+    parsed.videoSegments = [];
     // replyIds 不清空：debounce 的 quoteFromReply（整组里任意一条是回复 → 这一轮仍然引用）
     // 和私聊直提路径都靠它判定；水合只替换文本占位符，id 本身保留。清空曾让真回复轮永远裸发。
 
-    if (!parsed.text.trim() && parsed.replyIds.length === 0 && (parsed.forwardIds?.length ?? 0) === 0) return;
+    if (!parsed.text.trim() && !parsed.videos?.length && parsed.replyIds.length === 0 && (parsed.forwardIds?.length ?? 0) === 0) return;
     for (const h of this.#handlers) h(parsed);
   }
 
@@ -393,16 +428,59 @@ export class OneBot {
     }
   }
 
-  async call(action: string, params: Record<string, unknown> = {}): Promise<any> {
+  #registerVideos(chatKey: string, segments: readonly OneBotSegment[]): VideoAttachment[] {
+    const out: VideoAttachment[] = [];
+    for (const seg of segments.slice(0, 8)) {
+      const d = seg.data ?? {};
+      const name = String(d["name"] ?? d["file_name"] ?? (seg.type === "file" ? d["file"] : "") ?? "");
+      if (seg.type !== "video" && !(seg.type === "file" && isVideoName(name))) continue;
+      const fileId = String(d["file_id"] ?? d["id"] ?? d["file"] ?? d["url"] ?? "");
+      if (!fileId || (seg.type === "file" && /^(?:https?:|file:|\/|[A-Za-z]:[\\/])/.test(fileId))) continue;
+      try {
+        const source: QqVideoSource = { kind: seg.type === "video" ? "video" : "file", fileId, name,
+          ...(Number.isFinite(Number(d["busid"])) ? { busid: Number(d["busid"]) } : {}),
+          ...(Number(d["size"] ?? d["file_size"]) > 0 ? { size: Number(d["size"] ?? d["file_size"]) } : {}),
+          ...(typeof d["url"] === "string" ? { url: d["url"] } : {}),
+        };
+        const attachment = this.videos?.register(chatKey, source);
+        if (attachment) out.push(attachment);
+      } catch { console.warn("[鱼缸] 视频附件登记失败", chatKey); }
+    }
+    return out;
+  }
+
+  /** 只允许宿主登记来源刷新地址，不向模型开放协议调用。 */
+  async videoUrl(source: QqVideoSource, groupId: number, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
+    let response: any;
+    if (source.kind === "video") {
+      if (source.url && /^https?:\/\//.test(source.url)) return source.url;
+      if (/^https?:\/\//.test(source.fileId)) return source.fileId;
+      response = await this.call("get_file", { file: source.fileId }, signal);
+    } else {
+      response = await this.call("get_group_file_url", { group_id: groupId, file_id: source.fileId,
+        ...(source.busid !== undefined ? { busid: source.busid } : {}),
+      }, signal);
+    }
+    const d = response?.data ?? response;
+    const url = d?.url ?? d?.file_url ?? (typeof d?.file === "string" && /^https?:\/\//.test(d.file) ? d.file : undefined);
+    if (typeof url !== "string" || !/^https?:\/\//.test(url)) throw new Error("video_download_failed");
+    return url;
+  }
+
+  async call(action: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<any> {
     const ws = this.#ws;
     if (!ws || ws.readyState !== 1) throw new Error("OneBot 未连接");
     const echo = `yg${++this.#seq}`;
+    signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
-      this.#pending.set(echo, { resolve, reject });
-      ws.send(JSON.stringify({ action, params, echo }));
-      setTimeout(() => {
-        if (this.#pending.delete(echo)) reject(new Error(`${action} 超时`));
-      }, 20_000).unref?.();
+      const cleanup = (): void => { clearTimeout(timer); signal?.removeEventListener("abort", abort); this.#pending.delete(echo); };
+      const abort = (): void => { cleanup(); reject(signal?.reason ?? new Error("已取消")); };
+      const timer = setTimeout(() => { cleanup(); reject(new Error(`${action} 超时`)); }, 20_000);
+      timer.unref?.();
+      this.#pending.set(echo, { resolve: (value) => { cleanup(); resolve(value); }, reject: (error) => { cleanup(); reject(error); } });
+      signal?.addEventListener("abort", abort, { once: true });
+      try { ws.send(JSON.stringify({ action, params, echo })); } catch (error) { cleanup(); reject(error); }
     });
   }
 
@@ -923,21 +1001,17 @@ function parseCqParams(raw: string): Record<string, string> {
  * CQ 字符串形态的消息：只机械解析 at（message_format=string 时 @ 只在这里），
  * 其它 CQ 码原样留在正文里（与旧行为一致），普通文本做规范要求的反转义。
  */
-function parseCqMessage(raw: string, selfId: number, acc: MentionAccumulator): { text: string; mentionsBot: boolean } {
-  let text = "";
-  let mentionsBot = false;
+/** CQ 字符串与数组消息共用段解析，保留视频和引用字段。 */
+function parseCqSegments(raw: string): OneBotSegment[] {
+  const out: OneBotSegment[] = [];
   let cursor = 0;
-  const code = /\[CQ:at((?:,[^\]]*)?)\]/g;
-  for (let hit = code.exec(raw); hit !== null; hit = code.exec(raw)) {
-    text += unescapeCq(raw.slice(cursor, hit.index));
-    cursor = hit.index + hit[0].length;
-    const params = parseCqParams(hit[1] ?? "");
-    const applied = applyMention(String(params["qq"] ?? ""), String(params["name"] ?? ""), selfId, acc);
-    if (applied.kind === "bot") mentionsBot = true;
-    text += applied.text;
+  for (const hit of raw.matchAll(/\[CQ:([a-z_]+)((?:,[^\]]*)?)\]/g)) {
+    if (hit.index! > cursor) out.push({ type: "text", data: { text: unescapeCq(raw.slice(cursor, hit.index)) } });
+    out.push({ type: hit[1], data: parseCqParams(hit[2] ?? "") });
+    cursor = hit.index! + hit[0].length;
   }
-  text += unescapeCq(raw.slice(cursor));
-  return { text, mentionsBot };
+  if (cursor < raw.length) out.push({ type: "text", data: { text: unescapeCq(raw.slice(cursor)) } });
+  return out;
 }
 
 /**
@@ -1031,14 +1105,10 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
   const replyIds: string[] = [];
   const forwardIds: string[] = [];
   const cards: ShareCard[] = [];
-  const message = frame.message;
+  const message = typeof frame.message === "string" ? parseCqSegments(frame.message) : frame.message;
+  const videoSegments: OneBotSegment[] = [];
 
-  if (typeof message === "string") {
-    // message_format=string：@ 只存在于 CQ 码里，与段路径走同一套归一逻辑
-    const cq = parseCqMessage(message, self, atTargets);
-    text = cq.text;
-    mentionsBot = cq.mentionsBot;
-  } else if (Array.isArray(message)) {
+  if (Array.isArray(message)) {
     for (const seg of message) {
       if (seg.type === "text") text += String(seg.data?.["text"] ?? "");
       else if (seg.type === "at") {
@@ -1049,9 +1119,9 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
         text += ` [图片#${images.length}] `;
         segments.push(seg);
         images.push({ ref: "" });
-      } else if (seg.type === "video") {
-        const u = String(seg.data?.["url"] ?? seg.data?.["file"] ?? "");
-        if (u) text += ` [视频 ${u.slice(0, 200)}] `;
+      } else if (seg.type === "video" || (seg.type === "file" && isVideoName(String(seg.data?.["name"] ?? seg.data?.["file_name"] ?? seg.data?.["file"] ?? "")))) {
+        text += ` [视频#${videoSegments.length}] `;
+        videoSegments.push(seg);
       } else if (seg.type === "reply") {
         replyIds.push(String(seg.data?.["id"] ?? ""));
       } else if (seg.type === "json") {
@@ -1080,7 +1150,7 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
 
   const nickname = frame.sender?.card || frame.sender?.nickname || String(userId);
   const mediaOnly = mediaOnlyOf(text, segments);
-  const base = { userId, nickname, text, mentionsBot, ...(mentions.length > 0 ? { mentions } : {}), ...(atOthers.length > 0 ? { atOthers, atOtherNames } : {}), messageId: frame.message_id, images, imageSegments: segments, replyIds, forwardIds, ...(cards.length > 0 ? { cards } : {}), ...(mediaOnly ? { mediaOnly } : {}) };
+  const base = { userId, nickname, text, mentionsBot, ...(mentions.length > 0 ? { mentions } : {}), ...(atOthers.length > 0 ? { atOthers, atOtherNames } : {}), messageId: frame.message_id, images, imageSegments: segments, ...(videoSegments.length ? { videoSegments } : {}), replyIds, forwardIds, ...(cards.length > 0 ? { cards } : {}), ...(mediaOnly ? { mediaOnly } : {}) };
 
   if (frame.message_type === "group" && frame.group_id) {
     return { ...base, chatKey: `qq:group:${frame.group_id}`, groupId: frame.group_id };

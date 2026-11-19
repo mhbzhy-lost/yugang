@@ -141,6 +141,8 @@ export interface ToolPackageDeps {
   tagsCsv?: string;
   /** submissionId → 本轮触发消息（轮类型 + quoteIds 窗口）；出口工具的引用绑定与各工具身份闸同源。 */
   triggerOf?: (roundId: unknown) => RoundTrigger | undefined;
+  /** QQ 视频只经宿主校验当前会话/轮次的已见附件后下载；不接受任意 URL 或路径。 */
+  downloadVideo?: (conversationId: string, roundId: string, ref: string, directory: string, signal?: AbortSignal) => Promise<{ file: string; name: string }>;
   /** submissionId → 本轮触发消息自带的 bypass 段；仅 draw 消费。 */
   bypassOf?: (roundId: unknown) => { bypass?: string; pbypass?: string } | undefined;
   /** 贴表情实现；react 必需，缺省时 factory 返回 undefined。 */

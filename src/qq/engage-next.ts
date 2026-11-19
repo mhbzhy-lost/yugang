@@ -47,6 +47,7 @@ export interface EngageShardItem {
   payload?: string;
   replyIds?: readonly string[];
   quoted?: QuotedMessage;
+  videoRefs?: readonly string[];
   /** 这条 @ 的其他人（不含 @鱼/@全体）：批内渲染「接收对象是…，不是你」。 */
   mentionTargets?: readonly string[];
 }
