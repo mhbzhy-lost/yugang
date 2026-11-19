@@ -18,7 +18,7 @@ export async function installStartupMigrations(
   const { harness, options, personaExtensions, ctx } = state;
 
   // 启动告警：映射键里的人格名已不在注册名单（人格书被删后 ChatsDoc 残留）。
-  // 那个会话存的是按名绑定，名字没了就选不到任何扩展，只剩 salvage 兕底。
+  // 那个会话存的是按名绑定，名字没了就选不到任何扩展，无法正常响应。
   {
     const registered = new Set([DEFAULT_PERSONA, ...personaExtensions.keys()]);
     const snapshot = await harness.snapshot(ChatsDoc, ctx);

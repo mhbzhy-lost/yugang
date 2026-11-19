@@ -1,7 +1,6 @@
 {
   "name": "model_failure",
   "configOverride": {
-    "salvagePlainReply": false,
     "engage": { "freeBrowseChance": 0 }
   },
   "steps": [

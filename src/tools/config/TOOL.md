@@ -32,7 +32,6 @@ fish.config.json 受控字段白名单（生效时机逐字段标注）：
 | sendPacingSeconds | 数值 | 热加载 | 0–60，出站配速：同会话相邻两条物理消息实际发送的最小间隔（秒），每条消息发送前生效，0 = 关闭 |
 | compact | 对象 | 热加载 | 换页只按 tokens：maxTokens 1000–1000000（缺省 100000）、byModel（provider 或 provider/model → 阈值，精确模型键优先；google-antigravity 缺省 90000）。完整轮次结束后才换页，不截断消息；旧 maxEntries/maxChars 已停用 |
 | memeCooldownMinutes | 数值 | 热加载 | 0–240，表情包跨轮冷却（分钟） |
-| salvagePlainReply | 布尔 | 热加载 | 必答轮忘调出口工具时的正文兜底开关 |
 | gifAutoCollect | 布尔 | 热加载 | GIF 自动收录开关：缺省 false = 动图同静态图，ambient 轮不附收录标记、meme_add 只收主人点头轮的 inbound 动图；true 才恢复旧自动收行为 |
 | drawEnabled | 布尔 | 热加载 | 本地画图总开关（资源闸）：缺省 true；false 时 draw 入口即拒、真正提交前再复核一次，热生效不重启，用来临时让出 GPU。COMFYUI_URL 仍只作连接地址 |
 | voices | 对象 | 热加载 | 人格 → 单实例热切语音配置：url、gptModel、sovitsModel、referWav、referText 必填；referLanguage 可选（默认 zh），speed 可选（0.5–2）。缺字段会 fail closed，不会沿用服务端上一人格模型 |

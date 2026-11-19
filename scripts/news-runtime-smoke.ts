@@ -22,7 +22,6 @@ if (existsSync(join(REPO, "config", "auth.json"))) copyFileSync(join(REPO, "conf
 symlinkSync(join(REPO, "prompt"), join(ROOT, "prompt"), "dir");
 writeFileSync(join(ROOT, "fish.config.json"), JSON.stringify({
   engage: { freeSeconds: 15, freeBrowseChance: 0, freeBatchMax: 50 },
-  salvagePlainReply: false,
 }, null, 2));
 process.env.YUGANG_ROOT = ROOT;
 process.env.YUGANG_HOME = join(ROOT, "var");

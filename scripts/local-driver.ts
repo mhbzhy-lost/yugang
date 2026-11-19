@@ -308,8 +308,8 @@ async function main(): Promise<void> {
     scriptTrigger.set(String(submission.id), { messageId: id, mentionsBot: isAnswer, userId: line.from, kind: isAnswer ? "answer" : "ambient" });
     const settled = await submission.wait(ctx);
     await fish.drain([conv.id]);
-    // 零出口轮的可观测化：取本轮末条 assistant 的正文（生产里 answer 轮有 salvagePlainReply
-    // 兜底补发，ambient 轮本来允许沉默；driver 都打出来供观察，不冒充真实出口）
+    // 零出口轮的可观测化：driver 仅在本地展示普通正文，不冒充真实出口。
+    // 生产所有轮次均不自动补发普通正文。
     const view = await conv.context(ctx);
     const entries = view.entries as readonly { id?: number; kind?: string; model?: unknown }[];
     let bare = "";

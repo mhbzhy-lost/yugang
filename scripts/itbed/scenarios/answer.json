@@ -1,7 +1,6 @@
 {
   "name": "answer_echo",
   "configOverride": {
-    "salvagePlainReply": false,
     "engage": { "freeBrowseChance": 0 }
   },
   "steps": [

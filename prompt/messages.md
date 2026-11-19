@@ -37,7 +37,7 @@ forward_child_prefix: [合集#{{position}}]
 forward_truncated: …共 {{count}} 条
 forward_read_failed: [转发合集读取失败]
 
-# 出口共享：策略码（四个 say_* 与 salvage 共用）、回执与轮内状态
+# 出口共享：四个 say_* 的策略码、回执与轮内状态
 say_sent: 已发到群里
 say_once: 这一轮已经开口 3 次了，就此打住
 empty: 空消息，没什么可说的
@@ -195,11 +195,6 @@ cmd_memory_rejected: 已拒绝：{{id}}
 cmd_memory_rejected_all: 已拒绝全部 {{count}} 条待审
 cmd_memory_deleted: 已删除记忆 {{id}}（{{doc}}）
 cmd_memory_delete_missing: 没有这条记忆：{{id}}
-
-# 零出口兜底（salvagePlainReply，仅必答轮）的宿主日志文案：只进宿主日志，不给模型也不发群。
-# reason 是机器原因（找不到本轮 entry / 末条 assistant 没有正文 / 出口校验拒绝码），error 是错误摘要
-salvage_skip: 兜底放弃：{{reason}}
-salvage_error: 兜底出错：{{error}}
 
 # 换页（compact）的机械时间头与剖面卡片渲染模板：降级换页与正常剖面页共用（src/compact.ts 消费）。
 # compact_time_header 是纯机械时间戳行（{{count}} 条数、{{start}}/{{end}} 起止时间）；
