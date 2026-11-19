@@ -37,6 +37,8 @@ forward_child_prefix: [合集#{{position}}]
 forward_truncated: …共 {{count}} 条
 forward_read_failed: [转发合集读取失败]
 
+video_attachment: [视频 {{ref}} {{name}}]
+
 # 出口共享：四个 say_* 的策略码、回执与轮内状态
 say_sent: 已发到群里
 say_once: 这一轮已经开口 3 次了，就此打住

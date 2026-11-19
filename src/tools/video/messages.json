@@ -1,6 +1,6 @@
 {
   "video_canonical_url": "链接：{{url}}",
-  "video_invalid": "那不是 B 站视频链接",
+  "video_invalid": "请填写 B 站链接，或群消息里提供的 qqvideo:... 附件引用",
   "video_failed": "视频没打开：{{url}}",
   "video_budget_exhausted": "今天看视频的额度用完了（{{reason}}），明天再试，或者让主人调大 video.dailyBudget",
   "video_risk_control": "B 站今天把我们限流了（{{reason}}），这轮先别再看视频",
@@ -11,5 +11,17 @@
   "video_danmaku_header": "弹幕摘录：",
   "video_frames_header": "画面（按时间点）：",
   "video_comments_header": "热评：",
-  "video_browse_limit": "这一轮看的视频够多了，先说说已经看过的"
+  "video_browse_limit": "这一轮看的视频够多了，先说说已经看过的",
+  "video_source_choice": "url 和 ref 需要且只能填写一个",
+  "video_ref_denied": "这个视频不是当前会话已经见过的附件，不能读取",
+  "video_ref_expired": "这个视频附件已过期，请对方重新发送",
+  "video_source_invalid": "这个附件的来源或文件信息不符合读取条件",
+  "video_too_large": "群视频超过 100 MiB，暂时无法读取，请对方压缩后重发",
+  "video_download_failed": "群视频下载失败或已取消，请稍后重试",
+  "video_decoder_missing": "视频解码环境未就绪，请主人检查 VIDEO_PYTHON",
+  "video_decode_failed": "这个文件没有成功解码成视频，暂时看不了",
+  "video_vision_missing": "当前没有可用的视觉模型，暂时看不了视频画面",
+  "video_no_frames": "这次没能读出任何视频画面，不能判断视频内容",
+  "video_qq_header": "群视频《{{name}}》· 时长 {{duration}} · 抽样范围前 {{covered}}；只有关键画面，没有声音或完整台词",
+  "video_partial": "部分画面未能读取，以上仅包含成功描述的时间点"
 }

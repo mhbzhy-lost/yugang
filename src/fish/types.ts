@@ -75,6 +75,8 @@ export interface FishOptions {
   master?: string;
   /** submissionId → 本轮触发消息（轮类型 + quoteIds 窗口）；把回复引用绑在轮上，防串线。 */
   triggerOf?: (roundId: unknown) => RoundTrigger | undefined;
+  /** QQ 附件读取窄接口，执行前绑定会话与轮级授权。 */
+  downloadVideo?: import("../tools/types.ts").ToolPackageDeps["downloadVideo"];
   /** conversationId → 原始 chatKey（不带人格后缀）：config 工具判定「主人私聊轮」用。 */
   chatKeyOf?: (conversationId: string) => string | undefined;
   /** conversationId → 当前人格的鱼昵称与真实 self QQ，供换页历史统一消息行使用。 */

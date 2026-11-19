@@ -1,5 +1,5 @@
 /**
- * video —— 看一眼 B 站视频。
+ * video —— QQ 群视频与 B 站内容共用关键帧视觉描述。
  *
  * 模型看不了视频流，所以这里做三件事，产出**纯文本**：
  *   1. 元数据：标题 / UP 主 / 时长 / 简介 / 热评
@@ -25,28 +25,29 @@
  *
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest（factory 只消费它，不再有第二份运行时定义）。
  */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { getBiliClient, type BiliClient } from "../../external/bili-client.ts";
 import { sanitizeExternalText } from "../../external/sanitize.ts";
-import { recordViewedVideo, viewedVideoOf } from "../../external/video-browse.ts";
+import { recordViewedVideo, recordVideoResource, viewedResourceCount } from "../../external/video-browse.ts";
 import { biliOpusUrl, biliVideoUrl } from "../../external/video-links.ts";
 import { rememberViewedVideoTitle } from "../../external/video-pool.ts";
 import { loadFishConfig } from "../../fish-config.ts";
 import { renderTemplate } from "../../prompt/index.ts";
 import { describeImage } from "../../media/describe.ts";
-import { spawnCapture } from "../../media/spawn-capture.ts";
+import { extractVideoFrames, describeVideoFrames, pickVideoTimestamps, videoTime } from "../../media/video.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
-import { REPO_ROOT } from "../../paths.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface VideoArgs {
-  url: string;
+  url?: string;
+  ref?: string;
 }
 
+const activeVideoTemps = new Set<string>();
 const HEADERS = { "user-agent": "Mozilla/5.0", referer: "https://www.bilibili.com/" };
 
 /**
@@ -60,7 +61,7 @@ export function cleanupStaleVideoTemps(): void {
       const path = join(tmpdir(), name);
       try {
         const age = Date.now() - statSync(path).mtimeMs;
-        if (age > 60 * 60_000) rmSync(path, { recursive: true, force: true });
+        if (age > 60 * 60_000 && !activeVideoTemps.has(path)) rmSync(path, { recursive: true, force: true });
       } catch {
         // 单个目录删不掉不影响启动
       }
@@ -92,18 +93,20 @@ export function videoErrorText(raw: string, error: unknown, messages: Record<str
   return renderTemplate(messages["video_failed"] ?? "视频没打开：{{url}}", { url: raw });
 }
 
-interface Frame {
-  time: number;
-  path: string;
-}
-
 export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration {
   const doFetch = fetch;
   const timeoutMs = 20_000;
   const maxMinutes = 30;
-  const frameCount = 6;
-  const pythonPath = process.env["VIDEO_PYTHON"] ?? join(homedir(), "tts", ".venv-video", "bin", "python");
-  const scriptPath = join(REPO_ROOT, "scripts", "video-frames.py");
+  const qqErrors: Record<string, string> = {
+    video_ref_denied: deps.prompts.messages["video_ref_denied"],
+    video_ref_expired: deps.prompts.messages["video_ref_expired"],
+    video_source_invalid: deps.prompts.messages["video_source_invalid"],
+    video_too_large: deps.prompts.messages["video_too_large"],
+    video_decoder_missing: deps.prompts.messages["video_decoder_missing"],
+    video_decode_failed: deps.prompts.messages["video_decode_failed"],
+    video_vision_missing: deps.prompts.messages["video_vision_missing"],
+    video_no_frames: deps.prompts.messages["video_no_frames"],
+  };
 
   /** 每请求超时与调用方取消（工具超时/宿主取消）合并；底层 fetch 消费同一个 signal。 */
   const mergedSignal = (signal?: AbortSignal): AbortSignal => {
@@ -133,80 +136,13 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
     }
   }
 
-  /** 选时间点：弹幕密度峰值（前 3）+ 均匀（补满），跳过片头片尾各 5%。 */
-  function pickTimestamps(danmaku: { time: number }[], seconds: number): number[] {
-    const start = Math.min(seconds * 0.05, 30);
-    const end = Math.max(seconds * 0.95, seconds - 20);
-    const span = Math.max(end - start, 1);
-    const buckets = new Map<number, number>();
-    for (const d of danmaku) {
-      if (d.time < start || d.time > end) continue;
-      const bucket = Math.floor((d.time - start) / 5);
-      buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1);
-    }
-    const peaks = [...buckets.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, Math.max(1, Math.floor(frameCount / 2)))
-      .map(([bucket]) => start + bucket * 5 + 2.5);
-
-    const uniform: number[] = [];
-    const slots = frameCount - peaks.length;
-    for (let i = 0; i < slots; i++) {
-      uniform.push(start + (span * (i + 0.5)) / slots);
-    }
-    const all = [...peaks, ...uniform].map((t) => Math.round(t * 10) / 10).sort((a, b) => a - b);
-    // 去重：间隔 < 3 秒的合并
-    const dedup: number[] = [];
-    for (const t of all) {
-      if (dedup.length === 0 || t - dedup[dedup.length - 1] >= 3) dedup.push(t);
-    }
-    return dedup.slice(0, frameCount);
-  }
-
-  async function extractFrames(bvid: string, cid: string, timestamps: number[], outDir: string, signal?: AbortSignal): Promise<Frame[]> {
-    if (!existsSync(pythonPath) || !existsSync(scriptPath)) return [];
-    // 异步 spawn：不再阻塞事件循环（watchdog 能按时触发），超时/取消经 signal 交给底层 kill
-    const result = await spawnCapture(
-      pythonPath,
-      [
-        scriptPath,
-        "--bvid",
-        bvid,
-        "--cid",
-        cid,
-        "--timestamps",
-        timestamps.join(","),
-        "--out",
-        outDir,
-      ],
-      { timeoutMs: 90_000, signal, maxBytes: 8 * 1024 * 1024 },
-    );
-    if (result.status !== 0) {
-      const why = result.stderr.toString("utf8").split("\n").filter(Boolean).slice(-2).join(" / ");
-      console.warn("[鱼缸] 抽帧失败:", why || `exit ${result.status}`);
-      return [];
-    }
-    const line = result.stdout.toString("utf8").trim().split("\n").filter(Boolean).pop() ?? "";
-    try {
-      const parsed = JSON.parse(line) as Frame[];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  }
-
-  function fmtTime(seconds: number): string {
-    const m = Math.floor(seconds / 60);
-    const s = Math.round(seconds % 60);
-    return `${m}:${String(s).padStart(2, "0")}`;
-  }
-
   return defineTool({
     name: manifest.name,
     description: toolFullDescription(manifest),
     callers: ["model"],
     parameters: manifestParameters<VideoArgs>(manifest),
-    execute: async (args, api, context) => {
+    execute: async (input, api, context) => {
+      const args = input as VideoArgs;
       // 宿主机械提示：本轮第一次调用先说一句「在做了」（working_video），再开始耗时工作；
       // 拿不到轮标识（live.run.inputs[0]）就不发，不影响后续行为
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
@@ -219,19 +155,37 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
       // 工具面决定。这里只留纯资源闸——每轮成功观看数上限（video.browseMaxViewsPerRound，
       // 缺省 5，每轮热读），计数口径 = 本轮已登记的 viewed BV（轮末宿主清理，跨轮不残留）。
       const maxViews = Math.max(1, loadFishConfig().config.video.browseMaxViewsPerRound);
-      if (round !== undefined && viewedVideoOf(round).size >= maxViews) {
+      if (round !== undefined && viewedResourceCount(round) >= maxViews) {
         throw new Error(deps.prompts.messages["video_browse_limit"] ?? "video_browse_limit");
       }
 
-      const raw = args.url.trim();
-      if (!raw || raw.length > 512) {
+      if ((typeof args.url === "string") === (typeof args.ref === "string")) throw new Error(deps.prompts.messages["video_source_choice"]);
+      const raw = (args.url ?? args.ref ?? "").trim();
+      if (!raw || raw.length > 4096) {
         throw new Error(deps.prompts.messages["video_invalid"] ?? "链接不对");
       }
 
       const startedAt = Date.now();
       const client = getBiliClient();
       const tmp = mkdtempSync(join(tmpdir(), "yg-video-"));
+      activeVideoTemps.add(tmp);
       try {
+        if (args.ref !== undefined) {
+          if (!deps.downloadVideo || round === undefined) throw new Error("video_ref_denied");
+          if (!deps.models || !deps.visionModel) throw new Error("video_vision_missing");
+          const source = await deps.downloadVideo(String(api.conversationId), String(round), raw, tmp, signal);
+          const data = await extractVideoFrames({ kind: "local", file: source.file }, tmp, signal);
+          const described = await describeVideoFrames(deps, data, signal);
+          if (!described.lines.length) throw new Error("video_no_frames");
+          const head = renderTemplate(deps.prompts.messages["video_qq_header"], { name: source.name, duration: videoTime(data.durationSeconds), covered: videoTime(data.coveredSeconds) });
+          const text = [head, deps.prompts.messages["video_frames_header"], ...described.lines,
+            ...(described.failed ? [deps.prompts.messages["video_partial"]] : []),
+            ...(data.durationSeconds > data.coveredSeconds ? [renderTemplate(deps.prompts.messages["video_truncated"], { minutes: String(maxMinutes) })] : []),
+          ].join("\n");
+          signal?.throwIfAborted();
+          recordVideoResource(round, `qq:${raw}`);
+          return { output: [{ type: "text", text }] };
+        }
         // 短链先展开
         let target = raw;
         if (/^https?:\/\/b23\.tv\//.test(raw)) {
@@ -337,46 +291,14 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
             picked.map((t) => `· ${sanitizeExternalText(t, { maxLen: 40 })}`).join("\n");
         }
 
-        // 关键帧 → 文字描述
+        // 两个来源共用抽帧和视觉描述；B 站失败仍可返回元信息。
         let framesText = "";
         if (deps.models && deps.visionModel && cid) {
-          const timestamps = pickTimestamps(danmaku, capSeconds);
-          const framesStartedAt = Date.now();
-          const frames = await extractFrames(bv, cid, timestamps, tmp, signal);
-          const grabMs = Date.now() - framesStartedAt;
-          if (frames.length > 0) {
-            const described = await Promise.all(
-              frames.map(async (frame) => {
-                try {
-                  const bytes = readFileSync(frame.path);
-                  // 被内容审核拒/描述失败的帧优雅跳过（不整轮失败），其余帧照常
-                  const described = await describeImage(deps, bytes.toString("base64"), "image/jpeg", signal);
-                  if (!described.ok) return null;
-                  return { time: frame.time, line: `[${fmtTime(frame.time)}] ${described.text.replace(/\s+/g, " ").slice(0, 220)}` };
-                } catch {
-                  return null;
-                }
-              }),
-            );
-            const lines = described
-              .filter((x): x is { time: number; line: string } => x !== null)
-              .sort((a, b) => a.time - b.time)
-              .map((x) => x.line);
-            console.log(
-              "[鱼缸] video",
-              bv,
-              "抽帧",
-              grabMs,
-              "ms · 描述",
-              Date.now() - framesStartedAt - grabMs,
-              "ms · 帧",
-              frames.length,
-            );
-            if (lines.length > 0) {
-              framesText =
-                "\n" + (deps.prompts.messages["video_frames_header"] ?? "") + "\n" + lines.join("\n");
-            }
-          }
+          try {
+            const data = await extractVideoFrames({ kind: "bilibili", bvid: bv, cid, timestamps: pickVideoTimestamps(danmaku, capSeconds) }, tmp, signal);
+            const described = await describeVideoFrames(deps, data, signal);
+            if (described.lines.length > 0) framesText = "\n" + deps.prompts.messages["video_frames_header"] + "\n" + described.lines.join("\n");
+          } catch { signal?.throwIfAborted(); console.warn("[鱼缸] B站视频抽帧或描述失败"); }
         }
 
         // 热评（拿不到就略过）；经 bili-client 的 reply 端点（type=1，mode=3 热评序）
@@ -398,6 +320,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         // 实际成功观看后才登记：viewed 绑定当前轮（宿主 settle 时整份清掉），
         // 清洗后的标题进轮内缓存供 say_words 分享事务写池；失败路径（上面 catch）不登记，
         // opus 图文动态没有 BV 同样不登记
+        signal?.throwIfAborted();
         if (round !== undefined) {
           recordViewedVideo(round, bv);
           rememberViewedVideoTitle(round, bv, sanitizeExternalText(d.title, { maxLen: 60 }));
@@ -405,8 +328,13 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         console.log("[鱼缸] video", bv, "总用时", Date.now() - startedAt, "ms");
         return { output: [{ type: "text", text }] };
       } catch (error) {
+        if (args.ref !== undefined) {
+          const key = error instanceof Error && /^video_[a-z_]+$/.test(error.message) ? error.message : "video_download_failed";
+          throw new Error(qqErrors[key] ?? deps.prompts.messages["video_download_failed"]);
+        }
         throw new Error(videoErrorText(raw, error, deps.prompts.messages));
       } finally {
+        activeVideoTemps.delete(tmp);
         try {
           rmSync(tmp, { recursive: true, force: true });
         } catch {

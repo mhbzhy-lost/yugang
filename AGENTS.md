@@ -200,7 +200,9 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
 
 主会话有一条条件式 inline 直读通道（docs/plans/2026-11-01-inline-vision.md）：`models.vision` 解析结果 == `models.main` 且 main 的 api 在白名单（`google-code-assist` / `antigravity-code-assist` 真机验证过；`openai-completions` 即 zai/deepseek 2026-11-02 经主人决定放开——describe 路径本就向该通道发 image_url，且附图已压到 ≤50KB；codex 适配器不支持图片输入，仍排除）时，锚点消息的图经压图（`src/media/shrink-image.ts`：1280px 上限 / 50KB 阈值 / q80 只降分辨率）后以 image block 直接附在本轮 user message 上（普通轮 ≤8 张，直发图优先、被回复的引用图排在后面；ref 缺失/压图失败跳过不阻塞）。**GIF 走抽帧多 block**（2026-11-06 实测：glm 网关对 image/gif 只解码首帧，token 按首帧分辨率计费、与体积帧数无关）：`src/media/gif-frames.ts` 等距抽 2-4 帧（按时长自适应、含首末）、每帧压到长边 ≤640px JPEG（静态图是 1280px），一个 GIF 占 1 个编号 N 个 block；行内标签带 `·动图N帧`、末尾标签声明帧序与同一性（社区实践：Qwen fps 语义 / MiniCPM image_id）；抽帧失败降级首帧。`/关看图` 同时关掉 inline 附图（止损：当年 zai 网关曾被无压图的大图撞挂）。图进 transcript 但换页即丢弃、摘要永远只吃文本。**编号标签始终带 inbound 路径**（`[图片#N inbound/…]`）：模型可直接把路径填给 draw / gpt_image，读图不必 look。**被回复的引用图两种读图模式都要给到模型**：inline 模式编号成 `[图片#N inbound/…]` 附压缩图（answer 轮与开窗 shard 批共用），look 模式在 `[引用原文]` 里保留 `[图片 inbound/…]` 并触发 look 提示（2026-11-05 修复：此前 `quoted.images` 从不渲染，回复一张图说「收图」时模型拿不到引用，收不了）。
 
-读媒体目录的入口只有两处：`look` 只把图描述成文字；`draw` 的 `ref` 只读一张 `inbound/` 或 `gen/` 的图片当 img2img 初图。`look` 的额度：**普通一轮最多 2 张**。
+**群视频**：OneBot 的 video/file 视频段与 group_upload 只登记 QQ 附件引用，不自动下载；`video(ref)` 校验群、会话已见索引与轮级快照后受控下载（100 MiB），复用 B 站抽帧和视觉描述（前 30 分钟、最多 6 帧），无声音/完整台词。登记保留 24 小时、每群最多 200 项，不接受任意 URL 或本地路径。
+
+读图片媒体目录的入口只有两处：`look` 只把图描述成文字；`draw` 的 `ref` 只读一张 `inbound/` 或 `gen/` 的图片当 img2img 初图。`look` 的额度：**普通一轮最多 2 张**。
 唯一的受控例外是**导入轮**——主人本轮调过 `meme_import`、且这张图就在本轮 manifest 里时，
 额度放宽到 manifest 数量（硬上限 50 张），可以逐张看、逐张用 `meme_add` 收。
 这**不是**通用文件读取的回归：目录固定、身份固定（主人）、清单只活一轮、图仍然只从 `MEDIA_ROOT` 里读，

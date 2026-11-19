@@ -236,6 +236,7 @@ const inlineVisionOn = (): boolean =>
   && INLINE_IMAGE_APIS.has(modelSelection.main.api);
 
 export const onebot = new OneBot(config.onebotUrl, config.onebotToken, config.mediaRoot, {
+  videoGroupAllowed: (groupId) => config.groups.includes(String(groupId)),
   // 出站配速下沉到 onebot 发送层（终验 #3）：每条物理消息实际发送前按会话等待，
   // 热读取 fishConfig（改配置下一拍生效）；0 = 关闭
   pacingSeconds: () => fishConfig().config.sendPacingSeconds,
@@ -548,6 +549,10 @@ export async function bootRuntime(): Promise<void> {
   // 主模型直读图的事实（每轮现算）：look 机械锁死 / meme_import 结果附图都以它为准
   inlineVisionOn: () => inlineVisionOn(),
   triggerOf: (roundId) => triggerOf.get(String(roundId)),
+  downloadVideo: (conversationId, roundId, ref, directory, signal) => {
+    if (!onebot.videos) throw new Error("video_ref_denied");
+    return onebot.videos.download(conversationId, roundId, ref, directory, (source, group, abort) => onebot.videoUrl(source, group, abort), signal);
+  },
   silentOf: (roundId) => triggerOf.get(String(roundId))?.kind === "news",
   newsPrepare: (input) => prepareNewsFromTool(input),
   // 搭话模式（2026-11-06 合并）：GROUPS 群全部 free（保留「自由活动群」段）、
@@ -888,6 +893,8 @@ export async function submitRound(input: {
   entryKind?: string;
   /** 本轮注入窗口的消息 id（T4 quoteMsgId 合法目标）；随 triggerOf 在 settle 清除 */
   quoteIds?: ReadonlySet<string>;
+  /** 宿主结构化附件，绝不从模型可见字符串解析权限。 */
+  videoRefs?: readonly string[];
   /** 新闻备料：通用模型错误重试缺省 3，新闻固定 1，由调度器计首次 + 3 次重试。 */
   modelAttempts?: number;
   /** 硬截止 epoch ms；入口、密钥吸收后与每次真实提交前都复查。 */
@@ -965,6 +972,10 @@ export async function submitRound(input: {
         },
         ctx,
       );
+      if (chatKey.startsWith("qq:group:")) {
+        try { onebot.videos?.bind(String(conv.id), String(submission.id), chatKey, input.videoRefs ?? []); }
+        catch { console.warn("[鱼缸] 视频轮级授权登记失败", chatKey); }
+      }
       triggerOf.set(String(submission.id), {
         messageId: trigger.messageId,
         mentionsBot: trigger.mentionsBot,
@@ -997,11 +1008,11 @@ export async function submitRound(input: {
         // 合法沉默（F2/F3），不算异常不占观测日志
         if (roundKind !== "news" && result.status === "done" && (sayCalled.get(String(submission.id)) ?? 0) === 0) {
           if (roundKind === "answer") console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say_*`);
-
         }
         return result;
       } finally {
         triggerOf.delete(String(submission.id));
+        onebot.videos?.clear(String(submission.id));
         // viewed 登记只活本轮（T3/T4）：done、没答上来、wait 抛错都整份清掉，
         // browse 轮的「实际看过」授权不跨轮残留
         clearViewedVideos(String(submission.id));
@@ -1126,6 +1137,7 @@ function recycleNewsNonMentions(chatKey: string, messages: readonly BurstMessage
       ...(message.payload !== undefined ? { payload: message.payload } : {}),
       replyIds: message.replyIds,
       ...(message.quoted !== undefined ? { quoted: message.quoted } : {}),
+      ...(message.videoRefs?.length ? { videoRefs: message.videoRefs } : {}),
       ...(message.mentionTargets !== undefined ? { mentionTargets: message.mentionTargets } : {}),
     });
   }
@@ -1250,6 +1262,7 @@ export async function flushBurst(burst: PendingBurst): Promise<void> {
     trigger: { messageId: anchor.messageId, mentionsBot: burst.mustAnswer, userId: anchor.userId, kind: "answer" },
     reply: burst.quoteFromReply,
     quoteIds: quoteIdsOf(roundContext.seen),
+    videoRefs: roundContext.seen.flatMap((line) => line.videoRefs ?? []),
     ...(payload !== undefined ? { bypass: payload } : {}),
     ...(plan.blocks.length > 0 ? { imageBlocks: plan.blocks } : {}),
     memory: { inbound: memoryInbound, speakers },
@@ -1380,6 +1393,7 @@ async function submitShardRound(chatKey: string, items: readonly EngageShardItem
     reply: false,
     entryKind: MEMORY_ENGAGE_KIND,
     quoteIds: quoteIdsOf(fresh),
+    videoRefs: fresh.flatMap((line) => line.videoRefs ?? []),
     ...(payload !== undefined ? { bypass: payload } : {}),
     ...(imagePlan.blocks.length > 0 ? { imageBlocks: imagePlan.blocks } : {}),
   });
@@ -2125,6 +2139,10 @@ export const normalizeInbound: Middleware<MessageCtx> = async (ctx, next) => {
   // 记忆 entry 的原始文本：必须在卡片渲染（就地改写 msg.text）与 bypass 剥离之前取，
   // 只去掉 [卡片#N] 占位与 bypass 指令，不携带任何宿主渲染文案
   rawMemoryText.set(msg, memoryTextOf(msg.text));
+  if (msg.videos?.length) {
+    const tags = msg.videos.map((v) => renderTemplate(fish.prompts.messages["video_attachment"], { ref: v.ref, name: v.name })).join(" ");
+    msg.text = [msg.text.trim(), tags].filter(Boolean).join(" ");
+  }
   // 分享卡片：文本里只有 [卡片#N] 占位，这里按卡片内容渲染成可读文本
   // （B 站小程序卡片带 b23.tv 短链，鱼据此就能调 video 去看那条视频）
   if (msg.cards && msg.cards.length > 0) {
@@ -2151,6 +2169,7 @@ export const normalizeInbound: Middleware<MessageCtx> = async (ctx, next) => {
       userId: msg.userId,
       nickname: msg.nickname,
       text: backgroundTextOf(msg, fish.prompts.messages),
+      ...(msg.videos?.length ? { videoRefs: msg.videos.map((v) => v.ref) } : {}),
       at: Date.now(),
       ...(msg.messageId !== undefined ? { messageId: msg.messageId } : {}),
       ...(msg.arrivalSeq !== undefined ? { arrivalSeq: msg.arrivalSeq } : {}),
@@ -2260,6 +2279,7 @@ export const newsFreezeStage: Middleware<MessageCtx> = async (ctx, next) => {
     ...(ctx.bypass ? { payload: ctx.bypass.stash } : {}),
     replyIds: msg.replyIds,
     ...(msg.quoted !== undefined ? { quoted: msg.quoted } : {}),
+    ...((msg.videos?.length || msg.quoted?.videos?.length) ? { videoRefs: [...(msg.videos ?? []), ...(msg.quoted?.videos ?? [])].map((v) => v.ref) } : {}),
     ...(mentionTargetsOf(msg.mentions) !== undefined ? { mentionTargets: mentionTargetsOf(msg.mentions) } : {}),
   });
 };
@@ -2292,6 +2312,7 @@ export const groupWindowStage: Middleware<MessageCtx> = async (ctx, next) => {
         // 批内回复关系（2026-11-05）：让一拍里的「谁在回谁」可见，被引原文随批附上
         replyIds: msg.replyIds,
         ...(msg.quoted !== undefined ? { quoted: msg.quoted } : {}),
+        ...((msg.videos?.length || msg.quoted?.videos?.length) ? { videoRefs: [...(msg.videos ?? []), ...(msg.quoted?.videos ?? [])].map((v) => v.ref) } : {}),
         ...(mentionTargetsOf(msg.mentions) !== undefined ? { mentionTargets: mentionTargetsOf(msg.mentions) } : {}),
       });
       if (!collected) {
