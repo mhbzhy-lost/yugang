@@ -51,7 +51,6 @@ import { clearMemeImportRound } from "../tools/meme_import/shared.ts";
 import { shrinkForModel } from "../media/shrink-image.ts";
 import { absorbSecrets } from "../egress/absorb.ts";
 import { resetRun, resetLook, ledgerOf } from "../egress/ledger.ts";
-import { validateOutbound, DEFAULT_LIMITS } from "../egress/policy.ts";
 import { createChatlog } from "../records/chatlog.ts";
 import { localDay } from "../records/usage.ts";
 import { weeklyStats, renderWeekly } from "../records/stats.ts";
@@ -406,8 +405,7 @@ const workingSent = new Map<string, Set<string>>();
 /** draw 阶段进度机械提示的去重表：round → 已发阶段（单/多管线全部阶段）。 */
 const drawStageSent = new Map<string, Set<string>>();
 // 窗口键（chatKey\0发送者）→ 本组是否有「必答」放行（private/mentioned）。
-// gate 逐条放行时累积，flushBurst 整组消费并清掉：正文兜底只补必答轮——环境轮（free_pass）
-// 零 say_* 的正文多是内心独白，是当年删兜底时的误发重灾区，只留零出口轮日志。
+// gate 逐条放行时累积，flushBurst 整组消费并清掉：必答轮遇在途环境轮时排队等待。
 const burstMustAnswer = new Map<string, boolean>();
 
 export const newsFreezes = createNewsFreeze();
@@ -438,7 +436,7 @@ function windowKey(chatKey: string, userId: number): string {
   return chatKey + "\u0000" + userId;
 }
 
-/** 必答放行原因：只有以这些原因进闸的轮才允许正文兜底补发。 */
+/** 必答放行原因：用于在途环境轮的等待和忙碌回复。 */
 const MUST_ANSWER_REASONS: ReadonlySet<string> = new Set(["private", "mentioned"]);
 const conversations = new Map<string, Conversation>();
 
@@ -851,104 +849,6 @@ async function sendBusyReplies(conv: Conversation, messageIds: readonly (number 
   if (queued) await drainLoop();
 }
 
-/** assistant entry 的可见正文：只拼 text block，thinking 与工具调用一概不碰。 */
-function flattenAssistantText(model: unknown): string {
-  if (!Array.isArray(model)) return "";
-  return model
-    .map((message) => {
-      const content = (message as { content?: unknown }).content;
-      if (!Array.isArray(content)) return "";
-      return content
-        .filter((block): block is { type: "text"; text: string } => block?.type === "text" && typeof block.text === "string")
-        .map((block) => block.text)
-        .join(" ");
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-/**
- * 正文兜底补发（salvagePlainReply，仅必答轮）：一轮里一次 say_* 都没调但末条 assistant 有
- * 非空正文时，取正文首行（不截字数——出口链路 maxChars 已是 Infinity，长度约束只存在于
- * 模型侧建议），过与 say_words 完全相同的出口校验（结构 + 溯源 + 重复）
- * 后经 outbox 补发。thinking / tool 文本永不涉及（只取 text block）；放弃与出错都留日志
- * （文案在 prompt/messages.md 的 salvage_skip / salvage_error），本函数自身也永不抛错；
- * 误发可在 fish.config.json 里把 salvagePlainReply 设为 false 关掉。
- *
- * 定位本轮不能扫 pi.user：记忆链路上线后 submitRound 的输入以 fish.inbound entry 落库，
- * 鱼自己的轮从不写 pi.user，扫 kind 永远找不到输入、兜底就静默失效（2026-11-01 私聊轮）。
- * settle 记录直接带本轮的输入 entry 与末条 assistant entry 的 id，按 id 直取；answer 取不到
- * 时退回按输入 entry 定位、取其后的末条 pi.assistant（与旧语义一致）。
- */
-async function salvagePlainReply(
-  conv: Conversation,
-  chatKey: string,
-  trigger: { messageId?: number | string; mentionsBot: boolean },
-  round: { inputEntryId?: number; answerEntryId?: number },
-): Promise<void> {
-  // 早退可观测：放弃原因走 prompt/messages.md 的 salvage_skip（缺 key 时退化成裸原因，照样留日志）
-  const skip = (reason: string): void => {
-    const tpl = fish.prompts.messages["salvage_skip"] ?? "";
-    console.log(`[鱼缸] ${chatKey} ${tpl ? renderTemplate(tpl, { reason }) : `兜底放弃：${reason}`}`);
-  };
-  try {
-    const view = await conv.context(ctx);
-    const entries = view.entries as readonly { id?: number; kind?: string; model?: unknown }[];
-    // 优先按 settle 给出的 answer entry id 直取本轮末条 assistant（多轮工具调用时它就是最后一条回复）
-    let text = "";
-    const answered = entries.find((entry) => entry.id === round.answerEntryId);
-    if (answered !== undefined) {
-      text = flattenAssistantText(answered.model);
-    } else {
-      let anchor = -1;
-      for (let i = entries.length - 1; i >= 0; i--) {
-        if (entries[i]?.id === round.inputEntryId) { anchor = i; break; }
-      }
-      if (anchor < 0) {
-        skip(`找不到本轮 entry（input=${round.inputEntryId} answer=${round.answerEntryId}）`);
-        return;
-      }
-      for (let i = anchor + 1; i < entries.length; i++) {
-        if (entries[i]?.kind === "pi.assistant") text = flattenAssistantText(entries[i]?.model);
-      }
-    }
-    const line = text.split("\n").map((s) => s.trim()).find(Boolean) ?? "";
-    if (!line) {
-      skip("末条 assistant 没有正文");
-      return;
-    }
-    const clipped = line;
-    const ledger = ledgerOf(conv.id);
-    const rejection = validateOutbound(
-      { messages: [clipped] },
-      {
-        limits: { ...DEFAULT_LIMITS, mediaRoot: config.mediaRoot },
-        now: Date.now(),
-        recent: ledger.recent,
-        secrets: ledger.secrets,
-      },
-    );
-    if (rejection) {
-      skip(rejection.code);
-      return;
-    }
-    await fish.enqueue(conv.id, {
-      items: [clipped],
-      quote: trigger.mentionsBot,
-      quoteId: trigger.messageId,
-      quoteForce: trigger.mentionsBot,
-      at: Date.now(),
-      key: `salvage:${trigger.messageId ?? Date.now()}`, // 幂等键：崩溃重放不重复发
-    });
-    console.log(`[鱼缸] ${chatKey} 兜底补发 1 条`);
-  } catch (error) {
-    // 兜底本身不能拖垮主流程，但失败必须留痕（文案在 prompt/messages.md 的 salvage_error）
-    const detail = error instanceof Error ? error.message : String(error);
-    const tpl = fish.prompts.messages["salvage_error"] ?? "";
-    console.error(`[鱼缸] ${chatKey} ${tpl ? renderTemplate(tpl, { error: detail }) : `兜底出错：${detail}`}`);
-  }
-}
-
 /**
  * 提交一轮，等它跑完，再记账与换页。
  *
@@ -976,8 +876,6 @@ export async function submitRound(input: {
   };
   /** 本轮是不是在回复别人（回复链要引用） */
   reply: boolean;
-  /** 本轮是否必答（闸放行原因 ∈ private/mentioned）：正文兜底只补必答轮 */
-  mustAnswer?: boolean;
   /** bypass 段（画图指令）；只在这一轮可见，轮 settle 即删 */
   bypass?: string;
   /** 记忆：结构化入站 entry（fish.inbound，原始文本）与本轮在场人物（memory scope）。 */
@@ -1099,15 +997,7 @@ export async function submitRound(input: {
         // 合法沉默（F2/F3），不算异常不占观测日志
         if (roundKind !== "news" && result.status === "done" && (sayCalled.get(String(submission.id)) ?? 0) === 0) {
           if (roundKind === "answer") console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say_*`);
-          // 必答轮的兜底补发：配置可关（mtime 热加载，每次触发现读）；环境轮只留上面的观测日志。
-          // done 变体的 settle 记录带本轮输入（entry）与末条 assistant（answer）的 entry id，兜底按 id 定位
-          if (input.mustAnswer === true && fishConfig().config.salvagePlainReply) {
-            const placed = result as { entry?: number; answer?: number };
-            await salvagePlainReply(conv, chatKey, trigger, {
-              inputEntryId: placed.entry,
-              answerEntryId: placed.answer,
-            });
-          }
+
         }
         return result;
       } finally {
@@ -1258,7 +1148,7 @@ async function holdBurstForNews(burst: PendingBurst, conv: Conversation): Promis
  */
 export async function flushBurst(burst: PendingBurst): Promise<void> {
   const anchor = burst.anchor;
-  // 本组的必答标记整组消费一次（正文兜底判据）：窗口已随 timer 摘除，走哪条分支都不残留
+  // 本组的必答标记整组消费一次：用于在途环境轮的等待，走哪条分支都不残留
   const mustAnswer = burstMustAnswer.get(windowKey(burst.chatKey, burst.userId)) ?? false;
   burstMustAnswer.delete(windowKey(burst.chatKey, burst.userId));
   // 会话/人格只认首次 push 那一份：10 秒窗口里主人 /切换人格 也改不了这一组的落点
@@ -1359,7 +1249,6 @@ export async function flushBurst(burst: PendingBurst): Promise<void> {
     // burst 轮（@）一律 answer；open 态的非 @ 消息走 shard（ambient），不经这里
     trigger: { messageId: anchor.messageId, mentionsBot: burst.mustAnswer, userId: anchor.userId, kind: "answer" },
     reply: burst.quoteFromReply,
-    mustAnswer,
     quoteIds: quoteIdsOf(roundContext.seen),
     ...(payload !== undefined ? { bypass: payload } : {}),
     ...(plan.blocks.length > 0 ? { imageBlocks: plan.blocks } : {}),
@@ -1382,7 +1271,7 @@ export async function flushBurst(burst: PendingBurst): Promise<void> {
 /**
  * 零新增主动轮的提交（自由群空拍门开时由 engage-next 回调）。
  * decisions §5.6 固定模板四段逐字拼装，不预选具体视频、不注入编号、不附加元说明；
- * 走 injection 管线（fish.engage_tick、非必答、无 salvage、无 quoteIds），
+ * 走 injection 管线（fish.engage_tick、非必答、无 quoteIds），
  * browseWindow/browseTopic 钉上 trigger（浏览与分享授权的唯一来源）。
  * 遇忙放弃（宁少勿答，不重试不补发）。
  */
@@ -1407,7 +1296,7 @@ async function submitBrowseOpportunity(chatKey: string, gate: { windowId: string
 /**
  * 自由拍轮（ambient）：每 engage.freeSeconds 一拍，把这一拍收集的全部发送者
  * 消息合成一轮。输入是标准群消息列表（decisions §5.5），按真实接收顺序渲染。非必答：零出口
- * 合法、无 salvage、无强制引用；已读去重后注入、注入后推进标记；quoteIds = 本轮拍
+ * 合法、无强制引用；已读去重后注入、注入后推进标记；quoteIds = 本轮拍
  * 消息集。拍轮不携带 browseWindow/browseTopic——ambient 无浏览授权。
  * 提交前会话又忙（状态机检查后的竞态）就放回收集器并入下一拍（绝不丢、绝不并发提交）。
  */
@@ -2078,7 +1967,6 @@ function installNewsJob(): void {
           newsAttempt: attempt,
         },
         reply: false,
-        mustAnswer: false,
         entryKind: MEMORY_ENGAGE_KIND,
         modelAttempts: 1,
         deadline: run.publishAt,
@@ -2469,7 +2357,6 @@ export const privateChatStage: Middleware<MessageCtx> = async (ctx, next) => {
     },
     // 回复链：本轮触发本身是在回复某条消息，鱼的回应应引用触发那条
     reply: (msg.replyIds?.length ?? 0) > 0,
-    mustAnswer: MUST_ANSWER_REASONS.has(ctx.decision!.reason),
     ...(ctx.bypass ? { bypass: ctx.bypass } : {}),
     memory: { inbound: memoryInbound, speakers },
   });

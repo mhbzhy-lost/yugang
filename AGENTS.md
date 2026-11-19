@@ -228,6 +228,7 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
   被拒不计数），额度规划守则（表情包/语音保开口防吞）在 `prompt/runtime.md`
 - **draw 出图机械直发**（主人裁定 2026-11-13）：draw 生成图后由工具经 `enqueueOutbound` 直接入 outbox 发出（同提交写 `fish.outbound` transcript、记附件闸 `recordMedia`），不再让模型调 say_media、不占开口额度；与 working_*/新闻播报同属宿主机械消息。入队失败回退提示模型手动 say_media 补发。模型侧出口仍只有 say_* 一族
 - 任何新增工具都不许直接调用 `emit()`
+- **普通正文永不补发**：无论私聊或被 @，未调用 say_* 的 assistant 正文不进入 outbox；仅保留零出口轮日志，正文自动补发配置已退役。
 - 校验失败必须以 tool 错误返回给模型（文案来自 `prompt/messages.md` 或该工具 `TOOL.md` 的 tool-messages 块），不许静默丢弃
 - 主动 @ 不是第二个出口：它是 `say_words` / `say_media` / `say_meme` 的 `mentions` 参数
   （去重后最多 3 个纯数字 QQ 号；图片消息 @ 段挂图前），并随 outbox 一起持久化——
@@ -610,7 +611,7 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
   的 60s/RSS/知乎日报八源完成，单源失败降级；目标群必须 ∈ `.env GROUPS`。
   新闻轮绑定**开始时目标群当前人格的既有 Conversation**，由该人格先经 `tool_search` 加载 deferred
   `news_prepare`，再提交结构化 sections/closing 选材（topic/sourceRef 严格校验、summary≤60 字、closing≤30 字），
-  全程禁 `say_*`、跳过正文兜底与轮后 compact；首次 + 最多 3 次重试，全部尝试不得越过 publishAt。
+  全程禁 `say_*`、跳过轮后 compact；首次 + 最多 3 次重试，全部尝试不得越过 publishAt。
   宿主渲染 ≤500 字成品（canonical 链接只按 sourceRef 索引），到点在同一个 harness commit 内完成稳定 key
   `news:<day>:<group>` 的 outbox 入队与 `fish.news_runs` prepared→done，再解冻并 drain；FIFO 保证新闻先于
   解冻后的普通回复，入队不冒充 QQ 送达。run 全状态 CAS（preparing/prepared/done/failed）、run-key single-flight、
