@@ -435,7 +435,8 @@ export class OneBot {
       const name = String(d["name"] ?? d["file_name"] ?? (seg.type === "file" ? d["file"] : "") ?? "");
       if (seg.type !== "video" && !(seg.type === "file" && isVideoName(name))) continue;
       const fileId = String(d["file_id"] ?? d["id"] ?? d["file"] ?? d["url"] ?? "");
-      if (!fileId || (seg.type === "file" && /^(?:https?:|file:|\/|[A-Za-z]:[\\/])/.test(fileId))) continue;
+      // QQ 群文件 ID 可以是 /UUID；这里只传给协议接口，不作为本地路径读取。
+      if (!fileId || (seg.type === "file" && /^(?:https?:|file:|[A-Za-z]:[\\/])/.test(fileId))) continue;
       try {
         const source: QqVideoSource = { kind: seg.type === "video" ? "video" : "file", fileId, name,
           ...(Number.isFinite(Number(d["busid"])) ? { busid: Number(d["busid"]) } : {}),
