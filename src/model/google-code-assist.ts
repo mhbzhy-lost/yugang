@@ -55,7 +55,10 @@ import { getSystemMessageText } from "@earendil-works/pi-ai/utils/text";
 import { collapseSystemMessages, getCurrentTools, getInitialSystemMessage } from "@earendil-works/pi-ai/utils/transcript";
 
 const DEFAULT_BASE_URL = "https://cloudcode-pa.googleapis.com";
-const ANTIGRAVITY_BASE_URL = "https://daily-cloudcode-pa.sandbox.googleapis.com";
+// 付费（Pro/Ultra）请求走 daily（非 sandbox）：Google 对 prod / daily / sandbox 是三个独立
+// 配额桶，付费账号的订阅额度在 daily 计发（sub2api PR #8924/#8979 实锤）；2026-11-07
+// “生产端点实测 429”实为 prod 桶耗尽，当年选 sandbox 是误判（sandbox 能用但额度另算）。
+const ANTIGRAVITY_BASE_URL = "https://daily-cloudcode-pa.googleapis.com";
 const PROJECT_HEADER = "x-yugang-ca-project";
 const DEFAULT_MAX_RETRIES = 3;
 
@@ -68,11 +71,14 @@ function defaultBaseUrl(flavor: CodeAssistFlavor): string {
 
 const ANTIGRAVITY_IDE_VERSION = "2.29.0";
 
-/** 当前 IDE 指纹；完整值可由 provider.userAgent 覆盖，避免服务端升最低版本时改源码。 */
+/** 当前客户端指纹；完整值可由 provider.userAgent 覆盖。家族必须是 antigravity/hub：Google 按
+ * UA 的 subclient_type 门禁模型目录（2026-11-21 实测 + sub2api PR #8093 + Antigravity-Manager
+ * 逆向实证）——ide/vscode 家族被过滤掉整个 gemini-4 系列且调用 404；hub 家族（2.23.0+）
+ * 返回完整目录（carbon/neon/argon/hydrogen 全部 tiered ID）；tier 与模型授权无关。 */
 export function antigravityUserAgent(version = ANTIGRAVITY_IDE_VERSION): string {
   const os = process.platform === "win32" ? "windows" : process.platform;
   const arch = process.arch === "x64" ? "amd64" : process.arch === "ia32" ? "386" : process.arch;
-  return `antigravity/ide/${version} (os_type=${os}; arch=${arch}; aidev_client; auth_method=oauth)`;
+  return `antigravity/hub/${version} (os_type=${os}; arch=${arch}; aidev_client; auth_method=oauth)`;
 }
 
 function requestHeaders(flavor: CodeAssistFlavor, apiKey: string, streaming: boolean, userAgent?: string): Record<string, string> {
