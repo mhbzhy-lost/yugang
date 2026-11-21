@@ -15,10 +15,6 @@ export interface Ledger {
   recent: LedgerEntry[];
   secrets: string[];
   lastReact?: { emoji: string; at: number };
-  /** 本轮看过几张图。 */
-  lookedThisRun: number;
-  /** 本轮发过几张图（表情/画作），用来卡「一轮一张」。 */
-  mediaThisRun: number;
   /** 上一次发表情包的时间：跨轮共用的冷却，防止每句话都配图。 */
   lastMemeAt?: number;
 }
@@ -28,21 +24,10 @@ const ledgers = new Map<string, Ledger>();
 export function ledgerOf(conversationId: string): Ledger {
   let l = ledgers.get(conversationId);
   if (!l) {
-    l = { recent: [], secrets: [], lookedThisRun: 0, mediaThisRun: 0 };
+    l = { recent: [], secrets: [] };
     ledgers.set(conversationId, l);
   }
   return l;
-}
-
-export function resetRun(conversationId: string): void {
-  const l = ledgerOf(conversationId);
-  l.mediaThisRun = 0;
-}
-
-export function recordMedia(conversationId: string, now: number, meme = false): void {
-  const l = ledgerOf(conversationId);
-  l.mediaThisRun++;
-  if (meme) l.lastMemeAt = now;
 }
 
 export function recordSent(conversationId: string, texts: readonly string[], now: number): void {
@@ -53,14 +38,6 @@ export function recordSent(conversationId: string, texts: readonly string[], now
 
 export function recordReact(conversationId: string, emoji: string, now: number): void {
   ledgerOf(conversationId).lastReact = { emoji, at: now };
-}
-
-export function recordLook(conversationId: string): void {
-  ledgerOf(conversationId).lookedThisRun++;
-}
-
-export function resetLook(conversationId: string): void {
-  ledgerOf(conversationId).lookedThisRun = 0;
 }
 
 /** 把本轮的思考 / 工具结果记进 secrets。只保留最近若干段，避免无界增长。 */

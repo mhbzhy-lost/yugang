@@ -50,7 +50,6 @@ import { setLookDisabled } from "../tools/look/tool.ts";
 import { clearMemeImportRound } from "../tools/meme_import/shared.ts";
 import { shrinkForModel } from "../media/shrink-image.ts";
 import { absorbSecrets } from "../egress/absorb.ts";
-import { resetRun, resetLook, ledgerOf } from "../egress/ledger.ts";
 import { createChatlog } from "../records/chatlog.ts";
 import { localDay } from "../records/usage.ts";
 import { weeklyStats, renderWeekly } from "../records/stats.ts";
@@ -79,7 +78,7 @@ import { clearSeenLinks, recordSeenLinks } from "../egress/seen-links.ts";
 import { shouldSendWorkingReceipt } from "../working-receipt.ts";
 import type { Middleware } from "./app.ts";
 import { planInlineImages, planRoundImages, rewriteRoundForwardImages } from "../qq/round-images.ts";
-import { appendAnswerRules, assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
+import { assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
 import { buildNewsCandidateInput, renderNewsBroadcast, validateNewsDigest, type NewsCandidateInput, type NewsDigest } from "../external/news-broadcast.ts";
 import { createNewsJob, type NewsJob } from "../external/news-job.ts";
 import { createNewsFreeze, NewsFrozenError, splitNewsBurst } from "../external/news-freeze.ts";
@@ -240,9 +239,6 @@ export const onebot = new OneBot(config.onebotUrl, config.onebotToken, config.me
   // 出站配速下沉到 onebot 发送层（终验 #3）：每条物理消息实际发送前按会话等待，
   // 热读取 fishConfig（改配置下一拍生效）；0 = 关闭
   pacingSeconds: () => fishConfig().config.sendPacingSeconds,
-  // 末条自言标记（决策 24，终验 #7）的置位错点 = 每条物理消息实际发送成功（不是整个 emit
-  // 完成）：部分成功（文本发了、图挂了）也置 true——任一条成功即置位，末条至少有一条是鱼的话
-  onSent: (chatKey) => lastWasFish.add(chatKey),
   // 戳一戳是协议层机械互动：只认 GROUPS 白名单群，不进模型、不进 outbox。
   onPoke: ({ groupId, userId }) => {
     if (!config.groups.includes(String(groupId))) return;
@@ -374,12 +370,6 @@ function maxArrivalSeq(messages: readonly { arrivalSeq?: number }[]): number | u
 function quoteIdsOf(messages: readonly { messageId?: number | string }[]): Set<string> {
   return new Set(messages.flatMap((m) => (m.messageId !== undefined ? [String(m.messageId)] : [])));
 }
-
-// ── 末条自言标记（决策 24，T15）─────────────────────────────
-// chatKey → 群里最新一条消息是否鱼自己发的。内存态：emit 实际发送成功置 true，
-// 任一入站消息置 false，重启归 false（宁松勿严）。ambient/injection 环境轮的出口校验
-// 经 lastWasFishOf 读它；answer 轮豁免（有人 @ 必有入站，标记已翻 false）。
-const lastWasFish = new Set<string>();
 
 const lastMention = new Map<string, boolean>();
 // 本轮触发是否是回复某条消息：是则鱼的回应强制引用（回复链可读性）
@@ -628,29 +618,6 @@ export async function bootRuntime(): Promise<void> {
     // 整份替换：删掉的人（含已退群、watch remove 掉的）立刻失去主动 @ 权限与打标
     applyWatched(chatKey, people);
   },
-  // 主动 @ 的身份闸（机械判定，按轮类型，决策 7）：私聊没有 @ 这回事。answer 轮
-  // userId 是本轮触发者——只有主人或本群特别关注者「被点名」时可 @（语义零变化）；
-  // ambient/injection 环境轮没有锚点身份，出口层对每个 @ 目标各调一次、userId 携带的是
-  // 目标 QQ，白名单同为 {主人} ∪ 本群 watched——这是接受的放宽面（自由拍内普通群友可诱导
-  // 鱼 @ 主人/watched），放行与越界拒绝都记审计日志。成员名单校验在出口层照旧。
-  mentionPolicyOf: (conversationId, userId, kind) => {
-    const chatKey = chatKeyFor(conversationId);
-    if (!chatKey || !chatKey.startsWith("qq:group:")) return "not_group";
-    if (userId === undefined) return "not_privileged";
-    const id = String(userId);
-    const allowed = (config.master && id === config.master)
-      || (watchedByChat.get(baseChatKey(chatKey))?.has(id) ?? false);
-    if (kind === "ambient" || kind === "injection") {
-      console.log(`[鱼缸] 审计 ${chatKey} ${kind} 轮 @ ${id} → ${allowed ? "白名单" : "名单外"}`);
-    }
-    return allowed ? "allow" : "not_privileged";
-  },
-  // 末条自言标记（决策 24）的读取口：say_* 的 ambient/injection 轮据它判定「群里最新一条
-  // 是不是鱼自己发的」，是则只放行带 share 的素材分享。标记由 emit/入站两处维护（见上）。
-  lastWasFishOf: (conversationId) => {
-    const chatKey = chatKeyFor(conversationId);
-    return chatKey !== undefined && lastWasFish.has(chatKey);
-  },
   groupMembersOf: async (conversationId) => {
     const chatKey = chatKeyFor(conversationId);
     if (!chatKey || !chatKey.startsWith("qq:group:")) return [];
@@ -857,7 +824,7 @@ async function sendBusyReplies(conv: Conversation, messageIds: readonly (number 
 /**
  * 提交一轮，等它跑完，再记账与换页。
  *
- * 轮级清账（resetRun / resetLook / lastMention / lastReply）
+ * 轮级清账（lastMention / lastReply）
  * 全部挪到这里、在真正 submit 之前做：以前是 gate 放行那一刻就清，同一组连续发言的
  * follow-up 进来会把这一轮的引用目标和记账提前抹掉。
  */
@@ -916,22 +883,11 @@ export async function submitRound(input: {
   await absorbSecrets(conv);
   assertNewsAdmission(chatKey, conv, trigger);
   if (input.deadline !== undefined && Date.now() >= input.deadline) throw new NewsDeadlineError();
-  resetRun(conv.id);
-  resetLook(conv.id);
   // 被@必回引用，让群里看得出鱼在回谁
   lastMention.set(conv.id, trigger.mentionsBot);
   lastReply.set(conv.id, input.reply);
 
   let content = input.content;
-  // 语音提示的 0.3 概率门（仅 answer 轮，决策 7）：主人/特别关注对象过闸的轮里，三成概率追加一行
-  // `[本轮要求] 必须使用 say_voice 回复`。只是提示，不是门禁——用不用由鱼自己判断（说没配音色就不提示）。
-  // ambient/injection 环境轮一律不掷：零出口合法的轮不该被语音义务逼着开口。
-  // 看视频的调用侧规范（2026-11-05，decisions 定案）：工具不再按轮类型卡人，改成在 @ 轮
-  // 明确写一条要求——没被要求就别去看视频。确定性追加（不掷概率），与语音提示同为附加段。
-  const watchRule = fish.prompts.messages["video_answer_rule"] ?? "";
-  if (roundKind === "answer" && trigger.mentionsBot && watchRule.length > 0) {
-    content = appendAnswerRules(content, [watchRule]);
-  }
   // 语音不再有机械提示（2026-11-14 主人裁定）：只有对方明确要求时才用 say_voice，
   // 不再概率追加「必须使用 say_voice」任务行。用不用完全由模型按 TOOL.md 自己判断。
 
@@ -2125,17 +2081,13 @@ export function createMessageCtx(msg: IncomingMessage): MessageCtx {
 }
 
 /**
- * ① 入站归一：末条自言、原始文本、卡片渲染、背景流水、昵称映射、chatlog、bypass 剥离。
+ * ① 入站归一：原始文本、卡片渲染、背景流水、昵称映射、chatlog、bypass 剥离。
  *
- * 顺序是行为契约：lastWasFish 最先清；原始文本必须在卡片渲染前取；chatlog 记 bypass
- * 剥离前的原文；背景流水也要在 bypass 剥离前落（背景行只陈述群友原话）。
+ * 顺序是行为契约：原始文本必须在卡片渲染前取；chatlog 记 bypass 剥离前的原文；
+ * 背景流水也要在 bypass 剥离前落（背景行只陈述群友原话）。
  */
 export const normalizeInbound: Middleware<MessageCtx> = async (ctx, next) => {
   const msg = ctx.msg;
-  // 末条自言标记（决策 24）：任一入站消息都清掉本群的标记——有人说了话，
-  // 群里最新一条就不再是鱼自己发的了。置顶在处理链最前，后续本条触发的
-  // 机械回执 / drain 发送若真发出去，emit 会重新置回 true。
-  lastWasFish.delete(msg.chatKey);
   // 记忆 entry 的原始文本：必须在卡片渲染（就地改写 msg.text）与 bypass 剥离之前取，
   // 只去掉 [卡片#N] 占位与 bypass 指令，不携带任何宿主渲染文案
   rawMemoryText.set(msg, memoryTextOf(msg.text));

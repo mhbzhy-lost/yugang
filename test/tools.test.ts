@@ -5,7 +5,6 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resetRun } from "../src/egress/ledger.ts";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -106,8 +105,6 @@ test("say_* 每轮硬上限 3 次调用：四工具任意组合第 4 次拒，�
     );
 
     // 下一轮（新的一轮）恢复：上限按轮计，不株连。
-    // 生产行为对齐：index.ts 在每条消息前 resetRun，这里同样重置轮内记账
-    resetRun(root.id);
     faux.setResponses([
       fauxAssistantMessage([fauxToolCall("say_words", { text: "新一轮" })], { stopReason: "toolUse" }),
       fauxAssistantMessage("嗯"),

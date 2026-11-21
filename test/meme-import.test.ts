@@ -137,17 +137,18 @@ async function textOf(tool: { execute: (...args: never[]) => Promise<unknown> },
 
 const CAPTION = { ref: "", caption: "假笑敷衍", tags: ["无语"] };
 
-test("普通轮的 look 额度仍是 2 张（不会被导入配额或重复计数抬走）", async () => {
+test("普通轮 look 没有额度（2026-11-21 主人裁定移除），清单外 inbox 图照样拒", async () => {
   const { mediaRoot, look, conversationId, cleanup } = setup();
   try {
     const api = fakeApi(conversationId, "round-quota");
     for (const name of ["a.png", "b.png", "c.png"]) writeFileSync(join(mediaRoot, "inbound", name), PNG);
 
+    // 普通看图没有每轮额度
     assert.equal(await textOf(look, { ref: "inbound/a.png" }, api), "一张图");
     assert.equal(await textOf(look, { ref: "inbound/b.png" }, api), "一张图");
-    await assert.rejects(() => textOf(look, { ref: "inbound/c.png" }, api), /本轮已经看过 2 张图/, "普通轮就是 2 张");
+    assert.equal(await textOf(look, { ref: "inbound/c.png" }, api), "一张图");
 
-    // meme-inbox 不在本轮清单里：拒绝的同时不能把普通额度吃掉
+    // meme-inbox 不在本轮清单里：照样拒
     await assert.rejects(() => textOf(look, { ref: "meme-inbox/a.png" }, api), /不在本轮导入清单里/);
   } finally {
     cleanup();
@@ -163,7 +164,7 @@ test("普通群友 look meme-inbox：没有主人身份，读不了", async () =
       /只有主人这一轮导入时才能看/,
       "群友不该能读本地待收目录",
     );
-    // 普通额度（2 张）不能代替清单授权：换主人也一样，只要清单里没有它就拒绝
+    // 主人身份不能代替清单授权：换主人也一样，只要清单里没有它就拒绝
     setUserId(1);
     await assert.rejects(() => textOf(look, { ref: "meme-inbox/a.png" }, api), /不在本轮导入清单里/);
   } finally {

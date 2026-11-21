@@ -7,8 +7,8 @@
  * actual 一律从**生产导出的真实拼装入口**取得，不在测试里重写任何渲染/拼装逻辑：
  *  - answer / 私聊 / 三类合集 / 背景合集：`planRoundImages`(src/qq/round-images.ts) →
  *    `withContext`(src/qq/debounce.ts) → `rewriteRoundForwardImages` → `assembleRoundContent`
- *    → `appendAnswerRules` → `submitContentOf`（src/qq/round-input.ts），
- *    即 src/index.ts flushBurst(L1154-1185) + submitRound(L944-956) 的同一串调用；
+ *    → `submitContentOf`（src/qq/round-input.ts），
+ *    即宿主 flushBurst + submitRound 的同一串调用（answer 轮规范段已于 2026-11-21 移除）；
  *  - open injection / shard / 零新增：真 `createEngageNext` 状态机（假时钟推进）触发
  *    onPhase(open, backlog) / onShard(items)，回调里调 `renderOpenMessageList` /
  *    `renderBrowseOpportunity`（与 index.ts L1277/L1298/L1335 同一入口）；
@@ -48,7 +48,6 @@ import { DISABLED_TOOL_PACKAGES, mergeToolMessages } from "../src/tools/loader.t
 import { withContext, type BurstMessage, type RecentChatMessage } from "../src/qq/debounce.ts";
 import { planRoundImages, rewriteRoundForwardImages } from "../src/qq/round-images.ts";
 import {
-  appendAnswerRules,
   assembleRoundContent,
   backgroundTextOf,
   renderBrowseOpportunity,
@@ -161,8 +160,6 @@ interface AnswerRoundOptions {
   watched?: (userId: number | string) => boolean;
   /** @ 且提到「合集/转发」时补展开的最近合集（index.ts L1170-1179 的展开结果）。 */
   recentForward?: ForwardAttachment;
-  /** @ 轮确定性追加的 `video_answer_rule`（index.ts 的 answer 轮规范段）。 */
-  answerRule?: boolean;
 }
 
 /**
@@ -187,9 +184,7 @@ function answerRound(options: AnswerRoundOptions): { text: string; submit: strin
     lookHint: plan.lookHint,
   }, messages);
   // 规范段由共享装配器拼：顺序与宿主一致。语音提示的机械门已于 2026-11-14 移除，不再拼语音段。
-  let text = assembled;
-  if (options.answerRule === true) text = appendAnswerRules(text, [messages["video_answer_rule"] ?? ""]);
-  return { text, submit: submitContentOf(text, plan.blocks), blocks: plan.blocks };
+  return { text: assembled, submit: submitContentOf(assembled, plan.blocks), blocks: plan.blocks };
 }
 
 /** 可手动推进的假时钟（engage-next 的 tick 与 shard 节拍都用它，风格同 debounce.test.ts）。 */
@@ -397,7 +392,6 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       bucket,
       burst: [burstLine(2, 1110691775, 2627618651, "[有人@我]", anchor.text, { mentionsBot: true, replyIds: ["1262165350"], quoted })],
       inline: false,
-      answerRule: true,
     });
     return { ...round, via: "planRoundImages → withContext → assembleRoundContent → submitContentOf" };
   },
@@ -439,7 +433,6 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       burst,
       inline: true, // GIF 不 inline、不占编号；背景里的 jpg 不属本轮整组，不触发 look 提示
       watched: (userId) => String(userId) === String(WATCHED),
-      answerRule: true, // @ 轮确定性追加的看视频规范
       // 语音提示的 0.3 概率门已于 2026-11-14 移除（主人裁定）：不再传 voiceHint
     });
     return { ...round, via: "planRoundImages → withContext → assembleRoundContent" };
@@ -473,7 +466,6 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       anchor,
       burst: [burstLine(1, 1064654139, 2627618651, "[有人@我]", `[图片 ${JPG_REF}]`)],
       inline: true,
-      answerRule: true,
     });
     return { ...round, via: "planRoundImages(inline, 压缩 stub) → withContext → assembleRoundContent → submitContentOf" };
   },
@@ -492,7 +484,6 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       anchor,
       burst: [burstLine(1, 1064654139, 2627618651, "[有人@我]", `[图片 ${JPG_REF}]`)],
       inline: false,
-      answerRule: true,
     });
     return { ...round, via: "planRoundImages(fallback) → withContext → assembleRoundContent(lookHint)" };
   },
@@ -537,7 +528,6 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       anchor,
       burst: [burstLine(1, 1111529000, 2627618651, "[有人@我]", "看看这个", { mentionsBot: true, forward })],
       inline: true,
-      answerRule: true,
     });
     return { ...round, via: "planRoundImages(合集子图换编) → withContext(后置附件) → assembleRoundContent → submitContentOf" };
   },
@@ -573,7 +563,6 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       anchor,
       burst: [burstLine(1, 1111529001, 2627618651, "[有人@我]", "这个合集呢", { mentionsBot: true, replyIds: ["1111528999"], quoted })],
       inline: false,
-      answerRule: true,
     });
     return { ...round, via: "withContext(引用原文 + 被引合集附件后置)" };
   },
@@ -593,7 +582,6 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       anchor,
       burst: [burstLine(1, 1111529100, 2627618651, "[有人@我]", "看看上面的合集", { mentionsBot: true })],
       inline: false,
-      answerRule: true,
       recentForward: expanded,
     });
     return { ...round, via: "rewriteRoundForwardImages → assembleRoundContent(recentForward 最后一段)" };
@@ -628,7 +616,6 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       bucket,
       burst: [burstLine(2, 1111529201, 2627618651, "[有人@我]", anchor.text, { mentionsBot: true })],
       inline: false,
-      answerRule: true,
     });
     return { ...round, via: "backgroundTextOf(短标记) → withContext(背景行)" };
   },

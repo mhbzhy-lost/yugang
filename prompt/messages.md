@@ -56,7 +56,6 @@ media_magic: 文件头不是图片，拒绝发送
 voice_with_media: 语音不能和图片、表情包一起发，选一个
 quote_msg_invalid: quoteMsgId 对不上这一轮里的任何消息（要用 [m:…] 里的数字），这次没发出去，也不占这轮开口额度
 say_silent: 这一轮是收图用的，不用说话
-say_self_mute: 群里最后一条消息是你自己发的：现在只能做素材分享（兑现承诺、交付结果、分享你看过的视频等合法素材），继续闲聊先停一停；真有要分享的就重新调用并在参数里带上 share: true，等别人开了新话头就恢复正常
 say_link_not_allowed: 这个链接不是你这轮工具结果里出现过的（{{url}}），不要自己编链接；要看某个视频就先用 video 打开，链接会由它返回
 busy_reply: 正在整理记忆，稍等一下再叫我
 
@@ -87,8 +86,6 @@ news_closing: ——{{closing}}
 # 工具超时（host 侧注入，不属于任何单个工具）
 # 语音已无机械触发提示（2026-11-14 主人裁定）：不再概率追加「必须使用 say_voice」任务行，
 # 用不用语音完全由模型按 say_voice/TOOL.md 自己判断。
-# @ 轮（必答轮）的看视频规范：机械上不再卡轮类型，改用这条要求约束模型
-video_answer_rule: [本轮要求] 只有 @ 你的这条消息明确要求你看/找一个 B 站视频时，才可以用 bili_hot 或 video；没被要求就别去看视频，也别分享视频链接。
 
 # 定时任务到点注入轮（src/tools/remind/，fish.reminder durable task 的 due 相位）：
 # {{note}}=要做的事、{{by}}=谁让设的（task 侧兜底「大家」）。单行模板（messages.md 一行一条），

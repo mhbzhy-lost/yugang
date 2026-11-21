@@ -24,7 +24,6 @@ import { createSayVoiceTool } from "../src/tools/say_voice/tool.ts";
 import { loadToolManifests } from "../src/tools/manifest.ts";
 import { mergeToolMessages } from "../src/tools/loader.ts";
 import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
-import { recordMedia } from "../src/egress/ledger.ts";
 import { loadPrompts } from "../src/prompt/index.ts";
 import { personaOf, pickVoice } from "../src/qq/voice-route.ts";
 import { synthesizeToMedia, type TtsConfig } from "../src/tts.ts";
@@ -106,23 +105,12 @@ test("正常路径：payload 带 voice、不发文字气泡、音频落盘", asy
 
 test("超过 200 字：拒绝并提示改文字", async () => {
   const { say, api } = setup();
-  // 独立会话号：前置用例成功发过语音后，附件闸（一轮一条）会在字数检查前先把路拦死
+  // 独立会话号：避免前置用例的轮级状态串进本用例
   const longApi = { ...api, conversationId: "conv-long" } as never;
   const long = "啊".repeat(201);
   await assert.rejects(
     () => say.execute({ text: long } as never, longApi, ctx),
     /voice_too_long|太长/,
-  );
-});
-
-test("本轮已发过图片/表情：语音被附件闸拒", async () => {
-  const { say, api } = setup();
-  // 附件闸按会话记在账本里：先用独立会话号预置一条，避免污染其它用例
-  recordMedia("conv-media-used", 1_000);
-  const usedApi = { ...api, conversationId: "conv-media-used" } as never;
-  await assert.rejects(
-    () => say.execute({ text: "晚安" } as never, usedApi, ctx),
-    /这一轮已经配过图/,
   );
 });
 

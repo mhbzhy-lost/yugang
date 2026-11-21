@@ -11,7 +11,6 @@ import { loraBook, styleBook } from "../characters.ts";
 import { normalizeInitViaWorker, usesSips } from "../../media/image-ops.ts";
 import { spawnCapture } from "../../media/spawn-capture.ts";
 import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
-import { recordMedia } from "../../egress/ledger.ts";
 import { runInteraction, runInteractionSingle, type InteractionPreset } from "./comfy.ts";
 
 const INTERACTION_PRESETS = JSON.parse(readFileSync(new URL("./interaction-presets.json", import.meta.url)).toString("utf8")) as Record<string, InteractionPreset>;
@@ -158,9 +157,9 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         writeFileSync(join(dir, file), png, { flag: "wx" });
         state.used = true;
         // 机械发图（主人裁定 2026-11-13）：出图即经 outbox 直发，不再让模型调 say_media。
-        // 走 enqueueOutbound（同提交写 fish.outbound transcript + outbox，压缩/记忆看得到），
-        // 记附件闸 recordMedia（本轮再发图/表情/语音被拒）；不占开口额度、不经模型文本校验
-        //（gen/ 路径宿主生成、可信）。入队失败回退提示模型手动 say_media 补发，图不丢。
+        // 走 enqueueOutbound（同提交写 fish.outbound transcript + outbox，压缩/记忆看得到）；
+        // 不占开口额度、不经模型文本校验（gen/ 路径宿主生成、可信）。
+        // 入队失败回退提示模型手动 say_media 补发，图不丢。
         const trigger = deps.triggerOf?.(round);
         const ts = Date.now();
         try {
@@ -174,7 +173,6 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
             key: `${api.conversationId}:drawimg:${String(round)}`,
           };
           await enqueueOutbound(api, payload, context);
-          recordMedia(String(api.conversationId), ts);
           return { output: [{ type: "text", text: renderTemplate(deps.prompts.messages["draw_done"] ?? "gen/{{file}}", { file }) }] };
         } catch (sendError) {
           console.error("[fish] draw auto-send failed", sendError instanceof Error ? sendError.message : sendError);
