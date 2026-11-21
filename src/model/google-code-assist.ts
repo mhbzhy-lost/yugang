@@ -62,9 +62,41 @@ const ANTIGRAVITY_BASE_URL = "https://daily-cloudcode-pa.googleapis.com";
 const PROJECT_HEADER = "x-yugang-ca-project";
 const DEFAULT_MAX_RETRIES = 3;
 
-/** Gemini 4 tiered ID：档位已编码进 ID，不再发 thinkingConfig（服务端按 ID 执行；
- * 2026-11-21 与 pi-config 侧同款结论）。 */
-const G4_TIERED = /^gemini-4-(carbon|neon|argon|hydrogen)-(low|medium|high|xhigh)$/;
+/** 档位已编码进模型 ID 后缀的 tiered 模型（Gemini 4 / Gemini 3.8 Flash / Claude 5.5）：
+ * 不再发 thinkingLevel / thinkingBudget，但显式发 includeThoughts: true 以保留 thinking 块。 */
+const TIERED_MODEL_ID = /-(?:low|medium|high|xhigh)$/;
+
+/** legacy parameters（OpenAPI 3.03 / Google Protobuf Schema）的两处限制：
+ * 1) 不认 JSON Schema 的 `const`；
+ * 2) `Schema.enum` 是 `repeated string`（TYPE_STRING），数字/布尔 enum（如 qwen_draw 的 [1024, 2048]）
+ *    会直接触发 INVALID_ARGUMENT 400。
+ * 递归清洗时跳过 properties / $defs 等键名映射，避免误伤同名参数：字符串 const 转单值 enum，
+ * 非字符串 const/enum 移除并把允许值并入 description。 */
+const SCHEMA_NAME_MAPS = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"]);
+
+function sanitizeOpenApiSchema(node: unknown, isNameMap = false): unknown {
+  if (Array.isArray(node)) return node.map((item) => sanitizeOpenApiSchema(item, false));
+  if (typeof node !== "object" || node === null) return node;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    out[key] = sanitizeOpenApiSchema(value, !isNameMap && SCHEMA_NAME_MAPS.has(key));
+  }
+  if (isNameMap) return out;
+  const appendAllowed = (values: unknown[]) => {
+    const note = `Allowed values: ${values.map(String).join(", ")}`;
+    out.description = typeof out.description === "string" && out.description.length > 0 ? `${out.description} (${note})` : note;
+  };
+  if ("const" in out && out.enum === undefined) {
+    if (typeof out.const === "string") out.enum = [out.const];
+    else if (typeof out.const === "number" || typeof out.const === "boolean") appendAllowed([out.const]);
+    delete out.const;
+  }
+  if (Array.isArray(out.enum) && out.enum.some((item) => typeof item !== "string")) {
+    appendAllowed(out.enum);
+    delete out.enum;
+  }
+  return out;
+}
 
 /** 两个订阅通道共用本适配器，差异全部是常量级的（见文件头注释）。 */
 export type CodeAssistFlavor = "gemini" | "antigravity";
@@ -250,22 +282,26 @@ function buildParams(
     contents: [...systemPrefix, ...contents],
     // （systemInstruction 字段不发送，见上方风控注释；system 已注入 contents）
     ...(currentTools.length > 0 && {
-      // Code Assist 要求 legacy parameters（OpenAPI 3.03），不用 parametersJsonSchema
-      tools: convertTools(currentTools, true, supportsStrictMode),
+      // Code Assist 要求 legacy parameters（OpenAPI 3.03），再过一道 schema 清洗剥离
+      // Protobuf Schema.enum 不接受的非字符串元素（如 qwen_draw.resolution: [1024, 2048]）与 const
+      tools: sanitizeOpenApiSchema(convertTools(currentTools, true, supportsStrictMode)),
     }),
     ...(functionCallingMode !== undefined && {
       toolConfig: { functionCallingConfig: { mode: functionCallingMode } },
     }),
   };
 
-  if (options.thinking?.enabled && model.reasoning) {
-    if (!G4_TIERED.test(model.id)) {
-      const thinkingConfig: Record<string, unknown> = { includeThoughts: true };
-      if (options.thinking.level !== undefined) thinkingConfig.thinkingLevel = toGoogleSdkThinkingLevel(options.thinking.level);
-      else if (options.thinking.budgetTokens !== undefined) thinkingConfig.thinkingBudget = options.thinking.budgetTokens;
-      generationConfig.thinkingConfig = thinkingConfig;
-    }
-  } else if (model.reasoning && options.thinking && !options.thinking.enabled && !G4_TIERED.test(model.id)) {
+  const isTiered = TIERED_MODEL_ID.test(model.id);
+  if (isTiered && model.reasoning) {
+    // tiered 模型档位已编码进 ID，不传 thinkingLevel / thinkingBudget；
+    // 但必须显式传 includeThoughts: true，否则服务端默认不返回 thought 块
+    generationConfig.thinkingConfig = { includeThoughts: true };
+  } else if (options.thinking?.enabled && model.reasoning) {
+    const thinkingConfig: Record<string, unknown> = { includeThoughts: true };
+    if (options.thinking.level !== undefined) thinkingConfig.thinkingLevel = toGoogleSdkThinkingLevel(options.thinking.level);
+    else if (options.thinking.budgetTokens !== undefined) thinkingConfig.thinkingBudget = options.thinking.budgetTokens;
+    generationConfig.thinkingConfig = thinkingConfig;
+  } else if (model.reasoning && options.thinking && !options.thinking.enabled) {
     generationConfig.thinkingConfig = getDisabledGoogleThinkingConfig(model as unknown as GoogleModel);
   }
 
