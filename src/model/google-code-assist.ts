@@ -62,6 +62,10 @@ const ANTIGRAVITY_BASE_URL = "https://daily-cloudcode-pa.googleapis.com";
 const PROJECT_HEADER = "x-yugang-ca-project";
 const DEFAULT_MAX_RETRIES = 3;
 
+/** Gemini 4 tiered ID：档位已编码进 ID，不再发 thinkingConfig（服务端按 ID 执行；
+ * 2026-11-21 与 pi-config 侧同款结论）。 */
+const G4_TIERED = /^gemini-4-(carbon|neon|argon|hydrogen)-(low|medium|high|xhigh)$/;
+
 /** 两个订阅通道共用本适配器，差异全部是常量级的（见文件头注释）。 */
 export type CodeAssistFlavor = "gemini" | "antigravity";
 
@@ -255,11 +259,13 @@ function buildParams(
   };
 
   if (options.thinking?.enabled && model.reasoning) {
-    const thinkingConfig: Record<string, unknown> = { includeThoughts: true };
-    if (options.thinking.level !== undefined) thinkingConfig.thinkingLevel = toGoogleSdkThinkingLevel(options.thinking.level);
-    else if (options.thinking.budgetTokens !== undefined) thinkingConfig.thinkingBudget = options.thinking.budgetTokens;
-    generationConfig.thinkingConfig = thinkingConfig;
-  } else if (model.reasoning && options.thinking && !options.thinking.enabled) {
+    if (!G4_TIERED.test(model.id)) {
+      const thinkingConfig: Record<string, unknown> = { includeThoughts: true };
+      if (options.thinking.level !== undefined) thinkingConfig.thinkingLevel = toGoogleSdkThinkingLevel(options.thinking.level);
+      else if (options.thinking.budgetTokens !== undefined) thinkingConfig.thinkingBudget = options.thinking.budgetTokens;
+      generationConfig.thinkingConfig = thinkingConfig;
+    }
+  } else if (model.reasoning && options.thinking && !options.thinking.enabled && !G4_TIERED.test(model.id)) {
     generationConfig.thinkingConfig = getDisabledGoogleThinkingConfig(model as unknown as GoogleModel);
   }
 
