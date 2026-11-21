@@ -131,6 +131,11 @@ export async function startBrowserLogin(client: GoogleOauthClient): Promise<Brow
   url.searchParams.set("state", state);
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
+  // URLSearchParams 会把空格序列化成 +，Google 授权端点（2026-11-21 实测，Antigravity
+  // 通道）把它当字面加号、整个 scope 解析失败，报 Missing required parameter: scope。
+  // 统一换成标准百分号编码 %20（授权 URL 只影响 GET 跳转；token 交换走 POST body，
+  // 那里 + 本就是 form 编码的空格，不受影响）。
+  url.search = url.searchParams.toString().replaceAll("+", "%20");
   return { url: url.toString(), verifier, state };
 }
 
