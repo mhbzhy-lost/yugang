@@ -5,9 +5,10 @@
  * 同款），不是公开的 generativelanguage API，差异集中在三处：
  *   1) 不用 @google/genai SDK：自己 fetch `POST {base}/v1internal:streamGenerateContent?alt=sse`，
  *      Authorization Bearer，SSE 用手写行缓冲解析（data 行累积、空行 flush 成一个 JSON 事件）
- *   2) 请求体是信封包裹：{ model, project?, request: { contents, systemInstruction, tools,
- *      toolConfig, generationConfig } }，其中 tools 用 legacy `parameters`（OpenAPI 3.03），
- *      pi-ai 的 convertTools(tools, true) 正好输出这个形状
+ *   2) 请求体是信封包裹：{ model, project?, request: { contents, tools, toolConfig,
+ *      generationConfig } }，其中 tools 用 `parametersJsonSchema`（JSON Schema draft 2020-12，
+ *      2026-11-21 实测 Gemini 4 / 2.5 与 Claude 5.5 全员支持，避免 legacy OpenAPI 3.03
+ *      在 Claude 端因 anyOf 报 400 及 Protobuf Schema.enum 不接受数字）
  *   3) 响应也是信封：每个 SSE 事件是 { response: { candidates, usageMetadata } }，
  *      先解包 .response 再走与 google-generative-ai 适配器逐事件一致的归一化
  *
@@ -67,38 +68,6 @@ const DEFAULT_MAX_RETRIES = 3;
  * thinkingConfig.thinkingLevel，必须成对发送（-low→LOW / -medium→MEDIUM / -high→HIGH / -xhigh→XHIGH），
  * 且带 includeThoughts: true 以保留思考块。 */
 const TIERED_MODEL_ID = /-(low|medium|high|xhigh)$/;
-
-/** legacy parameters（OpenAPI 3.03 / Google Protobuf Schema）的两处限制：
- * 1) 不认 JSON Schema 的 `const`；
- * 2) `Schema.enum` 是 `repeated string`（TYPE_STRING），数字/布尔 enum（如 qwen_draw 的 [1024, 2048]）
- *    会直接触发 INVALID_ARGUMENT 400。
- * 递归清洗时跳过 properties / $defs 等键名映射，避免误伤同名参数：字符串 const 转单值 enum，
- * 非字符串 const/enum 移除并把允许值并入 description。 */
-const SCHEMA_NAME_MAPS = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"]);
-
-function sanitizeOpenApiSchema(node: unknown, isNameMap = false): unknown {
-  if (Array.isArray(node)) return node.map((item) => sanitizeOpenApiSchema(item, false));
-  if (typeof node !== "object" || node === null) return node;
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(node)) {
-    out[key] = sanitizeOpenApiSchema(value, !isNameMap && SCHEMA_NAME_MAPS.has(key));
-  }
-  if (isNameMap) return out;
-  const appendAllowed = (values: unknown[]) => {
-    const note = `Allowed values: ${values.map(String).join(", ")}`;
-    out.description = typeof out.description === "string" && out.description.length > 0 ? `${out.description} (${note})` : note;
-  };
-  if ("const" in out && out.enum === undefined) {
-    if (typeof out.const === "string") out.enum = [out.const];
-    else if (typeof out.const === "number" || typeof out.const === "boolean") appendAllowed([out.const]);
-    delete out.const;
-  }
-  if (Array.isArray(out.enum) && out.enum.some((item) => typeof item !== "string")) {
-    appendAllowed(out.enum);
-    delete out.enum;
-  }
-  return out;
-}
 
 /** 两个订阅通道共用本适配器，差异全部是常量级的（见文件头注释）。 */
 export type CodeAssistFlavor = "gemini" | "antigravity";
@@ -284,9 +253,9 @@ function buildParams(
     contents: [...systemPrefix, ...contents],
     // （systemInstruction 字段不发送，见上方风控注释；system 已注入 contents）
     ...(currentTools.length > 0 && {
-      // Code Assist 要求 legacy parameters（OpenAPI 3.03），再过一道 schema 清洗剥离
-      // Protobuf Schema.enum 不接受的非字符串元素（如 qwen_draw.resolution: [1024, 2048]）与 const
-      tools: sanitizeOpenApiSchema(convertTools(currentTools, true, supportsStrictMode)),
+      // 2026-11-21 实测：Gemini 4 / 2.5 与 Claude 5.5 均原生支持 parametersJsonSchema
+      // （draft 2020-12），规避 legacy OpenAPI 3.03 的 anyOf 400 与非字符串 enum 400
+      tools: convertTools(currentTools, false, supportsStrictMode),
     }),
     ...(functionCallingMode !== undefined && {
       toolConfig: { functionCallingConfig: { mode: functionCallingMode } },
@@ -403,6 +372,8 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
         if (candidate?.content?.parts) {
           for (const part of candidate.content.parts) {
             if (part.text !== undefined) {
+              // Claude/Vertex SSE 常带无签名的空文本边界 chunk（{ text: "" }），直接跳过避免产出幽灵空文本块
+              if (part.text === "" && !part.thoughtSignature) continue;
               const isThinking = isThinkingPart(part);
               if (!currentBlock ||
                 (isThinking && currentBlock.type !== "thinking") ||
