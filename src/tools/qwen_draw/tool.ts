@@ -7,7 +7,6 @@ import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
-import { recordMedia } from "../../egress/ledger.ts";
 import { ComfyExecutionFailed, ComfyBusy } from "../draw/comfy.ts";
 import { runQwenDraw, RATIO_SIZES } from "./comfy.ts";
 
@@ -112,7 +111,6 @@ export function createQwenDrawTool(manifest: ToolManifest, deps: ToolPackageDeps
             key: `${api.conversationId}:qwengen:${String(round)}`,
           };
           await enqueueOutbound(api, payload, context);
-          recordMedia(String(api.conversationId), ts);
           return { output: [{ type: "text", text: renderTemplate(deps.prompts.messages["qwen_done"] ?? "gen/{{file}}", { file }) }] };
         } catch (sendError) {
           console.error("[fish] qwen_draw auto-send failed", sendError instanceof Error ? sendError.message : sendError);

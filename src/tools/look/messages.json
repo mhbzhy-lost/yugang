@@ -2,7 +2,6 @@
   "look_outside": "只能看群里的图：{{ref}}",
   "look_missing": "找不到这张图：{{ref}}",
   "look_type": "不是图片：{{ref}}",
-  "look_used": "本轮已经看过 {{limit}} 张图，这张留到下一轮；别跟用户说识别服务坏了",
   "look_import_used": "这一轮导入的 {{count}} 张已经看完了，先把看过的逐张收进库（meme_add），不要重复看",
   "look_import_seen": "这一轮已经看过这张了，直接 meme_add 收它：{{ref}}",
   "look_inbox_master": "本地待收目录（meme-inbox/）里的图只有主人这一轮导入时才能看：{{ref}}",

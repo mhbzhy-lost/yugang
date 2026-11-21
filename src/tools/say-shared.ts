@@ -17,7 +17,7 @@ import { renderTemplate } from "../prompt/index.ts";
 import { isCurfewAt } from "../qq/curfew.ts";
 import { OutboxDoc } from "../store.ts";
 import type { Rejection } from "../egress/policy.ts";
-import type { RoundKind, RoundTrigger, ToolPackageDeps } from "./types.ts";
+import type { RoundTrigger, ToolPackageDeps } from "./types.ts";
 
 export interface OutboundPayload {
   /** 按顺序发出的几条文本。 */
@@ -89,8 +89,9 @@ export async function resolveSayContext(api: SayApi, deps: ToolPackageDeps, cont
 }
 
 /**
- * 主动 @ 的机械校验：去重 → 禁 all/非数字 → 身份闸（按轮类型）→ 群成员核对，任何一环缺失都
- * fail closed（文案来自 prompt/messages.md）。语音工具没有 mentions 参数，不经过这里。
+ * 主动 @ 的机械校验：去重 → 禁 all/非数字 → 群成员核对，任何一环缺失都
+ * fail closed（文案来自 prompt/messages.md）。身份闸已退役（2026-11-21 主人裁定）：
+ * 任何轮型都可 @ 当前群真实成员。语音工具没有 mentions 参数，不经过这里。
  */
 export async function assertMentions(
   deps: ToolPackageDeps,
@@ -106,23 +107,7 @@ export async function assertMentions(
   }
   if (list.length > 3) throw new Error(deps.prompts.messages["say_mention_too_many"] ?? "say_mention_too_many");
   if (trigger === undefined) throw new Error(deps.prompts.messages["say_mention_no_trigger"] ?? "say_mention_no_trigger");
-  const kind: RoundKind = trigger.kind ?? "answer";
-  // 身份闸按轮类型（决策 7）：answer/legacy 看触发者（被点名才可 @，语义零变化）；
-  // ambient/injection 环境轮没有锚点身份（injection 连 messageId 都没有），改为对每个
-  // @ 目标各过一次白名单（{主人} ∪ 本群 watched，宿主实现并记审计）——按轮类型放行而非拒绝
-  const ensureAllowed = (userId: number | undefined) => {
-    const policy = deps.mentionPolicyOf?.(String(api.conversationId), userId, kind);
-    if (policy === "not_group") throw new Error(deps.prompts.messages["say_mention_private"] ?? "say_mention_private");
-    if (policy !== "allow") {
-      throw new Error(deps.prompts.messages["say_mention_not_privileged"] ?? "say_mention_not_privileged");
-    }
-  };
-  if (kind === "ambient" || kind === "injection") {
-    for (const qq of list) ensureAllowed(Number(qq));
-  } else {
-    ensureAllowed(trigger.userId);
-  }
-  // 群成员名单核对照旧（两个分支共用；拿不到名单拒）
+  // 群成员名单核对（拿不到名单拒）
   const members = deps.membersOf ? await deps.membersOf(String(api.conversationId)) : undefined;
   if (!members || members.length === 0) {
     throw new Error(deps.prompts.messages["say_mention_members_missing"] ?? "say_mention_members_missing");
@@ -132,36 +117,6 @@ export async function assertMentions(
   if (missing.length > 0) {
     throw new Error(renderTemplate(deps.prompts.messages["say_mention_not_member"] ?? "", { userIds: missing.join("、") }));
   }
-}
-
-/**
- * 末条自言禁言（决策 24）的工具侧依赖形状：在 ToolPackageDeps 之上补一个宿主回调。
- * 字段的运行时接线在宿主（src/index.ts 维护标记，经 harness 的 packageDeps 下发）；
- * 类型声明就地放在这里而不动 src/tools/types.ts，运行时形状与字段直接落在
- * ToolPackageDeps 完全一致（宿主侧用条件展开传入，与既有可选回调同一套惯用法）。
- */
-export type SelfMuteDeps = ToolPackageDeps & {
-  /** conversationId → 该会话（chatKey 级）最新一条消息是否鱼自己发的；缺省 = 否。 */
-  lastWasFishOf?: (conversationId: string) => boolean;
-};
-
-/**
- * 末条自言禁言的机械校验（决策 24，T15）：群里最新一条消息是鱼自己发的（lastWasFish）时，
- * ambient/injection 轮未声明分享的出口一律 tool 错误拒绝——分享意图认 share: true
- * （兑现承诺/交付委托结果）与旧 ammoId（旧弹药内核已停用、兼容保留）。
- * 2026-11-05 起没有 videoBvid 这种专用声明：分享视频就是普通文本带一个本轮见过的链接，
- * 声不声明为素材分享由 share 决定，so 普通文字不能靠「带个 URL」绕过禁言。
- * answer 轮天然豁免（有人 @ 必有入站，标记已翻 false），trigger 拿不到时
- * 同样豁免；lastWasFishOf 未接线时缺省放行（宁松勿严）。调用点必须在 chargeSayRound
- * 之前：被拒的尝试不占开口额度；既有 @/quote/额度校验不受影响。
- */
-export function assertShareAllowed(deps: SelfMuteDeps, api: SayApi, trigger: SayRound["trigger"], share: unknown, ammoId?: unknown): void {
-  const kind: RoundKind = trigger?.kind ?? "answer";
-  if (kind === "answer") return;
-  if (share === true) return;
-  if (typeof ammoId === "string" && ammoId.trim().length > 0) return;
-  if (deps.lastWasFishOf?.(String(api.conversationId)) !== true) return;
-  throw new Error(deps.prompts.messages["say_self_mute"] ?? "say_self_mute");
 }
 
 /**

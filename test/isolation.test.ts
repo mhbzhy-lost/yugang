@@ -15,7 +15,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
-import { rememberSecrets, resetRun } from "../src/egress/ledger.ts";
+import { rememberSecrets } from "../src/egress/ledger.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
@@ -94,7 +94,6 @@ test("从思考里抄来的话被拒，且以 tool 错误返回", async () => {
   try {
     const root = await fish.harness.root(ctx, { agent: { model: { provider: faux.provider.id, modelId: faux.models[0].id } } });
     rememberSecrets(root.id, [secret]);
-    resetRun(root.id); // 生产行为对齐：index.ts 每条消息前 resetRun；轮内计数是模块级状态，跨测试会残留
 
     const submission = await root.submit({ type: "input", content: "说话啊" }, ctx);
     const settled = await submission.wait(ctx);

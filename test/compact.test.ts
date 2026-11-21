@@ -6,7 +6,6 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resetRun } from "../src/egress/ledger.ts";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -95,7 +94,6 @@ test("到 token 阈值才压，完整消息不被截断并写到 pi.reset 里", 
 
     // 第二轮：长消息把实际请求推过 2700 tokens；完整进入本轮后才换页
     const longMessage = "完整长消息".repeat(300);
-    resetRun(root.id);
     faux.setResponses([
       fauxAssistantMessage([fauxToolCall("say_words", { text: "刚在刷手机" })], { stopReason: "toolUse" }),
       fauxAssistantMessage("好了"),

@@ -2,17 +2,16 @@
  * say_media 工具包 —— 图片出口。
  *
  * media 是相对 mediaRoot 的图片路径；meme-inbox/ 禁直发（先 look + meme_add 进库），
- * 一轮一条附件闸（mediaThisRun）与每轮开口计数都在共享实现里。
+ * 每轮开口计数在共享实现里。
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest。
  */
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { validateOutbound } from "../../egress/policy.ts";
-import { ledgerOf, recordMedia } from "../../egress/ledger.ts";
+import { ledgerOf } from "../../egress/ledger.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import {
   assertMentions,
-  assertShareAllowed,
   chargeSayRound,
   enqueueOutbound,
   inMemeInbox,
@@ -29,8 +28,6 @@ interface SayMediaArgs {
   quoteMsgId?: string;
   /** 旧参数：schema 不再暴露；模型仍输出 quote:true 时按「引用本轮锚点」容忍，不报错。 */
   quote?: boolean;
-  /** 素材分享声明（决策 24）：ambient/injection 轮末条自言时必须为 true 才放行。 */
-  share?: boolean;
   mentions?: string[];
 }
 
@@ -48,19 +45,13 @@ export function createSayMediaTool(manifest: ToolManifest, deps: ToolPackageDeps
     execute: async (args, api, context) => {
       const { round, trigger } = await resolveSayContext(api, deps, context);
 
-      // 末条自言禁言（决策 24）：群里最后一条是自己发的时，ambient/injection 轮只放行带
-      // share 的素材分享；必须在开口计数前（被拒不占额度），answer 轮天然豁免
-      assertShareAllowed(deps, api, trigger, args.share);
-
       const media = args.media;
       // 本地待收目录（meme-inbox/）不是出口的图源：它里面的图必须先 look + meme_add 进库，
       // 否则「主人把图放进目录」就成了一条绕过审核的直达出口
       if (inMemeInbox(limits.mediaRoot, media)) {
         throw new Error(deps.prompts.messages["say_media_inbox"] ?? "say_media_inbox");
       }
-      // 附件闸：一轮一条（图 / 表情 / 语音互斥）
       const ledger = ledgerOf(api.conversationId);
-      if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
 
       // 引用参数（决策 6）：quoteMsgId 属本轮 quoteIds 窗口才有效，无效在开口计数前拒绝
       // 不占额度；旧 quote:true 运行时容忍（引用本轮锚点），机械必答引用链（quoteForce）
@@ -90,8 +81,6 @@ export function createSayMediaTool(manifest: ToolManifest, deps: ToolPackageDeps
         key: `${api.conversationId}:${api.callId}`,
       };
       await enqueueOutbound(api, payload, context);
-
-      recordMedia(String(api.conversationId), ts);
       return { output: [{ type: "text", text: deps.prompts.messages["say_sent"] ?? "ok" }] };
     },
   });

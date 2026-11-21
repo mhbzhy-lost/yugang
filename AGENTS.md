@@ -19,8 +19,8 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
                                        ✓ 硬校验 → QQ
 ```
 
-工具面：`say_words`/`say_media`/`say_meme`/`say_voice`（四个出口工具，共享每轮 3 次调用额度：
-文字/图片/表情包/语音各一个，可引用，除语音外可点名 @ 群友）、`react`（只贴表情）、
+工具面：`say_words`/`say_media`/`say_meme`/`say_voice`（四个出口工具，共享每轮 3 次调用额度，
+可引用，除语音外可点名 @ 群友）、`react`（只贴表情）、
 `look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`meme_import`（主人本地批量导入的登记入口）、
 `draw`（本地 SD 生图）、`gpt_image`（GPT Image 2 透传）、`search`/`video`（联网查）、
 `bili_hot`/`bili_video`（自主浏览候选与元数据核实，实际观看走 `video`）、`tags`（danbooru 词表）；
@@ -202,9 +202,9 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
 
 **群视频**：OneBot 的 video/file 视频段与 group_upload 只登记 QQ 附件引用，不自动下载；`video(ref)` 校验群、会话已见索引与轮级快照后受控下载（100 MiB），复用 B 站抽帧和视觉描述（前 30 分钟、最多 6 帧），无声音/完整台词。登记保留 24 小时、每群最多 200 项，不接受任意 URL 或本地路径。
 
-读图片媒体目录的入口只有两处：`look` 只把图描述成文字；`draw` 的 `ref` 只读一张 `inbound/` 或 `gen/` 的图片当 img2img 初图。`look` 的额度：**普通一轮最多 2 张**。
-唯一的受控例外是**导入轮**——主人本轮调过 `meme_import`、且这张图就在本轮 manifest 里时，
-额度放宽到 manifest 数量（硬上限 50 张），可以逐张看、逐张用 `meme_add` 收。
+读图片媒体目录的入口只有两处：`look` 只把图描述成文字（普通看图没有额度）；`draw` 的 `ref` 只读一张 `inbound/` 或 `gen/` 的图片当 img2img 初图。
+**导入轮**——主人本轮调过 `meme_import`、且这张图就在本轮 manifest 里时，
+额度按 manifest 数量（硬上限 50 张），可以逐张看、逐张用 `meme_add` 收。
 这**不是**通用文件读取的回归：目录固定、身份固定（主人）、清单只活一轮、图仍然只从 `MEDIA_ROOT` 里读，
 而且 `meme_add` 对本地导入的 ref 会机械核对「本轮 manifest 里有它、且这一轮模型真的见过它」
 （inline 模式 = meme_import 结果里直接附过图并记 seen，fallback 模式 = look 过）。
@@ -228,7 +228,7 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 - 只有 `say_words` / `say_media` / `say_meme` / `say_voice` 能把东西发到 QQ，且都必须
   `callers: ["model"]`（脚本/嵌套调用不能绕）；四工具共享每轮 3 次**调用**额度（无豁免、
   被拒不计数），额度规划守则（表情包/语音保开口防吞）在 `prompt/runtime.md`
-- **draw 出图机械直发**（主人裁定 2026-11-13）：draw 生成图后由工具经 `enqueueOutbound` 直接入 outbox 发出（同提交写 `fish.outbound` transcript、记附件闸 `recordMedia`），不再让模型调 say_media、不占开口额度；与 working_*/新闻播报同属宿主机械消息。入队失败回退提示模型手动 say_media 补发。模型侧出口仍只有 say_* 一族
+- **draw 出图机械直发**（主人裁定 2026-11-13）：draw 生成图后由工具经 `enqueueOutbound` 直接入 outbox 发出（同提交写 `fish.outbound` transcript），不再让模型调 say_media、不占开口额度；与 working_*/新闻播报同属宿主机械消息。入队失败回退提示模型手动 say_media 补发。模型侧出口仍只有 say_* 一族
 - 任何新增工具都不许直接调用 `emit()`
 - **普通正文永不补发**：无论私聊或被 @，未调用 say_* 的 assistant 正文不进入 outbox；仅保留零出口轮日志，正文自动补发配置已退役。
 - 校验失败必须以 tool 错误返回给模型（文案来自 `prompt/messages.md` 或该工具 `TOOL.md` 的 tool-messages 块），不许静默丢弃
@@ -236,12 +236,8 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
   （去重后最多 3 个纯数字 QQ 号；图片消息 @ 段挂图前），并随 outbox 一起持久化——
   重启补发还是同一条 @，不会静默降级成裸消息
 - 主动 @ 的机械边界：禁 `all`/非数字；只能 @ **当前群的真实成员**（宿主现拉群成员名单核对，拿不到名单就拒）；
-  `say_voice` 没有 `mentions` 参数（语音没有文本气泡，@ 等于静默丢人）
-- 主动 @ 的身份闸按轮类型：answer 轮沿用「被点名」语义——只有**主人**或**当前群的
-  特别关注者**叫你点名时才可以 @，其余一律以 tool 错误返回；私聊里没有「@谁」这回事，同样拒绝。
-  ambient / injection 轮（自由拍 / 主动交流机会）没有「被点名」一说，为白名单制：
-  @ 目标 ∈ {主人} ∪ 本群特别关注者且为真实成员即可，宿主记审计日志。已接受的放宽面：自由拍内
-  普通群友可诱导鱼 @ 主人/特别关注者（拍子本就是自由交流时段，白名单外的目标仍被机械拦截）。
+  `say_voice` 没有 `mentions` 参数（语音没有文本气泡，@ 等于静默丢人）。
+  身份闸已退役（2026-11-21 主人裁定：任何轮型都可 @ 名单内成员）；
   号码应优先从可信上下文（「昵称(QQ)」背景行）填写，机械校验确认纯数字与
   当前群成员；来源本身靠 prompt 引导，代码不校验号码抄自哪句话
 - 结构校验与溯源校验都是机械判定，不做「看起来像不像 AI」的猜测
@@ -332,8 +328,8 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
   （与 @ 轮同款渲染，批内图统一 inline 编号）
 - **搭话输入统一为标准消息列表**：没有 `[这条消息@了你]` 就不构成必答。零新增空拍不再由沉默、
   nudge、旧账或弹药触发，只在空拍一次 `engage.freeBrowseChance` 门开时提交 `[主动交流机会]`，
-  当前会话可自行 `bili_hot` 找候选、`video` 实际观看后把「推荐语 + 链接」用 `say_words` 发出去；
-  ambient 拍不携带 browse 授权。末条自言禁言的机械边界仍生效（分享素材要带 `share: true`）。
+  当前会话可自行 `bili_hot` 找候选、`video` 实际观看后想要分享就用 `say_words` 把链接发出去（怎么说由鱼定）；
+  ambient 拍不携带 browse 授权。
 - **闸放行 ≠ 立刻提交**：放行的群消息按「群 + 发送者」攒 **10 秒静默**（窗口固定，没有环境变量、没有最长等待），
   同一发送者的新消息取消旧计时并继续加长，不同发送者互不干扰；静默满 10 秒才把整组提交一次
   （这套按发送者的合并只管 @ 必答轮；非 @ free_pass 消息不进这里，改投自由拍收集器——
@@ -431,7 +427,7 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 - 触发提示：**没有机械提示**（2026-11-14 主人裁定，删除了旧 0.3 概率追加的 `[本轮要求] 必须使用 say_voice 回复` 任务行）。
   语音只在**对方明确要求**时用（「用语音说」「发条语音」这类），少数情形可由模型自己判断（对方正用语音聊、情绪浓、短话更适合出声）；
   其余时候用文字。策略文案唯一源是 `src/tools/say_voice/TOOL.md`
-- 出口限制：一轮一条附件（图/表情包/语音互斥）、台词 ≤200 字、超长/含失败一律以 tool 错误返回
+- 出口限制：台词 ≤200 字、超长/含失败一律以 tool 错误返回
 - 服务端：GPT-SoVITS 目标为只保留一个 launchd 常驻实例（默认 9884 爱莉希雅 v4），其它人格由同一进程的 `/set_model` 与 `/change_refer` 热切，不停止/重启实例。旧端口 plist 在远程切换完成前仍只作遗留记录，不属于本地代码验收范围；依赖 `~/nltk_data` 的
   `cmudict` + `averaged_perceptron_tagger*`——**缺了会返回 200 + 0 字节空音频**（英文 g2p 抛 LookupError）
 - 语音实例 plist 由 launchd 托管、`RunAtLoad=true`、`KeepAlive` 崩溃自愈；目标只保留 `elysia4` 为活跃实例，
@@ -586,15 +582,15 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
   选定 topic；门开才给当前（群 × 人格）会话提交 `[主动交流机会]`，ambient 拍不携带 browse 授权。
   `browseWindow` 是 `free-` 前缀的拍 id，下一拍作废；宵禁（空拍本就不提交）恒关。
   **授权不再写在工具里**：`bili_hot` / `video` / `say_words` 都不检查轮类型，能不能逛什么时候逛
-  由调用侧策略定——空拍的 freeBrowseChance 门决定主动轮起不起，prompt 的 `video_answer_rule`
-  （`[本轮要求]`，@ 轮确定性追加）要求「没被要求看视频就别去看」。工具只保留资源闸与防伪造：
+  由调用侧策略定——空拍的 freeBrowseChance 门决定主动轮起不起，工具本身不再限制轮型。
+  工具只保留资源闸与防伪造：
   `bili_hot` 按 topic（可选参数，缺省随机）取候选：**分区排行 + 以排行里的视频作种子的算法相关推荐
   （related，无需 Cookie/WBI）**，合并去重后从前 20 名里随机取 10；候选先过 `fish.video_pool`
   （chatKey 绑定）：`shared` 永久挡、`seen` 只挡 7 天（每次返回的 BV 都记 seen，避免固定榜单反复刷）；
   `video` 每轮最多 `video.browseMaxViewsPerRound`（缺省 5）次、成功观看才登记 viewed；
   `say_words` 的文本里每个 URL 必须是本轮工具结果里出现过的（`src/egress/seen-links.ts`
   白名单，宿主在工具包装层机械登记），文本里出现的 B 站 **BV 号（带不带链接都算）**顺手记进
-  去重表，写入与 outbox 同一次提交、失败回滚不占出口额度。分享视频因此就是「推荐语 + 链接」，
+  去重表，写入与 outbox 同一次提交、失败回滚不占出口额度。分享视频因此就是带链接的普通发言，
   没有 `videoBvid` 这类专用字段。
   频控内核 `src/external/bili-client.ts` 的白名单端点、串行锁、同端点 ≥2s、-412/-352 熔断与
   buvid3 复用不变，每日预算改读 `video.dailyBudget`（缺省 60，旧 `ammo.dailyBudget` 只作回退）。

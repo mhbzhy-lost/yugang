@@ -26,7 +26,7 @@ import { renderTemplate } from "../../prompt/index.ts";
 import { OutboxDoc } from "../../store.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { ammoCurfewAt, ammoShareGateOf, assertMentions, assertShareAllowed, chargeSayRound, enqueueOutbound, normalizeTextInput, OutboundEntry, peekSayRound, prefixAmmoLink, registerAmmoShare, resolveQuoteArg, resolveSayContext, stripOutboundLinks, throwIfSayCancelled, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
+import { ammoCurfewAt, ammoShareGateOf, assertMentions, chargeSayRound, enqueueOutbound, normalizeTextInput, OutboundEntry, peekSayRound, prefixAmmoLink, registerAmmoShare, resolveQuoteArg, resolveSayContext, stripOutboundLinks, throwIfSayCancelled, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 对应（quote 是 schema 已移除的旧布尔，运行时容忍）；
  *  运行时 Schema 只有 manifest 这一份。 */
@@ -35,8 +35,6 @@ interface SayWordsArgs {
   quoteMsgId?: string;
   /** 旧参数：schema 不再暴露；模型仍输出 quote:true 时按「引用本轮锚点」容忍，不报错。 */
   quote?: boolean;
-  /** 素材分享声明（决策 24）：ambient/injection 轮末条自言时必须为 true 才放行。 */
-  share?: boolean;
   /**
    * 旧外部弹药编号（外部计划 E5，已停用）：Schema 不再暴露，内核源码兼容保留——
    * 分享门接线已摘除，这条链恒 fail closed（ammo_gate_closed）。
@@ -58,12 +56,6 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
     parameters: manifestParameters<SayWordsArgs>(manifest),
     execute: async (args, api, context) => {
       const { round, trigger } = await resolveSayContext(api, deps, context);
-
-      // 末条自言禁言（决策 24）：群里最后一条是自己发的时，ambient/injection 轮只放行
-      // 素材分享——share: true（承诺/委托）这一种声明；必须在开口计数前（被拒不占额度），
-      // answer 轮天然豁免。2026-11-05 起不再有 videoBvid：分享视频就是「推荐语 + 链接」，
-      // 声不声明是素材分享由 share 决定。
-      assertShareAllowed(deps, api, trigger, args.share, args.ammoId);
 
       const text = normalizeTextInput(args.text);
       if (!text) throw new Error(deps.prompts.messages["empty"] ?? "empty");

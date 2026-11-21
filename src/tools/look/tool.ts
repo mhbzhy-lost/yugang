@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep, extname, relative } from "node:path";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { renderTemplate } from "../../prompt/index.ts";
-import { ledgerOf, recordLook } from "../../egress/ledger.ts";
+
 import { describeImage, isDescribeFiltered } from "../../media/describe.ts";
 import { lookShrinkViaWorker, readBoundedFile, sniffImageMagic, usesSips } from "../../media/image-ops.ts";
 import { checkMemeSource } from "../../media/meme-store.ts";
@@ -80,8 +80,6 @@ const SNIFF_EXT: Record<string, string> = {
 export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration {
   const root = resolve(deps.mediaRoot);
   const inboxDir = resolve(root, "meme-inbox");
-  // 普通轮每轮两张（历史默认，从不被调用方覆盖）；导入轮的额度按清单张数另算
-  const limit = 2;
   const maxBytes = deps.limits?.maxMediaBytes ?? DEFAULT_LIMITS.maxMediaBytes;
 
   return defineTool({
@@ -178,32 +176,22 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
 
       const importing = inInbox && roundId !== undefined && memeImportHas(roundId, localRef);
       // 导入轮：只认本轮 meme_import 清单里、且本轮触发是主人的 inbox 图，额度按清单张数（上限 50）；
-      const importLimit = roundId === undefined ? undefined : memeImportLookLimit(roundId);
-      // 额度＝清单张数（上限 50）：清单只有一张时就只看得了一张，不被普通轮的 2 张抬上去
-      const effectiveLimit = importing && importLimit !== undefined ? Math.min(importLimit, MEME_IMPORT_MAX) : limit;
-      const ledger = ledgerOf(api.conversationId);
+      // 普通看图没有额度
       if (importing && roundId !== undefined) {
         // 看过的重复看不占额度（也不重复花视觉调用）：直接让它去 meme_add
         if (memeImportLooked(roundId, localRef)) {
           throw new Error(renderTemplate(deps.prompts.messages["look_import_seen"] ?? "{{ref}}", { ref: localRef }));
         }
-        if (memeImportLookedCount(roundId) >= effectiveLimit) {
+        const importCap = Math.min(memeImportLookLimit(roundId) ?? MEME_IMPORT_MAX, MEME_IMPORT_MAX);
+        if (memeImportLookedCount(roundId) >= importCap) {
           throw new Error(
             renderTemplate(deps.prompts.messages["look_import_used"] ?? "{{count}}", {
-              count: String(effectiveLimit),
-              limit: String(effectiveLimit),
+              count: String(importCap),
+              limit: String(importCap),
               ref: localRef,
             }),
           );
         }
-      } else if (ledger.lookedThisRun >= effectiveLimit) {
-        throw new Error(
-          renderTemplate(deps.prompts.messages["look_used"] ?? "{{limit}}", {
-            limit: String(effectiveLimit),
-            count: String(effectiveLimit),
-            ref: localRef,
-          }),
-        );
       }
 
       // 与 metadata 同一道读取前机械闸：realpath 围栏 + maxMediaBytes + 魔数核对扩展名。
@@ -236,8 +224,7 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       if (!described.ok) {
         return { output: [{ type: "text", text: deps.prompts.messages["look_unstable"] ?? "看不了" }] };
       }
-      // 真的看成了才记帐：没描述成功不占额度，也不算「看过」（否则清单里的图永远 meme_add 不了）
-      recordLook(api.conversationId);
+      // 真的看成了才打标（导入轮清单额度）：没描述成功不算「看过」（否则清单里的图永远 meme_add 不了）
       if (importing && roundId !== undefined) memeImportMarkLooked(roundId, localRef);
       return { output: [{ type: "text", text: described.text }] };
     },

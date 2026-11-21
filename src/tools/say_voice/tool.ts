@@ -7,7 +7,7 @@
  */
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { validateOutbound } from "../../egress/policy.ts";
-import { ledgerOf, recordMedia } from "../../egress/ledger.ts";
+import { ledgerOf } from "../../egress/ledger.ts";
 import { synthesizeToMedia } from "../../tts.ts";
 import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
@@ -41,10 +41,7 @@ export function createSayVoiceTool(manifest: ToolManifest, deps: ToolPackageDeps
       const tts = deps.ttsOf?.(String(api.conversationId));
       if (!tts?.url) throw new Error(deps.prompts.messages["voice_off"] ?? "voice_off");
 
-      // 附件闸：一轮一条（图 / 表情 / 语音互斥）
       const ledger = ledgerOf(api.conversationId);
-      if (ledger.mediaThisRun >= 1) throw new Error(deps.prompts.messages["say_media_used"] ?? "say_media_used");
-
       const spoken = normalizeTextInput(args.text);
       if (!spoken) throw new Error(deps.prompts.messages["empty"] ?? "empty");
       if (spoken.length > VOICE_MAX_CHARS) {
@@ -82,8 +79,6 @@ export function createSayVoiceTool(manifest: ToolManifest, deps: ToolPackageDeps
         key: `${api.conversationId}:${api.callId}`,
       };
       await enqueueOutbound(api, payload, context);
-
-      recordMedia(String(api.conversationId), ts);
       return { output: [{ type: "text", text: deps.prompts.messages["say_sent"] ?? "ok" }] };
     },
   });

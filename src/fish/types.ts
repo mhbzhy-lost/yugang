@@ -16,7 +16,7 @@ import type { EgressLimits } from "../egress/policy.ts";
 import type { EngagementMode } from "../fish-config.ts";
 import type { PromptSet } from "../prompt/index.ts";
 import type { OutboundPayload } from "../tools/say-shared.ts";
-import type { RoundKind, RoundTrigger, ToolPackageDeps } from "../tools/types.ts";
+import type { RoundTrigger, ToolPackageDeps } from "../tools/types.ts";
 import type { CompactResult } from "../compact.ts";
 import type { MemoryApprovalPreparation, MemoryCommand, PendingMemoryEntry } from "../memory/index.ts";
 import type { WatchedPerson } from "../store.ts";
@@ -91,19 +91,6 @@ export interface FishOptions {
    * 为 true 时 inline 附图生效、look 机械锁死；缺省 = 恒按 fallback（look 转述）。
    */
   inlineVisionOn?: () => boolean;
-  /**
-   * 主动 @ 的身份闸：由宿主机械提供（私聊 = not_group；群内白名单 = allow），按轮类型
-   * （决策 7）：answer/legacy 轮 userId 是本轮触发者；ambient/injection 环境轮对每个
-   * @ 目标各调一次、userId 携带目标 QQ，白名单同为 {主人} ∪ 本群 watched（宿主记审计）。
-   * 同时交给 say_*（出口校验）使用；不提供时主动 @ 一律 fail closed。
-   */
-  mentionPolicyOf?: (conversationId: string, userId: number | undefined, kind: RoundKind) => "allow" | "not_group" | "not_privileged";
-  /**
-   * 末条自言禁言（决策 24，T15）的宿主事实：conversationId → 该会话（chatKey 级）最新一条
-   * 消息是否鱼自己发的（drain 实际发送成功置 true，任一入站消息置 false，内存态重启归 false）。
-   * 交给 say_*（ambient/injection 轮的素材分享校验）使用；不提供时缺省放行（宁松勿严）。
-   */
-  lastWasFishOf?: (conversationId: string) => boolean;
   /**
    * 会话 → 当前群成员名单：say_*（主动 @ 目标校验）与 watch（关注对象校验）共用同一条链路。
    * 群号必须由宿主自己从映射键解析，不能采信模型给的号码。

@@ -5,7 +5,6 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resetRun } from "../src/egress/ledger.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -102,7 +101,6 @@ test("发送失败保留未决：不重试，也不跳过队首发后面的", as
   const open = await built.fish;
   try {
     const conv = await open.group("qq:group:9");
-    resetRun(conv.id); // 生产行为对齐：index.ts 每条消息前 resetRun；轮内计数是模块级状态，跨测试会残留
     faux.setResponses([
       fauxAssistantMessage([fauxToolCall("say_words", { text: "喂" })], { stopReason: "toolUse" }),
       fauxAssistantMessage("好了"),
