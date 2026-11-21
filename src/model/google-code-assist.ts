@@ -62,9 +62,11 @@ const ANTIGRAVITY_BASE_URL = "https://daily-cloudcode-pa.googleapis.com";
 const PROJECT_HEADER = "x-yugang-ca-project";
 const DEFAULT_MAX_RETRIES = 3;
 
-/** 档位已编码进模型 ID 后缀的 tiered 模型（Gemini 4 / Gemini 3.8 Flash / Claude 5.5）：
- * 不再发 thinkingLevel / thinkingBudget，但显式发 includeThoughts: true 以保留 thinking 块。 */
-const TIERED_MODEL_ID = /-(?:low|medium|high|xhigh)$/;
+/** 档位编码在模型 ID 后缀的 tiered 模型（Gemini 4 / Gemini 3.8 Flash / Claude 5.5）：
+ * 2026-11-21 交叉实测证实：ID 后缀只是 Antigravity 网关 SKU 路由名，真正控制推理预算的是
+ * thinkingConfig.thinkingLevel，必须成对发送（-low→LOW / -medium→MEDIUM / -high→HIGH / -xhigh→XHIGH），
+ * 且带 includeThoughts: true 以保留思考块。 */
+const TIERED_MODEL_ID = /-(low|medium|high|xhigh)$/;
 
 /** legacy parameters（OpenAPI 3.03 / Google Protobuf Schema）的两处限制：
  * 1) 不认 JSON Schema 的 `const`；
@@ -291,11 +293,10 @@ function buildParams(
     }),
   };
 
-  const isTiered = TIERED_MODEL_ID.test(model.id);
-  if (isTiered && model.reasoning) {
-    // tiered 模型档位已编码进 ID，不传 thinkingLevel / thinkingBudget；
-    // 但必须显式传 includeThoughts: true，否则服务端默认不返回 thought 块
-    generationConfig.thinkingConfig = { includeThoughts: true };
+  const tieredMatch = TIERED_MODEL_ID.exec(model.id);
+  if (tieredMatch && model.reasoning) {
+    // tiered 模型成对发送对应的 thinkingLevel 与 includeThoughts: true
+    generationConfig.thinkingConfig = { includeThoughts: true, thinkingLevel: tieredMatch[1].toUpperCase() };
   } else if (options.thinking?.enabled && model.reasoning) {
     const thinkingConfig: Record<string, unknown> = { includeThoughts: true };
     if (options.thinking.level !== undefined) thinkingConfig.thinkingLevel = toGoogleSdkThinkingLevel(options.thinking.level);
