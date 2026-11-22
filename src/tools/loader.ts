@@ -62,6 +62,7 @@ import { createVideoTool } from "./video/tool.ts";
 import { createWatchTool } from "./watch/tool.ts";
 import { createWriteTool } from "./write/tool.ts";
 import { createWanImageTool } from "./wan_image/tool.ts";
+import { createWanGifTool } from "./wan_gif/tool.ts";
 
 /** 26 个工具包的 Node factory；与 src/tools/<name>/TOOL.md 一一对应，两边都不允许孤儿。 */
 const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
@@ -96,6 +97,7 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
   watch: createWatchTool,
   write: createWriteTool,
   wan_image: createWanImageTool,
+  wan_gif: createWanGifTool,
 };
 
 /** 初始就提供给模型的工具：四个出口 say_*、轻回应 react、按需加载的检索入口 tool_search。 */

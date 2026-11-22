@@ -1,0 +1,5 @@
+{
+  "wan_gif_prompt": "请写清楚一个短动作和循环感，例如眨眼、挥手或摇尾巴",
+  "wan_gif_ref_bad": "参考图只能使用本轮可见的 inbound/… 或鱼生成的 gen/… 图片",
+  "wan_gif_failed": "Wan GIF 生成失败"
+}

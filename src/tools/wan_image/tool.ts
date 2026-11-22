@@ -9,7 +9,7 @@ import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
 
-interface WanImageArgs { prompt: string }
+interface WanImageArgs { prompt: string; size?: "1K" | "2K"; enable_sequential?: boolean; n?: number }
 type RoundState = { round: unknown; pending: boolean; submitted: boolean; used: boolean };
 const rounds = new Map<string, RoundState>();
 
@@ -36,19 +36,24 @@ export function createWanImageTool(manifest: ToolManifest, deps: ToolPackageDeps
       deps.onLongWork?.("wan_image", round);
       try {
         state.submitted = true;
-        const file = await generateWanImage({ ...deps.wanImage, prompt, mediaRoot: root, signal: context.abortSignal });
+        const sequential = args.enable_sequential === true;
+        const count = args.n ?? 1;
+        if (!Number.isInteger(count) || count < 1 || count > (sequential ? 12 : 4)) throw new Error("wan_image_n");
+        const files = await generateWanImage({ ...deps.wanImage, prompt, size: args.size, n: count, enableSequential: sequential, mediaRoot: root, signal: context.abortSignal });
         context.abortSignal?.throwIfAborted();
         state.used = true;
         const trigger = deps.triggerOf?.(round);
-        const payload: OutboundPayload = {
-          items: [], media: `gen/${file}`, quote: false,
-          ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
-          ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
-          at: Date.now(), key: `${api.conversationId}:wanimage:${String(round)}:${randomUUID()}`,
-        };
-        try {
+        for (const file of files) {
+          const payload: OutboundPayload = {
+            items: [], media: `gen/${file}`, quote: false,
+            ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
+            ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
+            at: Date.now(), key: `${api.conversationId}:wanimage:${String(round)}:${file}`,
+          };
           await enqueueOutbound(api, payload, context);
-          return { output: [{ type: "text", text: renderTemplate(deps.prompts.messages["wan_image_done"] ?? "gen/{{file}}", { file }) }] };
+        }
+        try {
+          return { output: [{ type: "text", text: renderTemplate(deps.prompts.messages["wan_image_done"] ?? "gen/{{file}}", { file: files.join("、") }) }] };
         } catch (error) {
           console.error("[fish] wan_image auto-send failed", error instanceof Error ? error.message : error);
           throw error;

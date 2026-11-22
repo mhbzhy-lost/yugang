@@ -1,0 +1,16 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "GIF 画面与动作描述，自然语言，800 字以内"
+      },
+      "ref": {
+        "type": "string",
+        "description": "可选参考图路径，只能是本轮可见的 inbound/… 或鱼生成的 gen/… 图片"
+      }
+    },
+    "required": ["prompt"]
+  }
+}

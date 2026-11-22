@@ -8,12 +8,14 @@ export interface WanImageRequest {
   baseUrl: string;
   model: string;
   prompt: string;
-  size?: string;
+  size?: "1K" | "2K";
+  n?: number;
+  enableSequential?: boolean;
   mediaRoot: string;
   signal?: AbortSignal;
 }
 
-export async function generateWanImage(request: WanImageRequest): Promise<string> {
+export async function generateWanImage(request: WanImageRequest): Promise<string[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 180_000);
   const signal = request.signal ? AbortSignal.any([controller.signal, request.signal]) : controller.signal;
@@ -24,23 +26,34 @@ export async function generateWanImage(request: WanImageRequest): Promise<string
       body: JSON.stringify({
         model: request.model,
         input: { messages: [{ role: "user", content: [{ text: request.prompt }] }] },
-        ...(request.size ? { parameters: { size: request.size } } : {}),
+        ...((request.size || request.n !== undefined || request.enableSequential !== undefined) ? {
+          parameters: {
+            ...(request.size ? { size: request.size } : {}),
+            ...(request.n !== undefined ? { n: request.n } : {}),
+            ...(request.enableSequential !== undefined ? { enable_sequential: request.enableSequential } : {}),
+          },
+        } : {}),
       }),
       signal,
     });
     if (!response.ok) throw new Error(`wan_image_http_${response.status}`);
     const parsed = await response.json() as { output?: { choices?: Array<{ message?: { content?: Array<{ image?: string }> } }> } };
-    const url = parsed.output?.choices?.[0]?.message?.content?.find((item) => typeof item.image === "string")?.image;
-    if (!url) throw new Error("wan_image_empty");
-    const image = await fetch(url, { signal });
-    if (!image.ok) throw new Error(`wan_image_download_${image.status}`);
-    const bytes = Buffer.from(await image.arrayBuffer());
-    if (bytes.length < 1024) throw new Error("wan_image_too_small");
+    const urls = parsed.output?.choices?.flatMap((choice) => choice.message?.content ?? [])
+      .map((item) => item.image).filter((image): image is string => typeof image === "string");
+    if (urls.length === 0) throw new Error("wan_image_empty");
     const dir = join(request.mediaRoot, "gen");
     mkdirSync(dir, { recursive: true });
-    const file = `${Date.now()}-${randomUUID()}.png`;
-    writeFileSync(join(dir, file), bytes, { flag: "wx" });
-    return file;
+    const files: string[] = [];
+    for (const url of urls) {
+      const image = await fetch(url, { signal });
+      if (!image.ok) throw new Error(`wan_image_download_${image.status}`);
+      const bytes = Buffer.from(await image.arrayBuffer());
+      if (bytes.length < 1024) throw new Error("wan_image_too_small");
+      const file = `${Date.now()}-${randomUUID()}.png`;
+      writeFileSync(join(dir, file), bytes, { flag: "wx" });
+      files.push(file);
+    }
+    return files;
   } finally {
     clearTimeout(timeout);
   }
