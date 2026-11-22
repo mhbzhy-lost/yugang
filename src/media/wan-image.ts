@@ -36,7 +36,10 @@ export async function generateWanImage(request: WanImageRequest): Promise<string
       }),
       signal,
     });
-    if (!response.ok) throw new Error(`wan_image_http_${response.status}`);
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
+      throw new Error(`wan_image_http_${response.status}${detail ? `: ${detail}` : ""}`);
+    }
     const parsed = await response.json() as { output?: { choices?: Array<{ message?: { content?: Array<{ image?: string }> } }> } };
     const urls = parsed.output?.choices?.flatMap((choice) => choice.message?.content ?? [])
       .map((item) => item.image).filter((image): image is string => typeof image === "string");

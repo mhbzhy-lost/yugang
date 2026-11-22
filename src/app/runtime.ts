@@ -493,7 +493,14 @@ export async function bootRuntime(): Promise<void> {
     }
   })(),
   // gpt_image 通道：models.image 省略 = 该工具不可用（不隐式兜底模型名）
-  wanImage: modelSelection.wanImage,
+  wanImage: modelSelection.wanImage
+    ? {
+        apiKey: modelSelection.wanImage.apiKey,
+        baseUrl: modelSelection.wanImage.baseUrl,
+        model: modelSelection.wanImage.modelId,
+        ...(modelSelection.wanImage.proxy ? { proxy: modelSelection.wanImage.proxy } : {}),
+      }
+    : undefined,
   // gpt_image 通道：models.image 省略 = 该工具不可用
   gptImage: modelSelection.image
     ? {
