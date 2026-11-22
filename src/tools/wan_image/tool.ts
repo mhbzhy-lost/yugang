@@ -9,7 +9,7 @@ import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
 
-interface WanImageArgs { prompt: string; size?: string }
+interface WanImageArgs { prompt: string }
 type RoundState = { round: unknown; pending: boolean; submitted: boolean; used: boolean };
 const rounds = new Map<string, RoundState>();
 
@@ -36,7 +36,7 @@ export function createWanImageTool(manifest: ToolManifest, deps: ToolPackageDeps
       deps.onLongWork?.("wan_image", round);
       try {
         state.submitted = true;
-        const file = await generateWanImage({ ...deps.wanImage, prompt, size: args.size, mediaRoot: root, signal: context.abortSignal });
+        const file = await generateWanImage({ ...deps.wanImage, prompt, mediaRoot: root, signal: context.abortSignal });
         context.abortSignal?.throwIfAborted();
         state.used = true;
         const trigger = deps.triggerOf?.(round);

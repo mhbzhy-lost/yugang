@@ -5,10 +5,6 @@
       "prompt": {
         "type": "string",
         "description": "图片描述，自然语言，中文或英文，800 字以内"
-      },
-      "size": {
-        "type": "string",
-        "description": "图片尺寸，例如 1024*1024；不填由模型自动选择"
       }
     },
     "required": ["prompt"]
