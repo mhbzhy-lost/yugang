@@ -124,6 +124,13 @@ export interface ToolPackageDeps {
   groupMembersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
   /** watch 名单变更回调。 */
   onWatchChanged?: (conversationId: string, people: import("../store.ts").WatchedPerson[]) => void;
+  /** 百炼 Token Plan Wan Image 通道；密钥只在内存中使用。 */
+  wanImage?: {
+    apiKey: string;
+    baseUrl: string;
+    model: string;
+    proxy?: string;
+  };
   /** ChatGPT/Codex 图片通道（models.image）；authPath 决定用哪份登录凭据，proxy 只给这条通道。 */
   gptImage?: {
     authPath: string;

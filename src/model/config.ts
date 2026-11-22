@@ -54,7 +54,7 @@ export interface ProviderConfig {
   models: ProviderModelConfig[];
 }
 
-export type ModelRole = "main" | "vision" | "image" | "vision_fallback";
+export type ModelRole = "main" | "vision" | "image" | "wan_image" | "vision_fallback";
 
 export interface RoleRef {
   provider: string;
@@ -172,6 +172,8 @@ export interface FishModelsSelection {
   visionFallback?: FishModelConfig;
   /** gpt_image 通道：provider 决定用哪份 oauth，model 是默认模型名；省略 = 该工具不可用。 */
   image?: { provider: string; modelId: string; proxy?: string };
+  /** 百炼 Token Plan Wan Image 通道；省略 = wan_image 工具不可用。 */
+  wanImage?: { provider: string; modelId: string; apiKey: string; baseUrl: string; proxy?: string };
   /** 进程级流式传输；取自 main provider 的 transport。 */
   transport?: "sse";
 }
@@ -188,7 +190,7 @@ export interface ProviderLoadOptions extends LoadOptions {
   modelId?: string;
 }
 
-const ROLES: readonly ModelRole[] = ["main", "vision", "image", "vision_fallback"];
+const ROLES: readonly ModelRole[] = ["main", "vision", "image", "wan_image", "vision_fallback"];
 
 function defaultModelsPath(): string {
   return MODELS_CONFIG_PATH;
@@ -252,6 +254,18 @@ export function loadFishModels(options: LoadOptions = {}): FishModelsSelection {
         : buildConfig(file.providers, configSource, credentialsPath, "vision_fallback", fallbackRef);
   }
 
+  let wanImage: FishModelsSelection["wanImage"];
+  if (roles.wan_image) {
+    const wanRef = roleRef(roles, "wan_image");
+    const wanProvider = file.providers[wanRef.provider];
+    if (!wanProvider) throw new Error(`models.wan_image 的 provider 不在 providers 里：${wanRef.provider}`);
+    const wanStored = readCredentialFile(credentialsPath, wanRef.provider);
+    const wanKey = wanStored?.type === "api_key" ? wanStored.key : undefined;
+    if (!wanKey) throw new Error(`models.wan_image 没有可用 API key：${credentialsPath}`);
+    const baseUrl = (wanProvider.baseUrl ?? "").replace(/\/compatible-mode\/v1\/?$/, "");
+    wanImage = { provider: wanRef.provider, modelId: wanRef.model, apiKey: wanKey, baseUrl, ...(wanProvider.proxy ? { proxy: wanProvider.proxy } : {}) };
+  }
+
   let image: FishModelsSelection["image"];
   if (roles.image) {
     const imageRef = roleRef(roles, "image");
@@ -260,7 +274,7 @@ export function loadFishModels(options: LoadOptions = {}): FishModelsSelection {
     image = { provider: imageRef.provider, modelId: imageRef.model, ...(imageProvider.proxy ? { proxy: imageProvider.proxy } : {}) };
   }
 
-  return { main, vision, ...(visionFallback ? { visionFallback } : {}), ...(image ? { image } : {}), ...(main.transport ? { transport: main.transport } : {}) };
+  return { main, vision, ...(visionFallback ? { visionFallback } : {}), ...(image ? { image } : {}), ...(wanImage ? { wanImage } : {}), ...(main.transport ? { transport: main.transport } : {}) };
 }
 
 /**

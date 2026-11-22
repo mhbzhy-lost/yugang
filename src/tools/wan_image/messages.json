@@ -1,0 +1,6 @@
+{
+  "wan_image_unconfigured": "Wan Image 没配 Token Plan 通道，请检查 models.json 的 wan_image 配置",
+  "wan_image_prompt": "给我一句图片描述再画",
+  "wan_image_done": "gen/{{file}} —— Wan 画好了，已经自动发出去了",
+  "wan_image_failed": "Wan Image 画图没成功"
+}

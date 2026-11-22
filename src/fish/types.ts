@@ -54,6 +54,13 @@ export interface FishOptions {
   mediaRoot: string;
   /** DeepSeek Search API 的 key；给了才有联网搜索能力。 */
   searchKey?: string;
+  /** 百炼 Token Plan Wan Image 通道：apiKey 只在内存中使用。 */
+  wanImage?: {
+    apiKey: string;
+    baseUrl: string;
+    model: string;
+    proxy?: string;
+  };
   /** ChatGPT/Codex 图片通道（models.image）：authPath + provider 决定登录凭据，model 是默认模型名；proxy 只给这条通道用。 */
   gptImage?: {
     authPath: string;

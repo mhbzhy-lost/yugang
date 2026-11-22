@@ -41,6 +41,7 @@ export async function installToolSurface(base: FishBase): Promise<ToolSurfacePar
     ...(options.groupMembersOf ? { groupMembersOf: options.groupMembersOf, membersOf: options.groupMembersOf } : {}),
     ...(options.onWatchChanged ? { onWatchChanged: options.onWatchChanged } : {}),
     ...(options.gptImage ? { gptImage: options.gptImage } : {}),
+    ...(options.wanImage ? { wanImage: options.wanImage } : {}),
     ...(options.comfyUrl === undefined ? {} : { comfyUrl: options.comfyUrl }),
     ...(options.tagsCsv === undefined ? {} : { tagsCsv: options.tagsCsv }),
     ...(options.triggerOf ? { triggerOf: options.triggerOf } : {}),
