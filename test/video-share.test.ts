@@ -9,7 +9,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { biliOpusUrl, biliVideoUrl, bvidOfUrl } from "../src/external/video-links.ts";
+import { biliOpusUrl, biliVideoBvidOfUrl, biliVideoUrl, bvidOfUrl } from "../src/external/video-links.ts";
 import { clearAllSeenLinks, extractLinks, recordSeenLinks, seenLinksOf } from "../src/egress/seen-links.ts";
 import { clearViewedVideos, recordViewedVideo, viewedVideoOf } from "../src/external/video-browse.ts";
 import { shouldSendWorkingReceipt } from "../src/working-receipt.ts";
@@ -41,6 +41,28 @@ test("看过的 BV 按 BV 认链接：query / 尾斜杠 / 子域变体都算", (
 test("非 bilibili 域即使带 BV 也不算看过", () => {
   assert.equal(bvidOfUrl("https://evil.example/video/BV1eqZJYaESc"), undefined);
   assert.equal(bvidOfUrl("https://bilibili.com.evil.example/video/BV1eqZJYaESc"), undefined);
+});
+
+test("biliVideoBvidOfUrl 仅认 bilibili.com/video/BV 路径并拦截 av/opus/query/伪造域名", () => {
+  for (const url of [
+    "https://www.bilibili.com/video/BV1eqZJYaESc",
+    "https://www.bilibili.com/video/BV1eqZJYaESc/?spm_id_from=1#2",
+    "https://m.bilibili.com/video/BV1eqZJYaESc/",
+    "https://bilibili.com/video/BV1eqZJYaESc",
+  ]) {
+    assert.equal(biliVideoBvidOfUrl(url), "BV1eqZJYaESc", `${url} 没认出 BV`);
+  }
+  for (const url of [
+    "https://www.bilibili.com/video/av115138879295226/",
+    "https://www.bilibili.com/opus/123?ref=BV1eqZJYaESc",
+    "https://www.bilibili.com/read/cv123/BV1eqZJYaESc",
+    "https://bilibili.com.evil.example/video/BV1eqZJYaESc",
+    "https://evil.example/video/BV1eqZJYaESc",
+    "javascript:https://www.bilibili.com/video/BV1eqZJYaESc",
+    "not-a-url",
+  ]) {
+    assert.equal(biliVideoBvidOfUrl(url), undefined, `${url} 不该被认成 B 站视频`);
+  }
 });
 
 test("图文动态也有 canonical 链接", () => {

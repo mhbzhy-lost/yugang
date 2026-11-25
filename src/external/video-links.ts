@@ -27,3 +27,21 @@ export function bvidOfUrl(url: string): string | undefined {
   if (!/^https?:\/\/(?:[a-z0-9-]+\.)*bilibili\.com\//i.test(url)) return undefined;
   return url.match(/BV[0-9A-Za-z]{10}/)?.[0];
 }
+
+/**
+ * 严格版 BV 提取（bili_search 用）：用 URL 解析主机名，只认 http(s) +
+ * bilibili.com（含子域）+ pathname 以 `/video/BV…` 开头；
+ * av 号、/opus/、/read/、query 里夹带 BV、伪造域名一律 undefined。
+ */
+export function biliVideoBvidOfUrl(url: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+  const host = parsed.hostname.toLowerCase();
+  if (host !== "bilibili.com" && !host.endsWith(".bilibili.com")) return undefined;
+  return parsed.pathname.match(/^\/video\/(BV[0-9A-Za-z]{10})(?:\/|$)/)?.[1];
+}
