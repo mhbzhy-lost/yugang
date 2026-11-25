@@ -9,6 +9,8 @@
 import type { Models } from "@earendil-works/pi-ai";
 import type { AnyTask, ConversationId, ToolRegistration } from "@earendil-works/pi-durable";
 import type { PromptSet } from "../prompt/index.ts";
+import type { DrawRemoteConfig } from "../fish-config.ts";
+import type { runDrawRemote } from "../media/draw-remote/index.ts";
 
 /** TOOL.md Schema 里受控的动态枚举扩展键；x-yugang-* 是保留命名空间，其它键一律拒绝。 */
 export const ENUM_FROM_KEY = "x-yugang-enum-from";
@@ -125,24 +127,20 @@ export interface ToolPackageDeps {
   groupMembersOf?: (conversationId: string) => Promise<{ nickname: string; userId: string }[]>;
   /** watch 名单变更回调。 */
   onWatchChanged?: (conversationId: string, people: import("../store.ts").WatchedPerson[]) => void;
-  /** 百炼 Token Plan Wan Image 通道；密钥只在内存中使用。 */
+  /** 百炼 Token Plan Wan 通道（models.wan_image）：密钥只在内存中使用；wan_gif（视频转 GIF）消费，远程静态生图已收归 draw_remote。 */
   wanImage?: {
     apiKey: string;
     baseUrl: string;
     model: string;
     proxy?: string;
   };
-  /** ChatGPT/Codex 图片通道（models.image）；authPath 决定用哪份登录凭据，proxy 只给这条通道。 */
-  gptImage?: {
-    authPath: string;
-    provider: string;
-    model: string;
-    proxy?: string;
-    /** 官方 API key（config/auth.json 的 openai.key 或 OPENAI_API_KEY）：只给动图通道用。 */
-    apiKey?: string;
-    /** 官方 API 根地址覆盖（测试/代理用）。 */
-    apiBaseUrl?: string;
-  };
+  /**
+   * 远程生图热配置（fish.config.json 的 drawRemote，热加载）：通道、各通道模型与总开关。传函数每次现取，
+   * 工具在入口与提交前各读一次；缺省按 DRAW_REMOTE_DEFAULTS。
+   */
+  drawRemote?: () => DrawRemoteConfig;
+  /** 远程生图适配器（gpt / wan / gemini 三通道）；缺省用 runDrawRemote 本体，测试注入桩。 */
+  drawRemoteRun?: typeof runDrawRemote;
   /** ComfyUI 环回隧道地址；给了才有本地画图。 */
   comfyUrl?: string;
   /** danbooru.csv 路径；给了才能查 tag 词表。 */
@@ -173,7 +171,7 @@ export interface ToolPackageDeps {
   /** 本轮出口工具的 execute 被进入时回调（成败都算一次）；宿主据此识别「零出口轮」。 */
   onSayCall?: (roundId: unknown) => void;
   /**
-   * 重耗时工具（video/draw/gpt_image/meme_import/meme_add/restart）execute 入口的宿主回调：
+   * 重耗时工具（video/draw/draw_remote/meme_import/meme_add/restart）execute 入口的宿主回调：
    * 传本轮轮标识（LiveDoc 的 run.inputs[0]，拿不到就不调），宿主按「submissionId × 工具名」
    * 去重后经 outbox 发「正在执行」机械提示（文案 prompt/messages.md 的 working_*）。
    * restart 会 await 返回的 Promise，保证提示在进程退出前先入队并冲一次 outbox。
