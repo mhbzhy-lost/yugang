@@ -1,0 +1,22 @@
+{
+  "schema": "anima-contact-camera-extension.v1",
+  "canvas": [1024, 768],
+  "pairs": {"DC": ["deepseek", "claude"], "QG": ["qwen", "grok"]},
+  "seed": 20261112,
+  "weights": [0.8, 0.8],
+  "sampler": {"steps": 30, "cfg": 4, "sampler_name": "euler_ancestral", "scheduler": "sgm_uniform"},
+  "pose": {"strength": 0.8, "start": 0, "end": 0.7},
+  "repair": {"denoise": 0.45, "crop": 768, "dd_strength": 1, "ring_fraction": 0.08},
+  "scene_denoise": 0.65,
+  "contact_cases": ["C1", "C2", "C3"],
+  "camera_cases": {
+    "D0": {"center": [0.5, 0.55], "height_h": 0.8, "pitch": 0, "roll": 0},
+    "D1": {"center": [0.25, 0.55], "height_h": 0.2, "pitch": 12, "roll": 15},
+    "D2": {"center": [0.75, 0.55], "height_h": 0.2, "pitch": 12, "roll": -15},
+    "D3": {"center": [0.25, 0.7], "height_h": 0.2, "pitch": 12, "roll": 25}
+  },
+  "camera": {"fov": 38, "height_fraction": 0.4, "width_cap": 0.4, "margin": 0.03, "center_tolerance": 0.025},
+  "budget": {"maximum_actual_diffusions": 28, "first_checkpoint": ["DC-C1-parent", "DC-C1-repair", "DC-D1-human", "DC-D1-scene"], "remaining_requires_user_continue": true},
+  "authorization": {"mode": "main_session_serial", "experimental_fixtures": true, "new_software_tests": false, "production_changes": false, "commit_push": false},
+  "visual_acceptance": "user_only"
+}

@@ -1,0 +1,284 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "wf-initial-base.png"
+    }
+  },
+  "2": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "oneObsessionAnima_v40.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "3": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "device": "default",
+      "type": "stable_diffusion"
+    }
+  },
+  "4": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "5": {
+    "class_type": "RSMultiCharacterPrompt",
+    "inputs": {
+      "character1": "aigirls, aigirls（deepseek）, blue hair, gradient hair, very long hair, wavy hair, ahoge, blue eyes, fins, cetacean tail, maid headdress, blue ribbon, front-facing embrace, both arms wrapped around the other girl's torso, shoulders overlapping in front, bodies pressed together",
+      "character10_enable": false,
+      "character10_kind": "character",
+      "character1_enable": true,
+      "character1_kind": "character",
+      "character2": "claude_girl, orange hair, very long hair, wavy hair, bangs, orange eyes, hair flower, hair bow, black bow, embraced from the front, both arms wrapped around the other girl's back, head leaning toward her shoulder, slight forward lean",
+      "character2_enable": true,
+      "character2_kind": "character",
+      "character3_enable": false,
+      "character3_kind": "character",
+      "character4_enable": false,
+      "character4_kind": "character",
+      "character5_enable": false,
+      "character5_kind": "character",
+      "character6_enable": false,
+      "character6_kind": "character",
+      "character7_enable": false,
+      "character7_kind": "character",
+      "character8_enable": false,
+      "character8_kind": "character",
+      "character9_enable": false,
+      "character9_kind": "character",
+      "character_count": 2
+    }
+  },
+  "6": {
+    "class_type": "RSMultiCharacterLoRA",
+    "inputs": {
+      "building_pipe": [
+        "5",
+        0
+      ],
+      "character10_lora": "None",
+      "character10_lora_clip_strength": 1,
+      "character10_lora_strength": 1,
+      "character1_lora": "aigrilsV1.0.safetensors",
+      "character1_lora_clip_strength": 1.0,
+      "character1_lora_strength": 1.0,
+      "character2_lora": "claude_girl_anima_lora_clean.safetensors",
+      "character2_lora_clip_strength": 1.0,
+      "character2_lora_strength": 1.0,
+      "character3_lora": "None",
+      "character3_lora_clip_strength": 1,
+      "character3_lora_strength": 1,
+      "character4_lora": "None",
+      "character4_lora_clip_strength": 1,
+      "character4_lora_strength": 1,
+      "character5_lora": "None",
+      "character5_lora_clip_strength": 1,
+      "character5_lora_strength": 1,
+      "character6_lora": "None",
+      "character6_lora_clip_strength": 1,
+      "character6_lora_strength": 1,
+      "character7_lora": "None",
+      "character7_lora_clip_strength": 1,
+      "character7_lora_strength": 1,
+      "character8_lora": "None",
+      "character8_lora_clip_strength": 1,
+      "character8_lora_strength": 1,
+      "character9_lora": "None",
+      "character9_lora_clip_strength": 1,
+      "character9_lora_strength": 1,
+      "character_count": 2,
+      "lora_application_mode": "precision"
+    }
+  },
+  "7": {
+    "class_type": "RSMultiCharacterPosition",
+    "inputs": {
+      "building_pipe": [
+        "6",
+        0
+      ],
+      "character10_geometry": "point",
+      "character10_height": 0.8,
+      "character10_width": 0.4,
+      "character10_x": 0.5,
+      "character10_y": 0.5,
+      "character1_geometry": "box",
+      "character1_height": 0.88151,
+      "character1_width": 0.289062,
+      "character1_x": 0.429688,
+      "character1_y": 0.559245,
+      "character2_geometry": "box",
+      "character2_height": 0.882812,
+      "character2_width": 0.202148,
+      "character2_x": 0.563965,
+      "character2_y": 0.558594,
+      "character3_geometry": "point",
+      "character3_height": 0.8,
+      "character3_width": 0.4,
+      "character3_x": 0.5,
+      "character3_y": 0.5,
+      "character4_geometry": "point",
+      "character4_height": 0.8,
+      "character4_width": 0.4,
+      "character4_x": 0.5,
+      "character4_y": 0.5,
+      "character5_geometry": "point",
+      "character5_height": 0.8,
+      "character5_width": 0.4,
+      "character5_x": 0.5,
+      "character5_y": 0.5,
+      "character6_geometry": "point",
+      "character6_height": 0.8,
+      "character6_width": 0.4,
+      "character6_x": 0.5,
+      "character6_y": 0.5,
+      "character7_geometry": "point",
+      "character7_height": 0.8,
+      "character7_width": 0.4,
+      "character7_x": 0.5,
+      "character7_y": 0.5,
+      "character8_geometry": "point",
+      "character8_height": 0.8,
+      "character8_width": 0.4,
+      "character8_x": 0.5,
+      "character8_y": 0.5,
+      "character9_geometry": "point",
+      "character9_height": 0.8,
+      "character9_width": 0.4,
+      "character9_x": 0.5,
+      "character9_y": 0.5,
+      "character_count": 2
+    }
+  },
+  "8": {
+    "class_type": "RSMultiCharacterFinalize",
+    "inputs": {
+      "building_pipe": [
+        "7",
+        0
+      ]
+    }
+  },
+  "9": {
+    "class_type": "ModelPatchLoader",
+    "inputs": {
+      "name": "rs_reference\\anima_pose\\anima_3dpose_outline_7000.safetensors"
+    }
+  },
+  "14": {
+    "class_type": "YugangStudyCameraProject",
+    "inputs": {
+      "scene_json": "{\n  \"version\": 2,\n  \"width\": 2048,\n  \"height\": 1536,\n  \"mask_mode\": \"visible\",\n  \"outline\": true,\n  \"camera\": {\n    \"position\": [\n      -0.01335875628785953,\n      0.9981813926337998,\n      2.898482982272447\n    ],\n    \"target\": [\n      -0.01335875628785953,\n      0.9981813926337998,\n      -0.02549037485180947\n    ],\n    \"fov\": 38.0\n  },\n  \"people\": [\n    {\n      \"id\": 1,\n      \"position\": [\n        -0.17,\n        0.0,\n        0.0\n      ],\n      \"rotation\": [\n        0.0,\n        18.0,\n        0.0\n      ],\n      \"scale\": 1.0,\n      \"bulk\": 1.0,\n      \"joints\": {\n        \"left_shoulder\": [\n          29.8,\n          9.15,\n          13.6\n        ],\n        \"left_elbow\": [\n          0.0,\n          -42.2,\n          65.45\n        ],\n        \"right_shoulder\": [\n          40.1,\n          -57.95,\n          47.85\n        ],\n        \"right_elbow\": [\n          0.0,\n          -55.55,\n          35.55\n        ],\n        \"chest\": [\n          10.0,\n          0.0,\n          0.0\n        ]\n      }\n    },\n    {\n      \"id\": 2,\n      \"position\": [\n        0.17,\n        0.0,\n        0.0\n      ],\n      \"rotation\": [\n        0.0,\n        -18.0,\n        0.0\n      ],\n      \"scale\": 1.0,\n      \"bulk\": 1.0,\n      \"joints\": {\n        \"left_shoulder\": [\n          41.0,\n          -64.0,\n          54.4\n        ],\n        \"left_elbow\": [\n          0.0,\n          -57.45,\n          38.4\n        ],\n        \"right_shoulder\": [\n          39.25,\n          14.05,\n          9.0\n        ],\n        \"right_elbow\": [\n          0.0,\n          -50.55,\n          65.65\n        ],\n        \"chest\": [\n          10.0,\n          0.0,\n          0.0\n        ]\n      }\n    }\n  ]\n}",
+      "camera_extension": "{\"matrix\": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], \"roll\": 0, \"center\": null, \"tail\": null}"
+    }
+  },
+  "10": {
+    "class_type": "AnimaLLLiteApply",
+    "inputs": {
+      "strength": 0.8,
+      "start_percent": 0,
+      "end_percent": 0.7,
+      "model": [
+        "2",
+        0
+      ],
+      "model_patch": [
+        "9",
+        0
+      ],
+      "image": [
+        "14",
+        0
+      ]
+    }
+  },
+  "11": {
+    "class_type": "YugangRSSceneImg2Img",
+    "inputs": {
+      "model": [
+        "10",
+        0
+      ],
+      "clip": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ],
+      "character_pipe": [
+        "8",
+        0
+      ],
+      "prompt": "masterpiece, best quality, soft sunlight, courtyard, ground, background wall, distant trees, outdoors, full body, centered composition, 2girls",
+      "negative_prompt": "lowres, worst quality, low quality, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, extra limbs, extra legs, extra arms, conjoined bodies, fused bodies, text, watermark, signature",
+      "image": [
+        "23",
+        0
+      ],
+      "denoise": 0.25,
+      "seed": 1160312382,
+      "steps": 30,
+      "cfg": 4,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "sgm_uniform",
+      "width": 2048,
+      "height": 1536,
+      "autosave": false,
+      "save_format": "PNG",
+      "webp_quality": 90
+    }
+  },
+  "12": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "11",
+        0
+      ],
+      "filename_prefix": "wf-ordB/DC-HUG-M-pass2x"
+    }
+  },
+  "13": {
+    "class_type": "YugangStudyMetadata",
+    "inputs": {
+      "label": "wf orderB pass@2x"
+    }
+  },
+  "21": {
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "4x-AnimeSharp.safetensors"
+    }
+  },
+  "22": {
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "upscale_model": [
+        "21",
+        0
+      ],
+      "image": [
+        "1",
+        0
+      ]
+    }
+  },
+  "23": {
+    "class_type": "ImageScaleBy",
+    "inputs": {
+      "image": [
+        "22",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "scale_by": 0.5
+    }
+  }
+}

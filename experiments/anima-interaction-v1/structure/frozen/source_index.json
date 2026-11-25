@@ -1,0 +1,6036 @@
+{
+ "schema": "yugang.anima-interaction-v1.structure.source_index",
+ "version": 1,
+ "execution_state": "unrendered_T2a_source_only",
+ "generated_by": "T2a build_geometry.py",
+ "render_program": "experiments/anima-interaction-v1/structure/render.py (T2b runs it; produces real PNG + sha256 + per-case structure_index.json)",
+ "geometry_source": "experiments/anima-interaction-v1/structure/frozen/geometry.json",
+ "asset_pointers": {
+  "mhr_mesh": "preflight.json#/assets/mhr_mesh",
+  "mhr_license": "preflight.json#/assets/mhr_license",
+  "pose_lllite": "preflight.json#/assets/pose_lllite"
+ },
+ "note": "T2a 未实际渲染: 不填不存在的 PNG/hash。每 case 给 scene 指针 + 相机 + FK-proxy box + planned files(status=unrendered)。T2b 成功渲染后产正式 structure_index.json(真实文件+sha256+权威 box), 覆盖本 unrendered 状态。",
+ "case_count": 44,
+ "assert_44": true,
+ "cases": {
+  "DC-HAND-W": {
+   "world_id": "DC-HAND",
+   "pair": "DC",
+   "action": "HAND",
+   "framing": "W",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-HAND-W]/scene_json",
+   "camera": {
+    "position": [
+     -0.06852654593592986,
+     0.881129047467813,
+     5.714860863645857
+    ],
+    "target": [
+     -0.06852654593592986,
+     0.881129047467813,
+     0.02493599353248554
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.421875,
+      "y": 0.530599,
+      "width": 0.328125,
+      "height": 0.472656,
+      "pixel_bbox": [
+       264.0,
+       226.0,
+       600.0,
+       589.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      264.0,
+      226.0,
+      600.0,
+      589.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.517578,
+      "y": 0.530599,
+      "width": 0.152344,
+      "height": 0.472656,
+      "pixel_bbox": [
+       452.0,
+       226.0,
+       608.0,
+       589.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      452.0,
+      226.0,
+      608.0,
+      589.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.right_wrist",
+    "B.left_wrist",
+    "clasping_hand_fingers(authored interlock)"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-W/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-W/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-W/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-W/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-W/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-W/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-W/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-W/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-W/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-W/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-W/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-W/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-HAND-M": {
+   "world_id": "DC-HAND",
+   "pair": "DC",
+   "action": "HAND",
+   "framing": "M",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-HAND-M]/scene_json",
+   "camera": {
+    "position": [
+     -0.06852654593592986,
+     0.881129047467813,
+     2.9153042856978497
+    ],
+    "target": [
+     -0.06852654593592986,
+     0.881129047467813,
+     0.02493599353248554
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.346191,
+      "y": 0.553385,
+      "width": 0.645508,
+      "height": 0.893229,
+      "pixel_bbox": [
+       24.0,
+       82.0,
+       685.0,
+       768.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      24.0,
+      82.0,
+      685.0,
+      768.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.534668,
+      "y": 0.553385,
+      "width": 0.293945,
+      "height": 0.893229,
+      "pixel_bbox": [
+       397.0,
+       82.0,
+       698.0,
+       768.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      397.0,
+      82.0,
+      698.0,
+      768.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.right_wrist",
+    "B.left_wrist",
+    "clasping_hand_fingers(authored interlock)"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-M/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-M/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-M/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-M/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-M/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-M/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-M/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-M/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-M/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-M/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-M/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-M/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-HAND-C": {
+   "world_id": "DC-HAND",
+   "pair": "DC",
+   "action": "HAND",
+   "framing": "C",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-HAND-C]/scene_json",
+   "camera": {
+    "position": [
+     -0.00022805935406709245,
+     1.0003334716551686,
+     1.5698656877894217
+    ],
+    "target": [
+     -0.00022805935406709245,
+     1.0003334716551686,
+     0.03338063120830169
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.502441,
+      "y": 0.40625,
+      "width": 0.549805,
+      "height": 0.8125,
+      "pixel_bbox": [
+       233.0,
+       0.0,
+       796.0,
+       624.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      233.0,
+      0.0,
+      796.0,
+      624.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.498535,
+      "y": 0.40625,
+      "width": 0.547852,
+      "height": 0.8125,
+      "pixel_bbox": [
+       230.0,
+       0.0,
+       791.0,
+       624.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      230.0,
+      0.0,
+      791.0,
+      624.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.right_wrist",
+    "B.left_wrist",
+    "clasping_hand_fingers(authored interlock)"
+   ],
+   "expected_out_of_frame_parts": [
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-C/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-C/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-C/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-C/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-C/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-C/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-C/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-C/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-C/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-C/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-C/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-C/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-HAND-XU": {
+   "world_id": "DC-HAND",
+   "pair": "DC",
+   "action": "HAND",
+   "framing": "XU",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-HAND-XU]/scene_json",
+   "camera": {
+    "position": [
+     -0.00023819532535896415,
+     1.0045446851140474,
+     1.4832982470264022
+    ],
+    "target": [
+     -0.00023819532535896415,
+     1.0045446851140474,
+     0.034855954151499224
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.503418,
+      "y": 0.416016,
+      "width": 0.586914,
+      "height": 0.832031,
+      "pixel_bbox": [
+       215.0,
+       0.0,
+       816.0,
+       639.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      215.0,
+      0.0,
+      816.0,
+      639.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.497559,
+      "y": 0.416016,
+      "width": 0.584961,
+      "height": 0.832031,
+      "pixel_bbox": [
+       210.0,
+       0.0,
+       809.0,
+       639.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      210.0,
+      0.0,
+      809.0,
+      639.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.right_wrist",
+    "B.left_wrist",
+    "clasping_hand_fingers(authored interlock)"
+   ],
+   "expected_out_of_frame_parts": [
+    "pelvis",
+    "hips",
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XU/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XU/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XU/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XU/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XU/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XU/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XU/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XU/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XU/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XU/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XU/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XU/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-HAND-XH": {
+   "world_id": "DC-HAND",
+   "pair": "DC",
+   "action": "HAND",
+   "framing": "XH",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-HAND-XH]/scene_json",
+   "camera": {
+    "position": [
+     6.938893903907228e-18,
+     1.4381199799631184,
+     0.9755251857097198
+    ],
+    "target": [
+     6.938893903907228e-18,
+     1.4381199799631184,
+     0.0006112088125563032
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.26123,
+      "y": 0.460938,
+      "width": 0.459961,
+      "height": 0.567708,
+      "pixel_bbox": [
+       32.0,
+       136.0,
+       503.0,
+       572.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      32.0,
+      136.0,
+      503.0,
+      572.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.73877,
+      "y": 0.460938,
+      "width": 0.459961,
+      "height": 0.567708,
+      "pixel_bbox": [
+       521.0,
+       136.0,
+       992.0,
+       572.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      521.0,
+      136.0,
+      992.0,
+      572.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [],
+   "expected_out_of_frame_parts": [
+    "arms(elbow/wrist)",
+    "hands(fingers)",
+    "torso_below_shoulder(chest/pelvis)",
+    "hips",
+    "legs",
+    "feet"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XH/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XH/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XH/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XH/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XH/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XH/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XH/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XH/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XH/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XH/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XH/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HAND-XH/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-HUG-W": {
+   "world_id": "DC-HUG",
+   "pair": "DC",
+   "action": "HUG",
+   "framing": "W",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-HUG-W]/scene_json",
+   "camera": {
+    "position": [
+     -0.01335875628785953,
+     0.9981813926337998,
+     5.69924234708164
+    ],
+    "target": [
+     -0.01335875628785953,
+     0.9981813926337998,
+     -0.02549037485180947
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.476074,
+      "y": 0.558594,
+      "width": 0.180664,
+      "height": 0.471354,
+      "pixel_bbox": [
+       395.0,
+       248.0,
+       580.0,
+       610.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      395.0,
+      248.0,
+      580.0,
+      610.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.51709,
+      "y": 0.558594,
+      "width": 0.166992,
+      "height": 0.471354,
+      "pixel_bbox": [
+       444.0,
+       248.0,
+       615.0,
+       610.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      444.0,
+      248.0,
+      615.0,
+      610.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_wrist",
+    "B.right_wrist",
+    "A.chest",
+    "B.chest"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-W/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-W/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-W/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-W/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-W/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-W/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-W/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-W/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-W/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-W/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-W/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-W/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-HUG-M": {
+   "world_id": "DC-HUG",
+   "pair": "DC",
+   "action": "HUG",
+   "framing": "M",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-HUG-M]/scene_json",
+   "camera": {
+    "position": [
+     -0.01335875628785953,
+     0.9981813926337998,
+     2.898482982272447
+    ],
+    "target": [
+     -0.01335875628785953,
+     0.9981813926337998,
+     -0.02549037485180947
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.463379,
+      "y": 0.580729,
+      "width": 0.30957,
+      "height": 0.838542,
+      "pixel_bbox": [
+       316.0,
+       124.0,
+       633.0,
+       768.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      316.0,
+      124.0,
+      633.0,
+      768.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.53418,
+      "y": 0.580078,
+      "width": 0.310547,
+      "height": 0.839844,
+      "pixel_bbox": [
+       388.0,
+       123.0,
+       706.0,
+       768.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      388.0,
+      123.0,
+      706.0,
+      768.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_wrist",
+    "B.right_wrist",
+    "A.chest",
+    "B.chest"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-M/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-M/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-M/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-M/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-M/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-M/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-M/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-M/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-M/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-M/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-M/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-M/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-HUG-C": {
+   "world_id": "DC-HUG",
+   "pair": "DC",
+   "action": "HUG",
+   "framing": "C",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-HUG-C]/scene_json",
+   "camera": {
+    "position": [
+     0.020327044952926168,
+     1.1460262842553859,
+     1.4082300066379594
+    ],
+    "target": [
+     0.020327044952926168,
+     1.1460262842553859,
+     0.03212996892302233
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.418457,
+      "y": 0.440104,
+      "width": 0.592773,
+      "height": 0.880208,
+      "pixel_bbox": [
+       125.0,
+       0.0,
+       732.0,
+       676.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      125.0,
+      0.0,
+      732.0,
+      676.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.546875,
+      "y": 0.440104,
+      "width": 0.613281,
+      "height": 0.880208,
+      "pixel_bbox": [
+       246.0,
+       0.0,
+       874.0,
+       676.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      246.0,
+      0.0,
+      874.0,
+      676.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_wrist",
+    "B.right_wrist",
+    "A.chest",
+    "B.chest"
+   ],
+   "expected_out_of_frame_parts": [
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-C/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-C/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-C/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-C/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-C/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-C/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-C/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-C/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-C/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-C/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-C/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-C/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-HUG-XU": {
+   "world_id": "DC-HUG",
+   "pair": "DC",
+   "action": "HUG",
+   "framing": "XU",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-HUG-XU]/scene_json",
+   "camera": {
+    "position": [
+     0.021230469173056217,
+     1.1567127338298302,
+     1.2530809931601783
+    ],
+    "target": [
+     0.021230469173056217,
+     1.1567127338298302,
+     0.033332853685524265
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.408203,
+      "y": 0.383464,
+      "width": 0.669922,
+      "height": 0.766927,
+      "pixel_bbox": [
+       75.0,
+       0.0,
+       761.0,
+       589.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      75.0,
+      0.0,
+      761.0,
+      589.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.552246,
+      "y": 0.4375,
+      "width": 0.686523,
+      "height": 0.875,
+      "pixel_bbox": [
+       214.0,
+       0.0,
+       917.0,
+       672.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      214.0,
+      0.0,
+      917.0,
+      672.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_wrist",
+    "B.right_wrist",
+    "A.chest",
+    "B.chest"
+   ],
+   "expected_out_of_frame_parts": [
+    "pelvis",
+    "hips",
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XU/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XU/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XU/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XU/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XU/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XU/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XU/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XU/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XU/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XU/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XU/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XU/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-HUG-XH": {
+   "world_id": "DC-HUG",
+   "pair": "DC",
+   "action": "HUG",
+   "framing": "XH",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-HUG-XH]/scene_json",
+   "camera": {
+    "position": [
+     0.012525260219657766,
+     1.4380740411250998,
+     1.0999046383810067
+    ],
+    "target": [
+     0.012525260219657766,
+     1.4380740411250998,
+     0.015561285334715255
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.299316,
+      "y": 0.458333,
+      "width": 0.555664,
+      "height": 0.505208,
+      "pixel_bbox": [
+       22.0,
+       158.0,
+       591.0,
+       546.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      22.0,
+      158.0,
+      591.0,
+      546.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.671875,
+      "y": 0.457682,
+      "width": 0.572266,
+      "height": 0.509115,
+      "pixel_bbox": [
+       395.0,
+       156.0,
+       981.0,
+       547.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      395.0,
+      156.0,
+      981.0,
+      547.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [],
+   "expected_out_of_frame_parts": [
+    "arms(elbow/wrist)",
+    "hands(fingers)",
+    "torso_below_shoulder(chest/pelvis)",
+    "hips",
+    "legs",
+    "feet"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XH/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XH/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XH/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XH/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XH/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XH/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XH/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XH/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XH/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XH/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XH/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-HUG-XH/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-KISS-W": {
+   "world_id": "DC-KISS",
+   "pair": "DC",
+   "action": "KISS",
+   "framing": "W",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-KISS-W]/scene_json",
+   "camera": {
+    "position": [
+     -0.06323747892053852,
+     0.8195736257955295,
+     5.701731152596215
+    ],
+    "target": [
+     -0.06323747892053852,
+     0.8195736257955295,
+     0.003638929194975217
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.412109,
+      "y": 0.514974,
+      "width": 0.28125,
+      "height": 0.472656,
+      "pixel_bbox": [
+       278.0,
+       214.0,
+       566.0,
+       577.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      278.0,
+      214.0,
+      566.0,
+      577.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.530762,
+      "y": 0.514974,
+      "width": 0.118164,
+      "height": 0.472656,
+      "pixel_bbox": [
+       483.0,
+       214.0,
+       604.0,
+       577.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      483.0,
+      214.0,
+      604.0,
+      577.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.head",
+    "B.head"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-W/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-W/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-W/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-W/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-W/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-W/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-W/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-W/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-W/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-W/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-W/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-W/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-KISS-M": {
+   "world_id": "DC-KISS",
+   "pair": "DC",
+   "action": "KISS",
+   "framing": "M",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-KISS-M]/scene_json",
+   "camera": {
+    "position": [
+     -0.06323747892053852,
+     0.8195736257955295,
+     2.9161897421489242
+    ],
+    "target": [
+     -0.06323747892053852,
+     0.8195736257955295,
+     0.003638929194975217
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.32666,
+      "y": 0.536458,
+      "width": 0.53418,
+      "height": 0.921875,
+      "pixel_bbox": [
+       61.0,
+       58.0,
+       608.0,
+       766.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      61.0,
+      58.0,
+      608.0,
+      766.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.562012,
+      "y": 0.536458,
+      "width": 0.219727,
+      "height": 0.921875,
+      "pixel_bbox": [
+       463.0,
+       58.0,
+       688.0,
+       766.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      463.0,
+      58.0,
+      688.0,
+      766.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.head",
+    "B.head"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-M/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-M/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-M/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-M/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-M/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-M/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-M/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-M/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-M/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-M/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-M/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-M/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-KISS-C": {
+   "world_id": "DC-KISS",
+   "pair": "DC",
+   "action": "KISS",
+   "framing": "C",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-KISS-C]/scene_json",
+   "camera": {
+    "position": [
+     1.161541363210875e-08,
+     0.9237166170205179,
+     1.7231605447944887
+    ],
+    "target": [
+     1.161541363210875e-08,
+     0.9237166170205179,
+     0.013873887350008794
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.429688,
+      "y": 0.397135,
+      "width": 0.363281,
+      "height": 0.794271,
+      "pixel_bbox": [
+       254.0,
+       0.0,
+       626.0,
+       610.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      254.0,
+      0.0,
+      626.0,
+      610.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.570312,
+      "y": 0.397135,
+      "width": 0.363281,
+      "height": 0.794271,
+      "pixel_bbox": [
+       398.0,
+       0.0,
+       770.0,
+       610.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      398.0,
+      0.0,
+      770.0,
+      610.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.head",
+    "B.head"
+   ],
+   "expected_out_of_frame_parts": [
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-C/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-C/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-C/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-C/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-C/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-C/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-C/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-C/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-C/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-C/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-C/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-C/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-KISS-XU": {
+   "world_id": "DC-KISS",
+   "pair": "DC",
+   "action": "KISS",
+   "framing": "XU",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-KISS-XU]/scene_json",
+   "camera": {
+    "position": [
+     1.2131654237055066e-08,
+     0.9245226369400789,
+     1.636803497833382
+    ],
+    "target": [
+     1.2131654237055066e-08,
+     0.9245226369400789,
+     0.014457562471258647
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.425293,
+      "y": 0.405599,
+      "width": 0.381836,
+      "height": 0.811198,
+      "pixel_bbox": [
+       240.0,
+       0.0,
+       631.0,
+       623.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      240.0,
+      0.0,
+      631.0,
+      623.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.574707,
+      "y": 0.405599,
+      "width": 0.381836,
+      "height": 0.811198,
+      "pixel_bbox": [
+       393.0,
+       0.0,
+       784.0,
+       623.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      393.0,
+      0.0,
+      784.0,
+      623.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.head",
+    "B.head"
+   ],
+   "expected_out_of_frame_parts": [
+    "pelvis",
+    "hips",
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XU/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XU/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XU/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XU/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XU/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XU/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XU/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XU/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XU/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XU/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XU/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XU/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-KISS-XH": {
+   "world_id": "DC-KISS",
+   "pair": "DC",
+   "action": "KISS",
+   "framing": "XH",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-KISS-XH]/scene_json",
+   "camera": {
+    "position": [
+     -2.3129646346357427e-18,
+     1.4325410463966401,
+     0.893126544294417
+    ],
+    "target": [
+     -2.3129646346357427e-18,
+     1.4325410463966401,
+     0.02993271490680335
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.305664,
+      "y": 0.467448,
+      "width": 0.548828,
+      "height": 0.658854,
+      "pixel_bbox": [
+       32.0,
+       106.0,
+       594.0,
+       612.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      32.0,
+      106.0,
+      594.0,
+      612.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.694336,
+      "y": 0.467448,
+      "width": 0.548828,
+      "height": 0.658854,
+      "pixel_bbox": [
+       430.0,
+       106.0,
+       992.0,
+       612.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      430.0,
+      106.0,
+      992.0,
+      612.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.head",
+    "B.head"
+   ],
+   "expected_out_of_frame_parts": [
+    "arms(elbow/wrist)",
+    "hands(fingers)",
+    "torso_below_shoulder(chest/pelvis)",
+    "hips",
+    "legs",
+    "feet"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XH/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XH/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XH/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XH/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XH/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XH/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XH/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XH/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XH/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XH/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XH/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-KISS-XH/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-CARRY-W": {
+   "world_id": "DC-CARRY",
+   "pair": "DC",
+   "action": "CARRY",
+   "framing": "W",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-CARRY-W]/scene_json",
+   "camera": {
+    "position": [
+     -0.003953232871521499,
+     1.0918917510325439,
+     6.468135487505854
+    ],
+    "target": [
+     -0.003953232871521499,
+     1.0918917510325439,
+     -0.07341679988977497
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.5,
+      "y": 0.571615,
+      "width": 0.146484,
+      "height": 0.416667,
+      "pixel_bbox": [
+       437.0,
+       279.0,
+       587.0,
+       599.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      437.0,
+      279.0,
+      587.0,
+      599.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.5,
+      "y": 0.477865,
+      "width": 0.136719,
+      "height": 0.341146,
+      "pixel_bbox": [
+       442.0,
+       236.0,
+       582.0,
+       498.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      442.0,
+      236.0,
+      582.0,
+      498.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_hip",
+    "B.right_hip",
+    "B.left_knee",
+    "B.right_knee",
+    "B.left_wrist",
+    "B.right_wrist",
+    "B.left_ankle",
+    "B.right_ankle"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-W/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-W/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-W/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-W/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-W/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-W/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-W/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-W/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-W/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-W/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-W/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-W/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-CARRY-M": {
+   "world_id": "DC-CARRY",
+   "pair": "DC",
+   "action": "CARRY",
+   "framing": "M",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-CARRY-M]/scene_json",
+   "camera": {
+    "position": [
+     -0.003953232871521499,
+     1.0918917510325439,
+     3.2189949727473275
+    ],
+    "target": [
+     -0.003953232871521499,
+     1.0918917510325439,
+     -0.07341679988977497
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.499512,
+      "y": 0.617839,
+      "width": 0.274414,
+      "height": 0.764323,
+      "pixel_bbox": [
+       371.0,
+       181.0,
+       652.0,
+       768.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      371.0,
+      181.0,
+      652.0,
+      768.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.500488,
+      "y": 0.458984,
+      "width": 0.25293,
+      "height": 0.64974,
+      "pixel_bbox": [
+       383.0,
+       103.0,
+       642.0,
+       602.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      383.0,
+      103.0,
+      642.0,
+      602.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_hip",
+    "B.right_hip",
+    "B.left_knee",
+    "B.right_knee",
+    "B.left_wrist",
+    "B.right_wrist",
+    "B.left_ankle",
+    "B.right_ankle"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-M/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-M/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-M/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-M/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-M/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-M/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-M/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-M/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-M/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-M/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-M/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-M/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-CARRY-C": {
+   "world_id": "DC-CARRY",
+   "pair": "DC",
+   "action": "CARRY",
+   "framing": "C",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-CARRY-C]/scene_json",
+   "camera": {
+    "position": [
+     -0.004920514622321534,
+     1.2276313014873137,
+     1.8591707850348134
+    ],
+    "target": [
+     -0.004920514622321534,
+     1.2276313014873137,
+     -0.012388868996458337
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.5,
+      "y": 0.53776,
+      "width": 0.453125,
+      "height": 0.760417,
+      "pixel_bbox": [
+       280.0,
+       121.0,
+       744.0,
+       705.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      280.0,
+      121.0,
+      744.0,
+      705.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.500488,
+      "y": 0.30013,
+      "width": 0.413086,
+      "height": 0.60026,
+      "pixel_bbox": [
+       301.0,
+       0.0,
+       724.0,
+       461.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      301.0,
+      0.0,
+      724.0,
+      461.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_hip",
+    "B.right_hip",
+    "B.left_wrist",
+    "B.right_wrist"
+   ],
+   "expected_out_of_frame_parts": [
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-C/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-C/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-C/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-C/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-C/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-C/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-C/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-C/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-C/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-C/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-C/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-C/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-CARRY-XU": {
+   "world_id": "DC-CARRY",
+   "pair": "DC",
+   "action": "CARRY",
+   "framing": "XU",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-CARRY-XU]/scene_json",
+   "camera": {
+    "position": [
+     -0.0051392041610913795,
+     1.2352779740498436,
+     1.7539986265903664
+    ],
+    "target": [
+     -0.0051392041610913795,
+     1.2352779740498436,
+     -0.00650951744568531
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.500488,
+      "y": 0.546224,
+      "width": 0.477539,
+      "height": 0.803385,
+      "pixel_bbox": [
+       268.0,
+       111.0,
+       757.0,
+       728.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      268.0,
+      111.0,
+      757.0,
+      728.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.500977,
+      "y": 0.214844,
+      "width": 0.435547,
+      "height": 0.429688,
+      "pixel_bbox": [
+       290.0,
+       0.0,
+       736.0,
+       330.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      290.0,
+      0.0,
+      736.0,
+      330.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_wrist",
+    "B.right_wrist"
+   ],
+   "expected_out_of_frame_parts": [
+    "pelvis",
+    "hips",
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XU/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XU/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XU/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XU/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XU/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XU/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XU/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XU/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XU/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XU/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XU/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XU/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "DC-CARRY-XH": {
+   "world_id": "DC-CARRY",
+   "pair": "DC",
+   "action": "CARRY",
+   "framing": "XH",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=DC-CARRY-XH]/scene_json",
+   "camera": {
+    "position": [
+     0.0014779877992166877,
+     1.5830429018821643,
+     0.8672115008922243
+    ],
+    "target": [
+     0.0014779877992166877,
+     1.5830429018821643,
+     -0.12536725777835173
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.488281,
+      "y": 0.682292,
+      "width": 0.683594,
+      "height": 0.622396,
+      "pixel_bbox": [
+       150.0,
+       285.0,
+       850.0,
+       763.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      150.0,
+      285.0,
+      850.0,
+      763.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.5,
+      "y": 0.274089,
+      "width": 0.556641,
+      "height": 0.503906,
+      "pixel_bbox": [
+       227.0,
+       17.0,
+       797.0,
+       404.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      227.0,
+      17.0,
+      797.0,
+      404.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [],
+   "expected_out_of_frame_parts": [
+    "arms(elbow/wrist)",
+    "hands(fingers)",
+    "torso_below_shoulder(chest/pelvis)",
+    "hips",
+    "legs",
+    "feet"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XH/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XH/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XH/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XH/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XH/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XH/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XH/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XH/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XH/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XH/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XH/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/DC-CARRY-XH/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-HAND-W": {
+   "world_id": "QG-HAND",
+   "pair": "QG",
+   "action": "HAND",
+   "framing": "W",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-HAND-W]/scene_json",
+   "camera": {
+    "position": [
+     -0.00019849604216370272,
+     0.9094094056604555,
+     5.718035505894058
+    ],
+    "target": [
+     -0.00019849604216370272,
+     0.9094094056604555,
+     0.029046565532958705
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.495605,
+      "y": 0.53776,
+      "width": 0.15332,
+      "height": 0.471354,
+      "pixel_bbox": [
+       429.0,
+       232.0,
+       586.0,
+       594.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      429.0,
+      232.0,
+      586.0,
+      594.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.504395,
+      "y": 0.53776,
+      "width": 0.15332,
+      "height": 0.471354,
+      "pixel_bbox": [
+       438.0,
+       232.0,
+       595.0,
+       594.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      438.0,
+      232.0,
+      595.0,
+      594.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.right_wrist",
+    "B.left_wrist",
+    "clasping_hand_fingers(authored interlock)"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-W/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-W/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-W/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-W/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-W/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-W/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-W/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-W/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-W/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-W/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-W/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-W/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-HAND-M": {
+   "world_id": "QG-HAND",
+   "pair": "QG",
+   "action": "HAND",
+   "framing": "M",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-HAND-M]/scene_json",
+   "camera": {
+    "position": [
+     -0.00019849604216370272,
+     0.9094094056604555,
+     2.918458636735345
+    ],
+    "target": [
+     -0.00019849604216370272,
+     0.9094094056604555,
+     0.029046565532958705
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.493164,
+      "y": 0.561198,
+      "width": 0.294922,
+      "height": 0.877604,
+      "pixel_bbox": [
+       354.0,
+       94.0,
+       656.0,
+       768.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      354.0,
+      94.0,
+      656.0,
+      768.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.506836,
+      "y": 0.561198,
+      "width": 0.294922,
+      "height": 0.877604,
+      "pixel_bbox": [
+       368.0,
+       94.0,
+       670.0,
+       768.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      368.0,
+      94.0,
+      670.0,
+      768.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.right_wrist",
+    "B.left_wrist",
+    "clasping_hand_fingers(authored interlock)"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-M/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-M/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-M/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-M/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-M/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-M/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-M/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-M/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-M/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-M/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-M/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-M/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-HAND-C": {
+   "world_id": "QG-HAND",
+   "pair": "QG",
+   "action": "HAND",
+   "framing": "C",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-HAND-C]/scene_json",
+   "camera": {
+    "position": [
+     -0.00022805935406709245,
+     1.0003334716551686,
+     1.5698656877894217
+    ],
+    "target": [
+     -0.00022805935406709245,
+     1.0003334716551686,
+     0.03338063120830169
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.502441,
+      "y": 0.40625,
+      "width": 0.549805,
+      "height": 0.8125,
+      "pixel_bbox": [
+       233.0,
+       0.0,
+       796.0,
+       624.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      233.0,
+      0.0,
+      796.0,
+      624.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.498535,
+      "y": 0.40625,
+      "width": 0.547852,
+      "height": 0.8125,
+      "pixel_bbox": [
+       230.0,
+       0.0,
+       791.0,
+       624.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      230.0,
+      0.0,
+      791.0,
+      624.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.right_wrist",
+    "B.left_wrist",
+    "clasping_hand_fingers(authored interlock)"
+   ],
+   "expected_out_of_frame_parts": [
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-C/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-C/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-C/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-C/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-C/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-C/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-C/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-C/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-C/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-C/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-C/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-C/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-HAND-XU": {
+   "world_id": "QG-HAND",
+   "pair": "QG",
+   "action": "HAND",
+   "framing": "XU",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-HAND-XU]/scene_json",
+   "camera": {
+    "position": [
+     -0.00023819532535896415,
+     1.0045446851140474,
+     1.4832982470264022
+    ],
+    "target": [
+     -0.00023819532535896415,
+     1.0045446851140474,
+     0.034855954151499224
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.503418,
+      "y": 0.416016,
+      "width": 0.586914,
+      "height": 0.832031,
+      "pixel_bbox": [
+       215.0,
+       0.0,
+       816.0,
+       639.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      215.0,
+      0.0,
+      816.0,
+      639.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.497559,
+      "y": 0.416016,
+      "width": 0.584961,
+      "height": 0.832031,
+      "pixel_bbox": [
+       210.0,
+       0.0,
+       809.0,
+       639.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      210.0,
+      0.0,
+      809.0,
+      639.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.right_wrist",
+    "B.left_wrist",
+    "clasping_hand_fingers(authored interlock)"
+   ],
+   "expected_out_of_frame_parts": [
+    "pelvis",
+    "hips",
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XU/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XU/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XU/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XU/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XU/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XU/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XU/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XU/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XU/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XU/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XU/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XU/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-HAND-XH": {
+   "world_id": "QG-HAND",
+   "pair": "QG",
+   "action": "HAND",
+   "framing": "XH",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-HAND-XH]/scene_json",
+   "camera": {
+    "position": [
+     6.938893903907228e-18,
+     1.4381199799631184,
+     0.9755251857097198
+    ],
+    "target": [
+     6.938893903907228e-18,
+     1.4381199799631184,
+     0.0006112088125563032
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.26123,
+      "y": 0.460938,
+      "width": 0.459961,
+      "height": 0.567708,
+      "pixel_bbox": [
+       32.0,
+       136.0,
+       503.0,
+       572.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      32.0,
+      136.0,
+      503.0,
+      572.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.73877,
+      "y": 0.460938,
+      "width": 0.459961,
+      "height": 0.567708,
+      "pixel_bbox": [
+       521.0,
+       136.0,
+       992.0,
+       572.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      521.0,
+      136.0,
+      992.0,
+      572.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [],
+   "expected_out_of_frame_parts": [
+    "arms(elbow/wrist)",
+    "hands(fingers)",
+    "torso_below_shoulder(chest/pelvis)",
+    "hips",
+    "legs",
+    "feet"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XH/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XH/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XH/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XH/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XH/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XH/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XH/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XH/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XH/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XH/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XH/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HAND-XH/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-HUG-W": {
+   "world_id": "QG-HUG",
+   "pair": "QG",
+   "action": "HUG",
+   "framing": "W",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-HUG-W]/scene_json",
+   "camera": {
+    "position": [
+     0.017692059342026424,
+     1.0362161129236076,
+     5.701298929281615
+    ],
+    "target": [
+     0.017692059342026424,
+     1.0362161129236076,
+     0.027775663239211188
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.479492,
+      "y": 0.568359,
+      "width": 0.162109,
+      "height": 0.472656,
+      "pixel_bbox": [
+       408.0,
+       255.0,
+       574.0,
+       618.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      408.0,
+      255.0,
+      574.0,
+      618.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.51123,
+      "y": 0.568359,
+      "width": 0.166992,
+      "height": 0.472656,
+      "pixel_bbox": [
+       438.0,
+       255.0,
+       609.0,
+       618.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      438.0,
+      255.0,
+      609.0,
+      618.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_wrist",
+    "B.right_wrist",
+    "A.chest",
+    "B.chest"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-W/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-W/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-W/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-W/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-W/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-W/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-W/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-W/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-W/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-W/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-W/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-W/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-HUG-M": {
+   "world_id": "QG-HUG",
+   "pair": "QG",
+   "action": "HUG",
+   "framing": "M",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-HUG-M]/scene_json",
+   "camera": {
+    "position": [
+     0.017692059342026424,
+     1.0362161129236076,
+     2.9005293587525305
+    ],
+    "target": [
+     0.017692059342026424,
+     1.0362161129236076,
+     0.027775663239211188
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.458008,
+      "y": 0.589844,
+      "width": 0.298828,
+      "height": 0.820312,
+      "pixel_bbox": [
+       316.0,
+       138.0,
+       622.0,
+       768.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      316.0,
+      138.0,
+      622.0,
+      768.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.522461,
+      "y": 0.589844,
+      "width": 0.310547,
+      "height": 0.820312,
+      "pixel_bbox": [
+       376.0,
+       138.0,
+       694.0,
+       768.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      376.0,
+      138.0,
+      694.0,
+      768.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_wrist",
+    "B.right_wrist",
+    "A.chest",
+    "B.chest"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-M/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-M/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-M/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-M/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-M/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-M/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-M/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-M/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-M/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-M/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-M/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-M/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-HUG-C": {
+   "world_id": "QG-HUG",
+   "pair": "QG",
+   "action": "HUG",
+   "framing": "C",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-HUG-C]/scene_json",
+   "camera": {
+    "position": [
+     0.020327044952926168,
+     1.1460262842553859,
+     1.4082300066379594
+    ],
+    "target": [
+     0.020327044952926168,
+     1.1460262842553859,
+     0.03212996892302233
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.418457,
+      "y": 0.440104,
+      "width": 0.592773,
+      "height": 0.880208,
+      "pixel_bbox": [
+       125.0,
+       0.0,
+       732.0,
+       676.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      125.0,
+      0.0,
+      732.0,
+      676.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.546875,
+      "y": 0.440104,
+      "width": 0.613281,
+      "height": 0.880208,
+      "pixel_bbox": [
+       246.0,
+       0.0,
+       874.0,
+       676.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      246.0,
+      0.0,
+      874.0,
+      676.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_wrist",
+    "B.right_wrist",
+    "A.chest",
+    "B.chest"
+   ],
+   "expected_out_of_frame_parts": [
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-C/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-C/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-C/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-C/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-C/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-C/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-C/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-C/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-C/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-C/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-C/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-C/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-HUG-XU": {
+   "world_id": "QG-HUG",
+   "pair": "QG",
+   "action": "HUG",
+   "framing": "XU",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-HUG-XU]/scene_json",
+   "camera": {
+    "position": [
+     0.021230469173056217,
+     1.1567127338298302,
+     1.2530809931601783
+    ],
+    "target": [
+     0.021230469173056217,
+     1.1567127338298302,
+     0.033332853685524265
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.408203,
+      "y": 0.383464,
+      "width": 0.669922,
+      "height": 0.766927,
+      "pixel_bbox": [
+       75.0,
+       0.0,
+       761.0,
+       589.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      75.0,
+      0.0,
+      761.0,
+      589.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.552246,
+      "y": 0.4375,
+      "width": 0.686523,
+      "height": 0.875,
+      "pixel_bbox": [
+       214.0,
+       0.0,
+       917.0,
+       672.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      214.0,
+      0.0,
+      917.0,
+      672.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_wrist",
+    "B.right_wrist",
+    "A.chest",
+    "B.chest"
+   ],
+   "expected_out_of_frame_parts": [
+    "pelvis",
+    "hips",
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XU/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XU/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XU/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XU/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XU/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XU/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XU/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XU/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XU/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XU/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XU/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XU/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-HUG-XH": {
+   "world_id": "QG-HUG",
+   "pair": "QG",
+   "action": "HUG",
+   "framing": "XH",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-HUG-XH]/scene_json",
+   "camera": {
+    "position": [
+     0.012525260219657766,
+     1.4380740411250998,
+     1.0999046383810067
+    ],
+    "target": [
+     0.012525260219657766,
+     1.4380740411250998,
+     0.015561285334715255
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.299316,
+      "y": 0.458333,
+      "width": 0.555664,
+      "height": 0.505208,
+      "pixel_bbox": [
+       22.0,
+       158.0,
+       591.0,
+       546.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      22.0,
+      158.0,
+      591.0,
+      546.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.671875,
+      "y": 0.457682,
+      "width": 0.572266,
+      "height": 0.509115,
+      "pixel_bbox": [
+       395.0,
+       156.0,
+       981.0,
+       547.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      395.0,
+      156.0,
+      981.0,
+      547.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [],
+   "expected_out_of_frame_parts": [
+    "arms(elbow/wrist)",
+    "hands(fingers)",
+    "torso_below_shoulder(chest/pelvis)",
+    "hips",
+    "legs",
+    "feet"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XH/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XH/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XH/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XH/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XH/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XH/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XH/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XH/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XH/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XH/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XH/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-HUG-XH/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-KISS-W": {
+   "world_id": "QG-KISS",
+   "pair": "QG",
+   "action": "KISS",
+   "framing": "W",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-KISS-W]/scene_json",
+   "camera": {
+    "position": [
+     1.0358161756302203e-08,
+     0.8427243655154818,
+     5.703877247924541
+    ],
+    "target": [
+     1.0358161756302203e-08,
+     0.8427243655154818,
+     0.012047717785656593
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.481445,
+      "y": 0.520833,
+      "width": 0.117188,
+      "height": 0.471354,
+      "pixel_bbox": [
+       433.0,
+       219.0,
+       553.0,
+       581.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      433.0,
+      219.0,
+      553.0,
+      581.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.518555,
+      "y": 0.520833,
+      "width": 0.117188,
+      "height": 0.471354,
+      "pixel_bbox": [
+       471.0,
+       219.0,
+       591.0,
+       581.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      471.0,
+      219.0,
+      591.0,
+      581.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.head",
+    "B.head"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-W/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-W/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-W/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-W/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-W/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-W/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-W/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-W/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-W/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-W/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-W/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-W/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-KISS-M": {
+   "world_id": "QG-KISS",
+   "pair": "QG",
+   "action": "KISS",
+   "framing": "M",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-KISS-M]/scene_json",
+   "camera": {
+    "position": [
+     1.0358161756302203e-08,
+     0.8427243655154818,
+     2.9183291704503
+    ],
+    "target": [
+     1.0358161756302203e-08,
+     0.8427243655154818,
+     0.012047717785656593
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.461426,
+      "y": 0.54362,
+      "width": 0.217773,
+      "height": 0.91276,
+      "pixel_bbox": [
+       361.0,
+       67.0,
+       584.0,
+       768.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      361.0,
+      67.0,
+      584.0,
+      768.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.538574,
+      "y": 0.54362,
+      "width": 0.217773,
+      "height": 0.91276,
+      "pixel_bbox": [
+       440.0,
+       67.0,
+       663.0,
+       768.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      440.0,
+      67.0,
+      663.0,
+      768.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.head",
+    "B.head"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-M/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-M/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-M/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-M/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-M/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-M/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-M/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-M/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-M/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-M/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-M/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-M/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-KISS-C": {
+   "world_id": "QG-KISS",
+   "pair": "QG",
+   "action": "KISS",
+   "framing": "C",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-KISS-C]/scene_json",
+   "camera": {
+    "position": [
+     1.161541363210875e-08,
+     0.9237166170205179,
+     1.7231605447944887
+    ],
+    "target": [
+     1.161541363210875e-08,
+     0.9237166170205179,
+     0.013873887350008794
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.429688,
+      "y": 0.397135,
+      "width": 0.363281,
+      "height": 0.794271,
+      "pixel_bbox": [
+       254.0,
+       0.0,
+       626.0,
+       610.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      254.0,
+      0.0,
+      626.0,
+      610.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.570312,
+      "y": 0.397135,
+      "width": 0.363281,
+      "height": 0.794271,
+      "pixel_bbox": [
+       398.0,
+       0.0,
+       770.0,
+       610.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      398.0,
+      0.0,
+      770.0,
+      610.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.head",
+    "B.head"
+   ],
+   "expected_out_of_frame_parts": [
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-C/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-C/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-C/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-C/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-C/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-C/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-C/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-C/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-C/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-C/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-C/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-C/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-KISS-XU": {
+   "world_id": "QG-KISS",
+   "pair": "QG",
+   "action": "KISS",
+   "framing": "XU",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-KISS-XU]/scene_json",
+   "camera": {
+    "position": [
+     1.2131654237055066e-08,
+     0.9245226369400789,
+     1.636803497833382
+    ],
+    "target": [
+     1.2131654237055066e-08,
+     0.9245226369400789,
+     0.014457562471258647
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.425293,
+      "y": 0.405599,
+      "width": 0.381836,
+      "height": 0.811198,
+      "pixel_bbox": [
+       240.0,
+       0.0,
+       631.0,
+       623.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      240.0,
+      0.0,
+      631.0,
+      623.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.574707,
+      "y": 0.405599,
+      "width": 0.381836,
+      "height": 0.811198,
+      "pixel_bbox": [
+       393.0,
+       0.0,
+       784.0,
+       623.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      393.0,
+      0.0,
+      784.0,
+      623.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.head",
+    "B.head"
+   ],
+   "expected_out_of_frame_parts": [
+    "pelvis",
+    "hips",
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XU/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XU/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XU/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XU/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XU/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XU/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XU/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XU/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XU/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XU/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XU/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XU/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-KISS-XH": {
+   "world_id": "QG-KISS",
+   "pair": "QG",
+   "action": "KISS",
+   "framing": "XH",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-KISS-XH]/scene_json",
+   "camera": {
+    "position": [
+     -2.3129646346357427e-18,
+     1.4325410463966401,
+     0.893126544294417
+    ],
+    "target": [
+     -2.3129646346357427e-18,
+     1.4325410463966401,
+     0.02993271490680335
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.305664,
+      "y": 0.467448,
+      "width": 0.548828,
+      "height": 0.658854,
+      "pixel_bbox": [
+       32.0,
+       106.0,
+       594.0,
+       612.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      32.0,
+      106.0,
+      594.0,
+      612.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.694336,
+      "y": 0.467448,
+      "width": 0.548828,
+      "height": 0.658854,
+      "pixel_bbox": [
+       430.0,
+       106.0,
+       992.0,
+       612.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      430.0,
+      106.0,
+      992.0,
+      612.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.head",
+    "B.head"
+   ],
+   "expected_out_of_frame_parts": [
+    "arms(elbow/wrist)",
+    "hands(fingers)",
+    "torso_below_shoulder(chest/pelvis)",
+    "hips",
+    "legs",
+    "feet"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XH/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XH/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XH/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XH/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XH/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XH/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XH/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XH/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XH/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XH/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XH/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-KISS-XH/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-CARRY-W": {
+   "world_id": "QG-CARRY",
+   "pair": "QG",
+   "action": "CARRY",
+   "framing": "W",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-CARRY-W]/scene_json",
+   "camera": {
+    "position": [
+     -0.004282668944148289,
+     1.1377356678555803,
+     6.474334547355812
+    ],
+    "target": [
+     -0.004282668944148289,
+     1.1377356678555803,
+     -0.021294125806515466
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.5,
+      "y": 0.58138,
+      "width": 0.146484,
+      "height": 0.415365,
+      "pixel_bbox": [
+       437.0,
+       287.0,
+       587.0,
+       606.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      437.0,
+      287.0,
+      587.0,
+      606.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.5,
+      "y": 0.488281,
+      "width": 0.136719,
+      "height": 0.341146,
+      "pixel_bbox": [
+       442.0,
+       244.0,
+       582.0,
+       506.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      442.0,
+      244.0,
+      582.0,
+      506.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_hip",
+    "B.right_hip",
+    "B.left_knee",
+    "B.right_knee",
+    "B.left_wrist",
+    "B.right_wrist",
+    "B.left_ankle",
+    "B.right_ankle"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-W/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-W/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-W/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-W/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-W/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-W/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-W/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-W/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-W/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-W/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-W/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-W/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-CARRY-M": {
+   "world_id": "QG-CARRY",
+   "pair": "QG",
+   "action": "CARRY",
+   "framing": "M",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-CARRY-M]/scene_json",
+   "camera": {
+    "position": [
+     -0.004282668944148289,
+     1.1377356678555803,
+     3.2251286309133524
+    ],
+    "target": [
+     -0.004282668944148289,
+     1.1377356678555803,
+     -0.021294125806515466
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.499512,
+      "y": 0.628255,
+      "width": 0.274414,
+      "height": 0.74349,
+      "pixel_bbox": [
+       371.0,
+       197.0,
+       652.0,
+       768.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      371.0,
+      197.0,
+      652.0,
+      768.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.500488,
+      "y": 0.479818,
+      "width": 0.25293,
+      "height": 0.64974,
+      "pixel_bbox": [
+       383.0,
+       119.0,
+       642.0,
+       618.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      383.0,
+      119.0,
+      642.0,
+      618.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_hip",
+    "B.right_hip",
+    "B.left_knee",
+    "B.right_knee",
+    "B.left_wrist",
+    "B.right_wrist",
+    "B.left_ankle",
+    "B.right_ankle"
+   ],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-M/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-M/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-M/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-M/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-M/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-M/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-M/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-M/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-M/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-M/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-M/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-M/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-CARRY-C": {
+   "world_id": "QG-CARRY",
+   "pair": "QG",
+   "action": "CARRY",
+   "framing": "C",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-CARRY-C]/scene_json",
+   "camera": {
+    "position": [
+     -0.004920514622321534,
+     1.2276313014873137,
+     1.8591707850348134
+    ],
+    "target": [
+     -0.004920514622321534,
+     1.2276313014873137,
+     -0.012388868996458337
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.5,
+      "y": 0.53776,
+      "width": 0.453125,
+      "height": 0.760417,
+      "pixel_bbox": [
+       280.0,
+       121.0,
+       744.0,
+       705.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      280.0,
+      121.0,
+      744.0,
+      705.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.500488,
+      "y": 0.30013,
+      "width": 0.413086,
+      "height": 0.60026,
+      "pixel_bbox": [
+       301.0,
+       0.0,
+       724.0,
+       461.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      301.0,
+      0.0,
+      724.0,
+      461.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_hip",
+    "B.right_hip",
+    "B.left_wrist",
+    "B.right_wrist"
+   ],
+   "expected_out_of_frame_parts": [
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-C/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-C/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-C/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-C/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-C/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-C/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-C/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-C/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-C/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-C/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-C/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-C/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-CARRY-XU": {
+   "world_id": "QG-CARRY",
+   "pair": "QG",
+   "action": "CARRY",
+   "framing": "XU",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-CARRY-XU]/scene_json",
+   "camera": {
+    "position": [
+     -0.0051392041610913795,
+     1.2352779740498436,
+     1.7539986265903664
+    ],
+    "target": [
+     -0.0051392041610913795,
+     1.2352779740498436,
+     -0.00650951744568531
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.500488,
+      "y": 0.546224,
+      "width": 0.477539,
+      "height": 0.803385,
+      "pixel_bbox": [
+       268.0,
+       111.0,
+       757.0,
+       728.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      268.0,
+      111.0,
+      757.0,
+      728.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.500977,
+      "y": 0.214844,
+      "width": 0.435547,
+      "height": 0.429688,
+      "pixel_bbox": [
+       290.0,
+       0.0,
+       736.0,
+       330.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      290.0,
+      0.0,
+      736.0,
+      330.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [
+    "A.left_wrist",
+    "A.right_wrist",
+    "B.left_wrist",
+    "B.right_wrist"
+   ],
+   "expected_out_of_frame_parts": [
+    "pelvis",
+    "hips",
+    "legs(knee/ankle/toes)"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XU/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XU/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XU/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XU/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XU/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XU/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XU/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XU/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XU/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XU/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XU/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XU/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "QG-CARRY-XH": {
+   "world_id": "QG-CARRY",
+   "pair": "QG",
+   "action": "CARRY",
+   "framing": "XH",
+   "is_solo": false,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/projections[case_id=QG-CARRY-XH]/scene_json",
+   "camera": {
+    "position": [
+     0.0014779877992166877,
+     1.5830429018821643,
+     0.8672115008922243
+    ],
+    "target": [
+     0.0014779877992166877,
+     1.5830429018821643,
+     -0.12536725777835173
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.488281,
+      "y": 0.682292,
+      "width": 0.683594,
+      "height": 0.622396,
+      "pixel_bbox": [
+       150.0,
+       285.0,
+       850.0,
+       763.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      150.0,
+      285.0,
+      850.0,
+      763.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    },
+    "owner_b": {
+     "normalized_center": {
+      "x": 0.5,
+      "y": 0.274089,
+      "width": 0.556641,
+      "height": 0.503906,
+      "pixel_bbox": [
+       227.0,
+       17.0,
+       797.0,
+       404.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      227.0,
+      17.0,
+      797.0,
+      404.0
+     ],
+     "source": "fk_control_point_proxy(+tail for DC W/M owner_a)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [],
+   "expected_out_of_frame_parts": [
+    "arms(elbow/wrist)",
+    "hands(fingers)",
+    "torso_below_shoulder(chest/pelvis)",
+    "hips",
+    "legs",
+    "feet"
+   ],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XH/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XH/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XH/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XH/owner_b.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XH/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_b_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XH/owner_b_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "repair_core.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XH/repair_core.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "support.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XH/support.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "context.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XH/context.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "gray.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XH/gray.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XH/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/QG-CARRY-XH/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "SOLO-deepseek": {
+   "world_id": "SOLO-deepseek",
+   "character": "deepseek",
+   "action": "STAND",
+   "framing": "M",
+   "is_solo": true,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/solo_projections[case_id=SOLO-deepseek]/scene_json",
+   "camera": {
+    "position": [
+     4.358542018482727e-08,
+     0.7969267858607326,
+     2.8572059261043425
+    ],
+    "target": [
+     4.358542018482727e-08,
+     0.7969267858607326,
+     -0.1074497662673266
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.5,
+      "y": 0.513021,
+      "width": 0.261719,
+      "height": 0.921875,
+      "pixel_bbox": [
+       378.0,
+       40.0,
+       646.0,
+       748.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      378.0,
+      40.0,
+      646.0,
+      748.0
+     ],
+     "source": "fk_control_point_proxy(+tail for deepseek)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-deepseek/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-deepseek/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-deepseek/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-deepseek/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-deepseek/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-deepseek/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "SOLO-claude": {
+   "world_id": "SOLO-claude",
+   "character": "claude",
+   "action": "STAND",
+   "framing": "M",
+   "is_solo": true,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/solo_projections[case_id=SOLO-claude]/scene_json",
+   "camera": {
+    "position": [
+     5.084965688178449e-08,
+     0.8394537919781705,
+     2.8581839449867346
+    ],
+    "target": [
+     5.084965688178449e-08,
+     0.8394537919781705,
+     -0.008876579163732865
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.5,
+      "y": 0.534505,
+      "width": 0.261719,
+      "height": 0.923177,
+      "pixel_bbox": [
+       378.0,
+       56.0,
+       646.0,
+       765.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      378.0,
+      56.0,
+      646.0,
+      765.0
+     ],
+     "source": "fk_control_point_proxy(+tail for deepseek)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-claude/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-claude/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-claude/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-claude/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-claude/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-claude/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "SOLO-qwen": {
+   "world_id": "SOLO-qwen",
+   "character": "qwen",
+   "action": "STAND",
+   "framing": "M",
+   "is_solo": true,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/solo_projections[case_id=SOLO-qwen]/scene_json",
+   "camera": {
+    "position": [
+     5.084965688178449e-08,
+     0.8394537919781705,
+     2.8581839449867346
+    ],
+    "target": [
+     5.084965688178449e-08,
+     0.8394537919781705,
+     -0.008876579163732865
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.5,
+      "y": 0.534505,
+      "width": 0.261719,
+      "height": 0.923177,
+      "pixel_bbox": [
+       378.0,
+       56.0,
+       646.0,
+       765.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      378.0,
+      56.0,
+      646.0,
+      765.0
+     ],
+     "source": "fk_control_point_proxy(+tail for deepseek)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-qwen/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-qwen/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-qwen/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-qwen/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-qwen/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-qwen/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  },
+  "SOLO-grok": {
+   "world_id": "SOLO-grok",
+   "character": "grok",
+   "action": "STAND",
+   "framing": "M",
+   "is_solo": true,
+   "status": "unrendered",
+   "scene_ref": "structure/frozen/geometry.json#/solo_projections[case_id=SOLO-grok]/scene_json",
+   "camera": {
+    "position": [
+     5.084965688178449e-08,
+     0.8394537919781705,
+     2.8581839449867346
+    ],
+    "target": [
+     5.084965688178449e-08,
+     0.8394537919781705,
+     -0.008876579163732865
+    ],
+    "fov": 38.0
+   },
+   "box_proxy": {
+    "owner_a": {
+     "normalized_center": {
+      "x": 0.5,
+      "y": 0.534505,
+      "width": 0.261719,
+      "height": 0.923177,
+      "pixel_bbox": [
+       378.0,
+       56.0,
+       646.0,
+       765.0
+      ],
+      "empty": false
+     },
+     "pixel_bbox_plus8_clipped": [
+      378.0,
+      56.0,
+      646.0,
+      765.0
+     ],
+     "source": "fk_control_point_proxy(+tail for deepseek)",
+     "authoritative": "pending_T2b_rendered_owner_visible_mask"
+    }
+   },
+   "box_authoritative": "pending_T2b_rendered_owner_visible_mask",
+   "expected_visible_contacts": [],
+   "expected_out_of_frame_parts": [],
+   "files": {
+    "scene.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-grok/scene.json",
+     "status": "unrendered",
+     "sha256": null
+    },
+    "pose_image.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-grok/pose_image.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-grok/owner_a.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "owner_a_full.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-grok/owner_a_full.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "preview.png": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-grok/preview.png",
+     "status": "unrendered_T2b",
+     "sha256": null
+    },
+    "structure_index.json": {
+     "path": "var/local-driver/anima-interaction-v1/inputs/structure/SOLO-grok/structure_index.json",
+     "status": "unrendered",
+     "sha256": null
+    }
+   }
+  }
+ }
+}

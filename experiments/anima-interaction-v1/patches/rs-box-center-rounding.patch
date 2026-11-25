@@ -1,0 +1,15 @@
+--- a/character_builder.py
++++ b/character_builder.py
+@@ -120,6 +120,12 @@
+         else:
+             region = place_mask(s.region_mask, s.mask_transform) if s.region_mask is not None else None
+             x, y = region.center if region is not None else (s.x, s.y)
++            if box is not None:
++                # slot_box clips accepted six-decimal edge roundoff. Keep the
++                # strict Character center/bbox invariant after that tiny clip.
++                center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
++                if abs(x - center[0]) > 1e-9 or abs(y - center[1]) > 1e-9:
++                    x, y = center
+             chars.append(Character(s.prompt, s.uc, x, y, box, lora_name=s.lora_name,
+                                    lora_strength=s.strength_model, lora_clip_strength=s.strength_clip,
+                                    region_mask=region, reference=s.reference,

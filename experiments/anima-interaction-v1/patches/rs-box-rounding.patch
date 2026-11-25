@@ -1,0 +1,14 @@
+--- a/character_builder.py
++++ b/character_builder.py
+@@ -77,7 +77,10 @@
+            for v in (slot.width, slot.height)) or not (0 < slot.width <= 1 and 0 < slot.height <= 1):
+         raise ValueError("Box width/height must be in (0, 1]. / 상자 크기는 0 초과 1 이하입니다. / ボックスのサイズは0より大きく1以下です。")
+     box = (slot.x-slot.width/2, slot.y-slot.height/2, slot.x+slot.width/2, slot.y+slot.height/2)
+-    if any(v < -1e-9 or v > 1+1e-9 for v in box):
++    # Frozen study boxes round center and extent independently to six decimals.
++    # Accept only that sub-pixel roundoff; the existing clamp still clips edges.
++    # Larger out-of-canvas regions remain invalid.
++    if any(v < -1e-6 or v > 1+1e-6 for v in box):
+         raise ValueError(f"Character {slot.number}: box outside image; move its center inward or reduce its size. / 캐릭터 {slot.number}: 상자가 화면 밖입니다. 중심이나 크기를 조정해 주세요. / ボックスが画像の範囲外です。")
+     return tuple(min(1., max(0., v)) for v in box)
+ 
