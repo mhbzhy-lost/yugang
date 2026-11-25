@@ -47,6 +47,16 @@ export interface GptImageRequest {
   fetchImpl?: typeof fetch;
   /** provider 级代理（只有 OpenAI 需要翻墙时才有意义）；非法值会回落到直连。 */
   proxy?: string;
+  /**
+   * 同步提交钩子：凭据读取与前置刷新完成之后、发起生成 POST 之前被调用一次（不等待返回值）。
+   * 上层据此置 submitted / 发「稍等」；这里抛错 = 请求不发出。
+   */
+  onSubmitted?: () => void;
+}
+
+/** HTTP 非 2xx：消息保留旧格式（`gpt_image_http_<status>`），状态码另挂到 status 供上层判 4xx/5xx。 */
+function httpError(message: string, status: number): Error {
+  return Object.assign(new Error(message), { status });
 }
 
 /** 出图成功返回相对 mediaRoot 的引用列表（gen/xxx.png）；失败抛错，错误里不带凭据。 */
@@ -93,6 +103,9 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
   }
 
   const timeout = AbortSignal.timeout(request.timeoutMs ?? 180_000);
+  // 已取消就不发请求、不触发提交钩子
+  request.signal?.throwIfAborted();
+  request.onSubmitted?.();
   const response = await doFetch(request.images && request.images.length > 0 ? EDIT_ENDPOINT : GEN_ENDPOINT, {
     method: "POST",
     headers: {
@@ -112,9 +125,9 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
     // 不是参数写错。单独抛一个码，让工具层回一句人话，别让模型反复重试。
     const detail = await response.text().catch(() => "");
     if (response.status === 400 && detail.includes("GIF output is not enabled")) {
-      throw new Error("gpt_image_gif_off");
+      throw httpError("gpt_image_gif_off", response.status);
     }
-    throw new Error(`gpt_image_http_${response.status}`);
+    throw httpError(`gpt_image_http_${response.status}`, response.status);
   }
   const parsed = (await response.json()) as { data?: { b64_json?: string }[] };
   const entries = (parsed.data ?? []).filter((item) => typeof item.b64_json === "string");
@@ -126,6 +139,7 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
   mkdirSync(outDir, { recursive: true });
   const files: string[] = [];
   for (const entry of entries) {
+    request.signal?.throwIfAborted();
     const bytes = Buffer.from(entry.b64_json as string, "base64");
     if (bytes.length < 1024) throw new Error("gpt_image_too_small");
     const file = `${Date.now()}-${randomUUID().slice(0, 8)}.${extensionOf(bytes)}`;
