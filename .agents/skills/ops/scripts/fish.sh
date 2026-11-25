@@ -28,6 +28,7 @@ case "$CMD" in
   usage)             remote "$PREFIX node scripts/ops.ts usage $* 2>&1" ;;
   probe)             remote "$PREFIX npm run probe 2>&1" ;;
   ping)              remote "$PREFIX npm run ping 2>&1" ;;
+  quota)             remote "cd ~/yugang && /usr/local/bin/docker compose exec -T fish node scripts/quota.ts $* 2>&1" ;;
   log)               N="${1:-40}"; remote "cd ~/yugang && /usr/local/bin/docker compose logs --tail $N fish 2>&1" ;;
   ps)                remote 'ps aux | grep -E "src/index.ts|memes.ts" | grep -v grep' ;;
   deploy)            remote "cd ~/yugang && git fetch origin main && git reset --hard FETCH_HEAD && /usr/local/bin/docker compose restart fish 2>&1" ;;
@@ -40,6 +41,7 @@ case "$CMD" in
   usage [日期]           当天用量
   probe     QQ 侧验收（连 OneBot、报身份和群）
   ping      模型连通性 + 用量
+  quota [provider] [--json] [--no-refresh]   查各 provider 剩余额度/余额（容器内执行）
   log [N]   鱼日志尾部（默认 40 行）
   ps        进程状态（鱼 / meme import）
   deploy    git pull + 平滑重启鱼（标准部署入口）

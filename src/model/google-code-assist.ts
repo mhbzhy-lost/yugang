@@ -59,7 +59,7 @@ const DEFAULT_BASE_URL = "https://cloudcode-pa.googleapis.com";
 // 付费（Pro/Ultra）请求走 daily（非 sandbox）：Google 对 prod / daily / sandbox 是三个独立
 // 配额桶，付费账号的订阅额度在 daily 计发（sub2api PR #8924/#8979 实锤）；2026-11-07
 // “生产端点实测 429”实为 prod 桶耗尽，当年选 sandbox 是误判（sandbox 能用但额度另算）。
-const ANTIGRAVITY_BASE_URL = "https://daily-cloudcode-pa.googleapis.com";
+export const ANTIGRAVITY_BASE_URL = "https://daily-cloudcode-pa.googleapis.com";
 const PROJECT_HEADER = "x-yugang-ca-project";
 const DEFAULT_MAX_RETRIES = 3;
 
@@ -654,18 +654,25 @@ function parseLoadCodeAssist(value: unknown): CodeAssistDiscovery {
   return { ...(projectId ? { projectId } : {}), ...(tier ? { tier } : {}) };
 }
 
+/** 可选覆盖：baseUrl（去尾斜杠后使用，缺省按 flavor 默认端点）与 userAgent（透传请求头）。 */
+export interface CodeAssistRequestOptions {
+  baseUrl?: string;
+  userAgent?: string;
+}
+
 export async function discoverProject(
   accessToken: string,
   flavor: CodeAssistFlavor = "gemini",
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
+  options?: CodeAssistRequestOptions,
 ): Promise<CodeAssistDiscovery> {
-  const baseUrl = defaultBaseUrl(flavor).replace(/\/+$/, "");
+  const baseUrl = (options?.baseUrl ?? defaultBaseUrl(flavor)).replace(/\/+$/, "");
   const metadata = flavor === "antigravity" ? ANTIGRAVITY_METADATA : DISCOVERY_METADATA;
   const post = (path: string) =>
     fetchImpl(`${baseUrl}${path}`, {
       method: "POST",
-      headers: requestHeaders(flavor, accessToken, false),
+      headers: requestHeaders(flavor, accessToken, false, options?.userAgent),
       body: JSON.stringify({ metadata }),
       ...(signal ? { signal } : {}),
     });
@@ -685,7 +692,7 @@ export async function discoverProject(
   for (let tries = 0; operation.done !== true && operation.name && tries < 12; tries++) {
     await new Promise((r) => setTimeout(r, 5000));
     const poll = await fetchImpl(`${baseUrl}/v1internal/${operation.name}`, {
-      headers: requestHeaders(flavor, accessToken, false),
+      headers: requestHeaders(flavor, accessToken, false, options?.userAgent),
       ...(signal ? { signal } : {}),
     });
     if (!poll.ok) throw new Error(`onboard 轮询失败 (${poll.status})`);
@@ -706,10 +713,12 @@ export async function fetchAvailableModels(
   project: string,
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
+  options?: CodeAssistRequestOptions,
 ): Promise<Record<string, AvailableModelInfo>> {
-  const response = await fetchImpl(`${ANTIGRAVITY_BASE_URL}/v1internal:fetchAvailableModels`, {
+  const baseUrl = (options?.baseUrl ?? ANTIGRAVITY_BASE_URL).replace(/\/+$/, "");
+  const response = await fetchImpl(`${baseUrl}/v1internal:fetchAvailableModels`, {
     method: "POST",
-    headers: requestHeaders("antigravity", accessToken, false),
+    headers: requestHeaders("antigravity", accessToken, false, options?.userAgent),
     body: JSON.stringify({ project }),
     ...(signal ? { signal } : {}),
   });

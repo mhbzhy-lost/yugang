@@ -14,6 +14,7 @@
     "prompts": "node scripts/prompts.ts",
     "ops": "node --env-file-if-exists=.env scripts/ops.ts",
     "ping": "node --env-file-if-exists=.env scripts/ping.ts",
+    "quota": "node --env-file-if-exists=.env scripts/quota.ts",
     "creds": "node scripts/creds.ts",
     "protocol": "node --env-file-if-exists=.env scripts/protocol.ts",
     "up": "node --env-file-if-exists=.env scripts/up.ts",

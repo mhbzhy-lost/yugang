@@ -1,6 +1,6 @@
 ---
 name: yugang-ops
-description: 维护「鱼缸」这个 QQ 群机器人时使用：查状态、看原话簿、复盘某天某个群聊了什么、诊断连不上 QQ、以及改动前后的检查清单。用户提到鱼缸、鱼、QQ 机器人、掉线、不说话、群里聊了什么时都应该先加载这个技能。
+description: 维护「鱼缸」这个 QQ 群机器人时使用：查状态、看原话簿、复盘某天某个群聊了什么、诊断连不上 QQ、查各 provider 剩余额度/余额、以及改动前后的检查清单。用户提到鱼缸、鱼、QQ 机器人、掉线、不说话、群里聊了什么、额度、配额、余额、quota 时都应该先加载这个技能。
 ---
 
 # 鱼缸运维
@@ -16,6 +16,7 @@ scripts/fish.sh log 60               # 鱼日志尾部
 scripts/fish-logs.sh -m 30 -g 659976571 # 一次拉齐最近消息/DB事件/在途任务/鱼日志/协议端日志
 scripts/fish.sh deploy               # git pull + 平滑重启（标准部署入口）
 scripts/fish.sh memes                # 表情包库状态（本地批量导入：主人把图放进 media/meme-inbox/ 再让鱼逐批登记）
+scripts/fish.sh quota [provider]     # 查各 provider 剩余额度/余额（容器内执行，支持 --json / --no-refresh）
 scripts/fish.sh help                 # 全部子命令（其它命令原样透传）
 ```
 
@@ -56,6 +57,7 @@ cd ~/yugang
 /usr/local/bin/docker compose ps                    # 容器服务状态（fish/sixty）
 /usr/local/bin/docker compose logs -f fish          # 看鱼日志（不再 tail var/fish-console.log）
 /usr/local/bin/docker compose exec fish node scripts/doctor.ts   # 容器内体检
+/usr/local/bin/docker compose exec -T fish node scripts/quota.ts [provider]   # 查各 provider 额度/余额
 git pull && /usr/local/bin/docker compose restart fish           # 日常部署，1–3 秒
 ```
 
@@ -126,6 +128,30 @@ npm run ping
   缺省用当前 IDE 指纹。保持 `daily-cloudcode-pa.sandbox.googleapis.com`，不要改去生产端点硬试。
 - `ping` 会把 `stopReason:error/aborted` 当失败；不能再把一段网关错误文本误判为「通了」。
 
+## 查各 provider 额度
+
+```bash
+# 本地开发机经 fish.sh（走容器内执行）：
+bash .agents/skills/ops/scripts/fish.sh quota                      # 全部已配置 provider
+bash .agents/skills/ops/scripts/fish.sh quota google-antigravity   # 只查一家（精确匹配 provider id）
+bash .agents/skills/ops/scripts/fish.sh quota --json               # 结构化 JSON（不含任何密钥/token）
+bash .agents/skills/ops/scripts/fish.sh quota --no-refresh         # OAuth 过期不刷新不写盘，只报过期状态
+
+# 若当前环境走 home-connect MCP（无 connect.sh），直接在 home_exec(target="mac") 执行：
+cd ~/yugang && /usr/local/bin/docker compose exec -T fish node scripts/quota.ts [provider] [--json] [--no-refresh]
+```
+
+真实查询支持四类：**google-antigravity**（loadCodeAssist 套餐 + fetchAvailableModels 配额，
+按家族/剩余比例/重置时间折叠成 Claude/Gemini 配额桶）、**openai-codex**（/wham/usage 的 5h/7d
+窗口与 plan）、**deepseek**（/user/balance 余额）、**zai-coding-cn**（monitor quota/limit 的
+小时/周额度与剩余百分比）。全部按 `config/models.json` 里该 provider 的实际 `baseUrl` 查对应
+配额桶（Antigravity 的 prod/daily/sandbox 是三个独立桶，不要查错端点），并遵循 `provider.proxy`。
+其余 provider 标 unsupported，缺凭据标 unconfigured；OAuth 过期默认在跨进程文件锁内自动刷新
+并原子回写（防并发丢 refresh_token），`--no-refresh` 则只报过期。任一 provider 查询报错退出码 1。
+
+**优先在容器内跑**（`fish.sh quota` 已自动这么做）：容器内才有 `host.docker.internal:7897`
+代理、Linux `node_modules`，且凭据文件锁与线上鱼同域，刷新回写不会和鱼互踩。
+
 ## 群视频看不了怎么查
 
 - 短视频和群文件中的视频先登记为 `[视频 qqvideo:... 文件名]`，调用 video 时填 ref；B 站继续填 url，两者二选一。
@@ -159,7 +185,7 @@ node scripts/ops.ts probe
 
 1. `node scripts/ops.ts digest <今天>` —— 群里有没有消息进来。没有 → 协议端或 WS 断了。
 2. 有消息但没出站 —— 看进程日志里的 `[鱼缸]` 行；`这一轮没答上来` 表示模型调用失败。
-3. 有 `这一轮没答上来` —— 检查模型 key / 余额 / base_url。
+3. 有 `这一轮没答上来` —— 检查模型 key / 余额 / base_url；余额用 `scripts/fish.sh quota [provider]` 直接查（见「查各 provider 额度」）。
 4. 都正常但话少 —— 是闸挡的：看 `[fish] gate <chatKey> <昵称> -> skip:<原因>`（日志带 `HH:MM:SS`）。
    `rate_limited` = 限流挡的：同一群两条被处理消息之间至少隔 `ambientMinIntervalSeconds`（默认 60s，热加载）；
    `watched_sampled_out` = 关注者冷却没到且随机门没抽中（`watchAmbientChance`）；
