@@ -427,8 +427,7 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
   - `qwen-tts`（2026-11-25 新增）：云端 Qwen-Audio-TTS（`SpeechSynthesizer`），`engine: "qwen-tts"`、`url`、`model`、`voice` 必填，`provider` 缺省 `qwen-token-plan-cn`（凭据在运行时按 `provider` 从 `config/auth.json` 现读，禁止把 `apiKey` 写进 `fish.config.json`），可选 `language`（默认 `zh`）、`instruction`、`speed`（透传为 `input.rate`）。返回流式占位 WAV 头（`0x7FFFFFFF`）由 `fixWavHeader` 自动按真实 PCM 字节数重写；`scripts/tts.ts` 活跃本地端口扫描自动跳过 `qwen-tts` 音色
 - 人格解析必须走带 `#人格` 后缀的映射键（`mappingKeys`），`chatKeys` 只存剥离人格的 base 键给路由用
 - 触发提示：**没有机械提示**（2026-11-14 主人裁定，删除了旧 0.3 概率追加的 `[本轮要求] 必须使用 say_voice 回复` 任务行）。
-  语音只在**对方明确要求**时用（「用语音说」「发条语音」这类），少数情形可由模型自己判断（对方正用语音聊、情绪浓、短话更适合出声）；
-  其余时候用文字。策略文案唯一源是 `src/tools/say_voice/TOOL.md`
+  2026-11-25 放开自主语音引导（去掉旧「其余时候用文字 / 语音是点缀」克制文案）：对方明确要求时必用，日常聊天（打招呼、吐槽、安慰、撒娇、分享心情等）由模型自由选用 `say_voice`，仅保留客观边界（200 字上限、长内容/链接/精确信息用文字）。策略文案唯一源是 `src/tools/say_voice/TOOL.md`
 - 出口限制：台词 ≤200 字、超长/含失败一律以 tool 错误返回
 - 服务端：GPT-SoVITS 目标为只保留一个 launchd 常驻实例（默认 9884 爱莉希雅 v4），其它人格由同一进程的 `/set_model` 与 `/change_refer` 热切，不停止/重启实例。旧端口 plist 在远程切换完成前仍只作遗留记录，不属于本地代码验收范围；依赖 `~/nltk_data` 的
   `cmudict` + `averaged_perceptron_tagger*`——**缺了会返回 200 + 0 字节空音频**（英文 g2p 抛 LookupError）
