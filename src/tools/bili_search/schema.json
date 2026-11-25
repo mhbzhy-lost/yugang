@@ -1,0 +1,21 @@
+{
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "搜索关键词（1–80 字，自由中文/英文；不要手写 site:/after:/before: 算子，系统自动拼接站点与时间窗）"
+      },
+      "days": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 365,
+        "description": "只看最近 N 天内发布的视频；缺省 60，0 为不限时间；窗口内不足 3 条会自动放宽重搜一次"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "additionalProperties": false
+  }
+}

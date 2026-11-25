@@ -8,7 +8,7 @@
  * 那一条（src/egress/seen-links.ts，宿主在工具包装层机械登记），**或者**是本轮 video
  * 实际看过的那条视频的链接（按 BV 认，见 src/external/video-links.ts）；所以模型编不出
  * URL，也不能把群友贴的链接原样播出去。文本里出现 B 站 BV 链接时顺手记进会话私有池
- * （fish.video_pool，bili_hot 用它过滤重复推荐），与 outbound/outbox 同一次提交。
+ * （fish.video_pool，bili_search 用它过滤重复推荐），与 outbound/outbox 同一次提交。
  * 什么时候该看、该不该分享由 prompt 的 `[本轮要求]` 约束，工具不区分钟类型。
  * 旧外部弹药分享（ammoId，外部计划 E5）内核源码保留但模型 Schema 已不再暴露：
  * 分享门接线（wireAmmoShareHost）已随弹药管线停用摘除，这条链恒 fail closed。
@@ -113,7 +113,7 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
           ));
         }
       }
-      // 已分享的视频记进去重表（bili_hot 用它过滤重复推荐）：纯机械——本条消息里出现的
+      // 已分享的视频记进去重表（bili_search 用它过滤重复推荐）：纯机械——本条消息里出现的
       // BV 号就记一笔，**不要求带链接**。2026-11-05 修：此前只认 URL，模型退化成「只发
       // BV 号」（见 findProvenanceLeak 的链接豁免）时就不进表，于是同一条视频会被发第二遍。
       for (const bvid of text.match(/BV[0-9A-Za-z]{10}/g) ?? []) {

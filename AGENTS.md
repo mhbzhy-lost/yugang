@@ -23,7 +23,7 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 可引用，除语音外可点名 @ 群友）、`react`（只贴表情）、
 `look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`meme_import`（主人本地批量导入的登记入口）、
 `draw`（本地 SD 生图）、`gpt_image`（GPT Image 2 透传）、`search`/`video`（联网查）、
-`bili_hot`/`bili_video`（自主浏览候选与元数据核实，实际观看走 `video`）、`tags`（danbooru 词表）；
+`bili_search`/`bili_video`（关键词检索 B 站候选与元数据核实，实际观看走 `video`）、`tags`（danbooru 词表）；
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
 
@@ -328,7 +328,7 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
   （与 @ 轮同款渲染，批内图统一 inline 编号）
 - **搭话输入统一为标准消息列表**：没有 `[这条消息@了你]` 就不构成必答。零新增空拍不再由沉默、
   nudge、旧账或弹药触发，只在空拍一次 `engage.freeBrowseChance` 门开时提交 `[主动交流机会]`，
-  当前会话可自行 `bili_hot` 找候选、`video` 实际观看后想要分享就用 `say_words` 把链接发出去（怎么说由鱼定）；
+  当前会话可自行 `bili_search` 按关键词找候选、`video` 实际观看后想要分享就用 `say_words` 把链接发出去（怎么说由鱼定）；
   ambient 拍不携带 browse 授权。
 - **闸放行 ≠ 立刻提交**：放行的群消息按「群 + 发送者」攒 **10 秒静默**（窗口固定，没有环境变量、没有最长等待），
   同一发送者的新消息取消旧计时并继续加长，不同发送者互不干扰；静默满 10 秒才把整组提交一次
@@ -580,14 +580,18 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
 - **会话自主浏览（2026-11-06 合并后唯一入口）**：旧弹药库、后台 worker 逛轮、补货、手动 ammo
   入口与 `ammo_*` 工具已停用，源码仅作兼容保留，不进 active 工具面、调度或模型文案。
   自由活动群**空拍**时掷一次 `engage.freeBrowseChance`（缺省 0.03，主人可调，生产现配 0.1）并
-  选定 topic；门开才给当前（群 × 人格）会话提交 `[主动交流机会]`，ambient 拍不携带 browse 授权。
+  选定 topic（历史兼容字段，bili_search 不再消费）；门开才给当前（群 × 人格）会话提交 `[主动交流机会]`，ambient 拍不携带 browse 授权。
   `browseWindow` 是 `free-` 前缀的拍 id，下一拍作废；宵禁（空拍本就不提交）恒关。
-  **授权不再写在工具里**：`bili_hot` / `video` / `say_words` 都不检查轮类型，能不能逛什么时候逛
+  **授权不再写在工具里**：`bili_search` / `video` / `say_words` 都不检查轮类型，能不能逛什么时候逛
   由调用侧策略定——空拍的 freeBrowseChance 门决定主动轮起不起，工具本身不再限制轮型。
   工具只保留资源闸与防伪造：
-  `bili_hot` 按 topic（可选参数，缺省随机）取候选：**分区排行 + 以排行里的视频作种子的算法相关推荐
-  （related，无需 Cookie/WBI）**，合并去重后从前 20 名里随机取 10；候选先过 `fish.video_pool`
-  （chatKey 绑定）：`shared` 永久挡、`seen` 只挡 7 天（每次返回的 BV 都记 seen，避免固定榜单反复刷）；
+  `bili_search`（2026-11-25 重做，替换旧固定榜单工具）按模型自由关键词（1–80 字，可选 `days` 0–365、
+  缺省 60、0 不限时间）经 **DeepSeek Search** 检索并严格过滤 `bilibili.com/video/BV…` 路径
+  （零 B 站 API 配额消耗，不补播放/点赞元数据）：自动拼 `site:bilibili.com/video` 与 `after:`，
+  窗口内有效结果不足 3 条时在 24s 总预算内自动放宽时间窗重搜一次并合并去重（时间窗优先）；
+  每轮最多 2 次，输出行只含 BV 不含链接；候选先过 `fish.video_pool`
+  （chatKey 绑定）：`shared` 永久挡、`seen` 只挡 7 天（每次返回的 BV 都记 seen）；
+  文本硬筛（titleBait/uc/listicle/promoDesc）保留；
   `video` 每轮最多 `video.browseMaxViewsPerRound`（缺省 5）次、成功观看才登记 viewed；
   `say_words` 的文本里每个 URL 必须是本轮工具结果里出现过的（`src/egress/seen-links.ts`
   白名单，宿主在工具包装层机械登记），文本里出现的 B 站 **BV 号（带不带链接都算）**顺手记进
@@ -597,7 +601,7 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
   buvid3 复用不变，每日预算改读 `video.dailyBudget`（缺省 60，旧 `ammo.dailyBudget` 只作回退）。
   **`fish.video_pool` 是 chatKey 绑定的去重表**（2026-11-05 改绑，session scope，key = 群号/私聊号）：
   同一个群里换人格看同一份历史，不同群互不干扰；不做全局库存或跨会话 claim。只记「已分享过」
-  的视频（不发只看），所以 bili_hot 的候选过滤能挡住重复分享。
+  的视频（不发只看），所以 bili_search 的候选过滤能挡住重复分享。
   **抄写检查豁免链接**：出口白名单要求原样抄工具结果里的 canonical 链接，所以
   `findProvenanceLeak` 比对前先把两侧 http(s) 链接抹掉（`src/egress/policy.ts` 的 `maskUrls`）——
   否则「必须带链接」与「不许抄工具结果」直接冲突，模型只能退回只发 BV 号（2026-11-05 事故）。

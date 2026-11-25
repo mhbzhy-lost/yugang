@@ -5,7 +5,7 @@
       "bvid": {
         "type": "string",
         "pattern": "^BV[0-9A-Za-z]{10}$",
-        "description": "候选视频的 BV 号（bili_hot 行尾那格 / bili_video 卡片里的那个）"
+        "description": "候选视频的 BV 号（bili_search 行尾那格 / bili_video 卡片里的那个）"
       },
       "summary": {
         "type": "string",

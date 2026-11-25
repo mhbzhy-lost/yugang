@@ -12,10 +12,10 @@
  * clearViewedVideos(roundId) 整份清掉（与 triggerOf 同生命周期），跨轮 / 跨会话一律查不到。
  *
  * 这里不放任何模型可见文案；topic 枚举 VIDEO_TOPICS 是宿主侧机械词表（掷门时随机选一，
- * T4 的 bili_hot 按它取候选），不是 prompt。
+ * 仅作历史触发字段兼容保留：bili_search 按模型自由关键词检索，不再消费它），不是 prompt。
  */
 
-/** 视频浏览 topic 枚举（宿主掷门时随机选一；T4 的 bili_hot 候选过滤消费）。 */
+/** 视频浏览 topic 枚举（宿主掷门时随机选一；历史触发字段兼容保留，bili_search 不再消费）。 */
 export const VIDEO_TOPICS: readonly string[] = ["二次元", "游戏", "军事", "数码"];
 
 // roundId → 本轮实际成功观看的 BV 集合：只活在当前 browse 轮，宿主轮末整份清掉。

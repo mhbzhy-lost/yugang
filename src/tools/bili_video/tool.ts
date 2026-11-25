@@ -1,7 +1,7 @@
 /**
  * bili_video —— 终选核实一条 B 站视频（外部计划 Task E3）。
  *
- * bili_hot 的三层漏斗给出候选后，提交入库（ammo_submit）前用这条把最后疑点核掉：
+ * bili_search 的漏斗给出候选后，深看/分享前用这条把最后疑点核掉：
  *   1. 完整数据卡片：播放/弹幕/赞/币/收藏/分享、时长、发布时间、简介、分区（view 端点）；
  *   2. UP 评级：粉丝数/等级/官方认证（card 端点）——软筛信号一并展示，低级号与
  *      营销号在这里现形；
@@ -15,7 +15,7 @@
  * 陌生人输入，出本工具前统一过 sanitizeExternalText（bidi/零宽剔除、控制字符收敛、
  * 按码点截断）；数字字段由 bili-client 映射成 number，原始 JSON 不出客户端。
  *
- * 全部 B 站请求经 bili-client 共享单例（频控/预算/熔断与 video、bili_hot 共用一份）。
+ * 全部 B 站请求经 bili-client 共享单例（频控/预算/熔断与 video 共用一份）。
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest（factory 只消费它，不再有第二份运行时定义）。
  */
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";

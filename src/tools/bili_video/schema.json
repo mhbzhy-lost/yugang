@@ -4,7 +4,7 @@
     "properties": {
       "bvid": {
         "type": "string",
-        "description": "BV 号：BV 开头 + 10 个字母数字（即 ^BV[0-9A-Za-z]{10}$），从 bili_hot 结果或视频链接里取"
+        "description": "BV 号：BV 开头 + 10 个字母数字（即 ^BV[0-9A-Za-z]{10}$），从 bili_search 结果或视频链接里取"
       },
       "withComments": {
         "type": "boolean",

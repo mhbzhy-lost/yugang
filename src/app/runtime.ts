@@ -957,7 +957,7 @@ export async function submitRound(input: {
       userId: trigger.userId,
       kind: roundKind,
       ...(input.quoteIds !== undefined && input.quoteIds.size > 0 ? { quoteIds: input.quoteIds } : {}),
-      // 视频浏览授权（T3）：只随零新增主动轮钉上（T4 的 bili_hot/video/say_words 消费）
+      // 视频浏览授权（T3）：只随零新增主动轮钉上（宿主记账；bili_search 不再消费 browseTopic）
       ...(trigger.browseWindow !== undefined ? { browseWindow: trigger.browseWindow } : {}),
       ...(trigger.browseTopic !== undefined ? { browseTopic: trigger.browseTopic } : {}),
       ...(trigger.newsRunId !== undefined ? { newsRunId: trigger.newsRunId } : {}),

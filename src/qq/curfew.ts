@@ -3,7 +3,7 @@
  *
  * 单一实现，两个消费面都读这里：
  * - `src/engage-next.ts` 的开窗视频浏览门：宵禁内门恒关 → 不起「主动交流机会」轮，
- *   `bili_hot` / `video` / `say_words(videoBvid)` 的浏览授权随之全部失效（fail closed，
+ *   `bili_search` / `video` / `say_words` 的浏览机会随之全部失效（fail closed，
  *   不靠模型自觉）；
  * - 旧弹药链（`src/tools/say-shared.ts` 的 `ammoCurfewAt` 别名，现仅 disabled 的
  *   `ammo_list` 与已停用的 ammoId 分支引用）。

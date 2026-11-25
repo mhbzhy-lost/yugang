@@ -4,7 +4,7 @@
  * 每个 **chatKey（群 / 私聊）** 一份：session scope doc，key = chatKey（2026-11-05 改绑，
  * 原来按 conversationId 隔离，导致同群换人格后又能把同一条视频发一遍）。池是「已分享过」
  * 的视频历史 + 去重表：say_words 发出含 B 站链接**或裸 BV 号**的文本时机械记账
- * （pool 写入与 outbound entry / fish.outbox 同一次提交），bili_hot 用它过滤本群
+ * （pool 写入与 outbound entry / fish.outbox 同一次提交），bili_search 用它过滤本群
  * 已分享过的候选。换页不动 session doc，池跨页存续。
  *
  * 池不设 TTL、不淘汰：条目只在实际分享成功时追加（每窗至多一条），量级极小；
@@ -74,7 +74,7 @@ export function activeSeenOf(state: VideoPoolState | undefined, nowMs: number): 
 }
 
 /**
- * 机械记录「已展示」候选（纯函数，调用方放进事务）：bili_hot 每次返回给模型的 BV 都记一笔，
+ * 机械记录「已展示」候选（纯函数，调用方放进事务）：bili_search 每次返回给模型的 BV 都记一笔，
  * 7 天后自然过期；同时清理过期的 seen 与超出上限的老 seen。shared 条目不动。
  */
 export function applyVideoPoolSeen(doc: VideoPoolState, bvids: readonly string[], nowMs: number): number {

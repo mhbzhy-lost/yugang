@@ -56,10 +56,11 @@ export interface RoundTrigger {
   /**
    * 视频浏览授权（2026-11-04 模型输入计划 T3）：只在 open 空窗的零新增主动轮
    * （「主动交流机会」模板）由宿主钉上——browseWindow = 本窗稳定 windowId（engage-next
-   * 派生，同窗恒定、关窗作废），browseTopic = 本窗随机选定的 topic（VIDEO_TOPICS 枚举）。
-   * ambient shard、injection 有消息轮、answer 轮与私聊轮一律不携带 = 无浏览授权；
-   * T4 的 bili_hot（按 topic 取候选）/ video（登记实际观看）/ say_words（链接白名单）
-   * 只认这两个字段，不得按群 open 相位自行推断授权。
+   * 派生，同窗恒定、关窗作废），browseTopic = 本窗随机选定的 topic（VIDEO_TOPICS 枚举，
+   * 历史触发字段兼容保留：2026-11-25 起 bili_search 按模型自由关键词检索，不再消费它）。
+   * ambient shard、injection 有消息轮、answer 轮与私聊轮一律不携带；
+   * 工具侧已不做轮型授权（2026-11-05），这两个字段只作宿主记账与历史兼容，
+   * 不得按群 open 相位自行推断授权。
    */
   browseWindow?: string;
   browseTopic?: string;

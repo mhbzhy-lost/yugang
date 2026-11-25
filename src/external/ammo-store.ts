@@ -3,8 +3,8 @@
  *
  * 全局抓取池（决策 2）：kind=bili、会话级 session doc、人格中立——不挂任何群/人格，
  * 分享轮只按 id 认领，措辞由分享轮所在群的当前人格自然人格化。
- * 形状与 src/tools/bili_hot/tool.ts 的只读投影 ExternalAmmoReadDoc 必须严格同形
- * （kind/version/scope/字段）：bili_hot 用它剔已入库候选，本模块是唯一写入方，
+ * 形状与历史只读投影 ExternalAmmoReadDoc（原固定榜单工具，已随 bili_search 重做删除）
+ * 严格同形（kind/version/scope/字段）：本模块是唯一写入方，
  * pi-durable 对语义不符的存档当场抛错，两边谁漂移谁起不来。
  *
  * 判重口径（计划 FE4）：BV 已在库（任何状态，含 expired/claimed/shared）即拒绝——
@@ -50,7 +50,7 @@ export interface ExternalAmmoState {
   items: ExternalAmmoItem[];
 }
 
-/** 弹药库 token：与 bili_hot 的 ExternalAmmoReadDoc 同形（见文件头）。 */
+/** 弹药库 token：与历史只读投影 ExternalAmmoReadDoc 同形（见文件头）。 */
 export const ExternalAmmoDoc = defineDoc<ExternalAmmoState>({
   kind: "fish.external_ammo",
   version: 1,

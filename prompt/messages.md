@@ -140,7 +140,7 @@ image_gif_collect_hint: 值得收就用meme_add收它，不值得就不收
 ctx_browse_active_header: [主动交流机会]
 ctx_browse_active_line: 当前没有新消息。你可以自由决定是否使用 say_* 工具开口。
 ctx_browse_actions_header: [可选动作]
-ctx_browse_actions_line: 调用 bili_hot 去逛 B 站；遇到有意思的视频，可以用 say_words 分享到群里。
+ctx_browse_actions_line: 用 bili_search 按你的兴趣或群里最近的话题搜 B 站视频；遇到有意思的，用 video 看过后可以用 say_words 分享到群里。
 
 # 主人 / 指令的闸前机械回执（不进模型）
 bypass_placeholder: （一条画图指令：图片的细节发送者已单独指定，直接用 draw 画一张就好）

@@ -13,7 +13,7 @@
  * 的具名接口，不透传原始 JSON、不使用 any。
  *
  * 文件尾是 var/bili-filters.json 的类型定义、缺省值（JSON 不支持注释，字段说明以这里的
- * TS 注释为准）与 mtime 热加载器，供工具层（bili_hot 等）共用。
+ * TS 注释为准）与 mtime 热加载器，供工具层（bili_search 文本硬筛等）共用。
  */
 import { DATA_HOME } from "../paths.ts";
 import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
@@ -546,7 +546,7 @@ export function defaultVarDir(): string {
 let sharedClient: BiliClient | undefined;
 
 /**
- * 惰性单例口：video / bili_hot / bili_video 等工具层共用同一个频控内核，
+ * 惰性单例口：video / bili_video 等工具层共用同一个频控内核，
  * 串行锁、每日预算与熔断状态全进程只有一份。varDir 与 index.ts 的 HOME 同源
  * （YUGANG_HOME 优先，缺省仓库 var/）；构造本身无副作用，预算与 buvid 都在首次请求时才落盘。
  */

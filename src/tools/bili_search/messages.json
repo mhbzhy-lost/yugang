@@ -1,0 +1,12 @@
+{
+  "bili_search_query": "搜索词长度不对（需要 1 到 80 字）",
+  "bili_search_bad_days": "days 必须是 0 到 365 之间的整数",
+  "bili_search_nokey": "没有配置搜索凭据，搜不了 B 站视频",
+  "bili_search_round_missing": "当前轮次不可用，无法搜索",
+  "bili_search_used": "这一轮已经搜过两次 B 站视频了，直接从刚拿到的候选里挑就行",
+  "bili_search_failed": "B 站视频搜索没成功（{{query}}）：{{reason}}",
+  "bili_search_header": "B 站视频候选（标题|发布|简介|BV）：",
+  "bili_search_stats": "（搜索命中 {{raw}} → 有效 B 站视频 {{bili}} → 本群去重 {{in_library}} → 文本过滤 {{hard_veto}} → 返回 {{returned}}{{fallback_note}}）",
+  "bili_search_fallback_note": "，近{{days}}天不足已自动放宽时间",
+  "bili_search_empty": "这轮没搜到合适的 B 站视频，换个关键词或下次再逛"
+}

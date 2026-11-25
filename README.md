@@ -18,7 +18,7 @@
   react   只贴表情，不说话
 ```
 
-其余是可枚举的能力工具（`look` / `meme` / `search` / `video` / `bili_hot` / `bili_video` / `draw` / `gpt_image` / `tags`）
+其余是可枚举的能力工具（`look` / `meme` / `search` / `video` / `bili_search` / `bili_video` / `draw` / `gpt_image` / `tags`）
 和主人专属的工具（`meme_add` / `meme_import` / `read` / `grep` / `write` / `tree` / `config` / `restart` / `watch`）。
 完整清单就是 `src/tools/loader.ts` 里那份 factory 名单。
 
@@ -108,12 +108,13 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
 鱼不止被动接话，还有自主浏览与定时新闻两条外部链路：
 
 - **会话自主浏览**：自由活动群在**空拍**（收集器无消息的拍）按 `engage.freeBrowseChance`（缺省 0.03，
-  宵禁恒关）掷一次门，门开才给当前（群 × 人格）会话一个零新增主动交流机会。会话用 `bili_hot` 按本拍
-  topic 取候选，用 `video` 实际观看（每轮最多 `video.browseMaxViewsPerRound`，缺省 5），再通过
+  宵禁恒关）掷一次门，门开才给当前（群 × 人格）会话一个零新增主动交流机会。会话用 `bili_search`
+  按自由关键词经 DeepSeek Search 检索 B 站视频候选（默认近 60 天、不足自动放宽，零 B 站配额），
+  用 `video` 实际观看（每轮最多 `video.browseMaxViewsPerRound`，缺省 5），再通过
   `say_words` 把推荐语和宿主 canonical 链接发到群里。`fish.video_pool` 按 chatKey（群/私聊）绑定去重，跨会话同 BV 不互斥；写入与
   outbox 入队同事务。旧弹药库、后台逛轮和 `ammo_*` 工具只保留兼容源码，不进入 active 工具面或调度。
-  B 站请求全走 `bili-client` 频控内核（白名单端点、串行 + 同端点 ≥2s、`video.dailyBudget` 缺省
-  60/天 + 风控当日熔断），普通 `video` 工具共用。
+  B 站元数据/观看请求全走 `bili-client` 频控内核（白名单端点、串行 + 同端点 ≥2s、`video.dailyBudget`
+  缺省 60/天 + 风控当日熔断），`video` / `bili_video` 共用；`bili_search` 不消耗该预算。
 - **新闻备料与机械播报**：每天 `news.at`（缺省 10:30）开始取料，`news.preparationMinutes`
   （缺省 10）是目标群准备窗口。窗口内 @ 只机械回复「正在准备新闻哦，请稍后。」且不补答，非 @ 留在
   自由拍收集器，解冻后继续。目标群当前人格在既有会话内经 `tool_search` 加载 `news_prepare`，自主选材并
