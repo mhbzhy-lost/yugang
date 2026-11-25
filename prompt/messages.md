@@ -208,3 +208,7 @@ compact_profile_mood: 氛围：{{mood}}
 
 # 换页降级告警（compact.ts 降级换页成功后由 index.ts 打）：宿主日志文案，不打印内容。
 compact_fallback_log: 换页摘要失败，降级机械换页 {{chatKey}} {{reason}}
+
+# 必答轮（@ / 私聊）零出口补跑提醒（src/app/runtime.ts 消费）：
+# 模型仅输出裸文本、未调用任何 say_* 时追加给模型补跑 1 次，避免必答轮漏回（正文绝不兜底直发）。
+zero_egress_nudge: [宿主提醒] 你刚才只输出了普通正文，没有调用出口工具，对方什么都没收到。这一轮必须回复，请立刻调用 say_words（或其它 say_* 出口工具）把要说的话发出去。

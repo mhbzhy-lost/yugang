@@ -76,6 +76,7 @@ import { getBiliClient } from "../external/bili-client.ts";
 import { clearViewedVideos } from "../external/video-browse.ts";
 import { clearSeenLinks, recordSeenLinks } from "../egress/seen-links.ts";
 import { shouldSendWorkingReceipt } from "../working-receipt.ts";
+import { shouldNudgeZeroEgress } from "../zero-egress-nudge.ts";
 import type { Middleware } from "./app.ts";
 import { planInlineImages, planRoundImages, rewriteRoundForwardImages } from "../qq/round-images.ts";
 import { assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
@@ -929,6 +930,78 @@ export async function submitRound(input: {
   // 轮内自愈：模型错误（如内容拦截 1301）时自动重试，第三次尝试前强制换页——
   // 摘要同源失败会走机械降级把可能的中毒内容清出活跃页，一次输入就能自愈，不依赖用户重发
   const MAX_MODEL_ATTEMPTS = input.modelAttempts ?? 3;
+  // 跑单次提交并回收轮级状态；返回结算结果、本轮出口次数与已触发的重耗时工具集合，
+  // 供下方模型错误重试与 answer 轮零出口补跑复用。
+  const runSubmission = async (
+    payloadContent: typeof submitContent,
+    recordEntry: boolean,
+  ): Promise<{ result: SettledSubmissionRecord; sayCount: number; workingTools: ReadonlySet<string> }> => {
+    const submission = await conv.submit(
+      {
+        type: "input",
+        content: payloadContent,
+        entry: recordEntry
+          ? (input.memory !== undefined ? { kind: entryKind, data: input.memory.inbound } : { kind: entryKind })
+          : undefined,
+      },
+      ctx,
+    );
+    const subId = String(submission.id);
+    if (chatKey.startsWith("qq:group:")) {
+      try { onebot.videos?.bind(String(conv.id), subId, chatKey, input.videoRefs ?? []); }
+      catch { console.warn("[鱼缸] 视频轮级授权登记失败", chatKey); }
+    }
+    triggerOf.set(subId, {
+      messageId: trigger.messageId,
+      mentionsBot: trigger.mentionsBot,
+      userId: trigger.userId,
+      kind: roundKind,
+      ...(input.quoteIds !== undefined && input.quoteIds.size > 0 ? { quoteIds: input.quoteIds } : {}),
+      // 视频浏览授权（T3）：只随零新增主动轮钉上（T4 的 bili_hot/video/say_words 消费）
+      ...(trigger.browseWindow !== undefined ? { browseWindow: trigger.browseWindow } : {}),
+      ...(trigger.browseTopic !== undefined ? { browseTopic: trigger.browseTopic } : {}),
+      ...(trigger.newsRunId !== undefined ? { newsRunId: trigger.newsRunId } : {}),
+      ...(trigger.newsAttempt !== undefined ? { newsAttempt: trigger.newsAttempt } : {}),
+    });
+    // 重耗时工具的机械提示要落回本轮会话：登记轮的会话，settle 的 finally 里删
+    roundConv.set(subId, conv);
+    if (input.bypass !== undefined) {
+      // 三条提交路径可能传 string（旧形态）或对象（含 stash/pstash），统一归一
+      const bp = typeof input.bypass === "string" ? { stash: input.bypass } : input.bypass;
+      bypassOf.set(subId, { bypass: bp.stash || undefined, pbypass: bp.pstash });
+    }
+    // 零出口轮观测：本轮出口计数清零登记，与 triggerOf 同生命周期（见下方 finally）
+    sayCalled.set(subId, 0);
+
+    // 成功、失败、抛错都要把这一轮的绑定清掉
+    try {
+      const result = await submission.wait(ctx);
+      const sayCount = sayCalled.get(subId) ?? 0;
+      const workingTools = new Set(workingSent.get(subId) ?? []);
+      return { result, sayCount, workingTools };
+    } finally {
+      triggerOf.delete(subId);
+      onebot.videos?.clear(subId);
+      // viewed 登记只活本轮（T3/T4）：done、没答上来、wait 抛错都整份清掉，
+      // browse 轮的「实际看过」授权不跨轮残留
+      clearViewedVideos(subId);
+      // 本轮「见过的链接」白名单同一生命周期：出口侧只认本轮工具结果里的 URL，
+      // 轮末整份清掉，跨轮不残留（不把上一轮的链接变成下一轮的通行证）
+      clearSeenLinks(subId);
+      bypassOf.delete(subId);
+      // 导入清单只属于这一轮：成功、失败、抛错都在这里清掉
+      clearMemeImportRound(subId);
+      // 出口计数同样只活这一轮：done、没答上来、wait 抛错都不残留。
+      // 沉默递进（旧 T8 nudge）已停用且兼容源码随 2026-11-06 合并删除；
+      // sayCalled 仍只作本轮出口额度计数。
+      sayCalled.delete(subId);
+      // 机械提示的会话映射与轮内去重集合同样只活这一轮
+      roundConv.delete(subId);
+      workingSent.delete(subId);
+    }
+  };
+  let lastSayCount = 0;
+  let lastWorkingTools: ReadonlySet<string> = new Set();
   try {
     for (let attempt = 1; ; attempt++) {
       assertNewsAdmission(chatKey, conv, trigger);
@@ -943,79 +1016,37 @@ export async function submitRound(input: {
       // entry 是记忆的唯一原始输入：chatKey / QQ / 昵称 / 原话，不带任何宿主文案；
       // 重试不重复落库，只有首次尝试携带 entry。injection / shard 轮不写 fish.inbound
       //（fish.engage_tick：背景板非对话输入，不进摘要与抽取）
-      const submission = await conv.submit(
-        {
-          type: "input",
-          content: submitContent,
-          entry: attempt === 1
-            ? (input.memory !== undefined ? { kind: entryKind, data: input.memory.inbound } : { kind: entryKind })
-            : undefined,
-        },
-        ctx,
-      );
-      if (chatKey.startsWith("qq:group:")) {
-        try { onebot.videos?.bind(String(conv.id), String(submission.id), chatKey, input.videoRefs ?? []); }
-        catch { console.warn("[鱼缸] 视频轮级授权登记失败", chatKey); }
-      }
-      triggerOf.set(String(submission.id), {
-        messageId: trigger.messageId,
-        mentionsBot: trigger.mentionsBot,
-        userId: trigger.userId,
-        kind: roundKind,
-        ...(input.quoteIds !== undefined && input.quoteIds.size > 0 ? { quoteIds: input.quoteIds } : {}),
-        // 视频浏览授权（T3）：只随零新增主动轮钉上（T4 的 bili_hot/video/say_words 消费）
-        ...(trigger.browseWindow !== undefined ? { browseWindow: trigger.browseWindow } : {}),
-        ...(trigger.browseTopic !== undefined ? { browseTopic: trigger.browseTopic } : {}),
-        ...(trigger.newsRunId !== undefined ? { newsRunId: trigger.newsRunId } : {}),
-        ...(trigger.newsAttempt !== undefined ? { newsAttempt: trigger.newsAttempt } : {}),
-      });
-      // 重耗时工具的机械提示要落回本轮会话：登记轮的会话，settle 的 finally 里删
-      roundConv.set(String(submission.id), conv);
-      if (input.bypass !== undefined) {
-        // 三条提交路径可能传 string（旧形态）或对象（含 stash/pstash），统一归一
-        const bp = typeof input.bypass === "string" ? { stash: input.bypass } : input.bypass;
-        bypassOf.set(String(submission.id), { bypass: bp.stash || undefined, pbypass: bp.pstash });
-      }
-      // 零出口轮观测：本轮出口计数清零登记，与 triggerOf 同生命周期（见下方 finally）
-      sayCalled.set(String(submission.id), 0);
-
-      // 成功、失败、抛错都要把这一轮的绑定清掉
-      settled = await (async () => {
-      try {
-        const result = await submission.wait(ctx);
-        // 正常结束却一次 say_* 都没调：模型裸文本回复不出口，聊天对象什么都看不到——
-        // answer 轮打一行宿主日志让这类轮立刻可见（收图轮不经 submitRound，天然不在观测范围），
-        // 完整解释在 .agents/skills/ops/SKILL.md；ambient（shard）/ injection 轮零出口是
-        // 合法沉默（F2/F3），不算异常不占观测日志
-        if (roundKind !== "news" && result.status === "done" && (sayCalled.get(String(submission.id)) ?? 0) === 0) {
-          if (roundKind === "answer") console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say_*`);
-        }
-        return result;
-      } finally {
-        triggerOf.delete(String(submission.id));
-        onebot.videos?.clear(String(submission.id));
-        // viewed 登记只活本轮（T3/T4）：done、没答上来、wait 抛错都整份清掉，
-        // browse 轮的「实际看过」授权不跨轮残留
-        clearViewedVideos(String(submission.id));
-        // 本轮「见过的链接」白名单同一生命周期：出口侧只认本轮工具结果里的 URL，
-        // 轮末整份清掉，跨轮不残留（不把上一轮的链接变成下一轮的通行证）
-        clearSeenLinks(String(submission.id));
-        bypassOf.delete(String(submission.id));
-        // 导入清单只属于这一轮：成功、失败、抛错都在这里清掉
-        clearMemeImportRound(String(submission.id));
-        // 出口计数同样只活这一轮：done、没答上来、wait 抛错都不残留。
-        // 沉默递进（旧 T8 nudge）已停用且兼容源码随 2026-11-06 合并删除；
-        // sayCalled 仍只作本轮出口额度计数。
-        sayCalled.delete(String(submission.id));
-        // 机械提示的会话映射与轮内去重集合同样只活这一轮
-        roundConv.delete(String(submission.id));
-        workingSent.delete(String(submission.id));
-      }
-    })();
+      const run = await runSubmission(submitContent, attempt === 1);
+      settled = run.result;
+      lastSayCount = run.sayCount;
+      lastWorkingTools = run.workingTools;
       // 模型错误且还有重试余量：轮内重试（第三次前已强制换页）；其它结果直接出循环
       const reason = (settled as { reason?: string }).reason;
       if (settled.status === "done" || reason !== "model_error" || attempt >= MAX_MODEL_ATTEMPTS) break;
       console.log(`[鱼缸] ${chatKey} 模型错误，轮内重试 ${attempt}/${MAX_MODEL_ATTEMPTS - 1}`);
+    }
+    // 必答轮（@ / 私聊）零出口自愈：模型正常结束却没调任何 say_*（且非机械直发画图/重启）时，
+    // 绝不把裸文本兜底发出去，而是纯追加一条宿主提醒补跑最多 1 次（保持前缀缓存命中）。
+    // ambient（自由拍）/ injection / news 轮零出口合法，不触发补跑。
+    if (shouldNudgeZeroEgress({
+      roundKind,
+      status: settled.status,
+      sayCount: lastSayCount,
+      workingTools: lastWorkingTools,
+      alreadyNudged: false,
+    })) {
+      const nudgeText = fish.prompts.messages["zero_egress_nudge"];
+      if (nudgeText) {
+        console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say_*，提醒补跑 1 次`);
+        const nudgeRun = await runSubmission(submitContentOf(nudgeText, []), false);
+        settled = nudgeRun.result;
+        if (settled.status === "done") {
+          if (nudgeRun.sayCount === 0) console.log(`[鱼缸] ${chatKey} 零出口轮：提醒补跑后仍未调 say_*`);
+          else console.log(`[鱼缸] ${chatKey} 零出口轮补跑成功（say=${nudgeRun.sayCount}）`);
+        }
+      } else {
+        console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say_*`);
+      }
     }
   } finally {
     // scope 队列满（scopeToken undefined）时本轮没压过 scope，不能弹掉别人的队首
