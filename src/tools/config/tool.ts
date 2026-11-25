@@ -45,7 +45,7 @@ const ROLES: readonly ModelRole[] = ["main", "vision", "vision_fallback", "image
 /** config 工具的字段白名单：与 parseFile 同源（../../fish-config.ts 的 FISH_CONFIG_FIELDS，
  *  engage 块也在其中，终审 #7：不再另持一份字段集与校验）。 */
 const CONFIG_FIELDS: readonly FishConfigFieldSpec[] = FISH_CONFIG_FIELDS;
-const OBJECT_CONFIG_FIELDS = new Set(["engage", "ammo", "video", "news", "compact", "voices"]);
+const OBJECT_CONFIG_FIELDS = new Set(["engage", "ammo", "video", "news", "compact", "voices", "drawRemote"]);
 
 /** 值的回执显示：字符串裸显，其余 JSON 化。 */
 function show(value: unknown): string {

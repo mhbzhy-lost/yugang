@@ -16,7 +16,10 @@ description: 查看、探测或修改自己的运行配置：fish.config.json �
   （main / vision / vision_fallback / image）；provider 与 model 必须来自 `models_list` 的结果，别自己拼
   一个不存在的名字。切 main / vision / vision_fallback 前先用 models_probe 探测目标，成功才切换；
   它会发一次最小真实请求，不改角色表，失败就不要切。image 是图片透传通道，不用这个对话探测。
-  vision_fallback 是主视觉失败后的兜底，image 切换时模型名不校验。
+  vision_fallback 是主视觉失败后的兜底，image 切换时模型名不校验。image 只是兼容保留的旧图片透传角色，
+  切它不影响现在的远程生图：draw_remote 用哪条通道、哪个模型由 fish.config.json 的 `drawRemote` 热配置决定
+  （见下面字段表），主人要换远程生图通道就 `set drawRemote.provider`，要换模型就 `set drawRemote.models.<通道>`，
+  不要用 models_switch 去切 image。
 
 主人没让改就别自己动。改完回话说清楚改了什么、什么时候生效；标「需重启」的字段
 要提醒主人调 restart。每次改动都会留审计日志。
@@ -34,6 +37,7 @@ fish.config.json 受控字段白名单（生效时机逐字段标注）：
 | memeCooldownMinutes | 数值 | 热加载 | 0–240，表情包跨轮冷却（分钟） |
 | gifAutoCollect | 布尔 | 热加载 | GIF 自动收录开关：缺省 false = 动图同静态图，ambient 轮不附收录标记、meme_add 只收主人点头轮的 inbound 动图；true 才恢复旧自动收行为 |
 | drawEnabled | 布尔 | 热加载 | 本地画图总开关（资源闸）：缺省 true；false 时 draw 入口即拒、真正提交前再复核一次，热生效不重启，用来临时让出 GPU。COMFYUI_URL 仍只作连接地址 |
+| drawRemote | 对象 | 热加载 | 远程生图（draw_remote）配置，只认三个键：enabled（true/false，缺省 true；false = draw_remote 入口即拒、提交前再复核一次，用来临时停掉远程生图）、provider（当前通道，仅支持 gpt / wan / gemini，缺省 gemini；改完下一次调用就生效，不用重启）、models（对象：通道 → 模型名，只认 gpt / wan / gemini 三个键，值必须是非空字符串，缺省 gpt-image-2.6-flare / wan2.7-image / gemini-3.1-flash-image；只写一个通道不会冲掉其它通道，点路径写法如 `drawRemote.models.gemini`）。各通道的端点与凭据仍读 config/models.json 与 config/auth.json，这一块里出现 apiKey / key / token / access / refresh / secret 之类的键会整块拒绝、不落盘；未知键告警并忽略，全部非法才整块拒绝 |
 | voices | 对象 | 热加载 | 人格 → 语音配置，支持两种 engine：默认 `gpt-sovits`（单实例热切：`url`/`gptModel`/`sovitsModel`/`referWav`/`referText` 必填，`referLanguage` 默认 zh）或 `qwen-tts`（云端 SpeechSynthesizer：`engine: "qwen-tts"`、`url`/`model`/`voice` 必填，`provider` 默认 `qwen-token-plan-cn` 从 `config/auth.json` 读 key、`language` 默认 zh、`instruction` 可选）；两者均支持可选 `speed`（0.5–2）。严禁把 apiKey 写入 fish.config.json，缺字段会 fail closed |
 | weeklyGroupId | 字符串 | 热加载 | 周报群号（纯数字），空串 = 不发；下次周报触发时按新值执行 |
 | thinking | 布尔 | 需重启 | 思考开关：false = 关思考，true = 该模型最低可用档。各 provider 的字段差异由 config/models.json 的 thinkingLevelMap 映射；关不掉时启动日志会告警 |

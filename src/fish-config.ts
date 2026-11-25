@@ -233,6 +233,39 @@ export interface QwenTtsVoiceConfig {
 
 export type VoiceConfig = GptSovitsVoiceConfig | QwenTtsVoiceConfig;
 
+/** 远程生图（draw_remote 工具）的通道标识：走哪条通道只由 fish.config.json 的 drawRemote.provider 决定，模型不传。 */
+export type DrawRemoteProvider = "gpt" | "wan" | "gemini";
+
+/**
+ * 远程生图热配置（draw_remote 计划 Task 1，2026-11-25）：draw_remote 的总开关、当前通道与各通道模型名。
+ * 这里只有行为参数——各通道的端点与凭据仍读 config/models.json 与 config/auth.json，这一块里不许出现凭据。
+ */
+export interface DrawRemoteConfig {
+  /** 总开关：false 时 draw_remote 入口即拒（提交前再复核一次）。 */
+  readonly enabled: boolean;
+  /** 当前通道：gpt = Codex 订阅生图，wan = 百炼 Token Plan 生图，gemini = Antigravity 订阅生图。 */
+  readonly provider: DrawRemoteProvider;
+  /** 通道 → 模型名；没显式配置的通道回落内置默认。 */
+  readonly models: Readonly<Record<DrawRemoteProvider, string>>;
+}
+
+/** 受控通道清单：校验与文案里的枚举顺序都以它为准。 */
+const DRAW_REMOTE_PROVIDERS: readonly DrawRemoteProvider[] = ["gpt", "wan", "gemini"];
+
+/**
+ * 缺省值。外层与 models 都冻结：loadFishConfig 没有覆盖时直接把它交出去（全进程共享同一个对象），
+ * 谁就地改它都会抛错，不会出现「缺省被改坏后波及全部会话」。
+ */
+export const DRAW_REMOTE_DEFAULTS: DrawRemoteConfig = Object.freeze<DrawRemoteConfig>({
+  enabled: true,
+  provider: "gemini",
+  models: Object.freeze<Record<DrawRemoteProvider, string>>({
+    gpt: "gpt-image-2.6-flare",
+    wan: "wan2.7-image",
+    gemini: "gemini-3.1-flash-image",
+  }),
+});
+
 export interface FishConfig {
   /** next 搭话开窗参数：closed/open 节拍、积压与背景上限、nudge 阈值。 */
   engage: EngageConfig;
@@ -268,6 +301,11 @@ export interface FishConfig {
    * 不再兼作停用手段。G0/G1 实验期用它原子让出/收回鱼的 GPU 使用权。
    */
   drawEnabled: boolean;
+  /**
+   * 远程生图（draw_remote）热配置（2026-11-25）：总开关、当前通道与各通道模型名。每次调用现读，
+   * 改完即生效不重启；端点与凭据不在这里（仍读 config/models.json 与 config/auth.json），写进来整块拒绝。
+   */
+  drawRemote: DrawRemoteConfig;
   /** 按人格配置的语音：人格名 → 单实例热切配置。缺字段时该音色 fail closed。 */
   voices: Record<string, VoiceConfig>;
   /** 周报发到哪个群；空 = 不发。 */
@@ -363,6 +401,124 @@ function checkGifAutoCollect(raw: unknown): FieldCheck {
 function checkDrawEnabled(raw: unknown): FieldCheck {
   if (typeof raw === "boolean") return { ok: true, value: raw };
   return { ok: false, reason: "drawEnabled 必须是 true/false" };
+}
+
+/** 凭据样键名（大小写不敏感的子串）：apiKey / key / token / access / refresh / secret。 */
+const DRAW_REMOTE_CREDENTIAL_KEY = /apikey|key|token|access|refresh|secret/i;
+
+/**
+ * 在 drawRemote 块里递归找第一个像凭据的键，返回它相对块根的点路径（如 drawRemote.models.apiKey）；没有返回 undefined。
+ * 顶层与 models 子层都要扫，所以不写死层数；深度封顶只为防环形对象，JSON 来源的数据到不了这么深。
+ */
+function findCredentialKey(value: unknown, path: string, depth: number): string | undefined {
+  if (!value || typeof value !== "object" || depth > 16) return undefined;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const at = `${path}.${key}`;
+    if (DRAW_REMOTE_CREDENTIAL_KEY.test(key)) return at;
+    const nested = findCredentialKey(child, at, depth + 1);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
+/** drawRemote 的局部覆盖（checkDrawRemote 的解析中间态）：只有写到的字段才有值。 */
+interface DrawRemoteOverride {
+  enabled?: boolean;
+  provider?: DrawRemoteProvider;
+  models?: Readonly<Partial<Record<DrawRemoteProvider, string>>>;
+}
+
+/**
+ * 把局部覆盖并到缺省上（checkDrawRemote 与 loadFishConfig 共用）：models 是浅合并默认表，
+ * 只写一个通道不会冲掉其余通道的默认值；没有任何覆盖时直接返回冻结的共享默认对象。
+ */
+function mergeDrawRemote(override: DrawRemoteOverride | undefined): DrawRemoteConfig {
+  if (override === undefined) return DRAW_REMOTE_DEFAULTS;
+  const { enabled, provider, models } = override;
+  if (enabled === undefined && provider === undefined && models === undefined) return DRAW_REMOTE_DEFAULTS;
+  return Object.freeze<DrawRemoteConfig>({
+    enabled: enabled ?? DRAW_REMOTE_DEFAULTS.enabled,
+    provider: provider ?? DRAW_REMOTE_DEFAULTS.provider,
+    models: models === undefined
+      ? DRAW_REMOTE_DEFAULTS.models
+      : Object.freeze<Record<DrawRemoteProvider, string>>({ ...DRAW_REMOTE_DEFAULTS.models, ...models }),
+  });
+}
+
+/**
+ * drawRemote 块的校验（config 工具 set 与 parseFile 共用这一份，语义同 engage / video 等块）：
+ *  - 凭据红线先于一切形状校验：块内任何一层出现凭据样键名就整块拒绝，不当「未知键」放过；
+ *  - 再逐项校验 enabled / provider / models：非法子值告警并回默认、同块合法子值照用，
+ *    一个合法字段都没有才整块拒绝；
+ *  - 每条告警字面带完整点路径（drawRemote.xxx / drawRemote.models.xxx）。config 工具靠
+ *    「告警包含这次写入的目标路径」判定 set 是否命中非法值（tool.ts 的 targetProblem 子串匹配），
+ *    文案里的路径不能省，否则非法值会被静默回默认后照常落盘。
+ * 导出只为能单独测试；运行时消费方（config 工具 / parseFile）一律经 FISH_CONFIG_FIELDS 取用。
+ */
+export function checkDrawRemote(raw: unknown): FieldCheck {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "drawRemote 必须是对象" };
+  const d = raw as Record<string, unknown>;
+  const leak = findCredentialKey(d, "drawRemote", 0);
+  if (leak !== undefined) {
+    return { ok: false, reason: `${leak} 不得写入 fish.config.json，凭据放 config/auth.json` };
+  }
+
+  const parsed: DrawRemoteOverride = {};
+  const problems: string[] = [];
+  let any = false;
+
+  if (d["enabled"] !== undefined) {
+    if (typeof d["enabled"] === "boolean") {
+      parsed.enabled = d["enabled"];
+      any = true;
+    } else problems.push("drawRemote.enabled 必须是 true/false");
+  }
+
+  if (d["provider"] !== undefined) {
+    const provider = d["provider"];
+    if (typeof provider === "string" && (DRAW_REMOTE_PROVIDERS as readonly string[]).includes(provider)) {
+      parsed.provider = provider as DrawRemoteProvider;
+      any = true;
+    } else problems.push("drawRemote.provider 仅支持 gpt / wan / gemini");
+  }
+
+  const rawModels = d["models"];
+  if (rawModels !== undefined) {
+    if (!rawModels || typeof rawModels !== "object" || Array.isArray(rawModels)) {
+      problems.push("drawRemote.models 必须是对象");
+    } else {
+      any = true;
+      const models: Partial<Record<DrawRemoteProvider, string>> = {};
+      for (const [key, value] of Object.entries(rawModels as Record<string, unknown>)) {
+        if (!(DRAW_REMOTE_PROVIDERS as readonly string[]).includes(key)) {
+          problems.push(`drawRemote.models.${key} 不是受控通道，已忽略`);
+          continue;
+        }
+        const model = typeof value === "string" ? value.trim() : "";
+        if (!model) {
+          problems.push(`drawRemote.models.${key} 必须是非空字符串`);
+          continue;
+        }
+        models[key as DrawRemoteProvider] = model;
+      }
+      if (Object.keys(models).length > 0) parsed.models = models;
+    }
+  }
+
+  for (const key of Object.keys(d)) {
+    if (key === "enabled" || key === "provider" || key === "models") continue;
+    problems.push(`drawRemote.${key} 不是受控字段，已忽略`);
+  }
+
+  if (!any) {
+    return {
+      ok: false,
+      reason: problems.length > 0
+        ? `drawRemote 至少要有一个合法字段（${problems.join("；")}）`
+        : "drawRemote 至少要有一个合法字段（enabled / provider / models）",
+    };
+  }
+  return { ok: true, value: mergeDrawRemote(parsed), ...(problems.length > 0 ? { problems } : {}) };
 }
 
 function checkThinking(raw: unknown): FieldCheck {
@@ -766,6 +922,7 @@ export const FISH_CONFIG_FIELDS: readonly FishConfigFieldSpec[] = [
   { name: "memeCooldownMinutes", effect: "hot", check: numberIn("memeCooldownMinutes 必须在 0–240", 0, 240) },
   { name: "gifAutoCollect", effect: "hot", check: checkGifAutoCollect },
   { name: "drawEnabled", effect: "hot", check: checkDrawEnabled },
+  { name: "drawRemote", effect: "hot", check: checkDrawRemote },
   { name: "voices", effect: "hot", check: checkVoices },
   { name: "weeklyGroupId", effect: "hot", check: checkWeeklyGroup },
 ];
@@ -821,6 +978,7 @@ const DEFAULTS: FishConfig = {
   toolTimeoutSeconds: 30,
   gifAutoCollect: false,
   drawEnabled: true,
+  drawRemote: DRAW_REMOTE_DEFAULTS,
 };
 
 /** 读一次（不缓存），供热加载与启动各取所需。 */
@@ -848,6 +1006,8 @@ export function loadFishConfig(options: { path?: string } = {}): ConfigLoadResul
     ammo: { ...DEFAULTS.ammo, ...(fromFile.ammo ?? {}) },
     video: { ...DEFAULTS.video, ...(fromFile.video ?? {}) },
     news: { ...DEFAULTS.news, ...(fromFile.news ?? {}) },
+    // drawRemote：块内没写的子字段与没写的通道回落默认（models 浅合并）；整块缺席时就是共享默认对象
+    drawRemote: mergeDrawRemote(fromFile.drawRemote),
   };
 
   // 旧 ammo.dailyBudget 回退（2026-11-04 模型输入计划 T3）：文件里没给新的 video.dailyBudget

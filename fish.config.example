@@ -87,5 +87,15 @@
   "_gifAutoCollect": "注释：GIF 自动收录开关——false（缺省）= 动图同静态图，ambient 轮不附双边收录标记，meme_add 只在主人点头的轮收 inbound 动图；true 恢复旧自动收行为。布尔，非法告警保留缺省",
   "gifAutoCollect": false,
   "_drawEnabled": "注释：本地画图总开关（资源闸）——true（缺省）= draw 正常提交 ComfyUI；false = draw 入口即拒、真正 POST 前再复核一次，热生效不重启，用来临时让出 GPU（如离线实验期）。COMFYUI_URL 仍只作连接地址，不再兼作停用手段。布尔，非法告警保留缺省",
-  "drawEnabled": true
+  "drawEnabled": true,
+  "drawRemote": {
+    "enabled": true,
+    "provider": "gemini",
+    "models": {
+      "gpt": "gpt-image-2.6-flare",
+      "wan": "wan2.7-image",
+      "gemini": "gemini-3.1-flash-image"
+    }
+  },
+  "_drawRemote": "注释：远程生图（draw_remote）配置，热生效不重启。enabled=总开关（true 缺省；false 时入口即拒、提交前再复核一次）；provider=当前通道（仅支持 gpt / wan / gemini，缺省 gemini，改完下一次调用就生效）；models=各通道模型名（只认 gpt / wan / gemini 三个键，值必须是非空字符串；只写一个通道不会冲掉其它通道的默认值）。各通道的端点与凭据仍读 config/models.json 与 config/auth.json，严禁把 apiKey / key / token / access / refresh / secret 之类的键写进这一块（整块拒绝）；未知键告警，全部非法才整块拒绝"
 }
