@@ -13,10 +13,11 @@ import type {
   Storage,
 } from "@earendil-works/pi-durable";
 import type { EgressLimits } from "../egress/policy.ts";
-import type { EngagementMode } from "../fish-config.ts";
+import type { EngagementMode, DrawRemoteConfig } from "../fish-config.ts";
 import type { PromptSet } from "../prompt/index.ts";
 import type { OutboundPayload } from "../tools/say-shared.ts";
 import type { RoundTrigger, ToolPackageDeps } from "../tools/types.ts";
+import type { runDrawRemote } from "../media/draw-remote/index.ts";
 import type { CompactResult } from "../compact.ts";
 import type { MemoryApprovalPreparation, MemoryCommand, PendingMemoryEntry } from "../memory/index.ts";
 import type { WatchedPerson } from "../store.ts";
@@ -54,24 +55,20 @@ export interface FishOptions {
   mediaRoot: string;
   /** DeepSeek Search API 的 key；给了才有联网搜索能力。 */
   searchKey?: string;
-  /** 百炼 Token Plan Wan Image 通道：apiKey 只在内存中使用。 */
+  /** 百炼 Token Plan Wan 通道（models.wan_image）：apiKey 只在内存中使用；wan_gif（视频转 GIF）消费，远程静态生图已收归 draw_remote。 */
   wanImage?: {
     apiKey: string;
     baseUrl: string;
     model: string;
     proxy?: string;
   };
-  /** ChatGPT/Codex 图片通道（models.image）：authPath + provider 决定登录凭据，model 是默认模型名；proxy 只给这条通道用。 */
-  gptImage?: {
-    authPath: string;
-    provider: string;
-    model: string;
-    proxy?: string;
-    /** 官方 API key（config/auth.json 的 openai.key 或 OPENAI_API_KEY）：只给动图通道用。 */
-    apiKey?: string;
-    /** 官方 API 根地址覆盖（测试/代理用）。 */
-    apiBaseUrl?: string;
-  };
+  /**
+   * 远程生图热配置（fish.config.json 的 drawRemote，热加载）：通道、各通道模型与总开关。传函数每次现取，
+   * draw_remote 在入口与提交前各读一次。模型与通道不再从 models.json 的 models.image 选。
+   */
+  drawRemote?: () => DrawRemoteConfig;
+  /** 远程生图适配器（gpt / wan / gemini 三通道）；缺省用 runDrawRemote 本体，测试注入桩。 */
+  drawRemoteRun?: typeof runDrawRemote;
   /** config/models.json 路径；config 工具写回 models 角色表时用。 */
   modelsPath?: string;
   /** ComfyUI 环回隧道地址；给了才有本地画图。 */

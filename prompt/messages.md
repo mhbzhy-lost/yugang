@@ -102,7 +102,7 @@ working_draw: 在画了，单人一张大概两分钟，稍等一下下
 working_draw_fast: 快速模式起笔，一分钟出头就好，稍等
 working_draw_interaction: 这张要先摆姿势构图，工序多，大概四分钟，稍等哦
 working_qwen_draw: Qwen 在画了，分辨率高的话要一分钟上下，稍等
-working_gpt_image: 这张交给在线画师，稍等
+working_draw_remote: 这张交给在线画师，稍等
 working_meme_import: 新表情到货，我一张张过目
 working_meme_add: 正在把新表情收进柜子，一张张来
 working_restart: 我去重启一下，马上回来
@@ -113,7 +113,7 @@ tool_catalog_header: 当前可用的能力目录（按名字排序）：
 tool_catalog_line: - {{name}}：{{summary}}
 
 # 图片输入（decisions §5.4 fallback-image）：[图片#N inbound/…] 编号标签始终带路径——
-# 模型可直接把路径填给 draw / gpt_image 等吃图片引用的工具；读图本身走 inline 压缩图，
+# 模型可直接把路径填给 draw / draw_remote 等吃图片引用的工具；读图本身走 inline 压缩图，
 # 不需要 look。inline 开启时不加 look 提示（look 已机械锁死）；inline 关闭（fallback 模式）
 # 时，消息列表与附加段之后追加 image_look_hint 引导模型用 look 读。
 # 引用原文里的图走同一套：inline 时渲染 [图片#N inbound/…]（answer 轮与开窗批共用），

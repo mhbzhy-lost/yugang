@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { unsafe, type Schema } from "@earendil-works/pi-schema";
 import { ENUM_FROM_KEY, type ManifestLoadContext, type ToolManifest, type ToolParametersSchema } from "./types.ts";
 
-/** 工具名约束：现有下划线命名，如 gpt_image、meme_add、tool_search。 */
+/** 工具名约束：现有下划线命名，如 draw_remote、meme_add、tool_search。 */
 export const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
 
 const MAX_NAME_LENGTH = 64;

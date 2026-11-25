@@ -97,7 +97,7 @@ function lineText(text: string): string {
 }
 
 /** inline 模式的图片编号标签（[图片#N inbound/…]）：始终带路径——模型可直接把路径
- * 填给 draw / gpt_image 等要图片引用的工具，不需要为此再 look。 */
+ * 填给 draw / draw_remote 等要图片引用的工具，不需要为此再 look。 */
 export function imageTagOf(n: number, ref: string, messages: MessageTable): string {
   return renderTemplate(messages["image_tag"] ?? "[图片#{{n}} {{ref}}]", { n: String(n), ref });
 }

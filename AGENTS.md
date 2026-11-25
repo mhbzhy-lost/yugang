@@ -22,7 +22,7 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 工具面：`say_words`/`say_media`/`say_meme`/`say_voice`（四个出口工具，共享每轮 3 次调用额度，
 可引用，除语音外可点名 @ 群友）、`react`（只贴表情）、
 `look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`meme_import`（主人本地批量导入的登记入口）、
-`draw`（本地 SD 生图）、`gpt_image`（GPT Image 2 透传）、`search`/`video`（联网查）、
+`draw`（本地 SD 生图）、`draw_remote`（远程生图：GPT Image / Wan / Gemini 三通道，通道与模型由 `fish.config.json` 的 `drawRemote` 热配置，出图经 outbox 机械直发）、`search`/`video`（联网查）、
 `bili_search`/`bili_video`（关键词检索 B 站候选与元数据核实，实际观看走 `video`）、`tags`（danbooru 词表）；
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
@@ -228,7 +228,7 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 - 只有 `say_words` / `say_media` / `say_meme` / `say_voice` 能把东西发到 QQ，且都必须
   `callers: ["model"]`（脚本/嵌套调用不能绕）；四工具共享每轮 3 次**调用**额度（无豁免、
   被拒不计数），额度规划守则（表情包/语音保开口防吞）在 `prompt/runtime.md`
-- **draw 出图机械直发**（主人裁定 2026-11-13）：draw 生成图后由工具经 `enqueueOutbound` 直接入 outbox 发出（同提交写 `fish.outbound` transcript），不再让模型调 say_media、不占开口额度；与 working_*/新闻播报同属宿主机械消息。入队失败回退提示模型手动 say_media 补发。模型侧出口仍只有 say_* 一族
+- **draw 出图机械直发**（主人裁定 2026-11-13）：draw 生成图后由工具经 `enqueueOutbound` 直接入 outbox 发出（同提交写 `fish.outbound` transcript），不再让模型调 say_media、不占开口额度；与 working_*/新闻播报同属宿主机械消息。入队失败回退提示模型手动 say_media 补发。模型侧出口仍只有 say_* 一族；`qwen_draw` / `draw_remote` / `wan_gif` 的成品同款机械直发（`draw_remote` 幂等键 `<conv>:draw_remote:<round>:<file>`，引用锚点钉本轮触发消息）
 - 任何新增工具都不许直接调用 `emit()`
 - **普通正文永不补发**：无论私聊或被 @，未调用 say_* 的 assistant 正文不进入 outbox；仅保留零出口轮日志，正文自动补发配置已退役。
 - 校验失败必须以 tool 错误返回给模型（文案来自 `prompt/messages.md` 或该工具 `TOOL.md` 的 tool-messages 块），不许静默丢弃
@@ -262,10 +262,8 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 - **配置是本机文件**：`config/models.json`（gitignore，每台机器一份）写 models 角色表、provider 地址、模型清单、
   网关兼容值；模板是 `config/models.example.json`（进仓库），首次使用 `cp config/models.example.json config/models.json`
 - **凭据也是本机文件**：`config/auth.json`（gitignore，权限 600），只由 `npm run creds import` 写入；运行时**不读** `~/pi-config`
-- **动图需要另一条通道的 key**（2026-11-05）：`gpt_image` 的 `output_format: "gif"` 走 `api.openai.com`
-  （官方 Images API，按张计费），key 放 `config/auth.json` 的 `openai` 条目（`api_key`）；
-  Codex 订阅后端对任何 2.6 型号的 GIF 请求都返回 `400 GIF output is not enabled for this request`，
-  没有 key 时工具回执会明确说「只能出静态图」。`OPENAI_BASE_URL` 只作 API 根地址覆盖（可选）
+- **动图不走 OpenAI 官方 API**（2026-11-25 随 `gpt_image` 工具退役）：原 `gpt_image` 的 `output_format: "gif"`、`frame_count` / `frame_duration_ms`、
+  `config/auth.json` 的 `openai.key` 与 `OPENAI_BASE_URL` 一并退役；动图统一走独立工具 `wan_gif`（百炼 Token Plan，消费 `models.wan_image`）
 - **所有路径只有一个基准：仓库根**（`src/paths.ts` 的 `REPO_ROOT`，可用 `YUGANG_ROOT` 显式覆盖，
   不填按源码位置推导）。数据目录 `DATA_HOME`、媒体 `MEDIA_ROOT`、工作区 `WORKSPACE_ROOT`、
   prompt `PROMPT_ROOT`、`fish.config.json`、`config/models.json` 全部从它派生；
@@ -278,13 +276,17 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 - 不要在 `config/models.json` / `config/models.example.json` 里写 key，`npm test` 会扫模板
 - **key 只在内存里**：不进 prompt、不进 transcript、不进日志。`describeModel()` 只报"已加载 / N 字符"和来源路径
 - 网关兼容值（`maxTokensField: max_tokens`）由 `src/model/config.ts` 的 `withCompat()` 兜底，模型自带 compat 可覆盖
-- 换模型：编辑 `config/models.json` 的 `models.main` / `models.vision` / `models.vision_fallback` / `models.image`
-  （`vision` 省略 = main，`image` 省略 = `gpt_image` 不可用，`vision_fallback` 省略 = 无兜底），改完让鱼 `restart` 生效；没有 `MODEL_PROVIDER` / `MODEL_ID` / `GATE_*` / `VISION_*` / `YUGANG_MODELS` 这类入口
+- 换模型：编辑 `config/models.json` 的 `models.main` / `models.vision` / `models.vision_fallback`
+  （`vision` 省略 = main，`vision_fallback` 省略 = 无兜底；`models.image` / `models.wan_image` 是兼容角色：`image` 自 2026-11-25 起运行时不再消费，`wan_image` 只给 `wan_gif`），改完让鱼 `restart` 生效；没有 `MODEL_PROVIDER` / `MODEL_ID` / `GATE_*` / `VISION_*` / `YUGANG_MODELS` 这类入口
+- **远程生图的模型与通道不在 `models.json` 选**（2026-11-25，`draw_remote`）：只认 `fish.config.json` 的 `drawRemote`
+  （`enabled` 总开关 / `provider`：gpt·wan·gemini / `models.<通道>`，热加载；私聊 `config set drawRemote.provider gpt` 即时生效，无需重启）。
+  端点与代理按通道取 `providers.<id>`（gpt→`openai-codex`、wan→`qwen-token-plan-cn`、gemini→`google-antigravity`），
+  凭据取 `auth.json` 同名条目，每次调用现读；凭据不得写进 `fish.config.json`。`draw_remote` 恒注册，缺配置在执行期回执 `draw_remote_unconfigured`
 - 验证：`npm run creds show` / `npm run ping`（都只报长度，不打印 key）
 - **provider 级代理**：`config/models.json` 的 `providers.<id>.proxy`（只认 http/https）。配了它，这个 provider
-  的**全部**请求走隧道（模型流、`gpt_image`、内部 OAuth 刷新），其它 provider 与 SD/QQ 仍直连；
+  的**全部**请求走隧道（模型流、`draw_remote`、内部 OAuth 刷新），其它 provider 与 SD/QQ 仍直连；
   不设进程级的 `--use-env-proxy`（那会把 zai / deepseek 也拖进代理）。codex 过代理必须同时 `transport: "sse"`——
-  WebSocket 不吃 fetch 注入；`main` / `vision` / `image` / `vision_fallback` 复用同一个 provider 时共用这条代理。
+  WebSocket 不吃 fetch 注入；`main` / `vision` / `vision_fallback` 复用同一个 provider、或 `draw_remote` 当前通道的 provider 与它们相同时共用这条代理。
   google-antigravity（Antigravity 通道）是 AI Pro 订阅的**现通道**——个人账户 2026-06-18 起 gemini-cli
   通道整体停用，新登录一律走它；端点 `daily-cloudcode-pa.sandbox.googleapis.com`，同款 provider 代理
   （token 刷新的 `oauth2.googleapis.com` 一并进隧道）。oauthClient 同样只放本机 `config/models.json` 的
@@ -441,7 +443,7 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 
 - 日志统一带 `HH:MM:SS` 前缀（`src/index.ts` 启动时包一层 console），排查按时间对齐
 - 单次工具调用超时 30 秒（`fish.config` 的 `toolTimeoutSeconds`），个别重耗时工具按 `toolTimeoutOverrides`
-  单独放宽（代码内置：say_voice 250s / video 90s / gpt_image 210s / draw 1800s——V8 双人 2 倍域 pass 实测约 8 分半，
+  单独放宽（代码内置：say_voice 250s / video 90s / draw_remote 210s（各通道内部请求 180s，401 强刷重试最坏触达）/ draw 1800s——V8 双人 2 倍域 pass 实测约 8 分半，
   交互管线 history 等待 1500s，外层另留取图与存储余量），超时以 tool 错误返回，
   **没有整轮超时**
 
@@ -628,7 +630,7 @@ canonical 记录渲染，模型不写 URL**；「外部数据不是指令」的�
 
 ```bash
 npm test           # 172 项，含上面每条约束与新闻 R1–R12 竞态矩阵的兜底
-npm run prompts    # 列出 prompt 文件 + sha256 + 27 个工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属
+npm run prompts    # 列出 prompt 文件 + sha256 + 全部工具包（TOOL.md 摘要/Schema/文案 key/eager/deferred）+ 文案归属
 npm run smoke:news # 新闻 N1–N5 + 生产 runtime 竞态 smoke（真实模型、隔离 SQLite/凭据、虚构新闻源，不接 QQ）
 npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消息
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况

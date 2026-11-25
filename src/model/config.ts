@@ -170,9 +170,12 @@ export interface FishModelsSelection {
   vision: FishModelConfig;
   /** 看图兜底模型：主视觉 failed/filtered 时再试一轮；省略 = 无兜底（不隐式兜底）。 */
   visionFallback?: FishModelConfig;
-  /** gpt_image 通道：provider 决定用哪份 oauth，model 是默认模型名；省略 = 该工具不可用。 */
+  /**
+   * 远程生图角色（兼容保留，2026-11-25 起运行时不再消费）：画图模型与通道已收归 fish.config.json 的 drawRemote 热配置，
+   * draw_remote 按 drawRemote.provider 直接读 providers 里的端点与代理。保留解析只为旧 models.json 不拒启、ping / smoke 仍可展示。
+   */
   image?: { provider: string; modelId: string; proxy?: string };
-  /** 百炼 Token Plan Wan Image 通道；省略 = wan_image 工具不可用。 */
+  /** 百炼 Token Plan Wan 通道（models.wan_image）：wan_gif（视频转 GIF）消费；省略 = wan_gif 不可用。 */
   wanImage?: { provider: string; modelId: string; apiKey: string; baseUrl: string; proxy?: string };
   /** 进程级流式传输；取自 main provider 的 transport。 */
   transport?: "sse";

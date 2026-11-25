@@ -77,6 +77,7 @@ import { clearViewedVideos } from "../external/video-browse.ts";
 import { clearSeenLinks, recordSeenLinks } from "../egress/seen-links.ts";
 import { shouldSendWorkingReceipt } from "../working-receipt.ts";
 import { shouldNudgeZeroEgress } from "../zero-egress-nudge.ts";
+import { runDrawRemote } from "../media/draw-remote/index.ts";
 import type { Middleware } from "./app.ts";
 import { planInlineImages, planRoundImages, rewriteRoundForwardImages } from "../qq/round-images.ts";
 import { assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
@@ -123,8 +124,11 @@ const fishConfig = createConfigLoader();
 // 人格身份丢失 → personaOf 回退「默认」→ 拿默认音色开口（长征机用爱莉声音说话）
 const mappingKeys = new Map<string, string>();
 
+/** draw 的本地管线变体：onLongWork 里归入同一个 "draw" 家族（同轮只发一条提示）。 */
+const DRAW_VARIANTS = new Set(["draw_fast", "draw_interaction"]);
+
 /**
- * 六个重耗时工具的「正在执行」文案（prompt/messages.md 的 working_*）：逐个显式取，
+ * 重耗时工具的「正在执行」文案（prompt/messages.md 的 working_*）：逐个显式取，
  * key 拼错只会拿到空文案不发，不报错。
  */
 function workingTextOf(tool: string): string {
@@ -133,7 +137,7 @@ function workingTextOf(tool: string): string {
     case "draw": return fish.prompts.messages["working_draw"] ?? "";
     case "draw_fast": return fish.prompts.messages["working_draw_fast"] ?? "";
     case "draw_interaction": return fish.prompts.messages["working_draw_interaction"] ?? "";
-    case "gpt_image": return fish.prompts.messages["working_gpt_image"] ?? "";
+    case "draw_remote": return fish.prompts.messages["working_draw_remote"] ?? "";
     case "qwen_draw": return fish.prompts.messages["working_qwen_draw"] ?? "";
     case "meme_import": return fish.prompts.messages["working_meme_import"] ?? "";
     case "meme_add": return fish.prompts.messages["working_meme_add"] ?? "";
@@ -481,8 +485,9 @@ export async function bootRuntime(): Promise<void> {
   thinkingLevel: resolveThinking(fishConfig().config.thinking, modelSelection.main),
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
   // 重耗时工具单独放宽：say_voice 要等 GPT-SoVITS 合成（默认超时 120s，覆盖 250s 含空响应重试一次的最坏 240s），
-  // video 要下视频、抽帧、逐帧过视觉模型；全局 toolTimeoutSeconds 保持 30 不动
-  toolTimeoutOverrides: { say_voice: 250, video: 90, gpt_image: 210, draw: 1800, qwen_draw: 600, wan_image: 210, wan_gif: 1200 },
+  // video 要下视频、抽帧、逐帧过视觉模型；draw_remote 各通道内部请求超时 180s，遇 401 强刷重试一次最坏可能触达 210s 外层超时；
+  // 全局 toolTimeoutSeconds 保持 30 不动
+  toolTimeoutOverrides: { say_voice: 250, video: 90, draw_remote: 210, draw: 1800, qwen_draw: 600, wan_gif: 1200 },
   // codex 订阅走 WebSocket（Node 的 WS 不吃 --use-env-proxy），过代理时在 main provider 写 transport: "sse"
   ...(modelSelection.transport ? { streamTransport: modelSelection.transport } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时
@@ -509,7 +514,7 @@ export async function bootRuntime(): Promise<void> {
       return undefined;
     }
   })(),
-  // gpt_image 通道：models.image 省略 = 该工具不可用（不隐式兜底模型名）
+  // wan_gif 通道：models.wan_image 省略 = wan_gif 不可用（不隐式兜底模型名）
   wanImage: modelSelection.wanImage
     ? {
         apiKey: modelSelection.wanImage.apiKey,
@@ -518,26 +523,10 @@ export async function bootRuntime(): Promise<void> {
         ...(modelSelection.wanImage.proxy ? { proxy: modelSelection.wanImage.proxy } : {}),
       }
     : undefined,
-  // gpt_image 通道：models.image 省略 = 该工具不可用
-  gptImage: modelSelection.image
-    ? {
-        authPath: modelSelection.main.credentialsPath,
-        provider: modelSelection.image.provider,
-        model: modelSelection.image.modelId,
-        ...(modelSelection.image.proxy ? { proxy: modelSelection.image.proxy } : {}),
-        // 官方 API key 只服务动图通道（Codex 订阅后端不开 GIF）：从主模型 credentialsPath 的 openai 条目读，
-        // 缺了不报错——GIF 请求会得到「未配置 API key」的可读回执
-        ...(() => {
-          try {
-            const key = (JSON.parse(readFileSync(modelSelection.main.credentialsPath, "utf8") as { openai?: { key?: string } }).openai?.key) ?? undefined;
-            return key ? { apiKey: key } : {};
-          } catch {
-            return {};
-          }
-        })(),
-        ...(process.env.OPENAI_BASE_URL ? { apiBaseUrl: process.env.OPENAI_BASE_URL } : {}),
-      }
-    : undefined,
+  // 远程静态生图（draw_remote）：通道、各通道模型与总开关只认 fish.config.json 的 drawRemote（热加载），
+  // 每次调用现读，不再从 models.json 的 models.image 选模型；provider 端点与凭据由适配器按 modelsPath 现读
+  drawRemote: () => fishConfig().config.drawRemote,
+  drawRemoteRun: runDrawRemote,
   // config 工具写回 models 角色表用同一份文件
   modelsPath: modelSelection.main.configSource,
   // config 工具判定「主人私聊轮」用：与 chatKeyFor 同源（两种历史键写法都认）
@@ -580,7 +569,7 @@ export async function bootRuntime(): Promise<void> {
     const count = sayCalled.get(key);
     if (count !== undefined) sayCalled.set(key, count + 1);
   },
-  // 重耗时工具（video/draw〔含管线变体 draw_fast/draw_interaction〕/gpt_image/meme_import/meme_add/restart）execute 入口的机械提示：
+  // 重耗时工具（video/draw〔含管线变体 draw_fast/draw_interaction〕/draw_remote/meme_import/meme_add/restart）execute 入口的机械提示：
   // 本轮第一次调用时经 outbox 唯一出口发一条拟人文案（prompt/messages.md 的 working_*），
   // 幂等键 working:<tool>:<submissionId> 防崩溃重放；拿不到轮标识或会话映射就不发、不报错。
   // restart 返回 Promise：工具会 await 它，保证提示在进程退出前入队并冲一次 outbox。
@@ -591,9 +580,11 @@ export async function bootRuntime(): Promise<void> {
     if (!round || conv === undefined || !text) return;
     // 回执只给正在等的人：自由交流 / 开窗注入 / 自己逛的轮里没人问，冒一句「稍等」像自言自语
     if (!shouldSendWorkingReceipt(triggerOf.get(round)?.kind, tool)) return;
-    // draw 的管线变体（draw_fast/draw_interaction）算同一家族：同轮只发一条提示，
-    // 幂等键也用家族名，换变体重试不会多发（与旧 working:draw:<round> 键兼容）
-    const family = tool.startsWith("draw_") ? "draw" : tool;
+    // 只有 draw 的本地管线变体（draw_fast/draw_interaction）算同一家族：同轮只发一条提示，
+    // 幂等键也用家族名，换变体重试不会多发（与旧 working:draw:<round> 键兼容）。
+    // 不按 draw_ 前缀聚合：draw_remote 是独立家族，同轮先本地画再远程画各发各的提示，
+    // 零出口豁免（DIRECT_EGRESS_TOOL_FAMILIES）也按各自的家族名判
+    const family = DRAW_VARIANTS.has(tool) ? "draw" : tool;
     const sentTools = workingSent.get(round);
     if (sentTools?.has(family)) return; // 同轮同工具家族只发一次
     if (sentTools) sentTools.add(family);
@@ -2475,7 +2466,8 @@ export async function restoreSessions(): Promise<void> {
 export function printBanner(): void {
   const shown = describeModel(config.modelConfig);
   console.log(`[鱼缸] 已连接，模型 ${shown.provider}/${shown.model}，工具 ${fish.toolNames.join("、")}`);
-  console.log(`[鱼缸] 视觉 ${visionModel.provider}/${visionModel.modelId}，兜底 ${visionFallbackModel ? `${visionFallbackModel.provider}/${visionFallbackModel.modelId}` : "无"}，图片 ${modelSelection.image ? `${modelSelection.image.provider}/${modelSelection.image.modelId}` : "未配置"}`);
+  const remote = fishConfig().config.drawRemote;
+  console.log(`[鱼缸] 视觉 ${visionModel.provider}/${visionModel.modelId}，兜底 ${visionFallbackModel ? `${visionFallbackModel.provider}/${visionFallbackModel.modelId}` : "无"}，远程生图 ${remote.enabled ? `${remote.provider}/${remote.models[remote.provider]}` : "已关闭（drawRemote.enabled=false）"}`);
   console.log(`[鱼缸] 凭据 ${shown.key}（${shown.keySource}）`);
 }
 

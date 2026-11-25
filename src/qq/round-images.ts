@@ -116,7 +116,7 @@ export function planInlineImages(
 
 /** 统一规划直发图与合集子图的编号、压缩 block、末尾标签和 look fallback。
  *  编号标签始终带 inbound 路径（[图片#N inbound/…]）：模型可直接把路径填给
- *  draw / gpt_image 等吃图片引用的工具，读图本身不需要 look。 */
+ *  draw / draw_remote 等吃图片引用的工具，读图本身不需要 look。 */
 export function planRoundImages(
   anchor: IncomingMessage,
   burst: readonly BurstMessage[],

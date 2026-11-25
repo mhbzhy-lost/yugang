@@ -18,7 +18,7 @@
   react   只贴表情，不说话
 ```
 
-其余是可枚举的能力工具（`look` / `meme` / `search` / `video` / `bili_search` / `bili_video` / `draw` / `gpt_image` / `tags`）
+其余是可枚举的能力工具（`look` / `meme` / `search` / `video` / `bili_search` / `bili_video` / `draw` / `draw_remote` / `tags`）
 和主人专属的工具（`meme_add` / `meme_import` / `read` / `grep` / `write` / `tree` / `config` / `restart` / `watch`）。
 完整清单就是 `src/tools/loader.ts` 里那份 factory 名单。
 
@@ -190,7 +190,7 @@ src/
     manifest.ts     TOOL.md 严格解析器（双元数据块 + 严格 JSON Schema + 动态词表）
     loader.ts       工具包发现注册：manifest ↔ factory 一一对应，eager/deferred 在这里定
     catalog.ts      tool_catalog section 渲染（只列 name + 顶部摘要）
-    <name>/         25 个工具包，一包一目录：TOOL.md + tool.ts（say_* 是唯一出口，也住这里）
+    <name>/         工具包，一包一目录：TOOL.md + tool.ts（say_* 是唯一出口，也住这里）
   media/
     meme-store.ts   表情包库（索引、md5 去重、入库）
   qq/
@@ -246,7 +246,11 @@ config/auth.example.json   模板，说明格式                                
 | `main` | 主对话模型；压缩/备忘也用它 | 必填，缺了启动报错 |
 | `vision` | `look` / `video` 的识图模型 | 与 `main` 完全相同 |
 | `vision_fallback` | 识图兜底：主视觉失败或被内容审核拒时用它再试一轮 | 无兜底（不隐式兜底） |
-| `image` | `gpt_image` 透传通道：`provider` 决定用 `auth.json` 里哪条登录，`model` 是默认模型名 | `gpt_image` 不可用（不隐式兜底） |
+| `image` | 远程生图角色，**兼容保留**：自 2026-11-25 起运行时不再消费（画图模型改由 `fish.config.json` 的 `drawRemote` 选，见下） | 无影响 |
+
+远程生图（`draw_remote`）不在这里选模型：通道（gpt / wan / gemini）、各通道模型与总开关在 `fish.config.json` 的
+`drawRemote`（热加载，私聊 `config set drawRemote.provider gpt` 即时生效，不用重启）；端点与代理仍取本文件的
+`providers.<id>`，凭据取 `auth.json` 同名条目。旧角色 `models.image` / `models.wan_image` 兼容保留，`wan_image` 仍给 `wan_gif` 用。
 
 旧配置里的 `default` 键已废弃：留着会直接报错，改成 `models.main`。
 

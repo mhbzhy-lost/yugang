@@ -31,7 +31,7 @@ function nullBodyStatus(status: number): boolean {
 /**
  * 造一条走代理的 fetch（形状对齐 globalThis.fetch，只覆盖本仓实际用到的部分：
  * method / headers / string body / signal，返回全局 Response）。
- * 目标只支持 https —— gpt_image 的两个端点都是 https，别的协议直接抛，不静默直连。
+ * 目标只支持 https —— draw_remote 各通道的端点都是 https，别的协议直接抛，不静默直连。
  */
 export function createProxyFetch(proxy: string): typeof fetch | undefined {
   if (!validProxy(proxy)) return undefined;

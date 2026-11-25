@@ -38,7 +38,7 @@ import { createBiliVideoTool } from "./bili_video/tool.ts";
 import { createConfigTool } from "./config/tool.ts";
 import { createDrawTool } from "./draw/tool.ts";
 import { createQwenDrawTool } from "./qwen_draw/tool.ts";
-import { createGptImageTool } from "./gpt_image/tool.ts";
+import { createDrawRemoteTool } from "./draw_remote/tool.ts";
 import { createGrepTool } from "./grep/tool.ts";
 import { createLookTool } from "./look/tool.ts";
 import { createMemeTool } from "./meme/tool.ts";
@@ -61,10 +61,9 @@ import { createTreeTool } from "./tree/tool.ts";
 import { createVideoTool } from "./video/tool.ts";
 import { createWatchTool } from "./watch/tool.ts";
 import { createWriteTool } from "./write/tool.ts";
-import { createWanImageTool } from "./wan_image/tool.ts";
 import { createWanGifTool } from "./wan_gif/tool.ts";
 
-/** 32 个工具包的 Node factory；与 src/tools/<name>/TOOL.md 一一对应，两边都不允许孤儿。 */
+/** 31 个工具包的 Node factory；与 src/tools/<name>/TOOL.md 一一对应，两边都不允许孤儿。 */
 const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
   ammo_list: createAmmoListTool,
   ammo_submit: createAmmoSubmitTool,
@@ -72,7 +71,7 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
   bili_video: createBiliVideoTool,
   config: createConfigTool,
   draw: createDrawTool,
-  gpt_image: createGptImageTool,
+  draw_remote: createDrawRemoteTool,
   grep: createGrepTool,
   look: createLookTool,
   meme: createMemeTool,
@@ -96,7 +95,6 @@ const FACTORIES: Readonly<Record<string, ToolPackageFactory>> = {
   video: createVideoTool,
   watch: createWatchTool,
   write: createWriteTool,
-  wan_image: createWanImageTool,
   wan_gif: createWanGifTool,
 };
 

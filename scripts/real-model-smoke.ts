@@ -16,7 +16,8 @@
  *   - R2 凭据隔离：config/auth.json 复制为 ROOT/config/auth.json（0600，内容
  *     不输出）——副本与真实仓库同名同位，生产 read/grep 对 config/auth.json
  *     的既有硬封禁机械覆盖验收副本；loadFishModels 的 credentialsPath、
- *     gptImage.authPath、searchKey 全部指向副本，oauth 刷新只落副本。真实
+ *     draw_remote 的 modelsPath（config/models.json 副本，凭据取其同目录的
+ *     auth.json 副本）、searchKey 全部指向副本，oauth 刷新只落副本。真实
  *     config/auth.json 与 config/models.json 只记前后 sha256，发现变化判 fail。
  *   - R3 cwd/fixture 隔离：openFish 之前 chdir 进本次临时 ROOT（read/tree/
  *     restart/video 的 factory 在 openFish 时捕获 cwd）。ROOT 只放最小只读
@@ -60,6 +61,8 @@ import { deflateSync } from "node:zlib";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish, type Fish } from "../src/harness.ts";
+import { DRAW_REMOTE_DEFAULTS, type DrawRemoteConfig } from "../src/fish-config.ts";
+import { DRAW_REMOTE_PROVIDER_IDS, runDrawRemote } from "../src/media/draw-remote/index.ts";
 import { loadFishModels } from "../src/model/config.ts";
 import { createFishModels, addFishProvider } from "../src/model/models.ts";
 import { resetRun, resetLook } from "../src/egress/ledger.ts";
@@ -190,18 +193,20 @@ try {
   for (const f of ["say.ts", "read.ts", "tree.ts", "model.ts", "restart.ts"]) {
     writeFileSync(join(ROOT, "src", "tools", f), `// smoke fixture ${RUN_ID}\n`);
   }
-  cpSync(join(REPO, "config", "models.json"), join(ROOT, "config", "models.json"));
+  // config 工具写回 / draw_remote 读取的 models 副本：与真实仓库同路径（ROOT/config/models.json，内容是真实文件的拷贝）。
+  // draw_remote 按 modelsPath 同目录的 auth.json 取凭据，所以这份副本必须和 R2 的凭据副本放在一起；
+  // 真实仓库的 config/models.json 只读（loadFishModels）且前后比对 sha256
+  const tmpModelsPath = join(ROOT, "config", "models.json");
+  cpSync(join(REPO, "config", "models.json"), tmpModelsPath);
   if (existsSync(join(REPO, "scripts", "video-frames.py"))) {
     cpSync(join(REPO, "scripts", "video-frames.py"), join(ROOT, "scripts", "video-frames.py"));
   }
 
-  // ── 媒体夹具 + 模型副本（每次运行全新临时目录） ────────────────────
+  // ── 媒体夹具（每次运行全新临时目录；models 副本见上方 tmpModelsPath） ──────────
   for (const dir of ["inbound", "meme-inbox", "gen", "memes"]) mkdirSync(join(MEDIA, dir), { recursive: true });
   writeFileSync(join(MEDIA, "inbound", "smoke-red.png"), makePng(4, 4, [200, 30, 30]));
   writeFileSync(join(MEDIA, "meme-inbox", "inbox-red.png"), makePng(4, 4, [220, 40, 40]));
   writeFileSync(join(MEDIA, "meme-inbox", "inbox-blue.png"), makePng(4, 4, [40, 60, 220]));
-  const tmpModelsPath = join(ROOT, "models-copy.json");
-  cpSync(join(REPO, "config", "models.json"), tmpModelsPath);
 
   // ── R2：凭据副本落 ROOT/config/auth.json（0600、内容不输出；oauth 刷新只落副本；
   //      read/grep 围禁对 config/auth.json 的封禁机械覆盖该副本路径） ──────
@@ -256,6 +261,19 @@ try {
 
   // ── 模型装配：真实 config/models.json + 凭据只来自 ROOT 副本（内容不打印） ──
   const selection = loadFishModels({ modelsPath: join(REPO, "config", "models.json"), credentialsPath: AUTH_COPY });
+  // S10（draw_remote）钉 gpt 通道：延续原 gpt_image 验收的通道（生产上通道由 fish.config.json 的 drawRemote 热配置决定）。
+  // 通道可用性只看隔离副本：models 副本里有这条 provider，且凭据副本里有对应条目（只看有无，内容不输出）
+  const S10_PROVIDER_ID = DRAW_REMOTE_PROVIDER_IDS.gpt;
+  const s10DrawRemote: DrawRemoteConfig = { ...DRAW_REMOTE_DEFAULTS, provider: "gpt" };
+  const s10ChannelReady = (() => {
+    try {
+      const modelsFile = JSON.parse(readFileSync(tmpModelsPath, "utf8")) as { providers?: Record<string, unknown> };
+      const authFile = JSON.parse(readFileSync(AUTH_COPY, "utf8")) as Record<string, unknown>;
+      return Boolean(modelsFile.providers?.[S10_PROVIDER_ID]) && Boolean(authFile[S10_PROVIDER_ID]);
+    } catch {
+      return false;
+    }
+  })();
   const models = createFishModels(selection.main);
   if (selection.vision.providerId !== selection.main.providerId) addFishProvider(models, selection.vision);
   ev({
@@ -263,7 +281,7 @@ try {
     msg: "models loaded",
     main: `${selection.main.providerId}/${selection.main.modelId}`,
     vision: `${selection.vision.providerId}/${selection.vision.modelId}`,
-    image: selection.image ? `${selection.image.provider}/${selection.image.modelId}` : "(无)",
+    drawRemote: `${s10DrawRemote.provider}/${s10DrawRemote.models[s10DrawRemote.provider]}（channelReady=${s10ChannelReady}）`,
     transport: selection.transport ?? "auto",
     credentialsIsolated: selection.main.credentialsPath === AUTH_COPY,
   });
@@ -317,12 +335,12 @@ try {
     master: MASTER,
     modelsPath: tmpModelsPath,
     searchKey,
-    gptImage: selection.image
-      ? { authPath: selection.main.credentialsPath, provider: selection.image.provider, model: selection.image.modelId, ...(selection.image.proxy ? { proxy: selection.image.proxy } : {}) }
-      : undefined,
+    // 远程生图：与 runtime 同款注入（热配置现读 + 适配器本体）；通道钉 gpt，凭据 / 端点都读隔离副本
+    drawRemote: () => s10DrawRemote,
+    drawRemoteRun: runDrawRemote,
     comfyUrl: process.env.COMFYUI_URL,
     tagsCsv: tagsCsvPath,
-    toolTimeoutOverrides: { video: 90, gpt_image: 210, draw: 600 },
+    toolTimeoutOverrides: { video: 90, draw_remote: 210, draw: 600 },
     triggerOf: (roundId) => currentTrigger,
     mentionPolicyOf: (_cid, uid) => {
       if (uid === undefined) return "not_privileged";
@@ -697,28 +715,30 @@ try {
             });
             return;
           }
-          // ── S10 gpt_image（真实 GPT Image 通道；无通道在装配期已 blocked）──
+          // ── S10 draw_remote（真实 GPT Image 通道；通道未就绪在装配期已 blocked）──
           case "s10": {
-            // 提示合同：先 tool_search(query=gpt_image) 精确命中，下一请求才调用 gpt_image，结果经 say 发出。
+            // 提示合同：先 tool_search(query=draw_remote) 精确命中，下一请求才调用 draw_remote；
+            // 出图经 outbox 机械直发（宿主行为，不需要模型调 say_media）
             const r = await round(
-              "s10-gpt-image",
+              "s10-draw-remote",
               hostLine(
                 "小明",
                 "100001",
-                "严格按两步发现协议来：第一步先调用 tool_search，query 只填 ASCII 工具名 gpt_image（不要混入其它查询词）；" +
-                  "等工具面出现 gpt_image 后的下一次请求才调用它生成：极简风格，白底正中一个实心红色方块；生成完把结果用 say 发出来。" +
-                  "不要预加载工具，也不要跳过 tool_search。",
+                "严格按两步发现协议来：第一步先调用 tool_search，query 只填 ASCII 工具名 draw_remote（不要混入其它查询词）；" +
+                  "等工具面出现 draw_remote 后的下一次请求才调用它生成：极简风格，白底正中一个实心红色方块。" +
+                  "图会自动发到群里，不要再调 say_media。不要预加载工具，也不要跳过 tool_search。",
                 { messageId: 5010 },
               ),
               member(100001, 5010),
             );
             const genFiles = existsSync(join(MEDIA, "gen")) ? readdirSync(join(MEDIA, "gen")) : [];
-            const imgRes = r.toolResults.find((x) => x.name === "gpt_image");
-            const ok = hasCall(r, "gpt_image") && imgRes?.ok === true && genFiles.length >= 1;
+            const imgRes = r.toolResults.find((x) => x.name === "draw_remote");
+            const mediaRef = r.newOutbox.flatMap((o) => (typeof o.media === "string" && o.media.startsWith("gen/") ? [o.media] : []))[0];
+            const ok = hasCall(r, "draw_remote") && imgRes?.ok === true && genFiles.length >= 1 && mediaRef !== undefined;
             mark("s10", {
               status: ok ? "pass" : "fail",
-              expected: "先 tool_search(query=gpt_image) 精确命中、下一请求才调用：gpt_image 调用成功且 gen 目录落盘 ≥1 个文件",
-              observed: `seq=${seqOf(r)} genFiles=${genFiles.length} ok=${imgRes?.ok} summary=${imgRes?.summary.slice(0, 80) ?? ""}`,
+              expected: "先 tool_search(query=draw_remote) 精确命中、下一请求才调用：draw_remote 调用成功、gen 目录落盘 ≥1 个文件且经 outbox 机械直发（media=gen/…）",
+              observed: `seq=${seqOf(r)} genFiles=${genFiles.length} ok=${imgRes?.ok} autoSent=${mediaRef ?? "-"} summary=${imgRes?.summary.slice(0, 80) ?? ""}`,
             });
             return;
           }
@@ -801,9 +821,8 @@ try {
               master: undefined,
               modelsPath: tmpModelsPath,
               searchKey,
-              gptImage: selection.image
-                ? { authPath: selection.main.credentialsPath, provider: selection.image.provider, model: selection.image.modelId, ...(selection.image.proxy ? { proxy: selection.image.proxy } : {}) }
-                : undefined,
+              drawRemote: () => s10DrawRemote,
+              drawRemoteRun: runDrawRemote,
               comfyUrl: process.env.COMFYUI_URL,
               tagsCsv: tagsCsvPath,
               triggerOf: (roundId) => currentTrigger,
@@ -873,7 +892,7 @@ try {
 
   // ── R5：环境阻塞在装配期标 blocked，不烧流量、不跑配置错误路径 ──────
   function envBlockOf(stage: string): string | undefined {
-    if (stage === "s10" && !selection.image) return "env-blocked：无 models.image 通道";
+    if (stage === "s10" && !s10ChannelReady) return `env-blocked：隔离副本里没有 draw_remote 的 gpt 通道（models 副本缺 provider「${S10_PROVIDER_ID}」或凭据副本缺对应条目）`;
     if (stage === "s11" && !videoFramesReady) {
       return `env-blocked：帧描述依赖缺失（python=${existsSync(videoPython)} script=${existsSync(join(ROOT, "scripts", "video-frames.py"))} ffmpeg=${ffmpegOk}）`;
     }

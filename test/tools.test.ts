@@ -62,10 +62,12 @@ test("工具面为窄接口：无 bash，自改工具已注册", async () => {
     assert.ok(!names.includes("shell"), "shell 必须不存在");
     // 其余已启用工具（含 meme_import）全部等在 deferred 里，等 tool_search 加载；
     // ammo_list / ammo_submit 已进 loader 的 DISABLED_TOOL_PACKAGES（2026-11-04 T3 弹药管线停用），
-    // 完整性校验照旧但不进 active/deferred/catalog
+    // 完整性校验照旧但不进 active/deferred/catalog。
+    // 远程静态生图已收归 draw_remote（2026-11-25）：旧 gpt_image / wan_image 工具包已删，不在工具面里；
+    // drawRemote 配置 / 凭据 / modelsPath 缺失也不影响注册（恒返回注册，缺凭据在执行期回执）
     assert.deepEqual(
       agent.deferred.map((t) => t.name),
-      ["bili_search", "bili_video", "config", "draw", "gpt_image", "grep", "look", "meme", "meme_add", "meme_import", "news_prepare", "now", "qwen_draw", "read", "remind", "restart", "search", "tags", "tree", "video", "wan_gif", "wan_image", "watch", "write"],
+      ["bili_search", "bili_video", "config", "draw", "draw_remote", "grep", "look", "meme", "meme_add", "meme_import", "news_prepare", "now", "qwen_draw", "read", "remind", "restart", "search", "tags", "tree", "video", "wan_gif", "watch", "write"],
     );
   } finally {
     await open.close();
