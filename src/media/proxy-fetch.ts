@@ -51,7 +51,7 @@ export function createProxyFetch(proxy: string): typeof fetch | undefined {
           ? undefined
           : Buffer.from(init.body as ArrayBuffer);
 
-    const reply = await new Promise<{ status: number; statusText: string; text: string }>((resolve, reject) => {
+    const reply = await new Promise<{ status: number; statusText: string; body: Buffer; contentType: string }>((resolve, reject) => {
       const request = httpsRequest(
         target,
         {
@@ -67,7 +67,10 @@ export function createProxyFetch(proxy: string): typeof fetch | undefined {
             resolve({
               status: response.statusCode ?? 0,
               statusText: response.statusMessage ?? "",
-              text: Buffer.concat(chunks).toString("utf8"),
+              // 保留原始字节：先 toString("utf8") 会把 PNG/JPEG 里不成对的字节（如 0x89）换成 U+FFFD，
+              // 图片下载回来就是坏图
+              body: Buffer.concat(chunks),
+              contentType: response.headers["content-type"] ?? "",
             }),
           );
           response.on("error", reject);
@@ -78,8 +81,15 @@ export function createProxyFetch(proxy: string): typeof fetch | undefined {
     });
     if (reply.status === 0) throw new Error("proxy fetch: no response status");
 
-    // 状态码与正文原样带回；调用方只关心 ok / status / json()，这里不做重试、解压或重定向
-    return new Response(nullBodyStatus(reply.status) ? null : reply.text, { status: reply.status, statusText: reply.statusText });
+    // 状态码与正文原样带回（正文保持原始字节，文本 / JSON / 二进制都逐字节无损；上游给了
+    // content-type 就一并带回）；调用方只关心 ok / status / json()，这里不做重试、解压或重定向
+    const responseHeaders = new Headers();
+    if (reply.contentType) responseHeaders.set("content-type", reply.contentType);
+    return new Response(nullBodyStatus(reply.status) ? null : new Uint8Array(reply.body), {
+      status: reply.status,
+      statusText: reply.statusText,
+      headers: responseHeaders,
+    });
   };
 
   return proxied as typeof fetch;
