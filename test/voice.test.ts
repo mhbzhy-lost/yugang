@@ -26,7 +26,8 @@ import { mergeToolMessages } from "../src/tools/loader.ts";
 import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
 import { loadPrompts } from "../src/prompt/index.ts";
 import { personaOf, pickVoice } from "../src/qq/voice-route.ts";
-import { synthesizeToMedia, type TtsConfig } from "../src/tts.ts";
+import { fixWavHeader, synthesizeToMedia, type TtsConfig } from "../src/tts.ts";
+import { loadFishConfig } from "../src/fish-config.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
@@ -238,4 +239,181 @@ test("TTS 单实例按模型与参考音频串行热切", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+/** 构造带占位长度（0x7FFFFFFF）的流式 WAV 缓冲，复现 Qwen-Audio-TTS 真实响应。 */
+function makeStreamingWav(pcmLen: number, sampleRate = 24000): Buffer {
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(0x7fffffff, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(0x7fffffff, 40);
+  return Buffer.concat([header, Buffer.alloc(pcmLen, 0x11)]);
+}
+
+test("fixWavHeader 把流式占位长度重写为真实 PCM 字节数并保留 fmt 参数", () => {
+  const raw = makeStreamingWav(4800, 24000);
+  const fixed = fixWavHeader(raw);
+  assert.equal(fixed.length, 44 + 4800);
+  assert.equal(fixed.readUInt32LE(4), 36 + 4800);
+  assert.equal(fixed.readUInt32LE(24), 24000);
+  assert.equal(fixed.readUInt32LE(40), 4800);
+});
+
+test("Qwen 云端 TTS：SpeechSynthesizer 合成、修复 WAV 头、透传参数与 fail closed", async () => {
+  const mediaRoot = mkdtempSync(join(tmpdir(), "yg-qwen-tts-"));
+  const calls: { url: string; method: string; auth?: string; body?: Record<string, unknown> }[] = [];
+  const originalFetch = globalThis.fetch;
+  let synthAttempts = 0;
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
+    calls.push({ url, method: init?.method ?? "GET", auth: headers["authorization"], body });
+
+    if (url.endsWith("/SpeechSynthesizer")) {
+      synthAttempts++;
+      if ((body?.input as Record<string, unknown>)?.text === "触发500") {
+        return new Response("boom", { status: 500 });
+      }
+      if ((body?.input as Record<string, unknown>)?.text === "内联base64") {
+        return new Response(
+          JSON.stringify({ output: { audio: { data: makeStreamingWav(2048).toString("base64") } } }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({ output: { audio: { url: "https://oss.test/audio.wav" } } }),
+        { status: 200 },
+      );
+    }
+    if (url === "https://oss.test/audio.wav") {
+      // 第一次返回空字节测试重试，之后返回带 0x7FFFFFFF 占位头的合法 WAV
+      if (synthAttempts === 2) {
+        return new Response(Buffer.alloc(100), { status: 200 });
+      }
+      return new Response(makeStreamingWav(4096), { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const baseCfg: TtsConfig = {
+    engine: "qwen-tts",
+    url: "https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer",
+    model: "qwen-audio-3.0-tts-plus",
+    voice: "qwen-audio-3.0-tts-plus-elysia30s-demo",
+    apiKey: "sk-sp-test-token",
+    language: "zh",
+    speed: 1.08,
+  };
+
+  try {
+    // 1. 正常 URL 下载 + WAV 头修复 + 参数透传（无 instruction 时不发该字段）
+    const res = await synthesizeToMedia(baseCfg, "欸嘿，早安呀！", mediaRoot);
+    assert.ok(existsSync(join(mediaRoot, res.ref)), "音频应落盘");
+    assert.equal(res.bytes.readUInt32LE(4), 36 + 4096, "RIFF 长度应已修复");
+    assert.equal(res.bytes.readUInt32LE(40), 4096, "data 长度应已修复");
+    assert.equal(calls[0]?.auth, "Bearer sk-sp-test-token");
+    assert.deepEqual(calls[0]?.body, {
+      model: "qwen-audio-3.0-tts-plus",
+      input: {
+        text: "欸嘿，早安呀！",
+        voice: "qwen-audio-3.0-tts-plus-elysia30s-demo",
+        format: "wav",
+        sample_rate: 24000,
+        language_hints: ["zh"],
+        rate: 1.08,
+      },
+    });
+
+    // 2. 空音频自动重试一次（第 2 次 synth 返回 100B，第 3 次成功）
+    const retryRes = await synthesizeToMedia(baseCfg, "重试测试", mediaRoot);
+    assert.equal(retryRes.bytes.length, 44 + 4096);
+    assert.equal(synthAttempts, 3);
+
+    // 3. 支持内联 base64 data 且透传 instruction
+    const b64Res = await synthesizeToMedia({ ...baseCfg, instruction: "轻柔带笑意" }, "内联base64", mediaRoot);
+    assert.equal(b64Res.bytes.length, 44 + 2048);
+    assert.equal((calls.at(-1)?.body?.input as Record<string, unknown>)?.instruction, "轻柔带笑意");
+
+    // 4. fail closed：缺 key / 缺 model / HTTP 500
+    await assert.rejects(() => synthesizeToMedia({ ...baseCfg, apiKey: "" }, "缺key", mediaRoot), /tts_api_key_missing/);
+    await assert.rejects(() => synthesizeToMedia({ ...baseCfg, model: "" }, "缺model", mediaRoot), /tts_profile_incomplete/);
+    await assert.rejects(() => synthesizeToMedia(baseCfg, "触发500", mediaRoot), /tts_http_500/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fish.config voices 校验：支持 qwen-tts 与 gpt-sovits，禁止写入 apiKey", () => {
+  const dir = mkdtempSync(join(tmpdir(), "yg-voice-cfg-"));
+  const cfgPath = join(dir, "fish.config.json");
+
+  // 合法的 qwen-tts 与 gpt-sovits 并存
+  writeFileSync(cfgPath, JSON.stringify({
+    voices: {
+      爱莉希雅: {
+        engine: "qwen-tts",
+        url: "https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer",
+        model: "qwen-audio-3.0-tts-plus",
+        voice: "qwen-audio-3.0-tts-plus-elysia30s-demo",
+        provider: "qwen-token-plan-cn",
+        language: "zh",
+        speed: 1.08,
+      },
+      凯尔希: {
+        url: "http://host.docker.internal:9884",
+        gptModel: "/a.ckpt",
+        sovitsModel: "/a.pth",
+        referWav: "/a.wav",
+        referText: "原话",
+        speed: 0.9,
+      },
+    },
+  }));
+  const ok = loadFishConfig({ path: cfgPath });
+  assert.deepEqual(ok.problems, []);
+  assert.equal(ok.config.voices["爱莉希雅"]?.engine, "qwen-tts");
+  assert.equal(ok.config.voices["爱莉希雅"]?.speed, 1.08);
+  assert.equal(ok.config.voices["凯尔希"]?.url, "http://host.docker.internal:9884");
+
+  // 拒绝把 apiKey 写入 fish.config.json
+  writeFileSync(cfgPath, JSON.stringify({
+    voices: {
+      爱莉希雅: {
+        engine: "qwen-tts",
+        url: "https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer",
+        model: "qwen-audio-3.0-tts-plus",
+        voice: "v1",
+        apiKey: "sk-leak",
+      },
+    },
+  }));
+  const leak = loadFishConfig({ path: cfgPath });
+  assert.equal(Object.keys(leak.config.voices).length, 0);
+  assert.match(leak.problems.join(" "), /apiKey/);
+
+  // 缺 voice / 非法 engine 整块 fail closed
+  writeFileSync(cfgPath, JSON.stringify({
+    voices: {
+      爱莉希雅: {
+        engine: "qwen-tts",
+        url: "https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer",
+        model: "qwen-audio-3.0-tts-plus",
+      },
+    },
+  }));
+  const missing = loadFishConfig({ path: cfgPath });
+  assert.equal(Object.keys(missing.config.voices).length, 0);
+  assert.match(missing.problems.join(" "), /voice 缺失/);
 });

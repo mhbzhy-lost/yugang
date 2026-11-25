@@ -141,13 +141,29 @@ function workingTextOf(tool: string): string {
   }
 }
 
+/** 按 provider 名从主模型凭据文件（config/auth.json）现读 API key；读不到返回 undefined，不抛错。 */
+function readAuthKey(provider: string): string | undefined {
+  try {
+    const auth = JSON.parse(readFileSync(modelSelection.main.credentialsPath, "utf8")) as Record<string, { key?: unknown }>;
+    const key = auth[provider]?.key;
+    return typeof key === "string" && key.trim() ? key.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * chatKey（可能带人格后缀）→ 该会话的语音配置。
  * 只有 fish.config 的 voices 里明确配了这个人格，才有语音能力——没有兜底。
  * 兜底就是串音：任何没配音色的人格都会去用默认音色（长征机用爱莉声音开口）。
+ * 云端 qwen-tts 的 Bearer key 在这里现读 auth.json 注入内存态，不写进 fish.config.json。
  */
 function voiceConfigFor(chatKey: string): TtsConfig | undefined {
-  return pickVoice(fishConfig().config.voices, chatKey);
+  const voice = pickVoice(fishConfig().config.voices, chatKey);
+  if (!voice) return undefined;
+  if (voice.engine !== "qwen-tts") return voice;
+  const apiKey = readAuthKey(voice.provider ?? "qwen-token-plan-cn");
+  return { ...voice, ...(apiKey ? { apiKey } : {}) };
 }
 
 // 特别关注：chatKey（不含人格后缀）→ userId → 备注。随机门用它提高被关注者的概率，

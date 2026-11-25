@@ -193,7 +193,9 @@ export function compactTokenLimitOf(config: CompactConfig, provider: string, mod
   return config.byModel[`${provider}/${modelId}`] ?? config.byModel[provider] ?? config.maxTokens;
 }
 
-export interface VoiceConfig {
+export interface GptSovitsVoiceConfig {
+  /** 引擎类型：省略或 gpt-sovits 走本地单实例热切。 */
+  engine?: "gpt-sovits";
   /** 单实例热切服务地址。 */
   url: string;
   /** GPT 模型绝对路径；缺失时拒绝启用该音色。 */
@@ -209,6 +211,27 @@ export interface VoiceConfig {
   /** 语速倍率（0.5–2.0），缺省原速。 */
   speed?: number;
 }
+
+export interface QwenTtsVoiceConfig {
+  /** 引擎类型：云端 Qwen-Audio-TTS（Token Plan / 百炼 SpeechSynthesizer）。 */
+  engine: "qwen-tts";
+  /** SpeechSynthesizer 完整接口地址（http/https）。 */
+  url: string;
+  /** 模型 ID（如 qwen-audio-3.0-tts-plus）。 */
+  model: string;
+  /** 音色 ID（系统音色、基础音色或 voice-enrollment 复刻音色 ID）。 */
+  voice: string;
+  /** 凭据 provider 名（对应 config/auth.json 键，缺省 qwen-token-plan-cn）。 */
+  provider?: string;
+  /** 合成目标语种提示，缺省 zh。 */
+  language?: string;
+  /** 自然语言风格控制指令（可选；缺省不传，保留复刻原声韵律）。 */
+  instruction?: string;
+  /** 语速倍率（0.5–2.0），透传为 input.rate，缺省原速。 */
+  speed?: number;
+}
+
+export type VoiceConfig = GptSovitsVoiceConfig | QwenTtsVoiceConfig;
 
 export interface FishConfig {
   /** next 搭话开窗参数：closed/open 节拍、积压与背景上限、nudge 阈值。 */
@@ -353,8 +376,41 @@ function checkVoices(raw: unknown): FieldCheck {
   for (const [persona, value] of Object.entries(raw as Record<string, unknown>)) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, reason: `voices.${persona} 必须是对象` };
     const v = value as Record<string, unknown>;
+    if (v["apiKey"] !== undefined) {
+      return { ok: false, reason: `voices.${persona}.apiKey 不得写入 fish.config.json，凭据放 config/auth.json 并用 provider 引用` };
+    }
+    const engineRaw = v["engine"];
+    if (engineRaw !== undefined && engineRaw !== "gpt-sovits" && engineRaw !== "qwen-tts") {
+      return { ok: false, reason: `voices.${persona}.engine 仅支持 gpt-sovits 或 qwen-tts` };
+    }
     const url = typeof v["url"] === "string" ? v["url"].trim() : "";
     if (!url) return { ok: false, reason: `voices.${persona}.url 缺失` };
+    const speedRaw = num(v["speed"]);
+    const speed = speedRaw !== undefined && speedRaw >= 0.5 && speedRaw <= 2 ? speedRaw : undefined;
+    if (speedRaw !== undefined && speed === undefined) return { ok: false, reason: `voices.${persona}.speed 必须在 0.5–2.0` };
+
+    if (engineRaw === "qwen-tts") {
+      if (!/^https?:\/\//.test(url)) return { ok: false, reason: `voices.${persona}.url 必须是 http/https 地址` };
+      const model = typeof v["model"] === "string" ? v["model"].trim() : "";
+      if (!model) return { ok: false, reason: `voices.${persona}.model 缺失` };
+      const voice = typeof v["voice"] === "string" ? v["voice"].trim() : "";
+      if (!voice) return { ok: false, reason: `voices.${persona}.voice 缺失` };
+      const provider = typeof v["provider"] === "string" && v["provider"].trim() ? v["provider"].trim() : undefined;
+      const language = typeof v["language"] === "string" && v["language"].trim() ? v["language"].trim() : undefined;
+      const instruction = typeof v["instruction"] === "string" && v["instruction"].trim() ? v["instruction"].trim() : undefined;
+      voices[persona] = {
+        engine: "qwen-tts",
+        url,
+        model,
+        voice,
+        ...(provider ? { provider } : {}),
+        ...(language ? { language } : {}),
+        ...(instruction ? { instruction } : {}),
+        ...(speed !== undefined ? { speed } : {}),
+      };
+      continue;
+    }
+
     const gptModel = typeof v["gptModel"] === "string" ? v["gptModel"].trim() : "";
     if (!gptModel) return { ok: false, reason: `voices.${persona}.gptModel 缺失` };
     const sovitsModel = typeof v["sovitsModel"] === "string" ? v["sovitsModel"].trim() : "";
@@ -363,10 +419,8 @@ function checkVoices(raw: unknown): FieldCheck {
     if (!referWav) return { ok: false, reason: `voices.${persona}.referWav 缺失` };
     const referText = typeof v["referText"] === "string" ? v["referText"].trim() : "";
     if (!referText) return { ok: false, reason: `voices.${persona}.referText 缺失` };
-    const speedRaw = num(v["speed"]);
-    const speed = speedRaw !== undefined && speedRaw >= 0.5 && speedRaw <= 2 ? speedRaw : undefined;
-    if (speedRaw !== undefined && speed === undefined) return { ok: false, reason: `voices.${persona}.speed 必须在 0.5–2.0` };
     voices[persona] = {
+      ...(engineRaw === "gpt-sovits" ? { engine: "gpt-sovits" as const } : {}),
       url,
       gptModel,
       sovitsModel,

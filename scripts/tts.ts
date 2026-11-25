@@ -43,9 +43,9 @@ type Instance = {
   active: boolean;
 };
 
-/** 活跃集端口；配置读不到返回 null（开发机） */
+/** 活跃集端口；配置读不到返回 null（开发机）。云端 qwen-tts 音色不依赖本机 launchd，跳过。 */
 function activePorts(): Set<number> | null {
-  let cfg: { voices?: Record<string, { url?: string }> };
+  let cfg: { voices?: Record<string, { engine?: string; url?: string }> };
   try {
     cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
   } catch {
@@ -53,6 +53,7 @@ function activePorts(): Set<number> | null {
   }
   const ports = new Set<number>();
   for (const voice of Object.values(cfg.voices ?? {})) {
+    if (voice?.engine === "qwen-tts") continue;
     try {
       const port = Number(new URL(voice?.url ?? "").port);
       if (Number.isInteger(port) && port > 0) ports.add(port);

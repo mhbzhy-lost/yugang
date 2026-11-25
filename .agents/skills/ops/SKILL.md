@@ -48,7 +48,7 @@ scripts/fish.sh help                 # 全部子命令（其它命令原样透�
 
 ## 容器形态（2026-11-14 起，先看这节）
 
-**鱼与新闻源在 OrbStack 容器**（`yugang-fish` / `yugang-60s`）；**协议端 QQ+NapCat 于 2026-11-16 回退 mac native 宿主**（Linux QQ 容器风控频繁掉线）。语音于 2026-11-25 恢复（宿主单实例 `com.yugang.tts.elysia4` 监听 9884，容器经 `host.docker.internal:9884` 按请求热切模型，当前 `voices` 仅配爱莉希雅）；ComfyUI 在 **WSL** `~/anima-prod`，经宿主 SSH 隧道 18190。native 协议端搭建/恢复见 `mac-qq-napcat` skill。
+**鱼与新闻源在 OrbStack 容器**（`yugang-fish` / `yugang-60s`）；**协议端 QQ+NapCat 于 2026-11-16 回退 mac native 宿主**（Linux QQ 容器风控频繁掉线）。语音于 2026-11-25 切换至 **Qwen Token Plan 云端 TTS**（`engine: "qwen-tts"`，`qwen-audio-3.0-tts-plus` + 复刻爱莉希雅 27.3s 舰桥干声音色，`rate=1.08`，凭据读 `config/auth.json` 的 `qwen-token-plan-cn`；声音复刻专用 `DASHSCOPE_API_KEY` 在 macmini `~/yugang/.env`）；本地 GPT-SoVITS（`com.yugang.tts.elysia4` 9884）保留兼容。ComfyUI 在 **WSL** `~/anima-prod`，经宿主 SSH 隧道 18190。native 协议端搭建/恢复见 `mac-qq-napcat` skill。
 
 ```bash
 ssh macmini

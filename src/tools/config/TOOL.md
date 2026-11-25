@@ -34,7 +34,7 @@ fish.config.json 受控字段白名单（生效时机逐字段标注）：
 | memeCooldownMinutes | 数值 | 热加载 | 0–240，表情包跨轮冷却（分钟） |
 | gifAutoCollect | 布尔 | 热加载 | GIF 自动收录开关：缺省 false = 动图同静态图，ambient 轮不附收录标记、meme_add 只收主人点头轮的 inbound 动图；true 才恢复旧自动收行为 |
 | drawEnabled | 布尔 | 热加载 | 本地画图总开关（资源闸）：缺省 true；false 时 draw 入口即拒、真正提交前再复核一次，热生效不重启，用来临时让出 GPU。COMFYUI_URL 仍只作连接地址 |
-| voices | 对象 | 热加载 | 人格 → 单实例热切语音配置：url、gptModel、sovitsModel、referWav、referText 必填；referLanguage 可选（默认 zh），speed 可选（0.5–2）。缺字段会 fail closed，不会沿用服务端上一人格模型 |
+| voices | 对象 | 热加载 | 人格 → 语音配置，支持两种 engine：默认 `gpt-sovits`（单实例热切：`url`/`gptModel`/`sovitsModel`/`referWav`/`referText` 必填，`referLanguage` 默认 zh）或 `qwen-tts`（云端 SpeechSynthesizer：`engine: "qwen-tts"`、`url`/`model`/`voice` 必填，`provider` 默认 `qwen-token-plan-cn` 从 `config/auth.json` 读 key、`language` 默认 zh、`instruction` 可选）；两者均支持可选 `speed`（0.5–2）。严禁把 apiKey 写入 fish.config.json，缺字段会 fail closed |
 | weeklyGroupId | 字符串 | 热加载 | 周报群号（纯数字），空串 = 不发；下次周报触发时按新值执行 |
 | thinking | 布尔 | 需重启 | 思考开关：false = 关思考，true = 该模型最低可用档。各 provider 的字段差异由 config/models.json 的 thinkingLevelMap 映射；关不掉时启动日志会告警 |
 | toolTimeoutSeconds | 数值 | 需重启 | 5–600，单次工具调用超时（秒） |

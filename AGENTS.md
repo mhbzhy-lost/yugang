@@ -422,7 +422,9 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 
 ### 14. 语音
 
-- **音色只认 `fish.config.json` 的 `voices[人格名]`**，没有任何兜底；没配 = 该会话没有语音能力。单实例热切模式下 `url`、`gptModel`、`sovitsModel`、`referWav`、`referText` 均必填，缺任一项 fail closed，不沿用服务端上一人格状态
+- **音色只认 `fish.config.json` 的 `voices[人格名]`**，没有任何兜底；没配 = 该会话没有语音能力。支持两种 `engine`：
+  - `gpt-sovits`（缺省）：本地单实例热切，`url`、`gptModel`、`sovitsModel`、`referWav`、`referText` 均必填，缺任一项 fail closed，不沿用服务端上一人格状态
+  - `qwen-tts`（2026-11-25 新增）：云端 Qwen-Audio-TTS（`SpeechSynthesizer`），`engine: "qwen-tts"`、`url`、`model`、`voice` 必填，`provider` 缺省 `qwen-token-plan-cn`（凭据在运行时按 `provider` 从 `config/auth.json` 现读，禁止把 `apiKey` 写进 `fish.config.json`），可选 `language`（默认 `zh`）、`instruction`、`speed`（透传为 `input.rate`）。返回流式占位 WAV 头（`0x7FFFFFFF`）由 `fixWavHeader` 自动按真实 PCM 字节数重写；`scripts/tts.ts` 活跃本地端口扫描自动跳过 `qwen-tts` 音色
 - 人格解析必须走带 `#人格` 后缀的映射键（`mappingKeys`），`chatKeys` 只存剥离人格的 base 键给路由用
 - 触发提示：**没有机械提示**（2026-11-14 主人裁定，删除了旧 0.3 概率追加的 `[本轮要求] 必须使用 say_voice 回复` 任务行）。
   语音只在**对方明确要求**时用（「用语音说」「发条语音」这类），少数情形可由模型自己判断（对方正用语音聊、情绪浓、短话更适合出声）；
