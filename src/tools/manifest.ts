@@ -214,6 +214,11 @@ function validateSchema(schema: unknown, path: string, baseLine: number): ToolPa
   const parameters = schema["parameters"];
   if (!isPlainObject(parameters)) fail(path, baseLine, "parameters 必须是对象 Schema");
   if (parameters["type"] !== "object") fail(path, baseLine, "parameters.type 必须是 object");
+  for (const forbidden of ["oneOf", "allOf", "anyOf"] as const) {
+    if (forbidden in parameters) {
+      fail(path, baseLine, `parameters 顶层不允许使用 ${forbidden}（Claude 等模型 API 拒收）`);
+    }
+  }
   checkSchemaNode(parameters, path, baseLine);
   return parameters as ToolParametersSchema;
 }

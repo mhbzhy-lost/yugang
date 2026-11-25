@@ -290,6 +290,53 @@ test("工具文案合并：key 撞车（工具↔工具、工具↔中心）直�
   assert.deepEqual(target, { center_key: "中心文案", alpha_key: "甲的文案" });
 });
 
+test("schema.json：parameters 顶层拒绝 oneOf/allOf/anyOf，允许属性内嵌套 anyOf", () => {
+  for (const keyword of ["oneOf", "allOf", "anyOf"]) {
+    assert.throws(
+      () =>
+        parseSource({
+          source: {
+            md: toolSource("demo").source.md,
+            schema: JSON.stringify({
+              parameters: {
+                type: "object",
+                properties: { a: { type: "string" } },
+                [keyword]: [{ required: ["a"] }],
+              },
+            }),
+            messages: null,
+          },
+          mdPath: "demo/TOOL.md",
+          schemaPath: "demo/schema.json",
+          messagesPath: "demo/messages.json",
+        }),
+      new RegExp(`parameters 顶层不允许使用 ${keyword}`),
+    );
+  }
+
+  // 属性内部嵌套 anyOf 仍允许（如 meme.mood）
+  const nested = parseSource({
+    source: {
+      md: toolSource("demo").source.md,
+      schema: JSON.stringify({
+        parameters: {
+          type: "object",
+          properties: {
+            mood: {
+              anyOf: [{ type: "string" }, { enum: ["按标签"] }],
+            },
+          },
+        },
+      }),
+      messages: null,
+    },
+    mdPath: "demo/TOOL.md",
+    schemaPath: "demo/schema.json",
+    messagesPath: "demo/messages.json",
+  });
+  assert.equal(nested.name, "demo");
+});
+
 function sourceLiterals(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

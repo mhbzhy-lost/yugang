@@ -4,35 +4,13 @@
     "properties": {
       "url": {
         "type": "string",
-        "description": "B 站链接、BV 号、b23.tv 短链或图文动态"
+        "description": "B 站链接、BV 号、b23.tv 短链或图文动态；与 ref 二选一"
       },
       "ref": {
         "type": "string",
         "description": "群消息标签里的 qqvideo:... 视频附件引用；与 url 二选一"
       }
     },
-    "oneOf": [
-      {
-        "properties": {
-          "url": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "url"
-        ]
-      },
-      {
-        "properties": {
-          "ref": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "ref"
-        ]
-      }
-    ],
     "additionalProperties": false
   }
 }
