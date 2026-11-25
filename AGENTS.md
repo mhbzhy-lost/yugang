@@ -675,7 +675,7 @@ mini 上并没有 `home-mac-connect` 这个 skill（今天有子代理在 mini �
 `docs/plans/2026-11-14-dockerize-fish-napcat.md`，回退见 `docs/plans/2026-11-16-revert-native-qq.md`。
 
 **两个容器服务**（`compose.yaml`）：`fish`（自建）/ `sixty`（新闻源）。**协议端 native QQ+NapCat 在宿主**（见下「native 协议端」）。
-**语音与 ComfyUI 留宿主机**：GPT-SoVITS 靠 launchd + MPS（语音 2026-11-16 已下线，voices 清空）；ComfyUI 在 **WSL**，经宿主 SSH 隧道。
+**语音与 ComfyUI 留宿主机**：GPT-SoVITS 靠宿主 launchd + MPS（2026-11-25 恢复单实例 `com.yugang.tts.elysia4` 监听 9884，容器经 `host.docker.internal:9884` 按请求热切模型，当前 `voices` 仅配爱莉希雅）；ComfyUI 在 **WSL**，经宿主 SSH 隧道。
 
 ### 镜像只是环境，源码与数据全外挂
 
