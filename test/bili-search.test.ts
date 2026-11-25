@@ -226,6 +226,58 @@ test("createBiliSearchTool：缺省 days=60 生效；近 60 天结果 < 3 条自
   assert.ok(poolState.items.every((i) => i.state === "seen" && i.at === NOW));
 });
 
+test("createBiliSearchTool：放宽重搜时首轮超窗旧条目不得挤掉窗口内与放宽结果（I-1 回归），且读取去重池失败释放租约（M1 回归）", async () => {
+  // I-1：首轮前 12 条均早于 60 天窗口，第 13/14 条在窗口内；放宽返 1 条新结果
+  const oldPrimary = Array.from({ length: 12 }, (_, idx) =>
+    item(`BV1old${String(idx).padStart(6, "0")}`, { rawTitle: `旧视频${idx}`, publishedAtMs: NOW - (120 + idx) * DAY }),
+  );
+  const inWin1 = item("BV1win000001", { rawTitle: "窗口内1", publishedAtMs: NOW - 5 * DAY });
+  const inWin2 = item("BV1win000002", { rawTitle: "窗口内2", publishedAtMs: NOW - 20 * DAY });
+  const relaxed = item("BV1rel000001", { rawTitle: "放宽命中1", publishedAtMs: NOW - 90 * DAY });
+  {
+    const { api, poolState } = makeApi("conv-i1-regression");
+    const { tool } = makeTool(makeDeps(), [[...oldPrimary, inWin1, inWin2], [relaxed]]);
+    const text = textOf(await tool.execute({ query: "测试话题" } as never, api, ctx) as never);
+    assert.ok(text.includes("窗口内1|"), "窗口内1 不应被首轮超窗条目挤掉");
+    assert.ok(text.includes("窗口内2|"), "窗口内2 不应被首轮超窗条目挤掉");
+    assert.ok(text.includes("放宽命中1|"), "放宽结果不应被首轮超窗条目挤掉");
+    assert.ok(text.indexOf("窗口内1|") < text.indexOf("窗口内2|"));
+    assert.ok(text.indexOf("窗口内2|") < text.indexOf("放宽命中1|"));
+    assert.ok(text.indexOf("放宽命中1|") < text.indexOf("旧视频0|"));
+    assert.ok(poolState.items.some((i) => i.bvid === "BV1win000001"));
+    assert.ok(poolState.items.some((i) => i.bvid === "BV1rel000001"));
+  }
+
+  // M1：读 VideoPoolDoc 失败时必须释放租约，不得占掉每轮 2 次额度
+  {
+    let failCount = 2;
+    const round = { id: "r-m1" };
+    const poolState: VideoPoolState = { items: [] };
+    const api = {
+      conversationId: "conv-m1-regression" as never,
+      snapshot: async (doc: unknown) => {
+        if (doc === LiveDoc) return { run: { inputs: [round] } };
+        if (doc === VideoPoolDoc) {
+          if (failCount > 0) {
+            failCount -= 1;
+            throw new Error("pool read failed");
+          }
+          return poolState;
+        }
+        return undefined;
+      },
+      commit: async (fn: (tx: { doc: () => Promise<VideoPoolState> }) => Promise<void>) => {
+        await fn({ doc: async () => poolState });
+      },
+    } as never;
+    const { tool } = makeTool(makeDeps(), [[inWin1, inWin2, relaxed]]);
+    await assert.rejects(tool.execute({ query: "q", days: 0 } as never, api, ctx), /pool read failed/);
+    await assert.rejects(tool.execute({ query: "q", days: 0 } as never, api, ctx), /pool read failed/);
+    const okText = textOf(await tool.execute({ query: "q", days: 0 } as never, api, ctx) as never);
+    assert.ok(okText.includes("窗口内1|"), "两次快照失败不应耗尽轮内额度");
+  }
+});
+
 test("createBiliSearchTool：放宽重搜抛 SearchResponseError 时保留首次 1-2 条结果（不标已放宽）；0 条且 SearchResponseError 抛 bili_search_failed；网络错误/AbortError 原样上抛且不写 seen/不扣额度", async () => {
   const a = item("BV1eqZJYaESc", { rawTitle: "视频A", publishedAtMs: NOW - 10 * DAY });
   const b = item("BV2eqZJYaESc", { rawTitle: "视频B" });

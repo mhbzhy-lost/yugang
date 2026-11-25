@@ -312,23 +312,24 @@ export function createBiliSearchTool(manifest: ToolManifest, deps: ToolPackageDe
         }
       };
 
-      // 本群去重表（chatKey 绑定）：shared 永久挡、seen 只挡 7 天
+      // 本群去重表（chatKey 绑定）：shared 永久挡、seen 只挡 7 天；租约占位后即进 try，
+      // 任何快照/配置/检索异常都确保 release 归还本轮额度。
       const nowMs = clock();
       const startedAt = nowMs;
       const poolKey = videoPoolKeyOf(deps.chatKeyOf?.(String(api.conversationId)), api.conversationId);
-      const pool = (await api.snapshot(VideoPoolDoc, poolKey, context)) as VideoPoolState | undefined;
-      const activeSeen = activeSeenOf(pool, nowMs);
-      const inLibrary = new Map<string, string>();
-      for (const poolItem of pool?.items ?? []) {
-        if (poolItem.state === "seen" && !activeSeen.has(poolItem.bvid)) continue;
-        inLibrary.set(poolItem.bvid, poolItem.state);
-      }
-      const filters = getFilters();
       const signal = context?.abortSignal;
       // 首轮时间窗兜底：多放 1 天容差，避免时区/边界误杀
       const minPublishedAtMs = days > 0 ? nowMs - (days + 1) * DAY_MS : undefined;
 
       try {
+        const pool = (await api.snapshot(VideoPoolDoc, poolKey, context)) as VideoPoolState | undefined;
+        const activeSeen = activeSeenOf(pool, nowMs);
+        const inLibrary = new Map<string, string>();
+        for (const poolItem of pool?.items ?? []) {
+          if (poolItem.state === "seen" && !activeSeen.has(poolItem.bvid)) continue;
+          inLibrary.set(poolItem.bvid, poolItem.state);
+        }
+        const filters = getFilters();
         const primaryItems = await search({
           apiKey: deps.searchKey,
           query: buildBiliSearchQuery(query, days, nowMs),
@@ -349,8 +350,21 @@ export function createBiliSearchTool(manifest: ToolManifest, deps: ToolPackageDe
                 timeoutMs: remaining,
                 signal,
               });
-              // 合并去重：首轮条目排前（同 BV 保留时间窗内首条），放宽轮不再卡时间窗
-              result = runBiliSearchFunnel([...primaryItems, ...more], BILI_SEARCH_LIMIT, { filters, inLibrary, audit });
+              // 合并去重：时间窗内首轮排最前 → 放宽重搜结果次之 → 首轮超窗旧条目垫底（避免旧条目挤掉窗口内与放宽命中）
+              const inWindowPrimary: DeepSeekSearchItem[] = [];
+              const outOfWindowPrimary: DeepSeekSearchItem[] = [];
+              for (const entry of primaryItems) {
+                if (minPublishedAtMs !== undefined && entry.publishedAtMs !== undefined && entry.publishedAtMs < minPublishedAtMs) {
+                  outOfWindowPrimary.push(entry);
+                } else {
+                  inWindowPrimary.push(entry);
+                }
+              }
+              result = runBiliSearchFunnel(
+                [...inWindowPrimary, ...more, ...outOfWindowPrimary],
+                BILI_SEARCH_LIMIT,
+                { filters, inLibrary, audit },
+              );
               fallbackUsed = true;
             } catch (error) {
               // 放宽失败：网络/取消原样上抛；SearchResponseError 时保留首次 1–2 条，如实不标放宽
