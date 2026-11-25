@@ -379,6 +379,85 @@ test("proxy-fetch：非法代理地址返回 undefined，非 https 目标直接�
   await assert.rejects(proxied("http://127.0.0.1:1/x"), /https targets only/);
 });
 
+test("proxy-fetch：响应头已到、正文传输中途 abort → reject；上游提前断开截断正文 → reject，绝不 resolve 截断数据", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "proxy-fetch-abort-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  /** /slow 的首块正文已交给 socket 时 resolve：此后再 abort 才是「响应头已到、正文传输中途」。 */
+  let firstChunkWritten: (() => void) | undefined;
+  const firstChunk = new Promise<void>((resolve) => {
+    firstChunkWritten = resolve;
+  });
+  const timers: NodeJS.Timeout[] = [];
+  let tls: LoopbackServer | undefined;
+  tls = await startTlsServer(dir, (request, response) => {
+    request.resume();
+    // 客户端中途 abort 后 socket 已销毁，晚到的 end() 写入会以 error 事件冒出来：测试里吞掉
+    response.on("error", () => {});
+    if (request.url === "/slow") {
+      // 头 + 1024 字节先到，其余的拖到 800ms 之后才发：在这之前 abort 就是正文传输中途
+      response.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(PNG.length) });
+      response.write(PNG.subarray(0, 1024), () => firstChunkWritten?.());
+      timers.push(
+        setTimeout(() => {
+          if (!response.destroyed) response.end(PNG.subarray(1024));
+        }, 800),
+      );
+      return;
+    }
+    if (request.url === "/whole") {
+      response.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(PNG.length) });
+      response.end(PNG);
+      return;
+    }
+    // 声明的正文比实际发的长（或 chunked 没有终止块），发完首块就把连接掐断
+    response.writeHead(200, {
+      "content-type": "application/octet-stream",
+      ...(request.url === "/truncated-length" ? { "content-length": String(PNG.length) } : {}),
+    });
+    response.write(PNG.subarray(0, 1024), () => {
+      timers.push(setTimeout(() => response.socket?.destroy(), 30));
+    });
+  });
+  const proxy = tls ? await startConnectProxy() : undefined;
+  if (!tls || !proxy) {
+    t.skip("需要 openssl 与回环端口");
+    return;
+  }
+  t.after(async () => {
+    for (const timer of timers) clearTimeout(timer);
+    await proxy.close();
+    await tls?.close();
+  });
+
+  await withInsecureLoopbackTls(async () => {
+    const proxied = createProxyFetch(proxy.url);
+    assert.ok(proxied);
+
+    // 1) 响应头已到、正文传输中途被调用方 abort：必须 reject（AbortError），不能把半截正文 resolve 出去
+    const controller = new AbortController();
+    const pending = proxied(`${tls.url}/slow`, { signal: controller.signal });
+    await firstChunk;
+    // 首块已经交给 socket；给隧道与 TLS 记录留出送达时间，确保 abort 落在「头已到、正文未完」区间
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    controller.abort();
+    await assert.rejects(pending, expectAbort());
+
+    // 2) 上游提前断开：Content-Length 不满足 / chunked 没有终止块 → reject，不 resolve 截断数据
+    for (const path of ["/truncated-length", "/truncated-chunked"]) {
+      await assert.rejects(proxied(`${tls.url}${path}`), (error: unknown) => {
+        assert.ok(error instanceof Error, `应当以 Error 拒绝，实际：${String(error)}`);
+        assert.doesNotMatch(error.message, /HTTPS targets|https targets only/);
+        return true;
+      }, path);
+    }
+
+    // 对照：完整送达的同一份正文照常 resolve 且逐字节无损
+    const whole = await proxied(`${tls.url}/whole`);
+    assert.equal(whole.status, 200);
+    assert.ok(Buffer.from(await whole.arrayBuffer()).equals(PNG));
+  });
+});
+
 // =====================================================================
 // gemini：请求契约
 // =====================================================================
@@ -602,10 +681,43 @@ test("gemini：首调 401 时别的请求已经换过 token，则直接复用不
     generateGeminiImage({ ...geminiBase(ws2), onSubmitted: submitted.hook, fetchImpl: fetch2.impl }),
     expectDrawRemoteError("gemini", "failed", false, ["401"]),
   );
-  assert.equal(fetch2.calls.filter((call) => call.url === TOKEN_URL).length, 1);
   assert.equal(fetch2.calls.filter((call) => call.url === GENERATE_URL).length, 2);
   assert.equal(submitted.count(), 1);
   assert.deepEqual(ws2.files(), []);
+});
+
+test("gemini：首调 401 后锁内强刷失败（token 端点 400 / 网络错）→ failed/submitted=false，不发第二次生成 POST，文案不含凭据", async (t) => {
+  const cases: [string, () => Response, string[]][] = [
+    ["HTTP 400", () => jsonResponse({ error: "invalid_grant", error_description: `refresh token ${AG_REFRESH} was reused for client ag-client-secret` }, 400), ["强刷", "400"]],
+    ["网络错", () => {
+      throw new TypeError("fetch failed");
+    }, ["强刷", "fetch failed"]],
+  ];
+  for (const [label, tokenReply, includes] of cases) {
+    const ws = workspace();
+    t.after(() => ws.cleanup());
+    ws.models({ [AG]: AG_PROVIDER });
+    ws.credentials({ [AG]: agCredential() });
+    const submitted = submitTracker();
+    const fetch = fakeFetch((url, init) => {
+      if (url === TOKEN_URL) return tokenReply();
+      assert.equal(url, GENERATE_URL);
+      assert.equal(headerOf(init, "authorization"), `Bearer ${AG_ACCESS}`, "未过期凭据首调用的是旧 access");
+      return jsonResponse({ error: { message: "Access token expired" } }, 401);
+    });
+
+    await assert.rejects(
+      generateGeminiImage({ ...geminiBase(ws), onSubmitted: submitted.hook, fetchImpl: fetch.impl }),
+      expectDrawRemoteError("gemini", "failed", false, includes, [AG_ACCESS, AG_REFRESH, "ag-client-secret"]),
+      label,
+    );
+    assert.equal(fetch.calls.filter((call) => call.url === GENERATE_URL).length, 1, `${label}：强刷失败不得再发第二次生成 POST`);
+    assert.equal(fetch.calls.filter((call) => call.url === TOKEN_URL).length, 1, label);
+    assert.equal(submitted.count(), 1, `${label}：首个 POST 已发出，钩子已触发一次`);
+    // 刷新失败：auth.json 原样不动
+    assert.equal(JSON.parse(readFileSync(ws.credentialsPath, "utf8"))[AG]["access"], AG_ACCESS);
+    assert.deepEqual(ws.files(), []);
+  }
 });
 
 test("gemini：前置 OAuth 刷新失败抛 failed/submitted=false，不触发 onSubmitted、不发生成请求，文案不含凭据", async (t) => {
@@ -865,6 +977,34 @@ test("gpt：缺 auth.json 凭据在 onSubmitted 前报 unconfigured；HTTP 400/4
   assert.equal(gifTracker.count(), 1);
 });
 
+test("gpt：前置 OAuth 刷新失败（过期凭据 + token 端点 400 / 网络错）→ failed/submitted=false，onSubmitted 0 次，不发生成请求，文案不含凭据", async (t) => {
+  const CODEX_TOKEN = "https://auth.openai.com/oauth/token";
+  const cases: [string, () => Response, string[]][] = [
+    ["HTTP 400", () => jsonResponse({ error: "invalid_grant", error_description: "refresh token codex-refresh rejected" }, 400), ["400"]],
+    ["网络错", () => {
+      throw new TypeError("fetch failed");
+    }, ["fetch failed"]],
+  ];
+  for (const [label, tokenReply, includes] of cases) {
+    const ws = codexWorkspace(t);
+    ws.credentials({ [CODEX]: { type: "oauth", access: "codex-access", refresh: "codex-refresh", expires: Date.now() - 1000, accountId: "acct-1" } });
+    const submitted = submitTracker();
+    const fetch = fakeFetch((url) => {
+      assert.equal(url, CODEX_TOKEN, `${label}：过期凭据只允许打 token 端点，不得发生成请求`);
+      return tokenReply();
+    });
+
+    await assert.rejects(
+      runDrawRemote(runRequest(ws, { provider: "gpt", model: "gpt-image-2.6-flare", onSubmitted: submitted.hook, fetchImpl: fetch.impl })),
+      expectDrawRemoteError("gpt", "failed", false, includes, ["codex-access", "codex-refresh"]),
+      label,
+    );
+    assert.equal(submitted.count(), 0, `${label}：前置刷新失败不触发 onSubmitted`);
+    assert.equal(fetch.calls.length, 1, `${label}：只打了 token 端点`);
+    assert.deepEqual(ws.files(), []);
+  }
+});
+
 // =====================================================================
 // wan 通道
 // =====================================================================
@@ -906,6 +1046,32 @@ test("wan：读 qwen-token-plan-cn 的 key 与 baseUrl（去 /compatible-mode/v1
   assert.match(String(result.files[0]), /^\d+-[0-9a-f-]{36}\.png$/);
   assert.ok(readFileSync(join(ws.mediaRoot, "gen", String(result.files[0]))).equals(PNG));
   assert.equal(submitted.count(), 1);
+});
+
+test("wan：下载字节按真实魔数校验并决定落盘后缀——JPEG 存 .jpg 逐字节无损；200 但非图片正文按失败处理且零落盘", async (t) => {
+  const ws = wanWorkspace(t);
+  const generation = (image: string) => jsonResponse({ output: { choices: [{ message: { content: [{ image }] } }] } });
+
+  // 下载地址写着 .png、实际字节是 JPEG：后缀跟魔数走，不跟 URL 也不写死 .png
+  const jpeg = fakeFetch((url) => (url === WAN_GENERATION ? generation("https://img.test/out.png") : bytesResponse(JPEG, "image/jpeg")));
+  const tracker = submitTracker();
+  const result = await runDrawRemote(runRequest(ws, { provider: "wan", onSubmitted: tracker.hook, fetchImpl: jpeg.impl }));
+  assert.match(String(result.files[0]), /^\d+-[0-9a-f-]{36}\.jpg$/);
+  assert.ok(readFileSync(join(ws.mediaRoot, "gen", String(result.files[0]))).equals(JPEG), "字节逐字节无损");
+  assert.equal(tracker.count(), 1);
+
+  // HTTP 200 但正文是 ≥1024 字节的非图片（如网关返回的 HTML 错误页）：不当成图片落盘；
+  // 下载发生在生成 POST 之后 → 结果不明，submitted=true
+  const html = Buffer.from(`<!doctype html><html><body>${"<p>upstream error</p>".repeat(128)}</body></html>`, "utf8");
+  assert.ok(html.length >= 1024);
+  const notImage = fakeFetch((url) => (url === WAN_GENERATION ? generation("https://img.test/out.png") : bytesResponse(html, "text/html")));
+  const tracker2 = submitTracker();
+  await assert.rejects(
+    runDrawRemote(runRequest(ws, { provider: "wan", onSubmitted: tracker2.hook, fetchImpl: notImage.impl })),
+    expectDrawRemoteError("wan", "failed", true),
+  );
+  assert.equal(tracker2.count(), 1);
+  assert.deepEqual(ws.files(), [String(result.files[0])], "非图片正文零落盘，gen/ 里只有前面那张 JPEG");
 });
 
 test("wan：能力预检在 onSubmitted 前拒绝——prompt>800 字、images 非空、background=transparent；gemini 的 transparent 同样拒绝；均不发请求", async (t) => {
@@ -1184,4 +1350,53 @@ test("配置读取：credentialsPath 可显式覆盖默认的同目录 auth.json
     runDrawRemote(runRequest(ws, { credentialsPath: customCredentials, fetchImpl: fetch.impl })),
     expectDrawRemoteError("gemini", "unconfigured", false, ["models.json"], ["broken-secret"]),
   );
+});
+
+test("unconfigured 文案收敛：逐通道点名 models.json / auth.json，不带本机绝对路径与运维命令", async (t) => {
+  const ws = workspace();
+  t.after(() => ws.cleanup());
+  // 这些不得出现在模型可见的回执里（DrawRemoteError.message 经 {{reason}} 原样进入工具回执）
+  const leaks = [ws.modelsPath, ws.credentialsPath, ws.dir, "npm run"];
+  const silent = fakeFetch(() => {
+    throw new Error("unconfigured 不得发任何请求");
+  });
+  const call = (overrides: Partial<DrawRemoteRunRequest> = {}) =>
+    runDrawRemote(runRequest(ws, { ...overrides, fetchImpl: silent.impl }));
+  const codex = { type: "oauth", access: "codex-access", refresh: "codex-refresh", expires: Date.now() + 3600_000, accountId: "acct-1" };
+
+  // gemini：models.json 缺 provider → auth.json 缺凭据 → 凭据缺 projectId 且兜底查不到
+  await assert.rejects(call(), expectDrawRemoteError("gemini", "unconfigured", false, ["models.json", AG], leaks));
+  ws.models({ [AG]: AG_PROVIDER });
+  await assert.rejects(call(), expectDrawRemoteError("gemini", "unconfigured", false, ["auth.json", AG], leaks));
+  ws.credentials({ [AG]: agCredential({ projectId: undefined }) });
+  const discover = fakeFetch((url) => {
+    assert.ok(url.endsWith("/v1internal:loadCodeAssist"), `兜底只允许打 loadCodeAssist：${url}`);
+    return jsonResponse({ error: { message: "no project for this account" } }, 500);
+  });
+  await assert.rejects(
+    runDrawRemote(runRequest(ws, { fetchImpl: discover.impl })),
+    expectDrawRemoteError("gemini", "unconfigured", false, ["auth.json", "projectId"], leaks),
+  );
+
+  // gpt：models.json 缺 provider → auth.json 缺凭据 → 凭据形状不对（缺 accountId）
+  await assert.rejects(call({ provider: "gpt", model: "gpt-image-2.6-flare" }), expectDrawRemoteError("gpt", "unconfigured", false, ["models.json", CODEX], leaks));
+  ws.models({ [AG]: AG_PROVIDER, [CODEX]: { auth: "oauth" } });
+  await assert.rejects(call({ provider: "gpt", model: "gpt-image-2.6-flare" }), expectDrawRemoteError("gpt", "unconfigured", false, ["auth.json", CODEX], leaks));
+  ws.credentials({ [AG]: agCredential(), [CODEX]: { ...codex, accountId: undefined } });
+  await assert.rejects(call({ provider: "gpt", model: "gpt-image-2.6-flare" }), expectDrawRemoteError("gpt", "unconfigured", false, ["auth.json", CODEX], leaks));
+  ws.credentials({ [AG]: agCredential(), [CODEX]: codex });
+
+  // wan：models.json 缺 provider → provider 缺 baseUrl → auth.json 缺 key → key 为空串
+  await assert.rejects(call({ provider: "wan", model: "wan2.7-image" }), expectDrawRemoteError("wan", "unconfigured", false, ["models.json", QWEN], leaks));
+  ws.models({ [CODEX]: { auth: "oauth" }, [QWEN]: {} });
+  await assert.rejects(call({ provider: "wan", model: "wan2.7-image" }), expectDrawRemoteError("wan", "unconfigured", false, ["models.json", "baseUrl"], leaks));
+  ws.models({ [CODEX]: { auth: "oauth" }, [QWEN]: { baseUrl: "https://dashscope.test/compatible-mode/v1" } });
+  await assert.rejects(call({ provider: "wan", model: "wan2.7-image" }), expectDrawRemoteError("wan", "unconfigured", false, ["auth.json", QWEN], leaks));
+  ws.credentials({ [AG]: agCredential(), [CODEX]: codex, [QWEN]: { type: "api_key", key: "" } });
+  await assert.rejects(call({ provider: "wan", model: "wan2.7-image" }), expectDrawRemoteError("wan", "unconfigured", false, ["auth.json"], leaks));
+
+  // models.json 损坏：点名 models.json，不回显文件片段，也不带路径
+  writeFileSync(ws.modelsPath, '{"providers": {"x": broken-secret');
+  await assert.rejects(call(), expectDrawRemoteError("gemini", "unconfigured", false, ["models.json"], [...leaks, "broken-secret"]));
+  assert.equal(silent.calls.length, 0);
 });

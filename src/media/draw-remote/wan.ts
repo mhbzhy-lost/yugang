@@ -22,7 +22,7 @@ export async function runWanChannel(request: DrawRemoteChannelRequest): Promise<
     throw new DrawRemoteError(
       WAN,
       "unconfigured",
-      `draw_remote 未配置：models.json 的 provider「${request.providerId}」缺 baseUrl（wan 通道要用来拼原生生图接口）`,
+      `draw_remote 未配置：models.json 的 provider「${request.providerId}」缺少 baseUrl（wan 通道要用它拼原生生图接口）`,
       false,
     );
   }
@@ -34,13 +34,9 @@ export async function runWanChannel(request: DrawRemoteChannelRequest): Promise<
     // JSON 解析错误会截一段原文，凭据文件内容不经错误文案出境
     stored = undefined;
   }
+  // 错误文案会经工具回执原样到模型：只点名缺的是哪个来源，不带本机绝对路径与运维命令
   if (!stored || stored.type !== "api_key" || typeof stored.key !== "string" || stored.key === "") {
-    throw new DrawRemoteError(
-      WAN,
-      "unconfigured",
-      `draw_remote 未配置：auth.json（${request.authPath}）里没有「${request.providerId}」的 API key，请用 npm run creds import 写入`,
-      false,
-    );
+    throw new DrawRemoteError(WAN, "unconfigured", `draw_remote 未配置：auth.json 缺少「${request.providerId}」的 API key`, false);
   }
   const secrets = collectSecrets({ key: stored.key });
 

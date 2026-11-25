@@ -5,9 +5,13 @@
  * DrawRemoteError——缺凭据是 unconfigured，HTTP 4xx 是确定性拒绝（submitted=false），
  * 5xx / 超时 / POST 之后的异常结果不明（submitted=true）。aspectRatio 不透传：Codex 图片后端
  * 没有这个字段，构图靠提示词。
+ *
+ * 错误文案会经工具回执原样到模型：只点名缺的是哪个来源（models.json 的 provider / auth.json 的凭据），
+ * 不带本机绝对路径与运维命令；上游正文（含前置刷新失败的 token 端点回复）先按这条通道的凭据脱敏。
  */
+import { fileCredentialStore } from "../../auth/credentials.ts";
 import { generateGptImages } from "../gpt-image.ts";
-import { cleanUpstreamText } from "./redact.ts";
+import { cleanUpstreamText, collectSecrets } from "./redact.ts";
 import { DrawRemoteError, errorMessage, httpStatusOf, isAbortError, isTimeoutError } from "./types.ts";
 import type { DrawRemoteChannelRequest } from "./types.ts";
 
@@ -16,6 +20,11 @@ const DEFAULT_TIMEOUT_MS = 180_000;
 
 export async function runGptChannel(request: DrawRemoteChannelRequest): Promise<string[]> {
   const dataUrls = (request.images ?? []).map((image) => `data:${image.mimeType};base64,${image.bytes.toString("base64")}`);
+  // 脱敏名单：这条通道在 auth.json 里的凭据（access / refresh / clientSecret）。前置刷新失败时 token 端点的
+  // 正文可能回显它们；读不出就不收（随后的凭据校验会报 unconfigured）
+  const secrets = await fileCredentialStore(request.authPath)
+    .read(request.providerId)
+    .then((stored) => collectSecrets(stored), () => []);
   // prepare：还没调提交钩子；submitting：钩子在跑；posted：钩子跑完，之后的第一件事就是生成 POST。
   // 用对象装着：钩子在闭包里改它，裸变量会被控制流分析误判成恒为 prepare
   const progress: { phase: "prepare" | "submitting" | "posted" } = { phase: "prepare" };
@@ -52,7 +61,7 @@ export async function runGptChannel(request: DrawRemoteChannelRequest): Promise<
       throw new DrawRemoteError(
         GPT,
         "unconfigured",
-        `draw_remote 未配置：auth.json（${request.authPath}）里没有「${request.providerId}」可用的 OAuth 凭据（需 access 与 accountId），请先 npm run login -- openai-codex`,
+        `draw_remote 未配置：auth.json 缺少「${request.providerId}」的 OAuth 凭据`,
         false,
         { cause: error },
       );
@@ -68,7 +77,11 @@ export async function runGptChannel(request: DrawRemoteChannelRequest): Promise<
         cause: error,
       });
     }
-    // 空结果 / 过小的图 / 坏 JSON 都发生在 POST 之后
-    throw new DrawRemoteError(GPT, "failed", `gpt 生图失败：${cleanUpstreamText(message, [])}`, phase() === "posted", { cause: error });
+    // 走到这里的其余错误只发生在两处：提交前（凭据读取 / 前置 OAuth 刷新）或 POST 之后（空结果 / 过小的图 / 坏 JSON）。
+    // 文案按阶段说清是哪一种，submitted 跟着阶段走
+    const posted = phase() === "posted";
+    throw new DrawRemoteError(GPT, "failed", `gpt ${posted ? "生图失败" : "前置准备失败"}：${cleanUpstreamText(message, secrets)}`, posted, {
+      cause: error,
+    });
   }
 }

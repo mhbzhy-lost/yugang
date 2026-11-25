@@ -374,3 +374,48 @@ test("TOOL.md 字段表与 fish.config.example 同步登记 drawRemote", () => {
   assert.ok(result.ok, `fish.config.example 的 drawRemote 不合法：${JSON.stringify(result)}`);
   assert.deepEqual(result.problems ?? [], []);
 });
+
+test("config set drawRemote：嵌套凭据对象与更深的点路径都被拒绝，fish.config.json 逐字节不变", async () => {
+  writeConfig({
+    memeCooldownMinutes: 8,
+    drawRemote: { enabled: true, provider: "gpt", models: { ...DEFAULT_MODELS } },
+  });
+  const tool = makeConfigTool();
+  const before = readFileSync(CONFIG_PATH);
+
+  // 两层点路径写入「凭据对象」：模型把值写成 JSON 字符串或原生对象都一样，凭据红线整块拒绝
+  for (const value of [JSON.stringify({ apiKey: "sk-x" }), { apiKey: "sk-x" }]) {
+    assert.match(
+      await setRejection(tool, "drawRemote.models.gemini", value),
+      /^drawRemote\.models\.gemini 的值不合法：drawRemote\.models\.gemini\.apiKey 不得写入 fish\.config\.json，凭据放 config\/auth\.json$/,
+    );
+    assert.ok(readFileSync(CONFIG_PATH).equals(before), "拒绝后文件逐字节不变");
+    assert.equal(existsSync(`${CONFIG_PATH}.tmp`), false, "没有残留 tmp");
+  }
+  // models 整块塞进带凭据键的对象：同样被凭据红线拦下
+  assert.match(
+    await setRejection(tool, "drawRemote.models", JSON.stringify({ gemini: { access: "ya29.leaked" } })),
+    /drawRemote\.models\.gemini\.access 不得写入 fish\.config\.json/,
+  );
+  // 三层点路径直指凭据键：目标父级现在是模型名字符串 → 父级不是对象，拒绝且不建中间对象
+  for (const [field, value] of [
+    ["drawRemote.models.gemini.apiKey", "sk-x"],
+    ["drawRemote.models.gpt.refresh", "1//refresh-token"],
+    ["drawRemote.models.gpt", JSON.stringify({ token: "x" })],
+  ] as const) {
+    const rejected = await setRejection(tool, field, value);
+    assert.match(rejected, /^drawRemote\.models\./);
+    assert.match(rejected, /父级不是对象|不得写入 fish\.config\.json/);
+    assert.ok(readFileSync(CONFIG_PATH).equals(before), `${field}：拒绝后文件逐字节不变`);
+    assert.equal(existsSync(`${CONFIG_PATH}.tmp`), false);
+  }
+  // 生效值也没被动过
+  assert.equal(loadFishConfig().config.drawRemote.models.gemini, DEFAULT_MODELS.gemini);
+  assert.equal(loadFishConfig().config.drawRemote.provider, "gpt");
+
+  // 文件里还没有 drawRemote（首次建档前）：三层点路径要在内存里现搭中间对象，凭据键照样拦住，不建档
+  rmSync(CONFIG_PATH, { force: true });
+  assert.match(await setRejection(tool, "drawRemote.models.gemini.apiKey", "sk-x"), /drawRemote\.models\.gemini\.apiKey 不得写入 fish\.config\.json/);
+  assert.equal(existsSync(CONFIG_PATH), false, "被拒绝的 set 不得凭空建档");
+  assert.equal(existsSync(`${CONFIG_PATH}.tmp`), false);
+});

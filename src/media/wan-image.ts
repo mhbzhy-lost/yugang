@@ -1,7 +1,14 @@
-/** 百炼 Token Plan Wan Image 原生多模态生图客户端。 */
+/**
+ * 百炼 Token Plan Wan Image 原生多模态生图客户端。
+ *
+ * 下载回来的字节按真实魔数认图片：落盘后缀跟魔数走（不写死 .png），不是图片的正文（网关 200 + HTML 错误页、
+ * 通道不认的 bmp/tiff/heic）直接报 wan_image_not_image，不当成图写进 gen/。
+ */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { extensionOf } from "./gpt-image.ts";
+import { sniffImageMagic } from "./image-ops.ts";
 import { createProxyFetch } from "./proxy-fetch.ts";
 
 export interface WanImageRequest {
@@ -75,11 +82,15 @@ export async function generateWanImage(request: WanImageRequest): Promise<string
       // 取消后不落盘：逐张复核，第一张之前的 gen/ 目录也不建
       signal.throwIfAborted();
       if (bytes.length < 1024) throw new Error("wan_image_too_small");
+      // 按真实字节认图片（Spec §3.3.7）：只收 extensionOf 认得的 png/jpg/gif/webp；
+      // 没有图片魔数（HTML 错误页等）或需要转码的格式（bmp/tiff/heic，convert 标记）都拒落盘
+      const kind = sniffImageMagic(bytes.subarray(0, 16));
+      if (!kind || kind.convert) throw new Error("wan_image_not_image");
       if (dir === undefined) {
         dir = join(request.mediaRoot, "gen");
         mkdirSync(dir, { recursive: true });
       }
-      const file = `${Date.now()}-${randomUUID()}.png`;
+      const file = `${Date.now()}-${randomUUID()}.${extensionOf(bytes)}`;
       writeFileSync(join(dir, file), bytes, { flag: "wx" });
       files.push(file);
     }

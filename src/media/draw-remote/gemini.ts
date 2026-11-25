@@ -108,10 +108,8 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   const fail = (message: string, submitted: boolean, cause?: unknown): DrawRemoteError =>
     new DrawRemoteError(GEMINI, "failed", message, submitted, cause === undefined ? undefined : { cause });
   const unconfigured = (message: string): DrawRemoteError => new DrawRemoteError(GEMINI, "unconfigured", message, false);
-  const noCredential = () =>
-    unconfigured(
-      `draw_remote 未配置：auth.json（${request.authPath}）里没有「${request.provider}」可用的 OAuth 凭据（需 access + refresh），请先 npm run login -- google-antigravity`,
-    );
+  // 错误文案会经工具回执原样到模型：只点名缺的是哪个来源，不带本机绝对路径与运维命令
+  const noCredential = () => unconfigured(`draw_remote 未配置：auth.json 缺少「${request.provider}」的 OAuth 凭据`);
 
   let credential = asOAuth(await store.read(request.provider));
   if (!credential) throw noCredential();
@@ -160,7 +158,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
     }
     if (!projectId) {
       throw unconfigured(
-        `draw_remote 未配置：auth.json（${request.authPath}）的「${request.provider}」凭据没有 projectId，loadCodeAssist 兜底也没查到${reason ? `（${reason}）` : ""}；请重新 npm run login -- google-antigravity`,
+        `draw_remote 未配置：auth.json 的「${request.provider}」凭据缺少 projectId（loadCodeAssist 兜底未查到${reason ? `：${reason}` : ""}）`,
       );
     }
   }

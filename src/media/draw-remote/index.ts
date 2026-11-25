@@ -95,22 +95,14 @@ function readProviderConfig(modelsPath: string, providerId: string, provider: Dr
     file = JSON.parse(readFileSync(modelsPath, "utf8"));
   } catch {
     // 解析错误不回显：JSON.parse 的报错会带一段原文，models.json 的内容不经错误文案出境
-    throw new DrawRemoteError(
-      provider,
-      "unconfigured",
-      `draw_remote 未配置：读不出 models.json（${modelsPath}），请确认文件存在且是合法 JSON`,
-      false,
-    );
+    throw new DrawRemoteError(provider, "unconfigured", "draw_remote 未配置：models.json 无法读取或格式非法", false);
   }
   const config =
     file && typeof file === "object" && !Array.isArray(file) ? (file as Partial<ModelsFile>).providers?.[providerId] : undefined;
   if (!config || typeof config !== "object") {
-    throw new DrawRemoteError(
-      provider,
-      "unconfigured",
-      `draw_remote 未配置：models.json（${modelsPath}）里没有 provider「${providerId}」（${provider} 通道要用），请补上或请主人切换 drawRemote.provider`,
-      false,
-    );
+    // 错误文案会经工具回执原样到模型：只点名缺的是哪个来源（models.json 的 provider / auth.json 的凭据），
+    // 不带本机绝对路径与运维命令
+    throw new DrawRemoteError(provider, "unconfigured", `draw_remote 未配置：models.json 缺少 provider「${providerId}」（${provider} 通道要用）`, false);
   }
   return config;
 }
