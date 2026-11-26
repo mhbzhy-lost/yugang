@@ -6,7 +6,7 @@
  *
  * 顺序有意如此——越便宜的检查越靠前，且全部在 onSubmitted 之前：
  *   1. prompt（去首尾空白后非空；四通道同一个上限 ≤ 4000 字）
- *   2. 通道能力（参考图：qwen 最多 3 张、其余最多 5 张；wan / qwen / gemini 不收透明背景）
+ *   2. 通道能力（参考图：qwen 最多 3 张、其余最多 5 张）
  *   3. models.json 里有没有这条通道的 provider
  *   4. 通道内部：读 auth.json 凭据、前置 OAuth 刷新、projectId 兜底——缺了同样在提交前报 unconfigured
  * 以上任何一步失败都不会触发 onSubmitted，也不会发出任何 HTTP 请求；修正后同一个请求可直接重试。
@@ -70,14 +70,6 @@ export async function runDrawRemote(request: DrawRemoteRunRequest): Promise<Draw
       false,
     );
   }
-  if (provider !== "gpt" && request.background === "transparent") {
-    throw new DrawRemoteError(
-      provider,
-      "no_transparent",
-      `${provider} 通道不支持透明背景（background=transparent），请改为 auto / opaque 或不传`,
-      false,
-    );
-  }
 
   const providerId = DRAW_REMOTE_PROVIDER_IDS[provider];
   const config = readProviderConfig(request.modelsPath, providerId, provider);
@@ -86,7 +78,6 @@ export async function runDrawRemote(request: DrawRemoteRunRequest): Promise<Draw
     prompt,
     ...(images.length > 0 ? { images } : {}),
     ...(request.aspectRatio !== undefined ? { aspectRatio: request.aspectRatio } : {}),
-    ...(request.background !== undefined ? { background: request.background } : {}),
     mediaRoot: request.mediaRoot,
     authPath: request.credentialsPath ?? join(dirname(request.modelsPath), "auth.json"),
     providerId,

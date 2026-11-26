@@ -15,7 +15,6 @@
 
 export type DrawRemoteProviderId = "gpt" | "wan" | "qwen" | "gemini";
 export type DrawRemoteAspectRatio = "1:1" | "3:4" | "4:3" | "9:16" | "16:9";
-export type DrawRemoteBackground = "auto" | "transparent" | "opaque";
 
 /** 参考图：MIME 由上层按真实字节魔数核实过，bytes 是原始文件内容（只在内存里过一遍）。 */
 export interface DrawRemoteReferenceImage {
@@ -31,8 +30,6 @@ export interface DrawRemoteRunRequest {
   images?: readonly DrawRemoteReferenceImage[];
   /** 画面比例；gpt 后端没有这个字段，安全忽略。 */
   aspectRatio?: DrawRemoteAspectRatio;
-  /** wan / qwen / gemini 不支持 transparent，发请求前拒绝。 */
-  background?: DrawRemoteBackground;
   /** 媒体根目录；成品落 `<mediaRoot>/gen/`。 */
   mediaRoot: string;
   /** config/models.json：每次调用现读该通道 provider 的 baseUrl / userAgent / proxy。 */
@@ -71,8 +68,6 @@ export type DrawRemoteErrorCode =
   | "prompt"
   /** 参考图张数超出该通道上限（qwen 最多 3 张，其余最多 5 张）。 */
   | "bad_ref"
-  /** 通道不支持透明背景（wan / qwen / gemini）。 */
-  | "no_transparent"
   /** 上游请求失败：是否已提交看 submitted。 */
   | "failed";
 
@@ -106,7 +101,6 @@ export interface DrawRemoteChannelRequest {
   prompt: string;
   images?: readonly DrawRemoteReferenceImage[];
   aspectRatio?: DrawRemoteAspectRatio;
-  background?: DrawRemoteBackground;
   mediaRoot: string;
   /** 凭据文件路径（config/auth.json）。 */
   authPath: string;

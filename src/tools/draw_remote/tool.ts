@@ -22,7 +22,6 @@ import {
   MAX_REFERENCE_IMAGES_BY_PROVIDER,
   runDrawRemote,
   type DrawRemoteAspectRatio,
-  type DrawRemoteBackground,
   type DrawRemoteReferenceImage,
 } from "../../media/draw-remote/index.ts";
 import { readBoundedFile, sniffImageMagic } from "../../media/image-ops.ts";
@@ -36,7 +35,6 @@ interface DrawRemoteArgs {
   prompt: string;
   images?: string[];
   aspect_ratio?: DrawRemoteAspectRatio;
-  background?: DrawRemoteBackground;
 }
 
 type RoundState = { round: unknown; pending: boolean; submitted: boolean; used: boolean };
@@ -89,7 +87,6 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
     uncertain: messages["draw_remote_uncertain"] ?? "draw_remote_uncertain",
     prompt: messages["draw_remote_prompt"] ?? "draw_remote_prompt",
     bad_ref: messages["draw_remote_bad_ref"] ?? "draw_remote_bad_ref",
-    no_transparent: messages["draw_remote_no_transparent"] ?? "draw_remote_no_transparent",
     unconfigured: messages["draw_remote_unconfigured"] ?? "draw_remote_unconfigured",
     done: messages["draw_remote_done"] ?? "draw_remote_done",
     done_fallback: messages["draw_remote_done_fallback"] ?? "draw_remote_done_fallback",
@@ -171,7 +168,6 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
           prompt,
           ...(images.length > 0 ? { images } : {}),
           ...(args.aspect_ratio !== undefined ? { aspectRatio: args.aspect_ratio } : {}),
-          ...(args.background !== undefined ? { background: args.background } : {}),
           mediaRoot: deps.mediaRoot,
           // 每次调用现读 models.json（及同目录的 auth.json）：主人改配置、换凭据零重启生效
           modelsPath: deps.modelsPath ?? MODELS_CONFIG_PATH,
@@ -243,8 +239,6 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
             case "bad_ref":
               // 适配器层的张数防御（与 prepareReferences 同一张上限表，经工具调用正常走不到）：按整批张数点名
               throw badRef(`${images.length} 张`);
-            case "no_transparent":
-              throw new Error(say("no_transparent"));
             case "failed":
               throw new Error(say(error.submitted ? "failed_uncertain" : "failed", { reason: detail }));
           }

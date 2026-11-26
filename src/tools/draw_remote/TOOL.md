@@ -22,8 +22,7 @@ description: 远程在线画图/改图（GPT Image / Wan / Qwen / Gemini，通�
 - `images`：参考图路径，传了就是改图 / 图生图。填消息里 `[图片#N inbound/…]` 标签带的路径
   （带不带方括号都行），或你自己画过的 `gen/…`；最多 5 张（qwen 通道最多 3 张），单张 10MB 以内，
   只认 png/jpg/webp（gpt / qwen 通道额外认 gif；gemini 通道参考图合计 15MB 以内）；
-- `aspect_ratio`：`1:1` / `3:4` / `4:3` / `9:16` / `16:9`；qwen / wan / gemini 通道生效，gpt 通道忽略（靠 prompt 写构图）；
-- `background`：要透明底传 `transparent`（只有 gpt 通道支持，其它通道会回执拒绝）；平时不传。
+- `aspect_ratio`：`1:1` / `3:4` / `4:3` / `9:16` / `16:9`；qwen / wan / gemini 通道生效，gpt 通道忽略（靠 prompt 写构图）。
 
 ## 硬规矩
 

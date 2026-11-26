@@ -280,10 +280,11 @@ test("成功后经 outbox 机械直发：幂等键、引用锚点、回执含 ge
   assert.equal(fixture.calls[0]?.images, undefined);
 });
 
-test("background 透传给适配器；触发消息没有锚点时 payload 不带 quoteId、quoteForce=false", async () => {
+test("触发消息没有锚点时 payload 不带 quoteId、quoteForce=false；已移除的 background 不再透传给适配器", async () => {
   const fixture = setup({ triggerOf: () => ({ messageId: undefined, mentionsBot: false }) });
+  // background 已从 Schema 移除：模型若照旧带上，工具层也不再透传给适配器
   await fixture.tool.execute({ prompt: "抠个素材", background: "transparent" } as never, fixture.api(5), ctx());
-  assert.equal(fixture.calls[0]?.background, "transparent");
+  assert.ok(!("background" in (fixture.calls[0] ?? {})));
   assert.equal(fixture.outbox.length, 1);
   assert.equal(fixture.outbox[0]?.quoteId, undefined);
   assert.equal(fixture.outbox[0]?.quoteForce, false);
@@ -375,14 +376,6 @@ test("submitted=false 的失败不锁轮：修正后同轮可重试成功", asyn
       args: { images: ["inbound/a.png", "inbound/b.png", "inbound/p.jpg"] },
       error: new DrawRemoteError("qwen", "bad_ref", "qwen 通道最多接受 3 张参考图", false),
       rejected: /用不了.*最多 3 张/,
-      longWorks: 0,
-    },
-    {
-      name: "no_transparent（qwen 要透明底）",
-      provider: "qwen",
-      args: { background: "transparent" },
-      error: new DrawRemoteError("qwen", "no_transparent", "qwen 通道不支持透明背景（background=transparent）", false),
-      rejected: /不支持透明背景/,
       longWorks: 0,
     },
     {
@@ -690,14 +683,14 @@ test("文案契约：done 带通道名与路径并劝阻 say_media，failed 引�
   assert.match(messages["draw_remote_bad_ref"], /\{\{ref\}\}.*用不了/);
   assert.match(messages["draw_remote_bad_ref"], /最多 5 张（qwen 通道最多 3 张）/);
   assert.equal(messages["draw_remote_no_ref"], undefined);
-  // 参数 Schema：prompt 必填（四通道同一个 4000 字上限），images 最多 5 张（qwen 通道 3 张在执行期拦），比例与背景是枚举
+  // 参数 Schema：prompt 必填（四通道同一个 4000 字上限），images 最多 5 张（qwen 通道 3 张在执行期拦），比例是枚举；
+  // 只暴露 prompt / images / aspect_ratio 三个参数（background 与透明底分支已移除）
   const properties = manifest.parameters.properties as Record<string, Record<string, unknown>>;
   assert.deepEqual(manifest.parameters.required, ["prompt"]);
   assert.equal(properties["images"]?.["maxItems"], 5);
   assert.deepEqual(properties["aspect_ratio"]?.["enum"], ["1:1", "3:4", "4:3", "9:16", "16:9"]);
-  assert.deepEqual(properties["background"]?.["enum"], ["auto", "transparent", "opaque"]);
-  assert.deepEqual(Object.keys(properties).sort(), ["aspect_ratio", "background", "images", "prompt"]);
-  for (const name of ["prompt", "images", "aspect_ratio", "background"]) {
+  assert.deepEqual(Object.keys(properties).sort(), ["aspect_ratio", "images", "prompt"]);
+  for (const name of ["prompt", "images", "aspect_ratio"]) {
     assert.doesNotMatch(String(properties[name]?.["description"]), /800 字/, `${name}：wan 的 800 字上限已统一成 4000 字`);
   }
   assert.match(String(properties["prompt"]?.["description"]), /4000 字/);
@@ -709,7 +702,7 @@ test("文案契约：done 带通道名与路径并劝阻 say_media，failed 引�
   assert.match(manifest.guide, /qwen \/ wan \/ gemini 通道生效，gpt 通道忽略/);
   assert.match(manifest.guide, /最多 5 张（qwen 通道最多 3 张）/);
   assert.match(manifest.guide, /gpt \/ qwen 通道额外认 gif/);
-  assert.doesNotMatch(manifest.guide, /800 字|不支持参考图|wan 不收参考图/);
+  assert.doesNotMatch(manifest.guide, /800 字|不支持参考图|wan 不收参考图|background/);
   assert.match(manifest.guide, /drawRemote\.provider/);
   assert.match(manifest.guide, /say_media/);
 });

@@ -6,7 +6,6 @@
   "draw_remote_uncertain": "上次提交状态未确认，为避免重复出图本轮不能重试",
   "draw_remote_prompt": "画面描述不合适：{{reason}}",
   "draw_remote_bad_ref": "参考图 {{ref}} 用不了：只能是媒体目录里的图片文件（png/jpg/webp/gif，部分通道不认 gif），单张 10MB 以内、最多 5 张（qwen 通道最多 3 张），不能是目录外的路径或链接",
-  "draw_remote_no_transparent": "当前画图通道不支持透明背景：把 background 改成 auto / opaque，或者不传",
   "draw_remote_unconfigured": "远程画图还没配置好：{{reason}}",
   "draw_remote_done": "{{provider}} 画好了：{{file}} — 已经自动发出去了，不用再调 say_media",
   "draw_remote_done_fallback": "{{provider}} 画好了：{{file}} — 但自动发送没成功，用 say_media 把它发出去",

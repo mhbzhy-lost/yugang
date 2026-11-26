@@ -34,11 +34,8 @@ export async function runGptChannel(request: DrawRemoteChannelRequest): Promise<
       authPath: request.authPath,
       provider: request.providerId,
       prompt: request.prompt,
-      params: {
-        model: request.model,
-        // background 原生透传（transparent 可用）；没传就不替后端编造缺省值
-        ...(request.background !== undefined ? { background: request.background } : {}),
-      },
+      // params 只传 model：不替后端编造 size / quality / background 等字段的缺省值
+      params: { model: request.model },
       ...(dataUrls.length > 0 ? { images: dataUrls } : {}),
       mediaRoot: request.mediaRoot,
       timeoutMs: request.timeoutMs ?? DEFAULT_TIMEOUT_MS,

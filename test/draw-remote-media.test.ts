@@ -886,7 +886,7 @@ function codexWorkspace(t: TestContext): Workspace {
   return ws;
 }
 
-test("gpt：读 openai-codex 配置与 OAuth 凭据，透传 model/background/images 走 /edits，忽略 aspectRatio，onSubmitted 在生成 POST 前触发", async (t) => {
+test("gpt：读 openai-codex 配置与 OAuth 凭据，透传 model/images 走 /edits，忽略 aspectRatio，onSubmitted 在生成 POST 前触发", async (t) => {
   const ws = codexWorkspace(t);
   const submitted = submitTracker();
   const EDIT = "https://chatgpt.com/backend-api/codex/images/edits";
@@ -905,7 +905,6 @@ test("gpt：读 openai-codex 配置与 OAuth 凭据，透传 model/background/im
       model: "gpt-image-2.6-flare",
       images: [{ mimeType: "image/png", bytes: PNG }],
       aspectRatio: "16:9",
-      background: "transparent",
       onSubmitted: submitted.hook,
       fetchImpl: fetch.impl,
     }),
@@ -922,24 +921,17 @@ test("gpt：读 openai-codex 配置与 OAuth 凭据，透传 model/background/im
   const body = bodyOf(fetch.calls[0]?.init);
   assert.equal(body["model"], "gpt-image-2.6-flare");
   assert.equal(body["prompt"], "a cat sitting on a sofa");
-  assert.equal(body["background"], "transparent");
   assert.deepEqual(body["images"], [{ image_url: `data:image/png;base64,${PNG.toString("base64")}` }]);
-  for (const key of ["aspectRatio", "aspect_ratio", "size", "quality", "n", "output_format"]) {
+  for (const key of ["aspectRatio", "aspect_ratio", "background", "size", "quality", "n", "output_format"]) {
     assert.ok(!(key in body), `不得替后端编造字段：${key}`);
   }
   assert.equal(submitted.count(), 1);
 
-  // 纯文生图走 generations；background 不传就不编造，传了原样透传
-  const opaque = await runDrawRemote(
-    runRequest(ws, { provider: "gpt", model: "gpt-image-2.6-flare", background: "opaque", fetchImpl: fetch.impl }),
-  );
+  // 纯文生图走 generations；background 参数已移除，请求体只剩 model + prompt
+  const plain = await runDrawRemote(runRequest(ws, { provider: "gpt", model: "gpt-image-2.6-flare", fetchImpl: fetch.impl }));
   assert.equal(fetch.calls[1]?.url, GEN);
-  assert.equal(bodyOf(fetch.calls[1]?.init)["background"], "opaque");
-  const auto = await runDrawRemote(runRequest(ws, { provider: "gpt", model: "gpt-image-2.6-flare", background: "auto", fetchImpl: fetch.impl }));
-  assert.equal(bodyOf(fetch.calls[2]?.init)["background"], "auto");
-  await runDrawRemote(runRequest(ws, { provider: "gpt", model: "gpt-image-2.6-flare", fetchImpl: fetch.impl }));
-  assert.ok(!("background" in bodyOf(fetch.calls[3]?.init)));
-  assert.equal(auto.files.length, 1);
+  assert.deepEqual(bodyOf(fetch.calls[1]?.init), { model: "gpt-image-2.6-flare", prompt: "a cat sitting on a sofa" });
+  assert.equal(plain.files.length, 1);
 });
 
 test("gpt：缺 auth.json 凭据在 onSubmitted 前报 unconfigured；HTTP 400/403/429 标 submitted=false，500 标 submitted=true", async (t) => {
@@ -1103,7 +1095,7 @@ test("wan：下载字节按真实魔数校验并决定落盘后缀——JPEG 存
   assert.deepEqual(ws.files(), [String(result.files[0])], "非图片正文零落盘，gen/ 里只有前面那张 JPEG");
 });
 
-test("能力预检在 onSubmitted 前拒绝——prompt 超 4000 字、参考图超通道张数上限（qwen > 3 张，其余 > 5 张）、非 gpt 通道的 transparent；均不发请求", async (t) => {
+test("能力预检在 onSubmitted 前拒绝——prompt 超 4000 字、参考图超通道张数上限（qwen > 3 张，其余 > 5 张）；均不发请求", async (t) => {
   const ws = workspace();
   t.after(() => ws.cleanup());
   ws.models({ [QWEN]: { baseUrl: "https://dashscope.test/compatible-mode/v1" }, [AG]: AG_PROVIDER });
@@ -1122,9 +1114,6 @@ test("能力预检在 onSubmitted 前拒绝——prompt 超 4000 字、参考图
     [{ provider: "qwen", images: four }, "bad_ref"],
     [{ provider: "wan", images: six }, "bad_ref"],
     [{ provider: "gpt", images: six }, "bad_ref"],
-    [{ provider: "wan", background: "transparent" }, "no_transparent"],
-    [{ provider: "qwen", background: "transparent" }, "no_transparent"],
-    [{ provider: "gemini", background: "transparent" }, "no_transparent"],
     [{ provider: "gemini", prompt: "猫".repeat(4001) }, "prompt"],
   ];
   for (const [overrides, code] of cases) {
@@ -1137,14 +1126,14 @@ test("能力预检在 onSubmitted 前拒绝——prompt 超 4000 字、参考图
   assert.equal(fetch.calls.length, 0);
   assert.equal(submitted.count(), 0);
 
-  // wan / qwen 不支持透明，但 opaque/auto 照常放行；4000 字整（旧版 wan 限 800 字）与张数上限内的参考图同样放行
+  // 4000 字整（旧版 wan 限 800 字）与张数上限内的参考图同样放行
   const ok = fakeFetch((url) => (url === WAN_GENERATION ? jsonResponse({ output: { choices: [{ message: { content: [{ image: "https://img.test/a.png" }] } }] } }) : bytesResponse(PNG, "image/png")));
   for (const [provider, images] of [
     ["wan", six.slice(0, 5)],
     ["qwen", four.slice(0, 3)],
   ] as const) {
     const result = await runDrawRemote(
-      runRequest(ws, { provider, prompt: "猫".repeat(4000), images, background: "opaque", onSubmitted: submitted.hook, fetchImpl: ok.impl }),
+      runRequest(ws, { provider, prompt: "猫".repeat(4000), images, onSubmitted: submitted.hook, fetchImpl: ok.impl }),
     );
     assert.equal(result.files.length, 1, provider);
   }
@@ -1285,7 +1274,7 @@ test("wan：参考图改图同样走原生生图接口（data URI 在 { text } �
   assert.deepEqual(body["parameters"], { watermark: false });
 });
 
-test("qwen：参考图超 3 张或 background=transparent 在 onSubmitted 前拒绝（submitted=false），不发请求", async (t) => {
+test("qwen：参考图超 3 张在 onSubmitted 前拒绝（submitted=false），不发请求", async (t) => {
   const ws = qwenWorkspace(t);
   const submitted = submitTracker();
   const silent = fakeFetch(() => {
@@ -1305,10 +1294,8 @@ test("qwen：参考图超 3 张或 background=transparent 在 onSubmitted 前拒
     );
   const four = await rejected({ images: refs });
   assert.ok(expectDrawRemoteError("qwen", "bad_ref", false, ["qwen", "3 张", "4 张"])(four));
-  const transparent = await rejected({ background: "transparent" });
-  assert.ok(expectDrawRemoteError("qwen", "no_transparent", false, ["qwen 通道", "transparent"])(transparent));
   assert.equal(silent.calls.length, 0);
-  assert.equal(submitted.count(), 1, "两次拒绝都没有触发 onSubmitted");
+  assert.equal(submitted.count(), 1, "拒绝没有触发 onSubmitted");
   assert.deepEqual(ws.files(), [String(fine.files[0])]);
 });
 
