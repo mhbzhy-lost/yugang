@@ -4,11 +4,11 @@
     "properties": {
       "prompt": {
         "type": "string",
-        "description": "画面描述。一律英文 danbooru tag/短语、逗号分隔（先查词表拿准词，不要写中文）；负向词表是内置预设，不要在这里写「不要出现什么」。用户明确要「自定义画图」时传空字符串，内容交给角色词表与机械前缀。非人物题材（风景/动物/物品）建议 fast，姿态线会套人体骨架"
+        "description": "画面描述。一律英文 danbooru tag/短语、逗号分隔（先查词表拿准词，不要写中文）；负向词表是内置预设，不要在这里写「不要出现什么」。用户明确要「自定义画图」时传空字符串，内容交给角色词表与机械前缀。非人物题材（风景/动物/物品）建议传 fast=true"
       },
       "style": {
         "type": "string",
-        "description": "风格 LoRA 键：用户要某种画风时，先用 tags 查（不传关键词拿总表），把风格条目的 key 填这里；挂在全局、不注入任何 tag。不填不挂。仅 fast/ref 直出生效，姿态线忽略"
+        "description": "风格 LoRA 键：用户要某种画风时，先用 tags 查（不传关键词拿总表），把风格条目的 key 填这里；挂在全局、不注入任何 tag。不填不挂。部分模式或底模不支持画风，会以回执告知"
       },
       "ratio": {
         "type": "string",
@@ -60,7 +60,7 @@
       },
       "fast": {
         "type": "boolean",
-        "description": "单人快速模式，默认 false。传 true 时走单人 V8 直出快速模式：初采样 28 步 + 质感 pass 8 步 + 净超分 1.2x，明显更快，细节少于单人姿态线；不能与 hd、双人 characters 同时传。直出仅 fast 与 ref 两个入口，其余从零画默认姿态线"
+        "description": "单人快速模式，默认 false。传 true 时走快速生成管线，速度更快、细节略少；不能与 hd、双人 characters 同时传。若当前底模不支持快速模式会以回执告知"
       },
       "framing": {
         "type": "string",
@@ -77,24 +77,6 @@
           "apart"
         ],
         "description": "仅双人可用。默认 together：两人靠近，适合牵手、拥抱、依偎。只有用户明确要求两人相隔且无身体接触动作时选 apart；不得把远景误解为两人彼此远离"
-      },
-      "placement_x": {
-        "type": "string",
-        "enum": [
-          "left",
-          "center",
-          "right"
-        ],
-        "description": "仅单人从零画可用，默认 center。用户明确要求人物靠左或靠右时选 left/right；fast、ref、双人都不能用"
-      },
-      "placement_y": {
-        "type": "string",
-        "enum": [
-          "up",
-          "middle",
-          "down"
-        ],
-        "description": "仅单人从零画可用，默认 middle。构图重心：up=人物偏上+地面前景多，down=人物偏下+天空留白多；不是俯仰视角。与 placement_x 可组合"
       }
     },
     "required": [

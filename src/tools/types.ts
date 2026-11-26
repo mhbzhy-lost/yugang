@@ -188,6 +188,14 @@ export interface ToolPackageDeps {
   gifAutoCollect?: () => boolean;
   /** 本地画图总开关（fish.config.json 的 drawEnabled，热加载，资源闸）：false 时 draw 入口即拒、提交前再复核；缺省视为开。 */
   drawEnabled?: () => boolean;
+  /** 本地画图后端标识（fish.config.json 的 drawBackend，热加载）；缺省为 DEFAULT_DRAW_BACKEND。 */
+  drawBackend?: () => string;
+  /** 测试注入用：覆盖内置 draw 后端注册表。 */
+  drawBackends?: ReadonlyMap<string, import("./draw/backends/types.ts").DrawBackend>;
+  /** 测试注入用：替代共享执行引擎 execGraph。 */
+  drawExec?: typeof import("./draw/engine.ts").execGraph;
+  /** 测试注入用：替代参考图上传 uploadRefImage。 */
+  drawUploadRef?: typeof import("./draw/engine.ts").uploadRefImage;
   /** fish.reminder 任务定义（宿主装配时注入）：remind 工具 add 时建任务用；缺省不注册该工具。 */
   reminderTask?: AnyTask;
   /** 主模型直读图的宿主事实（vision==main 且白名单且未 /关看图）：look 与 meme_import 消费；缺省 = fallback。 */

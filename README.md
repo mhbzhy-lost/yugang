@@ -190,7 +190,7 @@ src/
     manifest.ts     TOOL.md 严格解析器（双元数据块 + 严格 JSON Schema + 动态词表）
     loader.ts       工具包发现注册：manifest ↔ factory 一一对应，eager/deferred 在这里定
     catalog.ts      tool_catalog section 渲染（只列 name + 顶部摘要）
-    <name>/         工具包，一包一目录：TOOL.md + tool.ts（say_* 是唯一出口，也住这里）
+    <name>/         工具包，一包一目录：TOOL.md + tool.ts（say_* 是唯一出口，也住这里；draw 内含共享 engine.ts 与 backends/<id>/ 插件后端）
   media/
     meme-store.ts   表情包库（索引、md5 去重、入库）
   qq/
@@ -294,7 +294,7 @@ npm run token             # 生成 OneBot token，同步到 .env 和 NapCat 配�
 | `GROUPS` | 允许说话的群号，逗号分隔 |
 
 其余行为参数不在 `.env` 里，在 `fish.config.json`（模板 `fish.config.example`，mtime 热加载）：
-`ambientMinIntervalSeconds` / `watchAmbientChance` / `thinkingLevel` / `compact` / `memeCooldownMinutes` /
+`engage` / `thinking` / `compact` / `memeCooldownMinutes` / `drawEnabled` / `drawBackend` / `drawRemote` /
 `toolTimeoutSeconds` / `voices` / `video` / `news`。**旧的 `AMBIENT_CHANCE` / `COOLDOWN_MS` / `DAILY_QUOTA` / `QUIET_HOURS` / `KEYWORDS`
 已经下线，写进 `.env` 也不会生效**（旧 `AMBIENT_MIN_INTERVAL_SECONDS` / `WATCH_AMBIENT_CHANCE` 仍作为兜底，
 但请改 `fish.config.json`）。**建议第一次先设 `GROUPS` 只放一个测试群。**

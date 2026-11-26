@@ -27,12 +27,13 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
 
-`draw` 使用 **WSL 生产 ComfyUI**（`~/anima-prod`，2026-11-14 从 Windows 本机切过来，Windows 实例已删）的固定 V8 API 工作流
-（`src/tools/draw/workflow.json` 单人/直出 + `workflow-interaction-single.json` 单人交互 + `workflow-interaction.json` 双人交互；
-`workflow-rs.json` 已随 RS 死代码删除。启动时结构契约校验：代码 rewiring 的角色节点缺位即拒启；不钉死 hash，模板迭代 = 改文件 + commit + deploy），
-通过 `COMFYUI_URL` 指向 macmini 的 `127.0.0.1:18190` SSH 隧道；不接受模型传入工作流、节点、模型名或地址。
+`draw` 采用 **「统一 danbooru 工具面（`src/tools/draw/tool.ts`）+ 共享 ComfyUI 执行引擎（`src/tools/draw/engine.ts`）+ 可插拔后端（`src/tools/draw/backends/*`）」** 三层架构，连往 **WSL 生产 ComfyUI**（`~/anima-prod`，2026-11-14 从 Windows 本机切过来，Windows 实例已删）：
+- 零 IO 标识表 `src/tools/draw/backends/ids.ts` 供 `src/fish-config.ts` 纯导入；注册表 `src/tools/draw/backends/registry.ts` 持有所有后端，**`createDrawTool` 启动时调 `validateAllDrawBackends()`，任一后端关键节点缺位即拒启**（`src/tools/draw/comfy.ts` 保持兼容门面导出，`qwen_draw` 共用同一 `runExclusive` 单飞锁）。
+- 内置默认后端 `anima3.8b`（`src/tools/draw/backends/anima3.8b/`）持有原 V8 API 工作流（`workflow.json` 单人/直出 + `workflow-interaction-single.json` 单人交互 + `workflow-interaction.json` 双人交互 + `interaction-presets.json`；`workflow-rs.json` 已随 RS 死代码删除；不钉死 hash，模板迭代 = 改文件 + commit + deploy；删改 `src/tools/draw/` 源文件后容器部署须 `docker compose up -d --force-recreate fish`）。
+- **本地画图后端热配置 `fish.config.json` 的 `drawBackend`**（字符串、缺省 `"anima3.8b"`、`effect: "hot"`）：每次调用现读、不重启切换底模；工具层按后端 `capabilities` 与 `ratioSizes` 严格全序预检，不做隐式降级（同进程热切多套管线可能出现显存驻留/it/s 漂移，属 ComfyUI dynamic VRAM 特性，见下方排障规程）。
+- 通过 `COMFYUI_URL` 指向 macmini 的 `127.0.0.1:18190` SSH 隧道；不接受模型传入工作流、节点、模型名或地址。
 **画图总开关是 `fish.config.json` 的 `drawEnabled`（布尔、缺省 true、effect=hot，资源闸）**：关闭时 draw 入口即拒（`draw_disabled` 文案），
-且单/双人管线的 `onSubmitted` 回调在标记 `submitted` 前再读一次热值并拒绝，堵住 /queue 查询与 ref 预处理期间关闭开关的窗口；
+且 `onSubmitted` 回调在标记 `submitted` 与发 `onLongWork` 前再读一次热值并拒绝，堵住 /queue 查询与 ref 预处理期间关闭开关的窗口；
 回调拒绝经 catch 仍回明确关闭回执、不谎称已提交（`submitted` 保持 false，可重试）。已 accepted 的作业不取消、不重投，
 提交状态不明不可重 POST 的规则不变。`COMFYUI_URL` 仅保留连接地址语义，不再兼作停用手段；需要临时让出 GPU（如离线实验期）时原子热切换本键，不重启鱼。
 
@@ -70,9 +71,9 @@ Windows 输入上传限定 `yugang-ref-<uuid>.png`；计划任务 `Yugang-ComfyU
 ComfyUI 忙或队列状态不可用时不删除，不触碰其他 input。部署前须核对该任务与脚本已安装且可运行。
 提交状态不明的画图在当前轮禁止重试，避免网络超时造成重复任务。
 
-**角色与风格 LoRA 的唯一事实源是 `src/tools/characters.ts`**（2026-11-10 词表化）：它加载 `src/tools/tags/` 下的
-三份 JSON（`ai-girls.json` / `honkai3rd.json` / `styles.json`），draw 取 `loraBook(key)` / `styleBook(key)`
-（key → LoRA 文件名 + 机械注入串 / 表内权重），tags 取 `listCharacters()` / `findCharacter()` / `findSection()` 渲染词表。
+**角色与风格 LoRA 的唯一事实源是 `src/tools/characters.ts`**（2026-11-10 词表化，2026-11-27 扩展按底模族解析）：它加载 `src/tools/tags/` 下的
+三份 JSON（`ai-girls.json` / `honkai3rd.json` / `styles.json`），draw 取 `resolveCharacter(key, target)` / `resolveStyle(key, target)`
+（按 `backendId > loraFamily > legacy base` 优先级解析：同族如 Anima 变体共享，跨族角色自动降级为仅注入外观 tag、跨族画风明确拒绝），tags 取 `listCharacters()` / `findCharacter()` / `findSection()` 渲染词表（旧 `loraBook`/`styleBook` 签名兼容保留）。
 加角色或画风 = 只改对应 JSON，不许再写第二份常量或 preset。两者都经 `AnimaLoRARemapTagLoader` 做 28→52 层映射
 （`auto_remap` 开、`extend_to_new_layers` 关），链序是底模 → 风格（节点 88）→ 角色（节点 93），消费方
 （model 侧 7/42、clip 侧 4/5/42）统一改接末端节点；`hsr` 现在是 `styles.json` 里的普通条目

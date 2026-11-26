@@ -31,5 +31,10 @@
   "draw_composition": "framing 只认 normal 或 wide；spacing 只认 together 或 apart",
   "draw_composition_multi": "framing 和 spacing 只用于双人 characters；单人请在 prompt 描述构图",
   "draw_region_retired": "region 已停用；用 framing 选择远景，spacing 选择靠近或分开，不要传坐标",
-  "draw_preset_unknown": "没有这个交互预设：{{key}}。当前可用：sit-haystack（双人草垛并坐牵手）、single-haystack（单人草垛侧坐）；要写新姿态先由主人离线编排"
+  "draw_backend_unknown": "当前配置的本地画图后端不可用，请联系主人检查 drawBackend 配置",
+  "draw_mode_unsupported": "当前本地画图模型暂不支持{{mode}}模式，请调整参数后重试",
+  "draw_hd_unsupported": "当前本地画图模型暂不支持高清模式（hd），去掉 hd 后可重试",
+  "draw_style_mode_unsupported": "当前模式不支持全局画风（style），请去掉 style 或切换支持画风的模式（如 fast / ref）",
+  "draw_style_backend_unsupported": "当前本地画图模型没有「{{key}}」对应的画风 LoRA，请去掉 style 或在 prompt 中用英文画风词描述",
+  "draw_composition_unsupported": "当前本地画图模型暂不支持双人构图参数（framing / spacing），去掉后再试"
 }

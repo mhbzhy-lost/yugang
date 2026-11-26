@@ -1,4 +1,4 @@
-/** 固定 ComfyUI 工作流：出图经 outbox 机械直发（主人裁定 2026-11-13），模型不能提交节点图。 */
+/** 统一 danbooru 本地画图工具面：能力预检 + 词表解析 + 共享 ComfyUI 执行；出图经 outbox 机械直发。 */
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,19 +7,19 @@ import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-d
 import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { loraBook, styleBook } from "../characters.ts";
+import { resolveCharacter, resolveStyle } from "../characters.ts";
 import { normalizeInitViaWorker, usesSips } from "../../media/image-ops.ts";
 import { spawnCapture } from "../../media/spawn-capture.ts";
 import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
-import { runInteraction, runInteractionSingle, type InteractionPreset } from "./comfy.ts";
-
-const INTERACTION_PRESETS = JSON.parse(readFileSync(new URL("./interaction-presets.json", import.meta.url)).toString("utf8")) as Record<string, InteractionPreset>;
-import { ComfyBusy, ComfyExecutionFailed, runComfy, type ComfyDraw, type DrawStage, type MultiPart } from "./comfy.ts";
+import { ComfyBusy, ComfyExecutionFailed, execGraph, runExclusive, uploadRefImage, type DrawStage } from "./engine.ts";
+import { DEFAULT_DRAW_BACKEND } from "./backends/ids.ts";
+import { getDrawBackend, validateAllDrawBackends } from "./backends/registry.ts";
+import type { DrawLoraRef, DrawMode, DrawMultiPart, DrawRatio, DrawRoleInput } from "./backends/types.ts";
 
 interface DrawArgs {
   prompt: string;
   style?: string;
-  ratio?: keyof typeof RATIO_SIZES;
+  ratio?: string;
   hd?: boolean;
   fast?: boolean;
   ref?: string;
@@ -29,19 +29,24 @@ interface DrawArgs {
   spacing?: "together" | "apart";
 }
 
-const RATIO_SIZES = {
-  "1:1": [1056, 1056], "3:4": [912, 1216], "4:3": [1216, 912],
-  "2:3": [832, 1248], "3:2": [1248, 832], "9:16": [720, 1280], "16:9": [1280, 720],
-} as const;
 type RoundState = { round: unknown; pending: boolean; submitted: boolean; used: boolean };
 const rounds = new Map<string, RoundState>();
 const REF_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic", ".heif"]);
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
+const MODE_LABELS: Readonly<Record<DrawMode, string>> = {
+  single: "单人从零画",
+  fast: "快速",
+  ref: "改图",
+  multi: "双人同框",
+};
+
 /** 提交前二次复核发现画图已被热关闭：在 onSubmitted 回调里抛出，阻止真正 POST，且不置 submitted。 */
 class DrawDisabledError extends Error {}
 
 export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration {
+  if (!deps.drawBackends) validateAllDrawBackends();
+
   const root = resolve(deps.mediaRoot);
   const realRoot = (() => { try { return realpathSync(root); } catch { return root; } })();
   // 画图总开关（fish.config.json 的 drawEnabled，热加载，资源闸）：缺省视为开；每次现读，
@@ -72,13 +77,11 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
     callers: ["model"],
     parameters: manifestParameters<DrawArgs>(manifest),
     execute: async (args, api, context) => {
-      // 资源闸：关闭时尽早拒绝（在 snapshot / onLongWork / 任何校验之前），不碰 GPU 管线。
+      // 1. 入口总闸与基础参数校验（原序保持零回归）
       if (!enabled()) throw new Error(deps.prompts.messages["draw_disabled"] ?? "draw_disabled");
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
       const positive = typeof args.prompt === "string" ? args.prompt.trim() : "";
-      // 自定义画图模式（2026-11-10）：用户明确要时 prompt 可为空串，内容全部由角色词表/机械前缀承担；
-      // 只限长度，不退非空。
       if (typeof args.prompt !== "string" || positive.length > 1000) throw new Error(deps.prompts.messages["draw_prompt"] ?? "draw_prompt");
       if (!deps.comfyUrl) throw new Error(deps.prompts.messages["draw_off"] ?? "draw_off");
       if (args.hd !== undefined && typeof args.hd !== "boolean") throw new Error(deps.prompts.messages["draw_hd"] ?? "draw_hd");
@@ -89,65 +92,132 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       if (args.fast === true && (args.hd === true || args.characters !== undefined)) throw new Error(deps.prompts.messages["draw_fast_scope"] ?? "draw_fast_scope");
       if ((args.framing !== undefined && !["normal", "wide"].includes(args.framing)) || (args.spacing !== undefined && !["together", "apart"].includes(args.spacing))) throw new Error(deps.prompts.messages["draw_composition"] ?? "draw_composition");
       if (args.characters === undefined && (args.framing !== undefined || args.spacing !== undefined)) throw new Error(deps.prompts.messages["draw_composition_multi"] ?? "draw_composition_multi");
-      const ratio = args.ratio ?? "3:4";
-      if (typeof ratio !== "string" || !Object.hasOwn(RATIO_SIZES, ratio)) throw new Error(deps.prompts.messages["draw_ratio"] ?? "draw_ratio");
-      const [width, height] = RATIO_SIZES[ratio];
-      let lora: ComfyDraw["lora"];
-      if (args.character !== undefined) {
-        const book = loraBook(args.character);
-        if (!book) throw new Error(renderTemplate(deps.prompts.messages["draw_character"] ?? "{{key}}", { key: args.character }));
-        lora = { file: book.file, weight: book.weight, inject: book.inject };
-      }
-      let style: ComfyDraw["style"];
-      if (args.style !== undefined) {
-        const book = styleBook(args.style);
-        if (!book) throw new Error(renderTemplate(deps.prompts.messages["draw_style"] ?? "{{key}}", { key: args.style }));
-        style = book;
-      }
-      // 双人唯一入口：characters 两项 → 一律 RS 区域管线（2026-11-11 主人裁定：不做任何路由判断）。
-      let multiParts: MultiPart[] | undefined;
       if (args.characters !== undefined) {
         if (args.character !== undefined) throw new Error(deps.prompts.messages["draw_characters_conflict"] ?? "draw_characters_conflict");
         if (args.style !== undefined || args.ref !== undefined) throw new Error(deps.prompts.messages["draw_multi_unsupported"] ?? "draw_multi_unsupported");
         if (!Array.isArray(args.characters) || args.characters.length !== 2) throw new Error(deps.prompts.messages["draw_characters_count"] ?? "draw_characters_count");
         if (args.characters.some((part) => !part || typeof part !== "object" || typeof part.description !== "string" || !part.description.trim())) throw new Error(deps.prompts.messages["draw_multi_sides"] ?? "draw_multi_sides");
-        multiParts = args.characters.map((part) => {
-          const book = part.character === undefined ? undefined : loraBook(part.character);
-          if (part.character !== undefined && !book) throw new Error(renderTemplate(deps.prompts.messages["draw_character"] ?? "{{key}}", { key: part.character }));
-          if (Object.hasOwn(part, "region")) throw new Error(deps.prompts.messages["draw_region_retired"]);
+        for (const part of args.characters) {
+          if (Object.hasOwn(part, "region")) throw new Error(deps.prompts.messages["draw_region_retired"] ?? "draw_region_retired");
+          if (part.character !== undefined && typeof part.character !== "string") throw new Error(deps.prompts.messages["draw_character_type"] ?? "draw_character_type");
           if (part.description.length > 800) throw new Error(deps.prompts.messages["draw_multi_length"] ?? "draw_multi_length");
-          return { text: part.description.trim(), ...(book ? { role: { file: book.file, weight: book.weight, inject: book.inject } } : {}) };
-        });
+        }
       }
-      // 路由合并（2026-11-13）：从零画默认姿态线（单/双看数量）；仅 fast/ref 走直出。
-      const useDirect = multiParts === undefined && (args.ref !== undefined || args.fast === true);
-      deps.onLongWork?.(useDirect ? (args.fast === true ? "draw_fast" : "draw") : "draw_interaction", round);
+
+      // 2. 轮状态检查
       if (round === undefined) throw new Error(deps.prompts.messages["draw_round_missing"] ?? "draw_round_missing");
       const previous = rounds.get(api.conversationId);
       if (previous?.pending) throw new Error(deps.prompts.messages["draw_inflight"] ?? "draw_inflight");
       if (previous?.round === round && previous.used) throw new Error(deps.prompts.messages["draw_used"] ?? "draw_used");
       if (previous?.round === round && previous.submitted) throw new Error(deps.prompts.messages["draw_uncertain"] ?? "draw_uncertain");
-      const ref = useDirect && args.ref !== undefined ? await prepareRef(args.ref, context.abortSignal) : undefined;
+
+      // 3. 热读后端
+      const backendId = deps.drawBackend?.() ?? DEFAULT_DRAW_BACKEND;
+      const backend = getDrawBackend(backendId, deps.drawBackends);
+      if (!backend) throw new Error(deps.prompts.messages["draw_backend_unknown"] ?? "draw_backend_unknown");
+
+      // 4. 推导 mode 与 fast
+      const mode: DrawMode = args.characters !== undefined ? "multi" : args.ref !== undefined ? "ref" : args.fast === true ? "fast" : "single";
+      const isFast = args.fast === true;
+
+      // 5. 按 backend.capabilities 严格能力校验（不做隐式降级）
+      if (!backend.capabilities.modes[mode]) {
+        throw new Error(renderTemplate(deps.prompts.messages["draw_mode_unsupported"] ?? "{{mode}}", { mode: MODE_LABELS[mode] }));
+      }
+      if (isFast && !backend.capabilities.modes.fast) {
+        throw new Error(renderTemplate(deps.prompts.messages["draw_mode_unsupported"] ?? "{{mode}}", { mode: MODE_LABELS.fast }));
+      }
+      if (args.hd === true && !backend.capabilities.hd) {
+        throw new Error(deps.prompts.messages["draw_hd_unsupported"] ?? "draw_hd_unsupported");
+      }
+      if (args.style !== undefined && !backend.capabilities.styleModes.includes(mode)) {
+        throw new Error(deps.prompts.messages["draw_style_mode_unsupported"] ?? "draw_style_mode_unsupported");
+      }
+      if ((args.framing !== undefined && !backend.capabilities.framing) || (args.spacing !== undefined && !backend.capabilities.spacing)) {
+        throw new Error(deps.prompts.messages["draw_composition_unsupported"] ?? "draw_composition_unsupported");
+      }
+
+      // 6. 比例解析
+      const ratio = args.ratio ?? "3:4";
+      if (typeof ratio !== "string" || !Object.hasOwn(backend.ratioSizes, ratio)) {
+        throw new Error(deps.prompts.messages["draw_ratio"] ?? "draw_ratio");
+      }
+      const [width, height] = backend.ratioSizes[ratio as DrawRatio];
+
+      // 7. 词表解析（按 backendId + loraFamily）
+      const target = { backendId: backend.id, loraFamily: backend.loraFamily };
+      let role: DrawRoleInput | undefined;
+      if (args.character !== undefined) {
+        const resolved = resolveCharacter(args.character, target);
+        if (!resolved) throw new Error(renderTemplate(deps.prompts.messages["draw_character"] ?? "{{key}}", { key: args.character }));
+        role = resolved;
+      }
+      let parts: DrawMultiPart[] | undefined;
+      if (args.characters !== undefined) {
+        parts = args.characters.map((part) => {
+          let partRole: DrawRoleInput | undefined;
+          if (part.character !== undefined) {
+            const resolved = resolveCharacter(part.character, target);
+            if (!resolved) throw new Error(renderTemplate(deps.prompts.messages["draw_character"] ?? "{{key}}", { key: part.character }));
+            partRole = resolved;
+          }
+          return { text: part.description.trim(), ...(partRole ? { role: partRole } : {}) };
+        });
+      }
+      let style: DrawLoraRef | undefined;
+      if (args.style !== undefined) {
+        const resolved = resolveStyle(args.style, target);
+        if (!resolved) throw new Error(renderTemplate(deps.prompts.messages["draw_style"] ?? "{{key}}", { key: args.style }));
+        if (!resolved.lora) {
+          throw new Error(renderTemplate(deps.prompts.messages["draw_style_backend_unsupported"] ?? "{{key}}", { key: args.style }));
+        }
+        style = resolved.lora;
+      }
+
+      // 8. 参考图预处理与单飞执行
+      const ref = mode === "ref" && args.ref !== undefined ? await prepareRef(args.ref, context.abortSignal) : undefined;
       const state: RoundState = { round, pending: true, submitted: false, used: false };
       rounds.set(api.conversationId, state);
-      // 提交前二次复核：comfy.ts 在真正 POST 前同步调 onSubmitted（其间无 await），
-      // 这里再读一次热值，关闭则抛 DrawDisabledError 阻止 POST，且 submitted 保持 false（可重试）。
-      const onSubmitted = () => { if (!enabled()) throw new DrawDisabledError(); state.submitted = true; };
+      const uploadRef = deps.drawUploadRef ?? uploadRefImage;
+      const exec = deps.drawExec ?? execGraph;
       try {
         const stageCb = deps.onDrawStage && round !== undefined ? (stage: DrawStage) => deps.onDrawStage?.(round, stage) : undefined;
         const bp = deps.bypassOf?.(round);
-        let png: Buffer;
-        const useInteraction = !useDirect;
-        if (useInteraction) {
-          const presetName = multiParts ? "sit-haystack" : "single-haystack";
-          const preset = INTERACTION_PRESETS[presetName];
-          if (!preset) throw new Error(renderTemplate(deps.prompts.messages["draw_preset_unknown"] ?? "{{key}}", { key: presetName }));
-          png = multiParts
-            ? await runInteraction(deps.comfyUrl, { prompt: positive, width, height, preset, parts: multiParts, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass, framing: args.framing, spacing: args.spacing }, onSubmitted, context.abortSignal)
-            : await runInteractionSingle(deps.comfyUrl, { prompt: positive, width, height, preset, part: { text: "", ...(lora ? { role: lora } : {}) }, label: presetName, hd: args.hd === true, bypass: bp?.bypass, pbypass: bp?.pbypass }, onSubmitted, context.abortSignal);
-        } else {
-          png = await runComfy(deps.comfyUrl, { prompt: positive, style, width, height, hd: args.hd === true, fast: args.fast === true, ref, lora, bypass: bp?.bypass, bypassP: bp?.pbypass }, onSubmitted, stageCb, context.abortSignal);
-        }
+        const png = await runExclusive(async () => {
+          const refInputName = ref ? await uploadRef(deps.comfyUrl!, ref.png, "png", context.abortSignal) : undefined;
+          const built = backend.buildGraph({
+            mode,
+            fast: isFast,
+            prompt: positive,
+            width,
+            height,
+            hd: args.hd === true,
+            ...(role ? { role } : {}),
+            ...(style ? { style } : {}),
+            ...(parts ? { parts } : {}),
+            ...(refInputName ? { refInputName, refStrength: ref!.strength } : {}),
+            ...(args.framing !== undefined ? { framing: args.framing } : {}),
+            ...(args.spacing !== undefined ? { spacing: args.spacing } : {}),
+            ...(bp?.bypass !== undefined ? { bypass: bp.bypass } : {}),
+            ...(bp?.pbypass !== undefined ? { pbypass: bp.pbypass } : {}),
+          });
+          // 提交前二次复核：execGraph 在真正 POST 前同步调 onSubmitted（其间无 await），
+          // 关闭则抛 DrawDisabledError 阻止 POST，且 submitted 保持 false（可重试）；正常放行再同步发 onLongWork。
+          const onSubmitted = () => {
+            if (!enabled()) throw new DrawDisabledError();
+            state.submitted = true;
+            deps.onLongWork?.(built.workingVariant, round);
+          };
+          return await exec(deps.comfyUrl!, built.graph, {
+            deadline: built.deadline,
+            outputNode: built.outputNode,
+            outputType: built.outputType,
+            onSubmitted,
+            ...(stageCb && built.stageNodes?.length ? { onStage: stageCb, stageNodes: built.stageNodes } : {}),
+            ...(backend.extraModelFileFields ? { extraModelFileFields: backend.extraModelFileFields } : {}),
+            signal: context.abortSignal,
+          });
+        });
         // 出图后、落盘/入队前的取消闸：超时晚到的图不再写 gen/ 也不再入 outbox；
         // submitted 保持 true（作业已被接受），本轮重试吃 draw_uncertain，不重 POST。
         context.abortSignal?.throwIfAborted();
@@ -157,9 +227,6 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         writeFileSync(join(dir, file), png, { flag: "wx" });
         state.used = true;
         // 机械发图（主人裁定 2026-11-13）：出图即经 outbox 直发，不再让模型调 say_media。
-        // 走 enqueueOutbound（同提交写 fish.outbound transcript + outbox，压缩/记忆看得到）；
-        // 不占开口额度、不经模型文本校验（gen/ 路径宿主生成、可信）。
-        // 入队失败回退提示模型手动 say_media 补发，图不丢。
         const trigger = deps.triggerOf?.(round);
         const ts = Date.now();
         try {
@@ -179,7 +246,6 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
           return { output: [{ type: "text", text: renderTemplate(deps.prompts.messages["draw_done_fallback"] ?? "gen/{{file}}", { file }) }] };
         }
       } catch (error) {
-        // 提交前被关闭：保留明确关闭回执，不谎称已提交（submitted 仍 false，可重试）。
         if (error instanceof DrawDisabledError) {
           console.error("[fish] draw disabled before submit");
           throw new Error(deps.prompts.messages["draw_disabled"] ?? "draw_disabled");
