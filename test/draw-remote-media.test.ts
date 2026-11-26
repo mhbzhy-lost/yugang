@@ -1,12 +1,13 @@
 /**
- * draw_remote 三通道适配器层（src/media/draw-remote/）与 proxy-fetch 二进制修复的兜底测试。
+ * draw_remote 四通道适配器层（src/media/draw-remote/）与 proxy-fetch 二进制修复的兜底测试。
  *
  *  - proxy-fetch：本地 CONNECT 代理桩 + 自签名 TLS 服务，验证含 0x89 等非 UTF-8 字节的 PNG
  *    经 `Response.arrayBuffer()` 逐字节一致、JSON 照常可读（Review Focus #3）
  *  - gemini：v1internal:generateContent 请求契约、projectId 兜底、锁内 OAuth 刷新与 401 强刷、
  *    submitted 边界、上游错误脱敏 + sanitizeExternalText、取消围栏（Review Focus #2 / #5）
- *  - gpt / wan：经 runDrawRemote 的能力预检、配置缺失、HTTP 4xx/5xx 的 submitted 判定、
- *    生成与下载都走注入 fetch（Review Focus #1 / #2）
+ *  - gpt / wan / qwen：经 runDrawRemote 的能力预检、配置缺失、HTTP 4xx/5xx 的 submitted 判定、
+ *    生成与下载都走注入 fetch（Review Focus #1 / #2）；wan / qwen 共用百炼原生生图客户端，
+ *    像素档位（aspect_ratio → W*H）、参考图 data URI、watermark=false 与「不编造组图 / 思考参数」逐项核对请求体
  *
  * 全部请求走注入的 fetchImpl 或本地回环服务，不碰真实上游；凭据全是测试字面量。
  */
@@ -27,6 +28,7 @@ import {
   DrawRemoteError,
   generateGeminiImage,
   runDrawRemote,
+  type DrawRemoteAspectRatio,
   type DrawRemoteRunRequest,
   type GeminiImageRequest,
 } from "../src/media/draw-remote/index.ts";
@@ -36,6 +38,7 @@ import {
 /** 2048 字节的「PNG」：魔数之后是覆盖 0x00–0xFF 的伪随机字节，经 utf8 往返必然变形。 */
 const PNG = patternBytes(2048, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const JPEG = patternBytes(1536, [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+const GIF = patternBytes(512, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
 const TINY_PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
 
 function patternBytes(length: number, head: number[]): Buffer {
@@ -853,8 +856,8 @@ test("取消围栏：请求在途时中止 → 抛 AbortError 且 gen/ 零写入
   assert.equal(wanFetch.calls.length, 2);
   assert.deepEqual(ws.files(), []);
 
-  // 请求前已中止：三条通道都不发请求、不触发钩子
-  for (const provider of ["gpt", "wan", "gemini"] as const) {
+  // 请求前已中止：四条通道都不发请求、不触发钩子
+  for (const provider of ["gpt", "wan", "qwen", "gemini"] as const) {
     const preAborted = new AbortController();
     preAborted.abort();
     const tracker = submitTracker();
@@ -1006,7 +1009,7 @@ test("gpt：前置 OAuth 刷新失败（过期凭据 + token 端点 400 / 网络
 });
 
 // =====================================================================
-// wan 通道
+// wan / qwen 通道（共用百炼 Token Plan 原生多模态生图接口与 qwen-token-plan-cn 的凭据）
 // =====================================================================
 
 const WAN_GENERATION = "https://dashscope.test/api/v1/services/aigc/multimodal-generation/generation";
@@ -1017,6 +1020,28 @@ function wanWorkspace(t: TestContext): Workspace {
   ws.models({ [QWEN]: { baseUrl: "https://dashscope.test/compatible-mode/v1/" } });
   ws.credentials({ [QWEN]: "sk-wan-key-0123456789" });
   return ws;
+}
+
+/** qwen 通道：与 wan 同一个 provider 条目，只是 key 字面量不同，用来核对取的是这条通道的凭据。 */
+function qwenWorkspace(t: TestContext): Workspace {
+  const ws = workspace();
+  t.after(() => ws.cleanup());
+  ws.models({ [QWEN]: { baseUrl: "https://dashscope.test/compatible-mode/v1/" } });
+  ws.credentials({ [QWEN]: "sk-qwen-key-0123456789" });
+  return ws;
+}
+
+function qwenRequest(ws: Workspace, overrides: Partial<DrawRemoteRunRequest> = {}): DrawRemoteRunRequest {
+  return runRequest(ws, { provider: "qwen", model: "qwen-image-3.0-pro", prompt: "一只戴草帽的猫", ...overrides });
+}
+
+/** 样例上游：生成接口回一张图，图片地址回 PNG。 */
+function dashScopeOk(): ReturnType<typeof fakeFetch> {
+  return fakeFetch((url) =>
+    url === WAN_GENERATION
+      ? jsonResponse({ output: { choices: [{ message: { content: [{ image: "https://img.test/out.png" }] } }] } })
+      : bytesResponse(PNG, "image/png"),
+  );
 }
 
 test("wan：读 qwen-token-plan-cn 的 key 与 baseUrl（去 /compatible-mode/v1），生成与下载都走注入 fetch，PNG 逐字节无损", async (t) => {
@@ -1039,8 +1064,12 @@ test("wan：读 qwen-token-plan-cn 的 key 与 baseUrl（去 /compatible-mode/v1
   assert.equal(fetch.calls.length, 2, "生成与图片下载都必须走同一条 fetch");
   assert.deepEqual(
     bodyOf(fetch.calls[0]?.init),
-    { model: "wan2.7-image", input: { messages: [{ role: "user", content: [{ text: "一只戴草帽的猫" }] }] } },
-    "aspectRatio/size/n 不得被编造进请求体",
+    {
+      model: "wan2.7-image",
+      input: { messages: [{ role: "user", content: [{ text: "一只戴草帽的猫" }] }] },
+      parameters: { watermark: false, size: "1280*1280" },
+    },
+    "aspectRatio 映射成 1:1 的 1280*1280；水印默认关；n / enable_sequential 不再发送",
   );
   assert.deepEqual(result, { provider: "wan", model: "wan2.7-image", files: ws.files() });
   assert.match(String(result.files[0]), /^\d+-[0-9a-f-]{36}\.png$/);
@@ -1074,7 +1103,7 @@ test("wan：下载字节按真实魔数校验并决定落盘后缀——JPEG 存
   assert.deepEqual(ws.files(), [String(result.files[0])], "非图片正文零落盘，gen/ 里只有前面那张 JPEG");
 });
 
-test("wan：能力预检在 onSubmitted 前拒绝——prompt>800 字、images 非空、background=transparent；gemini 的 transparent 同样拒绝；均不发请求", async (t) => {
+test("能力预检在 onSubmitted 前拒绝——prompt 超 4000 字、参考图超通道张数上限（qwen > 3 张，其余 > 5 张）、非 gpt 通道的 transparent；均不发请求", async (t) => {
   const ws = workspace();
   t.after(() => ws.cleanup());
   ws.models({ [QWEN]: { baseUrl: "https://dashscope.test/compatible-mode/v1" }, [AG]: AG_PROVIDER });
@@ -1083,27 +1112,43 @@ test("wan：能力预检在 onSubmitted 前拒绝——prompt>800 字、images �
   const fetch = fakeFetch(() => {
     throw new Error("预检拒绝的请求不得发出");
   });
+  const ref = (bytes: Buffer, mimeType = "image/png") => ({ mimeType, bytes });
+  const four = [ref(PNG), ref(JPEG, "image/jpeg"), ref(PNG), ref(JPEG, "image/jpeg")];
+  const six = [...four, ref(PNG), ref(PNG)];
   const cases: [Partial<DrawRemoteRunRequest>, string][] = [
-    [{ provider: "wan", prompt: "猫".repeat(801) }, "prompt"],
+    [{ provider: "wan", prompt: "猫".repeat(4001) }, "prompt"],
+    [{ provider: "qwen", prompt: "猫".repeat(4001) }, "prompt"],
     [{ provider: "wan", prompt: "   " }, "prompt"],
-    [{ provider: "wan", images: [{ mimeType: "image/png", bytes: PNG }] }, "no_ref"],
+    [{ provider: "qwen", images: four }, "bad_ref"],
+    [{ provider: "wan", images: six }, "bad_ref"],
+    [{ provider: "gpt", images: six }, "bad_ref"],
     [{ provider: "wan", background: "transparent" }, "no_transparent"],
+    [{ provider: "qwen", background: "transparent" }, "no_transparent"],
     [{ provider: "gemini", background: "transparent" }, "no_transparent"],
     [{ provider: "gemini", prompt: "猫".repeat(4001) }, "prompt"],
   ];
   for (const [overrides, code] of cases) {
+    const provider = String(overrides["provider"]);
     await assert.rejects(
       runDrawRemote(runRequest(ws, { ...overrides, onSubmitted: submitted.hook, fetchImpl: fetch.impl })),
-      expectDrawRemoteError(String(overrides["provider"]), code, false),
+      expectDrawRemoteError(provider, code, false, code === "prompt" ? [] : [provider]),
     );
   }
   assert.equal(fetch.calls.length, 0);
   assert.equal(submitted.count(), 0);
 
-  // wan 不支持透明，但 opaque/auto 照常放行
+  // wan / qwen 不支持透明，但 opaque/auto 照常放行；4000 字整（旧版 wan 限 800 字）与张数上限内的参考图同样放行
   const ok = fakeFetch((url) => (url === WAN_GENERATION ? jsonResponse({ output: { choices: [{ message: { content: [{ image: "https://img.test/a.png" }] } }] } }) : bytesResponse(PNG, "image/png")));
-  const result = await runDrawRemote(runRequest(ws, { provider: "wan", background: "opaque", fetchImpl: ok.impl }));
-  assert.equal(result.files.length, 1);
+  for (const [provider, images] of [
+    ["wan", six.slice(0, 5)],
+    ["qwen", four.slice(0, 3)],
+  ] as const) {
+    const result = await runDrawRemote(
+      runRequest(ws, { provider, prompt: "猫".repeat(4000), images, background: "opaque", onSubmitted: submitted.hook, fetchImpl: ok.impl }),
+    );
+    assert.equal(result.files.length, 1, provider);
+  }
+  assert.equal(submitted.count(), 2);
 });
 
 test("wan：生成 4xx 标 submitted=false，生成 5xx/空结果与下载失败标 submitted=true", async (t) => {
@@ -1134,7 +1179,173 @@ test("wan：生成 4xx 标 submitted=false，生成 5xx/空结果与下载失败
   assert.deepEqual(ws.files(), []);
 });
 
-test("POST 之后的网络异常与内部超时：三条通道均 failed 且 submitted=true（结果不明，防重复出图）", async (t) => {
+test("qwen：读 qwen-token-plan-cn 的 key 与 baseUrl，请求体只带 model / input / parameters（watermark=false），不编造组图与思考 / 改写参数", async (t) => {
+  const ws = qwenWorkspace(t);
+  const submitted = submitTracker();
+  const fetch = fakeFetch((url, init) => {
+    if (url === WAN_GENERATION) {
+      assert.equal(submitted.count(), 1, "onSubmitted 必须在生成 POST 之前同步触发");
+      assert.equal(headerOf(init, "authorization"), "Bearer sk-qwen-key-0123456789");
+      assert.equal(headerOf(init, "content-type"), "application/json");
+      return jsonResponse({ output: { choices: [{ message: { content: [{ image: "https://img.test/out.png" }] } }] } });
+    }
+    assert.equal(url, "https://img.test/out.png");
+    return bytesResponse(PNG, "image/png");
+  });
+
+  const result = await runDrawRemote(qwenRequest(ws, { onSubmitted: submitted.hook, fetchImpl: fetch.impl }));
+
+  assert.equal(fetch.calls.length, 2, "生成与图片下载都必须走同一条 fetch");
+  assert.deepEqual(
+    bodyOf(fetch.calls[0]?.init),
+    {
+      model: "qwen-image-3.0-pro",
+      input: { messages: [{ role: "user", content: [{ text: "一只戴草帽的猫" }] }] },
+      parameters: { watermark: false },
+    },
+    "不传 aspect_ratio 就不传 size（由模型自选尺寸）；不发 n / enable_sequential / prompt_extend / enable_thinking / thinking_mode / negative_prompt",
+  );
+  assert.deepEqual(result, { provider: "qwen", model: "qwen-image-3.0-pro", files: ws.files() });
+  assert.match(String(result.files[0]), /^\d+-[0-9a-f-]{36}\.png$/);
+  assert.ok(readFileSync(join(ws.mediaRoot, "gen", String(result.files[0]))).equals(PNG));
+  assert.equal(submitted.count(), 1);
+});
+
+test("qwen / wan：aspect_ratio 映射成 1K 计费档内的高清像素 size（W*H）；不传比例就不传 size", async (t) => {
+  const ws = qwenWorkspace(t);
+  const sizes: Record<DrawRemoteAspectRatio, string> = {
+    "1:1": "1280*1280",
+    "3:4": "1080*1440",
+    "4:3": "1440*1080",
+    "9:16": "1080*1920",
+    "16:9": "1920*1080",
+  };
+  const fetch = dashScopeOk();
+  // 每次调用打两个请求（生成 + 下载），只看生成请求的请求体
+  const generations = () => fetch.calls.filter((call) => call.url === WAN_GENERATION);
+  for (const [provider, model] of [
+    ["qwen", "qwen-image-3.0-pro"],
+    ["wan", "wan2.7-image"],
+  ] as const) {
+    for (const [aspectRatio, size] of Object.entries(sizes) as [DrawRemoteAspectRatio, string][]) {
+      await runDrawRemote(runRequest(ws, { provider, model, aspectRatio, fetchImpl: fetch.impl }));
+      const body = bodyOf(generations().at(-1)?.init);
+      assert.equal(body["model"], model);
+      assert.deepEqual(body["parameters"], { watermark: false, size }, `${provider} ${aspectRatio}`);
+    }
+    await runDrawRemote(runRequest(ws, { provider, model, fetchImpl: fetch.impl }));
+    assert.deepEqual(bodyOf(generations().at(-1)?.init)["parameters"], { watermark: false }, `${provider}：不传 aspect_ratio 不发 size`);
+  }
+});
+
+test("qwen：1–3 张参考图转成 data URI，排在 { text } 之前交给原生生图接口；size 照常带", async (t) => {
+  const ws = qwenWorkspace(t);
+  const fetch = dashScopeOk();
+  const refs = [
+    { mimeType: "image/png", bytes: PNG },
+    { mimeType: "image/jpeg", bytes: JPEG },
+    { mimeType: "image/gif", bytes: GIF },
+  ];
+  for (let count = 1; count <= refs.length; count++) {
+    const result = await runDrawRemote(
+      qwenRequest(ws, { images: refs.slice(0, count), aspectRatio: "9:16", fetchImpl: fetch.impl }),
+    );
+    assert.equal(result.files.length, 1, `${count} 张参考图`);
+    const body = bodyOf(fetch.calls.at(-2)?.init);
+    assert.deepEqual(
+      body["input"]["messages"],
+      [
+        {
+          role: "user",
+          content: [
+            ...refs.slice(0, count).map((ref) => ({ image: `data:${ref.mimeType};base64,${ref.bytes.toString("base64")}` })),
+            { text: "一只戴草帽的猫" },
+          ],
+        },
+      ],
+      `${count} 张参考图：图在前、文字在后`,
+    );
+    assert.deepEqual(body["parameters"], { watermark: false, size: "1080*1920" });
+  }
+});
+
+test("wan：参考图改图同样走原生生图接口（data URI 在 { text } 之前），4000 字内的 prompt 放行", async (t) => {
+  const ws = wanWorkspace(t);
+  const fetch = dashScopeOk();
+  // 旧版 wan 限 800 字且不收参考图：现在四通道同一个 4000 字上限，参考图照样带
+  const prompt = "猫".repeat(4000);
+  const result = await runDrawRemote(
+    runRequest(ws, { provider: "wan", model: "wan2.7-image", prompt, images: [{ mimeType: "image/png", bytes: PNG }], fetchImpl: fetch.impl }),
+  );
+  assert.equal(result.files.length, 1);
+  const body = bodyOf(fetch.calls[0]?.init);
+  assert.deepEqual(body["input"]["messages"], [
+    { role: "user", content: [{ image: `data:image/png;base64,${PNG.toString("base64")}` }, { text: prompt }] },
+  ]);
+  assert.deepEqual(body["parameters"], { watermark: false });
+});
+
+test("qwen：参考图超 3 张或 background=transparent 在 onSubmitted 前拒绝（submitted=false），不发请求", async (t) => {
+  const ws = qwenWorkspace(t);
+  const submitted = submitTracker();
+  const silent = fakeFetch(() => {
+    throw new Error("预检拒绝的请求不得发出");
+  });
+  const refs = [PNG, JPEG, PNG, JPEG].map((bytes) => ({ mimeType: bytes === JPEG ? "image/jpeg" : "image/png", bytes }));
+
+  // 3 张是上限，照常发出
+  const fine = await runDrawRemote(qwenRequest(ws, { images: refs.slice(0, 3), onSubmitted: submitted.hook, fetchImpl: dashScopeOk().impl }));
+  assert.equal(fine.files.length, 1);
+  assert.equal(submitted.count(), 1);
+
+  const rejected = async (overrides: Partial<DrawRemoteRunRequest>) =>
+    runDrawRemote(qwenRequest(ws, { ...overrides, onSubmitted: submitted.hook, fetchImpl: silent.impl })).then(
+      () => assert.fail("应当被预检拒绝"),
+      (reason: unknown) => reason,
+    );
+  const four = await rejected({ images: refs });
+  assert.ok(expectDrawRemoteError("qwen", "bad_ref", false, ["qwen", "3 张", "4 张"])(four));
+  const transparent = await rejected({ background: "transparent" });
+  assert.ok(expectDrawRemoteError("qwen", "no_transparent", false, ["qwen 通道", "transparent"])(transparent));
+  assert.equal(silent.calls.length, 0);
+  assert.equal(submitted.count(), 1, "两次拒绝都没有触发 onSubmitted");
+  assert.deepEqual(ws.files(), [String(fine.files[0])]);
+});
+
+test("qwen：错误文案的通道名是 qwen——4xx 标 submitted=false，5xx / 空结果 / 下载失败标 submitted=true", async (t) => {
+  const ws = qwenWorkspace(t);
+  const generate = (init: { status: number } | { empty: true }) =>
+    fakeFetch((url) => {
+      if (url === WAN_GENERATION) {
+        return "empty" in init ? jsonResponse({ output: { choices: [] } }) : jsonResponse({ code: "InvalidParameter" }, init.status);
+      }
+      return bytesResponse(PNG, "image/png", 404);
+    });
+  const downloadFail = fakeFetch((url) =>
+    url === WAN_GENERATION
+      ? jsonResponse({ output: { choices: [{ message: { content: [{ image: "https://img.test/a.png" }] } }] } })
+      : bytesResponse(PNG, "image/png", 404),
+  );
+  const run = async (fetch: ReturnType<typeof fakeFetch>) =>
+    runDrawRemote(qwenRequest(ws, { onSubmitted: submitTracker().hook, fetchImpl: fetch.impl })).then(
+      () => assert.fail("应当失败"),
+      (reason: unknown) => reason,
+    );
+
+  // 两条通道共用客户端：客户端自己的失败码带 wan 字样，不得原样出现在 qwen 的回执里
+  assert.ok(expectDrawRemoteError("qwen", "failed", false, ["qwen 生图请求失败（HTTP 400）"], ["wan"])(await run(generate({ status: 400 }))));
+  assert.ok(expectDrawRemoteError("qwen", "failed", true, ["qwen 生图请求失败（HTTP 503）"], ["wan"])(await run(generate({ status: 503 }))));
+  assert.ok(expectDrawRemoteError("qwen", "failed", true, ["qwen 生图失败"], ["wan"])(await run(generate({ empty: true }))));
+  assert.ok(expectDrawRemoteError("qwen", "failed", true, ["qwen 图片下载请求失败（HTTP 404）"], ["wan"])(await run(downloadFail)));
+  // wan 同理：通道名是 wan，不串成 qwen
+  await assert.rejects(
+    runDrawRemote(runRequest(ws, { provider: "wan", fetchImpl: generate({ empty: true }).impl })),
+    expectDrawRemoteError("wan", "failed", true, ["wan 生图失败"], ["qwen"]),
+  );
+  assert.deepEqual(ws.files(), []);
+});
+
+test("POST 之后的网络异常与内部超时：四条通道均 failed 且 submitted=true（结果不明，防重复出图）", async (t) => {
   const ws = workspace();
   t.after(() => ws.cleanup());
   ws.models({ [AG]: AG_PROVIDER, [QWEN]: { baseUrl: "https://dashscope.test/compatible-mode/v1" }, [CODEX]: { auth: "oauth" } });
@@ -1154,7 +1365,7 @@ test("POST 之后的网络异常与内部超时：三条通道均 failed 且 sub
       throw new DOMException("This operation was aborted", "AbortError");
     }],
   ];
-  for (const provider of ["gpt", "wan", "gemini"] as const) {
+  for (const provider of ["gpt", "wan", "qwen", "gemini"] as const) {
     for (const [label, fail] of failures) {
       const tracker = submitTracker();
       const fetch = fakeFetch(() => {
@@ -1166,7 +1377,12 @@ test("POST 之后的网络异常与内部超时：三条通道均 failed 且 sub
       );
       assert.ok(expectDrawRemoteError(provider, "failed", true)(error), `${provider} / ${label}`);
       assert.equal(tracker.count(), 1, `${provider} / ${label}：POST 已发出，钩子应已触发一次`);
-      if (label !== "断网") assert.match(String((error as Error).message), /超时/, `${provider} / ${label}`);
+      if (label !== "断网") {
+        const message = String((error as Error).message);
+        assert.match(message, /超时/, `${provider} / ${label}`);
+        // wan / qwen 共用一条通道实现：超时文案的通道名跟通道走
+        if (provider === "wan" || provider === "qwen") assert.match(message, new RegExp(`^${provider} 生图超时`), "超时文案的通道名跟通道走");
+      }
     }
   }
   assert.deepEqual(ws.files(), []);
@@ -1217,10 +1433,10 @@ test("wan：models.json 配了 provider 代理时，生成与图片下载都走�
 });
 
 // =====================================================================
-// 旧客户端直调（wan_gif 仍用 generateWanImage；提交钩子与取消围栏在客户端自身也要成立）
+// 客户端直调（draw_remote 的 wan / qwen 通道都经 generateWanImage；提交钩子与取消围栏在客户端自身也要成立）
 // =====================================================================
 
-test("旧客户端直调：generateGptImages / generateWanImage 已中止时不发请求、不触发 onSubmitted；在途中止不落盘", async (t) => {
+test("客户端直调：generateGptImages / generateWanImage 已中止时不发请求、不触发 onSubmitted；在途中止不落盘", async (t) => {
   const ws = workspace();
   t.after(() => ws.cleanup());
   ws.credentials({ [CODEX]: { type: "oauth", access: "codex-access", refresh: "codex-refresh", expires: Date.now() + 3600_000, accountId: "acct-1" } });
@@ -1310,7 +1526,7 @@ test("配置缺失：models.json 缺 provider 或 auth.json 缺凭据都在 onSu
   assert.equal(submitted.count(), 1);
   assert.equal(fetch.calls.length, 1);
 
-  // 其余两条通道缺 provider 时同样点名 models.json
+  // 其余三条通道缺 provider 时同样点名 models.json
   await assert.rejects(
     runDrawRemote(runRequest(ws, { provider: "gpt", model: "gpt-image-2.6-flare" })),
     expectDrawRemoteError("gpt", "unconfigured", false, ["models.json", CODEX]),
@@ -1319,12 +1535,21 @@ test("配置缺失：models.json 缺 provider 或 auth.json 缺凭据都在 onSu
     runDrawRemote(runRequest(ws, { provider: "wan", model: "wan2.7-image" })),
     expectDrawRemoteError("wan", "unconfigured", false, ["models.json", QWEN]),
   );
-  // models.json 缺 baseUrl 的 wan 同样算未配置
+  // qwen 与 wan 共用 qwen-token-plan-cn：缺 provider / 缺 baseUrl 同样点名来源与 qwen 通道
+  await assert.rejects(
+    runDrawRemote(runRequest(ws, { provider: "qwen", model: "qwen-image-3.0-pro" })),
+    expectDrawRemoteError("qwen", "unconfigured", false, ["models.json", QWEN, "qwen 通道"]),
+  );
+  // models.json 缺 baseUrl 的 wan / qwen 同样算未配置
   ws.models({ [AG]: AG_PROVIDER, [QWEN]: {} });
   ws.credentials({ [QWEN]: "sk-wan-key-0123456789" });
   await assert.rejects(
     runDrawRemote(runRequest(ws, { provider: "wan", model: "wan2.7-image" })),
     expectDrawRemoteError("wan", "unconfigured", false, ["models.json", "baseUrl"]),
+  );
+  await assert.rejects(
+    runDrawRemote(runRequest(ws, { provider: "qwen", model: "qwen-image-3.0-pro" })),
+    expectDrawRemoteError("qwen", "unconfigured", false, ["models.json", "baseUrl", "qwen 通道"]),
   );
 });
 
@@ -1386,14 +1611,25 @@ test("unconfigured 文案收敛：逐通道点名 models.json / auth.json，不�
   await assert.rejects(call({ provider: "gpt", model: "gpt-image-2.6-flare" }), expectDrawRemoteError("gpt", "unconfigured", false, ["auth.json", CODEX], leaks));
   ws.credentials({ [AG]: agCredential(), [CODEX]: codex });
 
-  // wan：models.json 缺 provider → provider 缺 baseUrl → auth.json 缺 key → key 为空串
-  await assert.rejects(call({ provider: "wan", model: "wan2.7-image" }), expectDrawRemoteError("wan", "unconfigured", false, ["models.json", QWEN], leaks));
-  ws.models({ [CODEX]: { auth: "oauth" }, [QWEN]: {} });
-  await assert.rejects(call({ provider: "wan", model: "wan2.7-image" }), expectDrawRemoteError("wan", "unconfigured", false, ["models.json", "baseUrl"], leaks));
-  ws.models({ [CODEX]: { auth: "oauth" }, [QWEN]: { baseUrl: "https://dashscope.test/compatible-mode/v1" } });
-  await assert.rejects(call({ provider: "wan", model: "wan2.7-image" }), expectDrawRemoteError("wan", "unconfigured", false, ["auth.json", QWEN], leaks));
-  ws.credentials({ [AG]: agCredential(), [CODEX]: codex, [QWEN]: { type: "api_key", key: "" } });
-  await assert.rejects(call({ provider: "wan", model: "wan2.7-image" }), expectDrawRemoteError("wan", "unconfigured", false, ["auth.json"], leaks));
+  // wan / qwen（共用 qwen-token-plan-cn 的 provider 与 API key）：models.json 缺 provider → provider 缺 baseUrl →
+  // auth.json 缺 key → key 为空串；文案点名的是各自通道，不串成另一条
+  for (const provider of ["wan", "qwen"] as const) {
+    const request = { provider, model: provider === "wan" ? "wan2.7-image" : "qwen-image-3.0-pro" };
+    const channel = `${provider} 通道`;
+    // 通道名不得串台：wan 的文案不会出现「qwen 通道」（provider 条目名 qwen-token-plan-cn 本身含 qwen，不能拿它当排除词），
+    // qwen 的文案里不该出现 wan（客户端失败码的 wan 字样已在通道层翻译掉）
+    const crossed = provider === "wan" ? "qwen 通道" : "wan";
+    ws.models({ [CODEX]: { auth: "oauth" } });
+    ws.credentials({ [AG]: agCredential(), [CODEX]: codex });
+    await assert.rejects(call(request), expectDrawRemoteError(provider, "unconfigured", false, ["models.json", QWEN, channel], [...leaks, crossed]));
+    ws.models({ [CODEX]: { auth: "oauth" }, [QWEN]: {} });
+    await assert.rejects(call(request), expectDrawRemoteError(provider, "unconfigured", false, ["models.json", "baseUrl", channel], [...leaks, crossed]));
+    ws.models({ [CODEX]: { auth: "oauth" }, [QWEN]: { baseUrl: "https://dashscope.test/compatible-mode/v1" } });
+    ws.credentials({ [AG]: agCredential(), [CODEX]: codex });
+    await assert.rejects(call(request), expectDrawRemoteError(provider, "unconfigured", false, ["auth.json", QWEN], [...leaks, crossed]));
+    ws.credentials({ [AG]: agCredential(), [CODEX]: codex, [QWEN]: { type: "api_key", key: "" } });
+    await assert.rejects(call(request), expectDrawRemoteError(provider, "unconfigured", false, ["auth.json"], [...leaks, crossed]));
+  }
 
   // models.json 损坏：点名 models.json，不回显文件片段，也不带路径
   writeFileSync(ws.modelsPath, '{"providers": {"x": broken-secret');

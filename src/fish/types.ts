@@ -67,7 +67,7 @@ export interface FishOptions {
    * draw_remote 在入口与提交前各读一次。模型与通道不再从 models.json 的 models.image 选。
    */
   drawRemote?: () => DrawRemoteConfig;
-  /** 远程生图适配器（gpt / wan / gemini 三通道）；缺省用 runDrawRemote 本体，测试注入桩。 */
+  /** 远程生图适配器（gpt / wan / qwen / gemini 四通道）；缺省用 runDrawRemote 本体，测试注入桩。 */
   drawRemoteRun?: typeof runDrawRemote;
   /** config/models.json 路径；config 工具写回 models 角色表时用。 */
   modelsPath?: string;

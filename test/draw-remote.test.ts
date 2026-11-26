@@ -1,13 +1,13 @@
 /**
  * draw_remote 工具包（统一远程生图的工具层）的工具级测试（draw_remote 计划 Task 3 / Spec §3.3）。
  *
- * 适配器（runDrawRemote 的三条通道）由桩替代——通道协议、OAuth、脱敏与落盘在
+ * 适配器（runDrawRemote 的四条通道）由桩替代——通道协议、OAuth、脱敏与落盘在
  * test/draw-remote-media.test.ts 里已经验过；这里只验工具层自己的契约：
  *  - 入口热读配置，通道与模型跟着 fish.config.json 现值走，同一实例不重建；
  *  - 总开关两道闸：入口关闭即拒不占轮；onSubmitted 瞬间翻为关闭同样拒绝且 submitted 保持 false；
  *  - 出图经 outbox 机械直发（幂等键 / 引用锚点），入队失败回退引导 say_media；
  *  - submitted 防重提矩阵：submitted=false 的失败不锁轮、true 的锁轮；
- *  - 参考图安全围栏（方括号 / 穿越 / 符号链接 / 非图 / 魔数不符 / 体积 / 张数 / 通道能力）；
+ *  - 参考图安全围栏（方括号 / 穿越 / 符号链接 / 非图 / 魔数不符 / 体积 / 按通道的张数与类型上限）；
  *  - 取消围栏：返回后已中止则不入 outbox。
  *
  * 任何用例都不碰真实适配器：drawRemoteRun 一律是桩，绝不读仓库的 config/、不发网络请求。
@@ -179,8 +179,8 @@ test("createDrawRemoteTool 恒返回注册：依赖不全也在册，参数 Sche
 test("没注入配置读取函数时按冻结默认值走；modelsPath 缺省落到仓库 config/models.json", async () => {
   const fixture = setup({ drawRemote: undefined, modelsPath: undefined });
   const result = await fixture.tool.execute({ prompt: "一只猫" } as never, fixture.api(), ctx());
-  assert.equal(fixture.calls[0]?.provider, "gemini");
-  assert.equal(fixture.calls[0]?.model, "gemini-3.1-flash-image");
+  assert.equal(fixture.calls[0]?.provider, "qwen");
+  assert.equal(fixture.calls[0]?.model, "qwen-image-3.0-pro");
   assert.equal(typeof fixture.calls[0]?.modelsPath, "string");
   assert.ok(fixture.calls[0]?.modelsPath.endsWith(join("config", "models.json")));
   assert.equal(fixture.calls[0]?.mediaRoot, fixture.mediaRoot);
@@ -190,9 +190,9 @@ test("没注入配置读取函数时按冻结默认值走；modelsPath 缺省落
 test("热切换：同一实例不重建，通道与模型跟着 drawRemote 现值走", async () => {
   const fixture = setup();
   const first = await fixture.tool.execute({ prompt: "第一张" } as never, fixture.api(1), ctx());
-  assert.equal(fixture.calls[0]?.provider, "gemini");
-  assert.equal(fixture.calls[0]?.model, "gemini-3.1-flash-image");
-  assert.match(text(first), /gemini/);
+  assert.equal(fixture.calls[0]?.provider, "qwen", "缺省通道是 qwen");
+  assert.equal(fixture.calls[0]?.model, "qwen-image-3.0-pro");
+  assert.match(text(first), /qwen/);
 
   // 主人热切到 gpt 并换模型（models 浅合并：其余通道的默认值不动）；同一个工具实例、同一个会话
   fixture.setConfig({ provider: "gpt", models: { ...DRAW_REMOTE_DEFAULTS.models, gpt: "gpt-image-custom" } });
@@ -370,26 +370,26 @@ test("submitted=false 的失败不锁轮：修正后同轮可重试成功", asyn
       longWorks: 0,
     },
     {
-      name: "no_ref（wan 传参考图）",
-      provider: "wan",
-      args: { images: ["inbound/a.png"] },
-      error: new DrawRemoteError("wan", "no_ref", "wan 通道不支持参考图（images）", false),
-      rejected: /不支持参考图/,
+      name: "bad_ref（qwen 通道参考图超 3 张：工具层放行的 3 张之外，适配器层的张数防御拦下第 4 张）",
+      provider: "qwen",
+      args: { images: ["inbound/a.png", "inbound/b.png", "inbound/p.jpg"] },
+      error: new DrawRemoteError("qwen", "bad_ref", "qwen 通道最多接受 3 张参考图", false),
+      rejected: /用不了.*最多 3 张/,
       longWorks: 0,
     },
     {
-      name: "no_transparent（wan 要透明底）",
-      provider: "wan",
+      name: "no_transparent（qwen 要透明底）",
+      provider: "qwen",
       args: { background: "transparent" },
-      error: new DrawRemoteError("wan", "no_transparent", "wan 通道不支持透明背景", false),
+      error: new DrawRemoteError("qwen", "no_transparent", "qwen 通道不支持透明背景（background=transparent）", false),
       rejected: /不支持透明背景/,
       longWorks: 0,
     },
     {
-      name: "prompt（wan 超 800 字）",
-      provider: "wan",
-      error: new DrawRemoteError("wan", "prompt", "wan 通道的 prompt 不得超过 800 字（当前 900 字），请精简", false),
-      rejected: /画面描述不合适.*800 字/,
+      name: "prompt（超 4000 字）",
+      provider: "qwen",
+      error: new DrawRemoteError("qwen", "prompt", "draw_remote 的 prompt 去首尾空白后不能为空，且不得超过 4000 字（当前 4001 字）", false),
+      rejected: /画面描述不合适.*4000 字/,
       longWorks: 0,
     },
     {
@@ -504,7 +504,8 @@ test("参考图：方括号兼容，按真实字节读图交给适配器", async
   assert.ok(png(64).equals(images[0]!.bytes), "字节原样（不经任何转码）");
 });
 
-test("参考图围栏：穿越 / 绝对路径 / 符号链接 / 非图 / 魔数不符 / 0 字节 / 超限 / 6 张 一律 bad_ref", async () => {
+test("参考图围栏：穿越 / 绝对路径 / 符号链接 / 非图 / 魔数不符 / 0 字节 / 超限 / 超出通道张数上限 一律 bad_ref", async () => {
+  // 这条用例跑在缺省通道上（qwen，最多 3 张）：类型与张数的逐通道边界见下面两条用例
   const fixture = setup();
   const outside = mkdtempSync(join(tmpdir(), "yg-draw-remote-outside-"));
   work.push(outside);
@@ -527,7 +528,7 @@ test("参考图围栏：穿越 / 绝对路径 / 符号链接 / 非图 / 魔数�
     ["魔数与后缀不符", ["inbound/fake.png"]],
     ["0 字节", ["inbound/empty.png"]],
     ["单张超过 10MiB", ["inbound/big.png"]],
-    ["6 张", ["inbound/a.png", "inbound/a.png", "inbound/a.png", "inbound/a.png", "inbound/a.png", "inbound/a.png"]],
+    ["超出通道张数上限（6 张）", ["inbound/a.png", "inbound/a.png", "inbound/a.png", "inbound/a.png", "inbound/a.png", "inbound/a.png"]],
     ["好图夹带一张坏图整批拒", ["inbound/a.png", "inbound/fake.png"]],
     ["空字符串", ["   "]],
   ];
@@ -574,6 +575,61 @@ test("gemini 通道的参考图能力：gif 与聚合超过 15MiB 拒掉；同�
   assert.equal(fixture.calls[0]?.images?.[0]?.mimeType, "image/gif");
   await fixture.tool.execute({ prompt: "拼起来", images: ["inbound/m8-a.png", "inbound/m8-b.png"] } as never, fixture.api(4), ctx());
   assert.equal(fixture.calls[1]?.images?.length, 2, "gpt 通道只限单张体积，不限聚合");
+});
+
+test("参考图张数按通道：qwen 最多 3 张（第 4 张起拒），gpt / wan / gemini 最多 5 张（第 6 张起拒）", async () => {
+  for (const [provider, limit] of [
+    ["qwen", 3],
+    ["gpt", 5],
+    ["wan", 5],
+    ["gemini", 5],
+  ] as const) {
+    const fixture = setup();
+    fixture.setConfig({ provider });
+    // 只用四条通道都认的 png / jpg：把「类型不认」从这条用例里排除，只验张数
+    writeFileSync(join(fixture.inbound, "c.png"), png(64));
+    writeFileSync(join(fixture.inbound, "d.png"), png(64));
+    writeFileSync(join(fixture.inbound, "e.png"), png(64));
+    const refs = ["inbound/a.png", "inbound/b.png", "inbound/p.jpg", "inbound/c.png", "inbound/d.png", "inbound/e.png"];
+
+    const accepted = await fixture.tool.execute({ prompt: "拼起来", images: refs.slice(0, limit) } as never, fixture.api(), ctx());
+    assert.match(text(accepted), /画好了/, `${provider}：恰好 ${limit} 张放行`);
+    assert.equal(fixture.calls[0]?.images?.length, limit);
+
+    // 第 limit+1 张起拒：回执点名这一张，并如实写出通道上限
+    const over = refs[limit]!;
+    const rejected = await rejection(() =>
+      fixture.tool.execute({ prompt: "拼起来", images: refs.slice(0, limit + 1) } as never, fixture.api(2), ctx()),
+    );
+    assert.match(rejected, new RegExp(`${over.replaceAll(".", "\\.")}.*用不了`), `${provider}：第 ${limit + 1} 张起拒`);
+    assert.match(rejected, provider === "qwen" ? /qwen 通道最多 3 张/ : /最多 5 张（qwen 通道最多 3 张）/, provider);
+    assert.equal(fixture.calls.length, 1, `${provider}：超限的那次没到适配器`);
+  }
+});
+
+test("参考图类型按通道：wan / gemini 不认 gif，gpt / qwen 认 gif；缺省通道 qwen 不切配置也认", async () => {
+  for (const provider of ["wan", "gemini"] as const) {
+    const fixture = setup();
+    fixture.setConfig({ provider });
+    const rejected = await rejection(() =>
+      fixture.tool.execute({ prompt: "参考这张", images: ["inbound/anim.gif"] } as never, fixture.api(), ctx()),
+    );
+    assert.match(rejected, /inbound\/anim\.gif.*用不了/, provider);
+    assert.equal(fixture.calls.length, 0, `${provider}：没发出去`);
+  }
+  // gpt 认 gif 是老行为；qwen（缺省通道）同样认
+  for (const provider of ["gpt", "qwen"] as const) {
+    const fixture = setup();
+    fixture.setConfig({ provider });
+    await fixture.tool.execute({ prompt: "参考这张", images: ["inbound/anim.gif"] } as never, fixture.api(), ctx());
+    assert.equal(fixture.calls[0]?.images?.[0]?.mimeType, "image/gif", provider);
+  }
+  const byDefault = setup();
+  await byDefault.tool.execute({ prompt: "参考这张", images: ["[inbound/anim.gif]"] } as never, byDefault.api(), ctx());
+  assert.equal(byDefault.calls[0]?.provider, "qwen");
+  assert.equal(byDefault.calls[0]?.model, "qwen-image-3.0-pro");
+  assert.equal(byDefault.calls[0]?.images?.[0]?.mimeType, "image/gif");
+  assert.match(text(await byDefault.tool.execute({ prompt: "再来" } as never, byDefault.api(2), ctx())), /qwen 画好了/);
 });
 
 test("取消围栏：返回后已中止则不入 outbox、直接抛取消异常", async () => {
@@ -630,15 +686,30 @@ test("文案契约：done 带通道名与路径并劝阻 say_media，failed 引�
   for (const key of ["draw_remote_disabled", "draw_remote_round_missing", "draw_remote_inflight", "draw_remote_used", "draw_remote_uncertain"]) {
     assert.ok(messages[key], `缺文案 ${key}`);
   }
-  // 参数 Schema：prompt 必填，images 最多 5 张，比例与背景是枚举
+  // bad_ref：点名是哪张，并如实写出张数上限（qwen 通道更少）；wan / qwen 都支持改图后 no_ref 整条删除，不留死文案
+  assert.match(messages["draw_remote_bad_ref"], /\{\{ref\}\}.*用不了/);
+  assert.match(messages["draw_remote_bad_ref"], /最多 5 张（qwen 通道最多 3 张）/);
+  assert.equal(messages["draw_remote_no_ref"], undefined);
+  // 参数 Schema：prompt 必填（四通道同一个 4000 字上限），images 最多 5 张（qwen 通道 3 张在执行期拦），比例与背景是枚举
   const properties = manifest.parameters.properties as Record<string, Record<string, unknown>>;
   assert.deepEqual(manifest.parameters.required, ["prompt"]);
   assert.equal(properties["images"]?.["maxItems"], 5);
   assert.deepEqual(properties["aspect_ratio"]?.["enum"], ["1:1", "3:4", "4:3", "9:16", "16:9"]);
   assert.deepEqual(properties["background"]?.["enum"], ["auto", "transparent", "opaque"]);
   assert.deepEqual(Object.keys(properties).sort(), ["aspect_ratio", "background", "images", "prompt"]);
-  // TOOL.md：通道不由模型选，出图自动发出
-  assert.match(manifest.description, /自动发出/);
+  for (const name of ["prompt", "images", "aspect_ratio", "background"]) {
+    assert.doesNotMatch(String(properties[name]?.["description"]), /800 字/, `${name}：wan 的 800 字上限已统一成 4000 字`);
+  }
+  assert.match(String(properties["prompt"]?.["description"]), /4000 字/);
+  assert.match(String(properties["images"]?.["description"]), /最多 5 张.*qwen 通道最多 3 张/);
+  assert.match(String(properties["aspect_ratio"]?.["description"]), /qwen \/ wan \/ gemini 通道生效，gpt 通道忽略/);
+  // TOOL.md：四通道说明；images 四通道都能改图；比例对 qwen / wan / gemini 生效；通道不由模型选，出图自动发出
+  assert.match(manifest.description, /GPT Image \/ Wan \/ Qwen \/ Gemini/);
+  assert.match(manifest.guide, /gpt \/ wan \/ qwen \/ gemini/);
+  assert.match(manifest.guide, /qwen \/ wan \/ gemini 通道生效，gpt 通道忽略/);
+  assert.match(manifest.guide, /最多 5 张（qwen 通道最多 3 张）/);
+  assert.match(manifest.guide, /gpt \/ qwen 通道额外认 gif/);
+  assert.doesNotMatch(manifest.guide, /800 字|不支持参考图|wan 不收参考图/);
   assert.match(manifest.guide, /drawRemote\.provider/);
   assert.match(manifest.guide, /say_media/);
 });

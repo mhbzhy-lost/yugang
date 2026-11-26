@@ -139,7 +139,7 @@ export interface ToolPackageDeps {
    * 工具在入口与提交前各读一次；缺省按 DRAW_REMOTE_DEFAULTS。
    */
   drawRemote?: () => DrawRemoteConfig;
-  /** 远程生图适配器（gpt / wan / gemini 三通道）；缺省用 runDrawRemote 本体，测试注入桩。 */
+  /** 远程生图适配器（gpt / wan / qwen / gemini 四通道）；缺省用 runDrawRemote 本体，测试注入桩。 */
   drawRemoteRun?: typeof runDrawRemote;
   /** ComfyUI 环回隧道地址；给了才有本地画图。 */
   comfyUrl?: string;

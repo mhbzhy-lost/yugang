@@ -39,9 +39,9 @@ after(() => rmSync(WORK, { recursive: true, force: true }));
 /** FieldCheck 取类型不取值：reasonOf 里显式收窄用。 */
 type FieldCheck = import("../src/fish-config.ts").FieldCheck;
 
-/** Spec §4 钉死的缺省值（测试里写字面量，不从生产常量反推）。 */
-const DEFAULT_MODELS = { gpt: "gpt-image-2.6-flare", wan: "wan2.7-image", gemini: "gemini-3.1-flash-image" };
-const DEFAULT_BLOCK = { enabled: true, provider: "gemini", models: DEFAULT_MODELS };
+/** Spec §4 钉死的缺省值（测试里写字面量，不从生产常量反推）：缺省通道 qwen（qwen-image-3.0-pro）。 */
+const DEFAULT_MODELS = { gpt: "gpt-image-2.6-flare", wan: "wan2.7-image", qwen: "qwen-image-3.0-pro", gemini: "gemini-3.1-flash-image" };
+const DEFAULT_BLOCK = { enabled: true, provider: "qwen", models: DEFAULT_MODELS };
 
 /** 受控字段表里的 drawRemote 规格：config 工具与 parseFile 共用的那一份校验。 */
 function spec() {
@@ -84,7 +84,7 @@ function bumpMtime(): void {
   utimesSync(CONFIG_PATH, later, later);
 }
 
-test("缺省：loadFishConfig() 的 drawRemote 就是冻结的共享默认（gemini + 三通道默认模型）", () => {
+test("缺省：loadFishConfig() 的 drawRemote 就是冻结的共享默认（qwen + 四通道默认模型）", () => {
   assert.equal(FISH_CONFIG_PATH, CONFIG_PATH, "config 工具的写盘路径必须已被指到临时目录");
   rmSync(CONFIG_PATH, { force: true });
   const { config, source, problems } = loadFishConfig();
@@ -105,6 +105,9 @@ test("缺省：loadFishConfig() 的 drawRemote 就是冻结的共享默认（gem
   assert.throws(() => {
     (DRAW_REMOTE_DEFAULTS.models as Record<string, string>).gemini = "x";
   }, TypeError);
+  assert.throws(() => {
+    (DRAW_REMOTE_DEFAULTS.models as Record<string, string>).qwen = "x";
+  }, TypeError);
   assert.deepEqual(DRAW_REMOTE_DEFAULTS, DEFAULT_BLOCK);
 });
 
@@ -115,7 +118,7 @@ test("局部覆盖：只写到的字段生效，其余回落默认；models 浅�
   assert.deepEqual(loaded.config.drawRemote, {
     enabled: true,
     provider: "gpt",
-    models: { gpt: "gpt-image-2.6-sunburst", wan: "wan2.7-image", gemini: "gemini-3.1-flash-image" },
+    models: { ...DEFAULT_MODELS, gpt: "gpt-image-2.6-sunburst" },
   });
   // 局部覆盖不得改写共享默认
   assert.deepEqual(DRAW_REMOTE_DEFAULTS, DEFAULT_BLOCK);
@@ -123,22 +126,24 @@ test("局部覆盖：只写到的字段生效，其余回落默认；models 浅�
   writeConfig({ drawRemote: { enabled: false } });
   const off = loadFishConfig().config.drawRemote;
   assert.equal(off.enabled, false);
-  assert.equal(off.provider, "gemini");
+  assert.equal(off.provider, "qwen");
   assert.deepEqual(off.models, DEFAULT_MODELS);
 
   writeConfig({ drawRemote: { models: { wan: "wan2.7-t2i" } } });
   const onlyModel = loadFishConfig().config.drawRemote;
-  assert.equal(onlyModel.provider, "gemini", "换当前通道的模型名不等于切通道");
+  assert.equal(onlyModel.provider, "qwen", "换当前通道的模型名不等于切通道");
   assert.deepEqual(onlyModel.models, { ...DEFAULT_MODELS, wan: "wan2.7-t2i" });
 
-  writeConfig({ drawRemote: { enabled: true, provider: "wan", models: { gpt: "a", wan: "b", gemini: "c" } } });
-  assert.deepEqual(loadFishConfig().config.drawRemote, { enabled: true, provider: "wan", models: { gpt: "a", wan: "b", gemini: "c" } });
+  // 四通道全部显式给出：照单全收
+  writeConfig({ drawRemote: { enabled: true, provider: "wan", models: { gpt: "a", wan: "b", qwen: "c", gemini: "d" } } });
+  assert.deepEqual(loadFishConfig().config.drawRemote, { enabled: true, provider: "wan", models: { gpt: "a", wan: "b", qwen: "c", gemini: "d" } });
 });
 
 test("子字段错误文案带完整点路径：非法子值告警回默认，全部非法才整块拒绝", () => {
   // 非法子值：只告警、该子值回默认，同块合法字段照用
   assertSameProblems(problemsOf({ provider: "gpt", enabled: "yes" }), ["drawRemote.enabled 必须是 true/false"]);
-  assertSameProblems(problemsOf({ enabled: true, provider: "dalle" }), ["drawRemote.provider 仅支持 gpt / wan / gemini"]);
+  assertSameProblems(problemsOf({ enabled: true, provider: "dalle" }), ["drawRemote.provider 仅支持 gpt / wan / qwen / gemini"]);
+  assertSameProblems(problemsOf({ provider: "qwen", models: { qwen: "" } }), ["drawRemote.models.qwen 必须是非空字符串"]);
   assertSameProblems(problemsOf({ provider: "gpt", models: { gemini: "" } }), ["drawRemote.models.gemini 必须是非空字符串"]);
   assertSameProblems(problemsOf({ provider: "gpt", models: { gemini: "   ", gpt: 42 } }), [
     "drawRemote.models.gemini 必须是非空字符串",
@@ -157,9 +162,9 @@ test("子字段错误文案带完整点路径：非法子值告警回默认，�
     extra: 1,
   });
   assert.ok(mixed.ok);
-  assert.deepEqual(mixed.value, { enabled: false, provider: "gemini", models: { ...DEFAULT_MODELS, wan: "wan2.7-t2i" } });
+  assert.deepEqual(mixed.value, { enabled: false, provider: "qwen", models: { ...DEFAULT_MODELS, wan: "wan2.7-t2i" } });
   assertSameProblems(mixed.problems ?? [], [
-    "drawRemote.provider 仅支持 gpt / wan / gemini",
+    "drawRemote.provider 仅支持 gpt / wan / qwen / gemini",
     "drawRemote.models.gpt 必须是非空字符串",
     "drawRemote.models.unknown 不是受控通道，已忽略",
     "drawRemote.extra 不是受控字段，已忽略",
@@ -175,7 +180,7 @@ test("子字段错误文案带完整点路径：非法子值告警回默认，�
   const bad = loadFishConfig();
   assert.deepEqual(bad.config.drawRemote, DEFAULT_BLOCK);
   assert.equal(bad.problems.length, 1);
-  assert.match(bad.problems[0] ?? "", /drawRemote\.provider 仅支持 gpt \/ wan \/ gemini/);
+  assert.match(bad.problems[0] ?? "", /drawRemote\.provider 仅支持 gpt \/ wan \/ qwen \/ gemini/);
   assert.match(bad.problems[0] ?? "", /已忽略/);
 
   writeConfig({ drawRemote: { provider: "gpt", enabled: "yes", models: { unknown: "x" } } });
@@ -226,6 +231,19 @@ test("热加载：文件改了 drawRemote 并推进 mtime，下一次读取立�
   assert.equal(next.config.drawRemote.provider, "wan");
   assert.equal(next.config.drawRemote.enabled, false);
   assert.deepEqual(next.config.drawRemote.models, { ...DEFAULT_MODELS, gemini: "gemini-3.1-pro-image" });
+});
+
+test("热加载：从别的通道切到 qwen 并换它的模型名，同一个 loader 不重建，下一次读取就是新值", () => {
+  writeConfig({ drawRemote: { provider: "wan", enabled: false, models: { gemini: "gemini-3.1-pro-image" } } });
+  const load = createConfigLoader({ path: CONFIG_PATH });
+  assert.equal(load().config.drawRemote.provider, "wan");
+
+  writeConfig({ drawRemote: { provider: "qwen", models: { qwen: "qwen-image-3.0-pro-max" } } });
+  bumpMtime();
+  const qwen = load();
+  assert.equal(qwen.config.drawRemote.provider, "qwen");
+  assert.equal(qwen.config.drawRemote.enabled, true, "没写的 enabled 回落默认");
+  assert.deepEqual(qwen.config.drawRemote.models, { ...DEFAULT_MODELS, qwen: "qwen-image-3.0-pro-max" });
 });
 
 const MASTER = "1";
@@ -283,7 +301,7 @@ test("config set drawRemote：顶层与两层点路径写盘成功，回执标�
   assert.match(first, /已把 drawRemote 改成/);
   assert.match(first, /热加载/);
   assert.doesNotMatch(first, /需重启/);
-  assert.deepEqual(fileConfig().drawRemote, { enabled: false, provider: "gemini", models: DEFAULT_MODELS });
+  assert.deepEqual(fileConfig().drawRemote, { enabled: false, provider: "qwen", models: DEFAULT_MODELS });
   assert.equal(loadFishConfig().config.drawRemote.enabled, false);
 
   // 原文件里的其它字段不动；顶层点路径改通道，没写的键保持默认
@@ -312,6 +330,22 @@ test("config set drawRemote：顶层与两层点路径写盘成功，回执标�
   await runSet(tool, "drawRemote", JSON.stringify({ provider: "wan" }));
   assert.deepEqual(fileConfig(), { memeCooldownMinutes: 8, drawRemote: { ...DEFAULT_BLOCK, provider: "wan" } });
 
+  // 缺省通道 qwen 的模型名走两层点路径：只改这一个通道；顶层点路径切回 qwen 即用它
+  const qwenModel = await runSet(tool, "drawRemote.models.qwen", "qwen-image-3.0-pro-max");
+  assert.match(qwenModel, /热加载/);
+  assert.deepEqual(fileConfig(), {
+    memeCooldownMinutes: 8,
+    drawRemote: { ...DEFAULT_BLOCK, provider: "wan", models: { ...DEFAULT_MODELS, qwen: "qwen-image-3.0-pro-max" } },
+  });
+  assert.equal(loadFishConfig().config.drawRemote.provider, "wan", "改 qwen 的模型名不等于切到 qwen");
+  await runSet(tool, "drawRemote.provider", "qwen");
+  assert.deepEqual(fileConfig(), {
+    memeCooldownMinutes: 8,
+    drawRemote: { ...DEFAULT_BLOCK, models: { ...DEFAULT_MODELS, qwen: "qwen-image-3.0-pro-max" } },
+  });
+  assert.equal(loadFishConfig().config.drawRemote.provider, "qwen");
+  assert.equal(loadFishConfig().config.drawRemote.models.qwen, "qwen-image-3.0-pro-max");
+
   // 块里有无关的历史垃圾键：不拦合法目标，照常写盘（落盘的是规整后的块），垃圾键告警进回执
   writeConfig({ drawRemote: { extra: 1 } });
   const tidied = await runSet(tool, "drawRemote.provider", "wan");
@@ -333,7 +367,10 @@ test("config set drawRemote：非法子值被 targetProblem 拦截、凭据键�
     "drawRemote.models.gemini 的值不合法：drawRemote.models.gemini 必须是非空字符串",
   );
   // 通道枚举外 / 布尔写错 / 非受控通道 / 非受控字段
-  assert.match(await setRejection(tool, "drawRemote.provider", "dalle"), /drawRemote\.provider 仅支持 gpt \/ wan \/ gemini/);
+  assert.match(await setRejection(tool, "drawRemote.provider", "dalle"), /drawRemote\.provider 仅支持 gpt \/ wan \/ qwen \/ gemini/);
+  // 通道名写错大小写或拼错（qwen-image / Wan）都不在枚举内
+  assert.match(await setRejection(tool, "drawRemote.provider", "Qwen"), /drawRemote\.provider 仅支持 gpt \/ wan \/ qwen \/ gemini/);
+  assert.match(await setRejection(tool, "drawRemote.models.qwen-image", "x"), /drawRemote\.models\.qwen-image 不是受控通道，已忽略/);
   assert.match(await setRejection(tool, "drawRemote.enabled", "yes"), /drawRemote\.enabled 必须是 true\/false/);
   assert.match(await setRejection(tool, "drawRemote.models", "gpt"), /drawRemote\.models 必须是对象/);
   assert.match(await setRejection(tool, "drawRemote.models.unknown", "x"), /drawRemote\.models\.unknown 不是受控通道，已忽略/);
@@ -355,7 +392,20 @@ test("TOOL.md 字段表与 fish.config.example 同步登记 drawRemote", () => {
   const toolMd = readFileSync(join(ROOT, "src", "tools", "config", "TOOL.md"), "utf8");
   const row = toolMd.split("\n").find((line) => line.startsWith("| drawRemote |"));
   assert.ok(row, "config 的 TOOL.md 字段表缺 drawRemote 行");
-  for (const word of ["对象", "热加载", "enabled", "provider", "gpt / wan / gemini", "models", "drawRemote.models", "apiKey", "整块拒绝"]) {
+  for (const word of [
+    "对象",
+    "热加载",
+    "enabled",
+    "provider",
+    "gpt / wan / qwen / gemini",
+    "缺省 qwen",
+    "models",
+    "四个键",
+    "qwen-image-3.0-pro",
+    "drawRemote.models.qwen",
+    "apiKey",
+    "整块拒绝",
+  ]) {
     assert.ok(row.includes(word), `drawRemote 行缺「${word}」：${row}`);
   }
   // models_switch 的说明要点明：远程生图的通道/模型改由 drawRemote 控制，不靠角色表的 image
@@ -368,8 +418,12 @@ test("TOOL.md 字段表与 fish.config.example 同步登记 drawRemote", () => {
   assert.match(switchGuide, /image/);
   assert.match(switchGuide, /drawRemote/);
 
-  const example = JSON.parse(readFileSync(join(ROOT, "fish.config.example"), "utf8")) as { drawRemote?: unknown };
+  const example = JSON.parse(readFileSync(join(ROOT, "fish.config.example"), "utf8")) as { drawRemote?: unknown; _drawRemote?: unknown };
   assert.deepEqual(example.drawRemote, DEFAULT_BLOCK);
+  // example 的注释同步：通道枚举四条、缺省通道 qwen
+  for (const word of ["gpt / wan / qwen / gemini", "缺省 qwen"]) {
+    assert.ok(String(example._drawRemote).includes(word), `fish.config.example 的 _drawRemote 注释缺「${word}」`);
+  }
   const result = spec().check(example.drawRemote);
   assert.ok(result.ok, `fish.config.example 的 drawRemote 不合法：${JSON.stringify(result)}`);
   assert.deepEqual(result.problems ?? [], []);

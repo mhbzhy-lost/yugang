@@ -1,5 +1,6 @@
 /**
- * 百炼 Token Plan Wan Image 原生多模态生图客户端。
+ * 百炼 Token Plan 原生多模态生图客户端：draw_remote 的 wan（万相）与 qwen（Qwen Image）两条通道共用
+ * （wan_gif 走 wan-video.ts，不经这里）。
  *
  * 下载回来的字节按真实魔数认图片：落盘后缀跟魔数走（不写死 .png），不是图片的正文（网关 200 + HTML 错误页、
  * 通道不认的 bmp/tiff/heic）直接报 wan_image_not_image，不当成图写进 gen/。
@@ -16,9 +17,10 @@ export interface WanImageRequest {
   baseUrl: string;
   model: string;
   prompt: string;
-  size?: "1K" | "2K";
-  n?: number;
-  enableSequential?: boolean;
+  /** 像素尺寸串 `宽*高`（如 `1280*1280`）；不传就不发 size，由模型按提示词自选尺寸。 */
+  size?: string;
+  /** 参考图（图生图 / 改图）：`data:{mime};base64,...` 或公网 URL，按给定顺序排在提示词之前。 */
+  images?: readonly string[];
   mediaRoot: string;
   signal?: AbortSignal;
   /** provider 级代理（只有需要翻墙时才有意义）；非法值回落直连。 */
@@ -54,14 +56,11 @@ export async function generateWanImage(request: WanImageRequest): Promise<string
       headers: { authorization: `Bearer ${request.apiKey}`, "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({
         model: request.model,
-        input: { messages: [{ role: "user", content: [{ text: request.prompt }] }] },
-        ...((request.size || request.n !== undefined || request.enableSequential !== undefined) ? {
-          parameters: {
-            ...(request.size ? { size: request.size } : {}),
-            ...(request.n !== undefined ? { n: request.n } : {}),
-            ...(request.enableSequential !== undefined ? { enable_sequential: request.enableSequential } : {}),
-          },
-        } : {}),
+        input: {
+          messages: [{ role: "user", content: [...(request.images ?? []).map((image) => ({ image })), { text: request.prompt }] }],
+        },
+        // 水印默认关；思考 / 提示词改写这类定制不开放，也不替后端编造组图（n / enable_sequential）参数
+        parameters: { watermark: false, ...(request.size ? { size: request.size } : {}) },
       }),
       signal,
     });

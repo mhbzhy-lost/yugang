@@ -5,8 +5,8 @@
  * 所以主人改配置、换凭据都是零重启热生效。
  *
  * 顺序有意如此——越便宜的检查越靠前，且全部在 onSubmitted 之前：
- *   1. prompt（去首尾空白后非空；wan ≤ 800 字，其余 ≤ 4000 字）
- *   2. 通道能力（wan 不收参考图；wan / gemini 不收透明背景）
+ *   1. prompt（去首尾空白后非空；四通道同一个上限 ≤ 4000 字）
+ *   2. 通道能力（参考图：qwen 最多 3 张、其余最多 5 张；wan / qwen / gemini 不收透明背景）
  *   3. models.json 里有没有这条通道的 provider
  *   4. 通道内部：读 auth.json 凭据、前置 OAuth 刷新、projectId 兜底——缺了同样在提交前报 unconfigured
  * 以上任何一步失败都不会触发 onSubmitted，也不会发出任何 HTTP 请求；修正后同一个请求可直接重试。
@@ -23,17 +23,28 @@ import type {
   DrawRemoteRunRequest,
   DrawRemoteRunResult,
 } from "./types.ts";
-import { runWanChannel } from "./wan.ts";
+import { runQwenChannel, runWanChannel } from "./wan.ts";
 
-/** 通道 → models.json 的 provider 条目名（auth.json 的凭据条目同名）。 */
+/** 通道 → models.json 的 provider 条目名（auth.json 的凭据条目同名）。wan 与 qwen 同属百炼 Token Plan，共用一条。 */
 export const DRAW_REMOTE_PROVIDER_IDS: Readonly<Record<DrawRemoteProviderId, string>> = Object.freeze({
   gpt: "openai-codex",
   wan: "qwen-token-plan-cn",
+  qwen: "qwen-token-plan-cn",
   gemini: "google-antigravity",
 });
 
 const PROMPT_MAX = 4000;
-const WAN_PROMPT_MAX = 800;
+
+/**
+ * 各通道一次最多收几张参考图。工具层 prepareReferences 按它先拦（回执能点名是第几张），
+ * 这里是适配器自己的防御（不经工具层直接调用时同样成立）。
+ */
+export const MAX_REFERENCE_IMAGES_BY_PROVIDER: Readonly<Record<DrawRemoteProviderId, number>> = Object.freeze({
+  gpt: 5,
+  wan: 5,
+  qwen: 3,
+  gemini: 5,
+});
 
 export async function runDrawRemote(request: DrawRemoteRunRequest): Promise<DrawRemoteRunResult> {
   const { provider } = request;
@@ -49,12 +60,15 @@ export async function runDrawRemote(request: DrawRemoteRunRequest): Promise<Draw
       false,
     );
   }
-  if (provider === "wan" && prompt.length > WAN_PROMPT_MAX) {
-    throw new DrawRemoteError(provider, "prompt", `wan 通道的 prompt 不得超过 ${WAN_PROMPT_MAX} 字（当前 ${prompt.length} 字），请精简`, false);
-  }
   const images = request.images ?? [];
-  if (provider === "wan" && images.length > 0) {
-    throw new DrawRemoteError(provider, "no_ref", "wan 通道不支持参考图（images），请去掉参考图，或请主人把 drawRemote.provider 切到 gpt / gemini", false);
+  const maxImages = MAX_REFERENCE_IMAGES_BY_PROVIDER[provider];
+  if (images.length > maxImages) {
+    throw new DrawRemoteError(
+      provider,
+      "bad_ref",
+      `${provider} 通道最多接受 ${maxImages} 张参考图（当前 ${images.length} 张），请删到 ${maxImages} 张以内`,
+      false,
+    );
   }
   if (provider !== "gpt" && request.background === "transparent") {
     throw new DrawRemoteError(
@@ -84,7 +98,11 @@ export async function runDrawRemote(request: DrawRemoteRunRequest): Promise<Draw
     timeoutMs: request.timeoutMs,
     fetchImpl: request.fetchImpl,
   };
-  const files = provider === "gpt" ? await runGptChannel(channel) : provider === "wan" ? await runWanChannel(channel) : await runGeminiChannel(channel);
+  let files: string[];
+  if (provider === "gpt") files = await runGptChannel(channel);
+  else if (provider === "gemini") files = await runGeminiChannel(channel);
+  else if (provider === "wan") files = await runWanChannel(channel);
+  else files = await runQwenChannel(channel);
   // 通道返回的是 gen/ 下的裸文件名，对外原样透出（媒体引用由上层拼 gen/，幂等键用裸文件名）
   return { provider, model: request.model, files };
 }

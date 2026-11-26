@@ -234,7 +234,7 @@ export interface QwenTtsVoiceConfig {
 export type VoiceConfig = GptSovitsVoiceConfig | QwenTtsVoiceConfig;
 
 /** 远程生图（draw_remote 工具）的通道标识：走哪条通道只由 fish.config.json 的 drawRemote.provider 决定，模型不传。 */
-export type DrawRemoteProvider = "gpt" | "wan" | "gemini";
+export type DrawRemoteProvider = "gpt" | "wan" | "qwen" | "gemini";
 
 /**
  * 远程生图热配置（draw_remote 计划 Task 1，2026-11-25）：draw_remote 的总开关、当前通道与各通道模型名。
@@ -243,14 +243,14 @@ export type DrawRemoteProvider = "gpt" | "wan" | "gemini";
 export interface DrawRemoteConfig {
   /** 总开关：false 时 draw_remote 入口即拒（提交前再复核一次）。 */
   readonly enabled: boolean;
-  /** 当前通道：gpt = Codex 订阅生图，wan = 百炼 Token Plan 生图，gemini = Antigravity 订阅生图。 */
+  /** 当前通道：gpt = Codex 订阅生图，wan / qwen = 百炼 Token Plan 生图（万相 / Qwen Image），gemini = Antigravity 订阅生图。 */
   readonly provider: DrawRemoteProvider;
   /** 通道 → 模型名；没显式配置的通道回落内置默认。 */
   readonly models: Readonly<Record<DrawRemoteProvider, string>>;
 }
 
 /** 受控通道清单：校验与文案里的枚举顺序都以它为准。 */
-const DRAW_REMOTE_PROVIDERS: readonly DrawRemoteProvider[] = ["gpt", "wan", "gemini"];
+const DRAW_REMOTE_PROVIDERS: readonly DrawRemoteProvider[] = ["gpt", "wan", "qwen", "gemini"];
 
 /**
  * 缺省值。外层与 models 都冻结：loadFishConfig 没有覆盖时直接把它交出去（全进程共享同一个对象），
@@ -258,10 +258,11 @@ const DRAW_REMOTE_PROVIDERS: readonly DrawRemoteProvider[] = ["gpt", "wan", "gem
  */
 export const DRAW_REMOTE_DEFAULTS: DrawRemoteConfig = Object.freeze<DrawRemoteConfig>({
   enabled: true,
-  provider: "gemini",
+  provider: "qwen",
   models: Object.freeze<Record<DrawRemoteProvider, string>>({
     gpt: "gpt-image-2.6-flare",
     wan: "wan2.7-image",
+    qwen: "qwen-image-3.0-pro",
     gemini: "gemini-3.1-flash-image",
   }),
 });
@@ -479,7 +480,7 @@ export function checkDrawRemote(raw: unknown): FieldCheck {
     if (typeof provider === "string" && (DRAW_REMOTE_PROVIDERS as readonly string[]).includes(provider)) {
       parsed.provider = provider as DrawRemoteProvider;
       any = true;
-    } else problems.push("drawRemote.provider 仅支持 gpt / wan / gemini");
+    } else problems.push("drawRemote.provider 仅支持 gpt / wan / qwen / gemini");
   }
 
   const rawModels = d["models"];

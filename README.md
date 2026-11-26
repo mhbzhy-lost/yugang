@@ -248,7 +248,7 @@ config/auth.example.json   模板，说明格式                                
 | `vision_fallback` | 识图兜底：主视觉失败或被内容审核拒时用它再试一轮 | 无兜底（不隐式兜底） |
 | `image` | 远程生图角色，**兼容保留**：自 2026-11-25 起运行时不再消费（画图模型改由 `fish.config.json` 的 `drawRemote` 选，见下） | 无影响 |
 
-远程生图（`draw_remote`）不在这里选模型：通道（gpt / wan / gemini）、各通道模型与总开关在 `fish.config.json` 的
+远程生图（`draw_remote`）不在这里选模型：通道（gpt / wan / qwen / gemini）、各通道模型与总开关在 `fish.config.json` 的
 `drawRemote`（热加载，私聊 `config set drawRemote.provider gpt` 即时生效，不用重启）；端点与代理仍取本文件的
 `providers.<id>`，凭据取 `auth.json` 同名条目。旧角色 `models.image` / `models.wan_image` 兼容保留，`wan_image` 仍给 `wan_gif` 用。
 

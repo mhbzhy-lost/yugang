@@ -1,5 +1,5 @@
 /**
- * draw_remote 三通道适配器（gpt / wan / gemini）的公共类型与错误。
+ * draw_remote 四通道适配器（gpt / wan / qwen / gemini）的公共类型与错误。
  *
  * 这一层不认识 fish.config.json，也不碰 prompt：通道选择、热开关与轮状态机在工具层
  * （src/tools/draw_remote/）。这里只负责「按给定通道把图画出来」，并把失败分成两类——
@@ -13,7 +13,7 @@
  * onSubmitted 里记下的状态为准。
  */
 
-export type DrawRemoteProviderId = "gpt" | "wan" | "gemini";
+export type DrawRemoteProviderId = "gpt" | "wan" | "qwen" | "gemini";
 export type DrawRemoteAspectRatio = "1:1" | "3:4" | "4:3" | "9:16" | "16:9";
 export type DrawRemoteBackground = "auto" | "transparent" | "opaque";
 
@@ -29,9 +29,9 @@ export interface DrawRemoteRunRequest {
   model: string;
   prompt: string;
   images?: readonly DrawRemoteReferenceImage[];
-  /** gpt / wan 后端没有这个字段，安全忽略。 */
+  /** 画面比例；gpt 后端没有这个字段，安全忽略。 */
   aspectRatio?: DrawRemoteAspectRatio;
-  /** wan / gemini 不支持 transparent，发请求前拒绝。 */
+  /** wan / qwen / gemini 不支持 transparent，发请求前拒绝。 */
   background?: DrawRemoteBackground;
   /** 媒体根目录；成品落 `<mediaRoot>/gen/`。 */
   mediaRoot: string;
@@ -67,11 +67,11 @@ export type DrawRemoteErrorCode =
   | "disabled"
   /** models.json 缺该通道的 provider，或 auth.json 缺该通道的凭据。 */
   | "unconfigured"
-  /** prompt 为空或超长（wan 限 800 字，其余 4000 字）。 */
+  /** prompt 为空或超长（四通道同一上限 4000 字）。 */
   | "prompt"
-  /** 通道不支持参考图（wan）。 */
-  | "no_ref"
-  /** 通道不支持透明背景（wan / gemini）。 */
+  /** 参考图张数超出该通道上限（qwen 最多 3 张，其余最多 5 张）。 */
+  | "bad_ref"
+  /** 通道不支持透明背景（wan / qwen / gemini）。 */
   | "no_transparent"
   /** 上游请求失败：是否已提交看 submitted。 */
   | "failed";
@@ -121,7 +121,7 @@ export interface DrawRemoteChannelRequest {
   fetchImpl?: typeof fetch;
 }
 
-// ---------- 三条通道共用的错误判别 ----------
+// ---------- 四条通道共用的错误判别 ----------
 
 /** 媒体客户端给 HTTP 非 2xx 错误挂上的状态码；不是 HTTP 错误返回 undefined。 */
 export function httpStatusOf(error: unknown): number | undefined {

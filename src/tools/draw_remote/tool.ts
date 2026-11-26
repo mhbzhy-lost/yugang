@@ -1,5 +1,5 @@
 /**
- * draw_remote —— 统一远程生图（gpt / wan / gemini 三通道），出图经 outbox 机械直发。
+ * draw_remote —— 统一远程生图（gpt / wan / qwen / gemini 四通道），出图经 outbox 机械直发。
  *
  * 与 draw（本地 SD）、qwen_draw（本地 Qwen）、wan_gif（动图）并列：这里只管「走远程接口把静态图画出来」。
  * 通道与模型不由模型选：每次执行现读 fish.config.json 的 drawRemote（热加载），入口与提交前各复核一次总开关。
@@ -19,6 +19,7 @@ import { MODELS_CONFIG_PATH } from "../../paths.ts";
 import {
   DrawRemoteError,
   isAbortError,
+  MAX_REFERENCE_IMAGES_BY_PROVIDER,
   runDrawRemote,
   type DrawRemoteAspectRatio,
   type DrawRemoteBackground,
@@ -41,7 +42,6 @@ interface DrawRemoteArgs {
 type RoundState = { round: unknown; pending: boolean; submitted: boolean; used: boolean };
 const rounds = new Map<string, RoundState>();
 
-const MAX_REFERENCE_IMAGES = 5;
 const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
 /** gemini 的参考图走 inline 载荷：原始字节合计上限（给约 20MB 的 inline 上限留余量）。 */
 const TOTAL_REFERENCE_BYTES: Readonly<Partial<Record<DrawRemoteProvider, number>>> = { gemini: 15 * 1024 * 1024 };
@@ -62,12 +62,13 @@ const MIME_BY_EXT: Readonly<Record<string, string>> = {
   ".webp": "image/webp",
 };
 /**
- * 各通道认的参考图类型。wan 不收参考图，但那是适配器的能力闸（回执 no_ref，单一事实源）——
- * 这里按通用图片校验完原样交过去，由它在发请求前拒。
+ * 各通道认的参考图类型（四通道都支持改图，差别只在类型与张数）。wan2.7-image 与 gemini 不收 gif；
+ * 张数上限与适配器共用同一张表（MAX_REFERENCE_IMAGES_BY_PROVIDER）：这里先拦并点名第几张，那边是不经工具层时的防御。
  */
 const REFERENCE_MIME: Readonly<Record<DrawRemoteProvider, readonly string[]>> = {
   gpt: ["image/png", "image/jpeg", "image/webp", "image/gif"],
-  wan: ["image/png", "image/jpeg", "image/webp", "image/gif"],
+  wan: ["image/png", "image/jpeg", "image/webp"],
+  qwen: ["image/png", "image/jpeg", "image/webp", "image/gif"],
   gemini: ["image/png", "image/jpeg", "image/webp"],
 };
 
@@ -88,7 +89,6 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
     uncertain: messages["draw_remote_uncertain"] ?? "draw_remote_uncertain",
     prompt: messages["draw_remote_prompt"] ?? "draw_remote_prompt",
     bad_ref: messages["draw_remote_bad_ref"] ?? "draw_remote_bad_ref",
-    no_ref: messages["draw_remote_no_ref"] ?? "draw_remote_no_ref",
     no_transparent: messages["draw_remote_no_transparent"] ?? "draw_remote_no_transparent",
     unconfigured: messages["draw_remote_unconfigured"] ?? "draw_remote_unconfigured",
     done: messages["draw_remote_done"] ?? "draw_remote_done",
@@ -108,7 +108,9 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
   const prepareReferences = (provider: DrawRemoteProvider, rawImages: readonly string[]): DrawRemoteReferenceImage[] => {
     // 兼容模型把编号标签原样抄过来：[inbound/xxx.jpg]
     const refs = rawImages.map((raw) => (typeof raw === "string" ? raw.trim().replace(/^\[|\]$/g, "") : ""));
-    if (refs.length > MAX_REFERENCE_IMAGES) throw badRef(refs[MAX_REFERENCE_IMAGES] ?? "");
+    const maxImages = MAX_REFERENCE_IMAGES_BY_PROVIDER[provider];
+    // 超限点名第一张多余的：回执里的张数上限按通道如实写
+    if (refs.length > maxImages) throw badRef(refs[maxImages] ?? "");
     const accepted = REFERENCE_MIME[provider];
     const totalLimit = TOTAL_REFERENCE_BYTES[provider];
     const images: DrawRemoteReferenceImage[] = [];
@@ -153,7 +155,7 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
       if (config.enabled === false) throw new Error(say("disabled"));
       const provider = config.provider;
       const model = config.models[provider] || DRAW_REMOTE_DEFAULTS.models[provider];
-      // prompt 的空 / 超长（含 wan 的 800 字）由适配器统一预检并给出具体原因，这里只规整
+      // prompt 的空 / 超长（4000 字）由适配器统一预检并给出具体原因，这里只规整
       const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
       const images = prepareReferences(provider, args.images ?? []);
       context.abortSignal?.throwIfAborted();
@@ -238,8 +240,9 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
               throw new Error(say("unconfigured", { reason: detail }));
             case "prompt":
               throw new Error(say("prompt", { reason: detail }));
-            case "no_ref":
-              throw new Error(say("no_ref"));
+            case "bad_ref":
+              // 适配器层的张数防御（与 prepareReferences 同一张上限表，经工具调用正常走不到）：按整批张数点名
+              throw badRef(`${images.length} 张`);
             case "no_transparent":
               throw new Error(say("no_transparent"));
             case "failed":

@@ -22,7 +22,7 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 工具面：`say_words`/`say_media`/`say_meme`/`say_voice`（四个出口工具，共享每轮 3 次调用额度，
 可引用，除语音外可点名 @ 群友）、`react`（只贴表情）、
 `look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`meme_import`（主人本地批量导入的登记入口）、
-`draw`（本地 SD 生图）、`draw_remote`（远程生图：GPT Image / Wan / Gemini 三通道，通道与模型由 `fish.config.json` 的 `drawRemote` 热配置，出图经 outbox 机械直发）、`search`/`video`（联网查）、
+`draw`（本地 SD 生图）、`draw_remote`（远程生图：GPT Image / Wan / Qwen / Gemini 四通道，通道与模型由 `fish.config.json` 的 `drawRemote` 热配置，出图经 outbox 机械直发）、`search`/`video`（联网查）、
 `bili_search`/`bili_video`（关键词检索 B 站候选与元数据核实，实际观看走 `video`）、`tags`（danbooru 词表）；
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
@@ -279,8 +279,8 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 - 换模型：编辑 `config/models.json` 的 `models.main` / `models.vision` / `models.vision_fallback`
   （`vision` 省略 = main，`vision_fallback` 省略 = 无兜底；`models.image` / `models.wan_image` 是兼容角色：`image` 自 2026-11-25 起运行时不再消费，`wan_image` 只给 `wan_gif`），改完让鱼 `restart` 生效；没有 `MODEL_PROVIDER` / `MODEL_ID` / `GATE_*` / `VISION_*` / `YUGANG_MODELS` 这类入口
 - **远程生图的模型与通道不在 `models.json` 选**（2026-11-25，`draw_remote`）：只认 `fish.config.json` 的 `drawRemote`
-  （`enabled` 总开关 / `provider`：gpt·wan·gemini / `models.<通道>`，热加载；私聊 `config set drawRemote.provider gpt` 即时生效，无需重启）。
-  端点与代理按通道取 `providers.<id>`（gpt→`openai-codex`、wan→`qwen-token-plan-cn`、gemini→`google-antigravity`），
+  （`enabled` 总开关 / `provider`：gpt·wan·qwen·gemini，缺省 qwen / `models.<通道>`，热加载；私聊 `config set drawRemote.provider gpt` 即时生效，无需重启）。
+  端点与代理按通道取 `providers.<id>`（gpt→`openai-codex`、wan / qwen→`qwen-token-plan-cn`、gemini→`google-antigravity`），
   凭据取 `auth.json` 同名条目，每次调用现读；凭据不得写进 `fish.config.json`。`draw_remote` 恒注册，缺配置在执行期回执 `draw_remote_unconfigured`
 - 验证：`npm run creds show` / `npm run ping`（都只报长度，不打印 key）
 - **provider 级代理**：`config/models.json` 的 `providers.<id>.proxy`（只认 http/https）。配了它，这个 provider
