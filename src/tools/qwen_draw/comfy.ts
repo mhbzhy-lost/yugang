@@ -1,7 +1,7 @@
 /** Qwen-Image-2.1 管线：静态模板 + 参数注入；执行内核复用 draw/comfy.ts（queue 闸/清单核对/提交轮询取图）。 */
 import { randomInt, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { ComfyBusy, execGraph, uploadRefImage, type Graph } from "../draw/comfy.ts";
+import { execGraph, runExclusive, uploadRefImage, type Graph } from "../draw/comfy.ts";
 
 const QUALITY_UNET = "qwen_image_2.1_bf16.safetensors";
 const TURBO_UNET = "qwen_image_2.1_turbo_int8_convrot.safetensors";
@@ -74,15 +74,11 @@ function makeQwenGraph(args: QwenDrawArgs): Graph {
   return g;
 }
 
-let busy = false;
-
 /** 出图经 PreviewImage 走 temp（不污染 output 目录），图由调用方落 gen/。deadline 覆盖冷加载 + 2048 域。 */
 export async function runQwenDraw(url: string, args: QwenDrawArgs, onSubmitted: () => void, signal?: AbortSignal): Promise<Buffer> {
-  if (busy) throw new ComfyBusy("ComfyUI busy");
-  busy = true;
-  try {
+  return runExclusive(async () => {
     const uploaded = args.ref ? await uploadRefImage(url, args.ref.bytes, args.ref.ext, signal) : undefined;
     const ref = args.ref && uploaded !== undefined ? { ...args.ref, name: uploaded } : undefined;
     return await execGraph(url, makeQwenGraph({ ...args, ref }), { deadline: 500_000, outputNode: "9", outputType: "temp", onSubmitted, signal });
-  } finally { busy = false; }
+  });
 }
