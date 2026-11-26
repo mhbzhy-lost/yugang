@@ -45,7 +45,8 @@ const MODE_LABELS: Readonly<Record<DrawMode, string>> = {
 class DrawDisabledError extends Error {}
 
 export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration {
-  if (!deps.drawBackends) validateAllDrawBackends();
+  validateAllDrawBackends();
+  if (deps.drawBackends) validateAllDrawBackends(deps.drawBackends);
 
   const root = resolve(deps.mediaRoot);
   const realRoot = (() => { try { return realpathSync(root); } catch { return root; } })();

@@ -493,3 +493,38 @@ test("取消围栏、outbox 机械直发与 fallback、Schema/文案/文档/runt
   const runtimeSrc = readFileSync(join(ROOT, "src", "app", "runtime.ts"), "utf8");
   assert.ok(runtimeSrc.includes("drawBackend: () => fishConfig().config.drawBackend"));
 });
+
+test("createDrawTool 启动期必调后端 validateStartup，坏契约后端立即拒启", () => {
+  const prompts = loadPrompts(join(ROOT, "prompt"));
+  const manifests = loadToolManifests(join(ROOT, "src", "tools"), { memeTags: prompts.memeTags });
+  mergeToolMessages(manifests, prompts.messages);
+  const drawManifest = manifests.get("draw")!;
+  const brokenBackend: DrawBackend = {
+    id: "broken_backend",
+    loraFamily: "anima",
+    ratioSizes: makeRatios(1),
+    capabilities: {
+      modes: { single: true, fast: false, ref: false, multi: false },
+      hd: false,
+      styleModes: [],
+      framing: false,
+      spacing: false,
+    },
+    validateStartup() {
+      throw new Error("draw workflow contract mismatch: tampered node");
+    },
+    buildGraph(): DrawBuiltGraph {
+      throw new Error("unreachable");
+    },
+  };
+  assert.throws(
+    () =>
+      createDrawTool(drawManifest, {
+        prompts,
+        mediaRoot: WORK,
+        react: () => {},
+        drawBackends: new Map([["broken_backend", brokenBackend]]),
+      }),
+    /contract mismatch: tampered node/,
+  );
+});
