@@ -37,6 +37,7 @@ fish.config.json 受控字段白名单（生效时机逐字段标注）：
 | memeCooldownMinutes | 数值 | 热加载 | 0–240，表情包跨轮冷却（分钟） |
 | gifAutoCollect | 布尔 | 热加载 | GIF 自动收录开关：缺省 false = 动图同静态图，ambient 轮不附收录标记、meme_add 只收主人点头轮的 inbound 动图；true 才恢复旧自动收行为 |
 | drawEnabled | 布尔 | 热加载 | 本地画图总开关（资源闸）：缺省 true；false 时 draw 入口即拒、真正提交前再复核一次，热生效不重启，用来临时让出 GPU。COMFYUI_URL 仍只作连接地址 |
+| drawBackend | 字符串 | 热加载 | 本地画图（draw）使用的底模后端，仅支持 anima3.8b，缺省 anima3.8b；改完下一次调用即生效，不用重启。同进程热切多套 ComfyUI 管线时可能出现显存驻留/it/s 漂移（ComfyUI dynamic VRAM 特性） |
 | drawRemote | 对象 | 热加载 | 远程生图（draw_remote）配置，只认三个键：enabled（true/false，缺省 true；false = draw_remote 入口即拒、提交前再复核一次，用来临时停掉远程生图）、provider（当前通道，仅支持 gpt / wan / qwen / gemini，缺省 qwen；改完下一次调用就生效，不用重启）、models（对象：通道 → 模型名，只认 gpt / wan / qwen / gemini 四个键，值必须是非空字符串，缺省 gpt-image-2.6-flare / wan2.7-image / qwen-image-3.0-pro / gemini-3.1-flash-image；只写一个通道不会冲掉其它通道，点路径写法如 `drawRemote.models.gemini`、`drawRemote.models.qwen`）。各通道的端点与凭据仍读 config/models.json 与 config/auth.json，这一块里出现 apiKey / key / token / access / refresh / secret 之类的键会整块拒绝、不落盘；未知键告警并忽略，全部非法才整块拒绝 |
 | voices | 对象 | 热加载 | 人格 → 语音配置，支持两种 engine：默认 `gpt-sovits`（单实例热切：`url`/`gptModel`/`sovitsModel`/`referWav`/`referText` 必填，`referLanguage` 默认 zh）或 `qwen-tts`（云端 SpeechSynthesizer：`engine: "qwen-tts"`、`url`/`model`/`voice` 必填，`provider` 默认 `qwen-token-plan-cn` 从 `config/auth.json` 读 key、`language` 默认 zh、`instruction` 可选）；两者均支持可选 `speed`（0.5–2）。严禁把 apiKey 写入 fish.config.json，缺字段会 fail closed |
 | weeklyGroupId | 字符串 | 热加载 | 周报群号（纯数字），空串 = 不发；下次周报触发时按新值执行 |

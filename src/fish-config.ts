@@ -12,6 +12,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { FISH_CONFIG_PATH } from "./paths.ts";
+import { DEFAULT_DRAW_BACKEND, DRAW_BACKEND_IDS } from "./tools/draw/backends/ids.ts";
 
 /** 搭话模式标记（兼容 harness 的 runtime 裁剪）：next = 开窗两态；free = 自由活动模式
  *  （专用白名单群恒可搭话、60 秒一拍合并）；非群会话（私聊 / worker）标 legacy 以裁掉
@@ -303,6 +304,11 @@ export interface FishConfig {
    */
   drawEnabled: boolean;
   /**
+   * 本地画图模型后端标识（2026-11-27 新增，热生效）：缺省 anima3.8b。每次画图现读，改完下一次生效不重启；
+   * 同进程热切多套 ComfyUI 管线时可能出现显存驻留/it/s 漂移（ComfyUI dynamic VRAM 特性，见 AGENTS.md 排障规程）。
+   */
+  drawBackend: string;
+  /**
    * 远程生图（draw_remote）热配置（2026-11-25）：总开关、当前通道与各通道模型名。每次调用现读，
    * 改完即生效不重启；端点与凭据不在这里（仍读 config/models.json 与 config/auth.json），写进来整块拒绝。
    */
@@ -402,6 +408,13 @@ function checkGifAutoCollect(raw: unknown): FieldCheck {
 function checkDrawEnabled(raw: unknown): FieldCheck {
   if (typeof raw === "boolean") return { ok: true, value: raw };
   return { ok: false, reason: "drawEnabled 必须是 true/false" };
+}
+
+function checkDrawBackend(raw: unknown): FieldCheck {
+  if (typeof raw === "string" && (DRAW_BACKEND_IDS as readonly string[]).includes(raw)) {
+    return { ok: true, value: raw };
+  }
+  return { ok: false, reason: `drawBackend 仅支持 ${DRAW_BACKEND_IDS.join(" / ")}` };
 }
 
 /** 凭据样键名（大小写不敏感的子串）：apiKey / key / token / access / refresh / secret。 */
@@ -923,6 +936,7 @@ export const FISH_CONFIG_FIELDS: readonly FishConfigFieldSpec[] = [
   { name: "memeCooldownMinutes", effect: "hot", check: numberIn("memeCooldownMinutes 必须在 0–240", 0, 240) },
   { name: "gifAutoCollect", effect: "hot", check: checkGifAutoCollect },
   { name: "drawEnabled", effect: "hot", check: checkDrawEnabled },
+  { name: "drawBackend", effect: "hot", check: checkDrawBackend },
   { name: "drawRemote", effect: "hot", check: checkDrawRemote },
   { name: "voices", effect: "hot", check: checkVoices },
   { name: "weeklyGroupId", effect: "hot", check: checkWeeklyGroup },
@@ -979,6 +993,7 @@ const DEFAULTS: FishConfig = {
   toolTimeoutSeconds: 30,
   gifAutoCollect: false,
   drawEnabled: true,
+  drawBackend: DEFAULT_DRAW_BACKEND,
   drawRemote: DRAW_REMOTE_DEFAULTS,
 };
 

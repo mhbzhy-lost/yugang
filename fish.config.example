@@ -88,6 +88,8 @@
   "gifAutoCollect": false,
   "_drawEnabled": "注释：本地画图总开关（资源闸）——true（缺省）= draw 正常提交 ComfyUI；false = draw 入口即拒、真正 POST 前再复核一次，热生效不重启，用来临时让出 GPU（如离线实验期）。COMFYUI_URL 仍只作连接地址，不再兼作停用手段。布尔，非法告警保留缺省",
   "drawEnabled": true,
+  "_drawBackend": "注释：本地画图（draw）使用的底模后端，热生效不重启；当前仅支持 anima3.8b（缺省 anima3.8b）。同进程热切多套 ComfyUI 管线时可能出现显存驻留或 it/s 漂移（ComfyUI dynamic VRAM 特性，参见 AGENTS.md 排障规程）",
+  "drawBackend": "anima3.8b",
   "drawRemote": {
     "enabled": true,
     "provider": "qwen",
