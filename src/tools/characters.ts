@@ -19,6 +19,30 @@ export interface CharacterSection {
   readonly alias?: readonly string[];
 }
 
+export interface LoraVariant {
+  readonly file: string;
+  readonly weight?: number;
+}
+
+export interface LoraTarget {
+  readonly backendId: string;
+  readonly loraFamily: string;
+}
+
+export interface ResolvedLora {
+  readonly file: string;
+  readonly weight: number;
+}
+
+export interface ResolvedCharacter {
+  readonly inject: string;
+  readonly lora?: ResolvedLora;
+}
+
+export interface ResolvedStyle {
+  readonly lora?: ResolvedLora;
+}
+
 export interface CharacterEntry {
   readonly key: string;
   readonly group: EntryGroup;
@@ -33,10 +57,14 @@ export interface CharacterEntry {
   readonly source: string;
   readonly match: readonly string[];
   readonly sections: readonly CharacterSection[];
+  /** 可选多底模 LoRA 覆盖表（键为 backendId 或 loraFamily）。 */
+  readonly loras?: Readonly<Record<string, LoraVariant>>;
 }
 
 const GROUPS: readonly EntryGroup[] = ["aigirls", "honkai3rd", "style"];
 const KEY_RE = /^[a-z][a-z0-9_]*$/;
+const LORA_KEY_RE = /^[a-z0-9][a-z0-9._-]*$/;
+const LORA_FILE_RE = /^[\w .@()-]+\.safetensors$/;
 const SECTION_LIMIT = 300;
 const INJECT_LIMIT = 300;
 const WEIGHT_MIN = 0.4;
@@ -62,7 +90,33 @@ function readList(rel: string): unknown[] {
   return parsed;
 }
 
-function parseEntry(raw: unknown, where: string): CharacterEntry {
+function isValidWeight(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= WEIGHT_MIN && value <= WEIGHT_MAX;
+}
+
+function parseLoras(raw: unknown, where: string): Readonly<Record<string, LoraVariant>> {
+  if (!isObject(raw)) fail(`${where} loras 必须是对象`);
+  const entries = Object.entries(raw);
+  if (entries.length === 0) fail(`${where} loras 不能为空对象`);
+  const result: Record<string, LoraVariant> = {};
+  for (const [targetKey, variantRaw] of entries) {
+    if (!LORA_KEY_RE.test(targetKey)) fail(`${where} loras 键名非法：${targetKey}`);
+    if (!isObject(variantRaw)) fail(`${where} loras.${targetKey} 必须是对象`);
+    const file = variantRaw["file"];
+    if (typeof file !== "string" || !LORA_FILE_RE.test(file) || file.includes("..")) {
+      fail(`${where} loras.${targetKey}.file 必须是合法的 .safetensors 文件名`);
+    }
+    const weight = variantRaw["weight"];
+    if (weight !== undefined && !isValidWeight(weight)) {
+      fail(`${where} loras.${targetKey}.weight 必须在 ${WEIGHT_MIN}–${WEIGHT_MAX}`);
+    }
+    result[targetKey] = weight === undefined ? { file } : { file, weight };
+  }
+  return result;
+}
+
+/** 解析并校验单条角色 / 风格词表记录。 */
+export function parseCharacterEntry(raw: unknown, where: string): CharacterEntry {
   if (!isObject(raw)) fail(`${where} 必须是对象`);
   const key = raw["key"];
   const group = raw["group"];
@@ -76,7 +130,7 @@ function parseEntry(raw: unknown, where: string): CharacterEntry {
   if (typeof inject !== "string" || inject.length > INJECT_LIMIT) fail(`${where} inject 超过 ${INJECT_LIMIT} 字符`);
   if (group !== "style" && !inject.trim()) fail(`${where} 角色条目 inject 不能为空`);
   const weight = raw["weight"];
-  if (typeof weight !== "number" || !Number.isFinite(weight) || weight < WEIGHT_MIN || weight > WEIGHT_MAX) {
+  if (!isValidWeight(weight)) {
     fail(`${where} weight 必须在 ${WEIGHT_MIN}–${WEIGHT_MAX}`);
   }
   const base = raw["base"];
@@ -104,6 +158,8 @@ function parseEntry(raw: unknown, where: string): CharacterEntry {
     }
     return { title, tags, ...(alias === undefined ? {} : { alias: alias as string[] }) };
   });
+  const lorasRaw = raw["loras"];
+  const loras = lorasRaw === undefined ? undefined : parseLoras(lorasRaw, where);
   const entry: CharacterEntry = {
     key,
     group: group as EntryGroup,
@@ -115,6 +171,7 @@ function parseEntry(raw: unknown, where: string): CharacterEntry {
     source,
     match: match as string[],
     sections,
+    ...(loras === undefined ? {} : { loras }),
   };
   return entry;
 }
@@ -123,7 +180,7 @@ function load(): readonly CharacterEntry[] {
   const list: CharacterEntry[] = [];
   for (const rel of FILES) {
     const rows = readList(rel);
-    rows.forEach((row, index) => list.push(parseEntry(row, `${rel}[${index}]`)));
+    rows.forEach((row, index) => list.push(parseCharacterEntry(row, `${rel}[${index}]`)));
   }
   const keys = new Set<string>();
   const matches = new Map<string, string>();
@@ -232,6 +289,43 @@ export function findSection(entry: CharacterEntry, raw: string): CharacterSectio
     else if (hits === bestHits && hits > 0) tie = true;
   }
   return bestHits > 0 && !tie ? best : undefined;
+}
+
+/** 底模名归一化（trim + lower-case），用于与后端 loraFamily 对齐。 */
+export function normalizeLoraFamily(base: string): string {
+  return base.trim().toLowerCase();
+}
+
+/** 按 backendId → loraFamily → legacy base 优先级解析条目的 LoRA 文件与权重。 */
+export function resolveEntryLora(entry: CharacterEntry, target: LoraTarget): ResolvedLora | undefined {
+  const loras = entry.loras;
+  if (loras) {
+    const byBackend = Object.hasOwn(loras, target.backendId) ? loras[target.backendId] : undefined;
+    if (byBackend) return { file: byBackend.file, weight: byBackend.weight ?? entry.weight };
+    const byFamily = Object.hasOwn(loras, target.loraFamily) ? loras[target.loraFamily] : undefined;
+    if (byFamily) return { file: byFamily.file, weight: byFamily.weight ?? entry.weight };
+  }
+  const targetFamily = normalizeLoraFamily(target.loraFamily);
+  if (targetFamily && normalizeLoraFamily(entry.base) === targetFamily) {
+    return { file: entry.lora, weight: entry.weight };
+  }
+  return undefined;
+}
+
+/** draw 用：按目标后端/模型族解析角色注入词与可选 LoRA；未知或 style 组返回 undefined。 */
+export function resolveCharacter(key: string, target: LoraTarget): ResolvedCharacter | undefined {
+  const entry = byKey(key);
+  if (!entry || entry.group === "style") return undefined;
+  const lora = resolveEntryLora(entry, target);
+  return lora === undefined ? { inject: entry.inject } : { inject: entry.inject, lora };
+}
+
+/** draw 用：按目标后端/模型族解析风格可选 LoRA；未知或角色组返回 undefined。 */
+export function resolveStyle(key: string, target: LoraTarget): ResolvedStyle | undefined {
+  const entry = byKey(key);
+  if (!entry || entry.group !== "style") return undefined;
+  const lora = resolveEntryLora(entry, target);
+  return lora === undefined ? {} : { lora };
 }
 
 /** draw 用：角色 LoRA 的文件名、机械注入串与表内预设权重；style 组不可当角色挂。 */
