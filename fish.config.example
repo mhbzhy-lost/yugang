@@ -1,6 +1,4 @@
 {
-  "ambientMinIntervalSeconds": 30,
-  "watchAmbientChance": 0.5,
   "engage": {
     "freeSeconds": 60,
     "freeBrowseChance": 0.03,
