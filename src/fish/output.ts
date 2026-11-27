@@ -5,6 +5,7 @@
 import type { ConversationId, Harness } from "@earendil-works/pi-durable";
 import type { Compactor } from "../compact.ts";
 import { OutboxDoc } from "../store.ts";
+import { OutboundEntry } from "../tools/say-shared.ts";
 import type { FishBase } from "./base.ts";
 import type { Fish } from "./types.ts";
 
@@ -19,8 +20,11 @@ export function installCompact(state: { compactor: Compactor | undefined }): Pic
 
 export function installEnqueue(state: FishBase & { harness: Harness }): Pick<Fish, "enqueue"> {
   return {
-    async enqueue(conversationId: ConversationId, payload) {
+    async enqueue(conversationId: ConversationId, payload, options) {
       await state.harness.commit(async (tx) => {
+        if (options?.recordTranscript) {
+          await tx.appendEntry(OutboundEntry, conversationId, { data: payload });
+        }
         const doc = await tx.doc(OutboxDoc, conversationId);
         doc.queue.push({ ...payload, status: "queued", attempts: 0 });
       }, state.ctx);

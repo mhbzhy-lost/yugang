@@ -69,6 +69,10 @@ export interface FishOptions {
   drawRemote?: () => DrawRemoteConfig;
   /** 远程生图适配器（gpt / wan / qwen / gemini 四通道）；缺省用 runDrawRemote 本体，测试注入桩。 */
   drawRemoteRun?: typeof runDrawRemote;
+  /** 远程生图异步完成后的宿主投递回调：逐条写入 fish.outbound + outbox 并立即冲刷。 */
+  deliverDrawRemote?: (conversationId: ConversationId, payloads: readonly OutboundPayload[]) => Promise<void>;
+  /** 进程停机时用于中止在途异步 draw_remote 后台任务的取消信号。 */
+  drawRemoteSignal?: AbortSignal;
   /** config/models.json 路径；config 工具写回 models 角色表时用。 */
   modelsPath?: string;
   /** ComfyUI 环回隧道地址；给了才有本地画图。 */
@@ -185,7 +189,7 @@ export interface Fish {
   group(groupKey: string, profile?: GroupProfile, persona?: string): Promise<Conversation>;
   /** 把 outbox 里排队的消息发出去；返回实际发了几条。队首卡在 sending 的会话会被跳过（不重发）。 */
   drain(extra?: readonly ConversationId[]): Promise<number>;
-  /** 不经模型直接往 outbox 里排队一条（宿主侧机械回复专用，同样走唯一出口）。 */
-  enqueue(conversationId: ConversationId, payload: OutboundPayload): Promise<void>;
+  /** 不经模型直接往 outbox 里排队一条（宿主侧机械回复专用，同样走唯一出口）；recordTranscript=true 时同事务写入 fish.outbound。 */
+  enqueue(conversationId: ConversationId, payload: OutboundPayload, options?: { recordTranscript?: boolean }): Promise<void>;
   close(): Promise<void>;
 }

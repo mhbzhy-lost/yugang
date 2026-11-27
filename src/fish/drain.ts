@@ -152,17 +152,34 @@ export function installDrain(state: FishBase & { harness: Harness }): DrainParts
     }
   }
 
+  const redrain = new Set<string>();
+
   async function drain(extra: readonly ConversationId[] = []): Promise<number> {
     const snapshot = await harness.snapshot(ChatsDoc, ctx);
     const ids = new Set<ConversationId>([...Object.values(snapshot?.chats ?? {}), ...extra]);
     let total = 0;
     for (const conversationId of ids) {
-      if (state.sending.has(String(conversationId))) continue;
-      state.sending.add(String(conversationId));
+      const key = String(conversationId);
+      if (state.sending.has(key)) {
+        // 正在发送中时收到新 drain 请求（例如异步生图刚入队）：记下补冲标记，当前循环收尾时复查
+        redrain.add(key);
+        continue;
+      }
+      state.sending.add(key);
       try {
-        total += await drainConversation(conversationId);
+        for (;;) {
+          redrain.delete(key);
+          total += await drainConversation(conversationId);
+          if (!redrain.has(key)) break;
+          // 队首停在 sending（发送异常未解除）时不再重复空转
+          const box = await harness.snapshot(OutboxDoc, conversationId, ctx);
+          if (!box?.queue[0] || box.queue[0].status === "sending") {
+            redrain.delete(key);
+            break;
+          }
+        }
       } finally {
-        state.sending.delete(String(conversationId));
+        state.sending.delete(key);
       }
     }
     return total;

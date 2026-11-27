@@ -141,6 +141,14 @@ export interface ToolPackageDeps {
   drawRemote?: () => DrawRemoteConfig;
   /** 远程生图适配器（gpt / wan / qwen / gemini 四通道）；缺省用 runDrawRemote 本体，测试注入桩。 */
   drawRemoteRun?: typeof runDrawRemote;
+  /** 远程生图同步预检（校验输入与配置/凭据存在性，不发网络请求）；缺省用 preflightDrawRemote，测试可注入桩。 */
+  drawRemotePreflight?: typeof import("../media/draw-remote/index.ts").preflightDrawRemote;
+  /** 远程生图异步完成后的宿主投递回调：经 outbox 唯一出口直发并记入 fish.outbound transcript。 */
+  deliverDrawRemote?: (conversationId: ConversationId, payloads: readonly import("./say-shared.ts").OutboundPayload[]) => Promise<void>;
+  /** 进程停机时中止在途异步 draw_remote 任务的取消信号。 */
+  drawRemoteSignal?: AbortSignal;
+  /** 异步 draw_remote 后台任务收敛时的观察回调（测试用于确定性等待，不改变业务行为）。 */
+  onDrawRemoteSettled?: (event: { conversationId: string; status: "ok" | "failed" | "aborted"; files?: string[]; error?: unknown }) => void;
   /** ComfyUI 环回隧道地址；给了才有本地画图。 */
   comfyUrl?: string;
   /** danbooru.csv 路径；给了才能查 tag 词表。 */

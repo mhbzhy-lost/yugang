@@ -40,9 +40,11 @@ export async function installToolSurface(base: FishBase): Promise<ToolSurfacePar
     // 同一条链路两用：watch 校验关注对象、say_* 校验主动 @ 的目标
     ...(options.groupMembersOf ? { groupMembersOf: options.groupMembersOf, membersOf: options.groupMembersOf } : {}),
     ...(options.onWatchChanged ? { onWatchChanged: options.onWatchChanged } : {}),
-    // 远程生图（draw_remote）：热配置现读 + 适配器本体；wanImage 通道留给 wan_gif（视频转 GIF）
+    // 远程生图（draw_remote）：热配置现读 + 适配器本体 + 异步投递与停机信号；wanImage 通道留给 wan_gif（视频转 GIF）
     ...(options.drawRemote ? { drawRemote: options.drawRemote } : {}),
     ...(options.drawRemoteRun ? { drawRemoteRun: options.drawRemoteRun } : {}),
+    ...(options.deliverDrawRemote ? { deliverDrawRemote: options.deliverDrawRemote } : {}),
+    ...(options.drawRemoteSignal ? { drawRemoteSignal: options.drawRemoteSignal } : {}),
     ...(options.wanImage ? { wanImage: options.wanImage } : {}),
     ...(options.comfyUrl === undefined ? {} : { comfyUrl: options.comfyUrl }),
     ...(options.tagsCsv === undefined ? {} : { tagsCsv: options.tagsCsv }),
