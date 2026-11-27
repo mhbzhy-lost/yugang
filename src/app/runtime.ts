@@ -78,6 +78,7 @@ import { clearSeenLinks, recordSeenLinks } from "../egress/seen-links.ts";
 import { shouldSendWorkingReceipt } from "../working-receipt.ts";
 import { shouldNudgeZeroEgress } from "../zero-egress-nudge.ts";
 import {
+  canContinueOnEntry,
   retrySubmissionMode,
   shouldFallbackContinueToInput,
   stripRoundImages,
@@ -1010,7 +1011,7 @@ export async function submitRound(input: {
   let lastSayCount = 0;
   let lastWorkingTools: ReadonlySet<string> = new Set();
   const placedImageEntries: EntryId[] = [];
-  let hasPlacedEntryOnCurrentPage = false;
+  let lastPlacedEntryId: EntryId | undefined;
   try {
     for (let attempt = 1; ; attempt++) {
       assertNewsAdmission(chatKey, conv, trigger);
@@ -1018,14 +1019,16 @@ export async function submitRound(input: {
       if (roundKind !== "news" && attempt === MAX_MODEL_ATTEMPTS && MAX_MODEL_ATTEMPTS > 1) {
         const cleared = await compactWithGuard(conv, true, chatKey);
         if (cleared.compacted) {
-          hasPlacedEntryOnCurrentPage = false;
+          lastPlacedEntryId = undefined;
           console.log(`[鱼缸] ${chatKey} 换页 ${cleared.entries}条/${cleared.chars}字/${cleared.tokens ?? "-"}tok ·强制`);
         }
       }
       // 触发消息绑在 submission 上：轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）。
       // entry 是记忆的唯一原始输入：chatKey / QQ / 昵称 / 原话，不带任何宿主文案；
-      // 重试优先走 continue 复用当前页已落盘输入，避免带图消息重复落盘；仅首次或强制换页后走 input。
-      const mode = attempt === 1 ? "input" : retrySubmissionMode(hasPlacedEntryOnCurrentPage);
+      // 重试前实时核实上次落盘 entry 仍在当前活跃页（防外部 /压缩 或并发换页导致 continue 误答 handoff），
+      // 在页内优先走 continue 复用已有输入、避免带图消息重复落盘；否则走 input。
+      const stillOnPage = attempt > 1 && await canContinueOnEntry(conv, lastPlacedEntryId, ctx);
+      const mode = attempt === 1 ? "input" : retrySubmissionMode(stillOnPage);
       let run: { result: SettledSubmissionRecord; sayCount: number; workingTools: ReadonlySet<string> };
       if (mode === "continue") {
         try {
@@ -1045,7 +1048,7 @@ export async function submitRound(input: {
       }
       settled = run.result;
       if (settled.entry !== undefined) {
-        hasPlacedEntryOnCurrentPage = true;
+        lastPlacedEntryId = settled.entry;
         if (imageBlocks.length > 0) placedImageEntries.push(settled.entry);
       }
       lastSayCount = run.sayCount;

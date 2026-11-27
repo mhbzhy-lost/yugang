@@ -12,6 +12,7 @@ import { MemoryStorage, type Conversation, type EntryId, type SettledSubmissionR
 import { openFish } from "../src/harness.ts";
 import { MEMORY_ENGAGE_KIND, renderTranscript } from "../src/compact.ts";
 import {
+  canContinueOnEntry,
   IMAGE_STRIP_ENTRY_KIND,
   retrySubmissionMode,
   shouldFallbackContinueToInput,
@@ -143,9 +144,40 @@ test("当轮结算立刻剥离图片：本轮模型可见、下一轮零图片�
     await (await conv.submit({ type: "input", content: "下一句" }, ctx)).wait(ctx);
     assert.equal(nextCallImages, 0, "下一轮送给模型的历史上下文应零图片");
 
-    // 摘要 / 渲染仍读取原始文本（不丢内容）
+    // 摘要 / 渲染仍读取原始文本（不丢内容；改查 pi.user / fish.inbound 或 engage_tick 计入 entries）
     const rendered = await renderTranscript(conv);
     assert.ok(rendered.entries > 0);
+    assert.match(rendered.transcript, /下一句/);
+  } finally {
+    await open.close();
+  }
+});
+
+test("外部换页后 canContinueOnEntry 必须返回 false，避免 continue 误答 handoff 摘要（I-1）", async () => {
+  const { faux, fish } = boot();
+  const open = await fish;
+  try {
+    const conv = await open.harness.root(ctx, {
+      agent: { model: { provider: faux.provider.id, modelId: faux.models[0].id } },
+    });
+
+    faux.setResponses([
+      fauxAssistantMessage("", { stopReason: "error", errorMessage: "400 content_filter_1301" }),
+    ]);
+    const attempt1 = await (await conv.submit({
+      type: "input",
+      content: [{ type: "text", text: "原消息" }, IMG_BLOCK_1],
+      entry: { kind: MEMORY_ENGAGE_KIND },
+    }, ctx)).wait(ctx);
+    assert.ok(attempt1.entry !== undefined);
+
+    // 换页前：原 entry 仍在活跃页，可安全 continue
+    assert.equal(await canContinueOnEntry(conv, attempt1.entry, ctx), true);
+    assert.equal(await canContinueOnEntry(conv, undefined, ctx), false);
+
+    // 外部换页（例如主人 /压缩 或并发轮完成换页）：原 entry 已出活跃页，绝不能 continue 去答 handoff
+    await conv.reset("（前情摘要）", ctx);
+    assert.equal(await canContinueOnEntry(conv, attempt1.entry, ctx), false);
   } finally {
     await open.close();
   }
@@ -351,6 +383,7 @@ test("runtime.ts submitRound 接线契约：重试走 continue 回退、nudge �
   assert.ok(start !== -1 && end > start);
   const body = src.slice(start, end);
 
+  assert.match(body, /canContinueOnEntry\(/, "重试循环应通过 canContinueOnEntry 校验原 entry 仍在活跃页");
   assert.match(body, /retrySubmissionMode\(/, "重试循环应接入 retrySubmissionMode");
   assert.match(body, /ConversationBusy/, "应处理 continue 的 ConversationBusy 回退");
   assert.match(body, /shouldFallbackContinueToInput\(/, "应处理 continue 的 nothing_to_answer 回退");

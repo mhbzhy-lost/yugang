@@ -76,6 +76,25 @@ export function retrySubmissionMode(hasPlacedEntryOnCurrentPage: boolean): "cont
   return hasPlacedEntryOnCurrentPage ? "continue" : "input";
 }
 
+/**
+ * 核实本轮先前落盘的 user entry 是否仍在当前活跃页中（防范外部 `/压缩` 或并发轮换页
+ * 把旧 entry 切出活跃页后，`continue` 误把新页的 `pi.reset` handoff 当成用户消息作答）。
+ * 读取异常时保守返回 false（回退 `input`）。
+ */
+export async function canContinueOnEntry(
+  conv: Conversation,
+  entryId: EntryId | undefined,
+  context: Context,
+): Promise<boolean> {
+  if (entryId === undefined) return false;
+  try {
+    const view = await conv.context(context);
+    return view.entries.some((entry) => entry.id === entryId);
+  } catch {
+    return false;
+  }
+}
+
 /** `continue` 结算返回 `nothing_to_answer` 时需回退到 `input` 重新提交。 */
 export function shouldFallbackContinueToInput(result: SettledSubmissionRecord): boolean {
   return result.status === "unanswered" && (result as { reason?: string }).reason === "nothing_to_answer";
