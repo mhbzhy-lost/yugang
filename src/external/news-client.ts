@@ -217,12 +217,34 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** RSS 值节点可能是字符串、数字或混合内容对象（取 #text）。 */
+/** RSS 值节点可能是字符串、数字、混合内容对象（取 #text）或数组（取首项）。 */
 function textOf(value: unknown): string {
+  if (Array.isArray(value)) return value.length > 0 ? textOf(value[0]) : "";
   if (typeof value === "string") return value;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (value !== null && typeof value === "object") return strOf(rec(value)["#text"]);
+  if (value !== null && typeof value === "object") return textOf(rec(value)["#text"]);
   return "";
+}
+
+function decodeResponseBytes(bytes: Uint8Array, contentType: string | null): string {
+  let encoding: string | undefined;
+  const ctMatch = contentType?.match(/charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))/i);
+  if (ctMatch) {
+    encoding = (ctMatch[1] ?? ctMatch[2] ?? ctMatch[3] ?? "").trim();
+  }
+  if (!encoding) {
+    const head = new TextDecoder("latin1").decode(bytes.subarray(0, 512));
+    const xmlMatch = head.match(/<\?xml\b[^>]*\bencoding\s*=\s*["']([^"']+)["']/i);
+    if (xmlMatch) encoding = xmlMatch[1]?.trim();
+  }
+  if (encoding) {
+    try {
+      return new TextDecoder(encoding).decode(bytes);
+    } catch {
+      // 不支持的编码回退 utf-8
+    }
+  }
+  return new TextDecoder("utf-8").decode(bytes);
 }
 
 /** 简介里的 HTML 标签换成空格（只在匹配文本里做，不产出给模型）。 */
@@ -330,7 +352,7 @@ export function createNewsClient(options: NewsClientOptions = {}): NewsClient {
       merged.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    return new TextDecoder("utf-8").decode(merged);
+    return decodeResponseBytes(merged, res.headers.get("content-type"));
   }
 
   async function requestText(url: string): Promise<string> {
@@ -342,9 +364,15 @@ export function createNewsClient(options: NewsClientOptions = {}): NewsClient {
         signal: ctrl.signal,
         redirect: "follow",
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        await Promise.resolve(res.body?.cancel()).catch(() => undefined);
+        throw new Error(`HTTP ${res.status}`);
+      }
       const declared = Number(res.headers.get("content-length") ?? "");
-      if (Number.isFinite(declared) && declared > maxBytes) throw new Error(`响应超限(${declared}B)`);
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        await Promise.resolve(res.body?.cancel()).catch(() => undefined);
+        throw new Error(`响应超限(${declared}B)`);
+      }
       return await readBodyCapped(res);
     } catch (error) {
       if (ctrl.signal.aborted) throw new Error(`超时(>${timeoutMs}ms)`);
@@ -436,7 +464,13 @@ export function createNewsClient(options: NewsClientOptions = {}): NewsClient {
   function parseRss(text: string, source: RssSourceId): CollectedItem[] {
     const out: CollectedItem[] = [];
     for (const entry of parseRssRawItems(text)) {
-      const item = toItem(source, entry["title"], entry["link"], entry["pubDate"], entry["description"]);
+      const item = toItem(
+        source,
+        textOf(entry["title"]),
+        textOf(entry["link"]),
+        textOf(entry["pubDate"]) || entry["pubDate"],
+        textOf(entry["description"]),
+      );
       if (item !== undefined) out.push(item);
       if (out.length >= NEWS_MAX_ITEMS_PER_SOURCE) break;
     }

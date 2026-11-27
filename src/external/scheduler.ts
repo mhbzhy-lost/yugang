@@ -13,8 +13,7 @@
  * 时钟与定时器全部注入（可注入时钟）：测试用假时钟内联验证四条路径；
  * 生产接线用 nodeTimers（unref，不挡进程退出）。
  *
- * "24:00" 这类端点时点按当天 00:00 触发与记账（date 键仍归当天）：跨零点的
- * 「前一天 24:00」与「当天 00:00」是同一瞬间，归一成当天零点后 evaluate/补跑口径自洽。
+ * "24:00" 这类端点时点按次日 00:00 触发与记账（date 键仍归前一日，与 newsScheduledStartAt 一致）。
  */
 import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
 import { defineDoc, type Harness } from "@earendil-works/pi-durable";
@@ -136,17 +135,17 @@ export interface Scheduler {
 
 interface SlotEntry {
   slot: string;
-  /** 当天 00:00 起算的分钟数（"24:00" 归一为 0）。 */
+  /** 当天 00:00 起算的分钟数（"24:00" 归一为 1440 = 次日 00:00）。 */
   minutes: number;
 }
 
-/** "HH:MM" 解析；只认 00:00–23:59 与 24:00（后者归一为当天 0 分）。 */
+/** "HH:MM" 解析；只认 00:00–23:59 与 24:00（后者归一为次日 00:00，即 1440 分）。 */
 function parseSlot(slot: string): number | undefined {
   const m = /^(\d{1,2}):(\d{2})$/.exec(slot.trim());
   if (!m) return undefined;
   const h = Number(m[1]);
   const min = Number(m[2]);
-  if (h === 24 && min === 0) return 0;
+  if (h === 24 && min === 0) return 24 * 60;
   if (h > 23 || min > 59) return undefined;
   return h * 60 + min;
 }
@@ -188,7 +187,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return [...seen.values()].sort((a, b) => a.minutes - b.minutes);
   }
 
-  /** 某天的时点对应的具体时刻（"24:00" 已归一为 0 分 = 当天零点）。 */
+  /** 某天的时点对应的具体时刻（"24:00" 为 1440 分 = 次日零点）。 */
   function slotTimeOn(day: Date, minutes: number): Date {
     return new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(minutes / 60), minutes % 60, 0, 0);
   }
@@ -217,6 +216,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       return;
     }
     memory.set(jobKeyOf(record.date, record.slot), record);
+    const horizon = deps.now().getTime() - JOBS_TTL_DAYS * 86_400_000;
+    for (const [key, job] of memory) {
+      if ((job.finishedAt ?? job.startedAt) < horizon) memory.delete(key);
+    }
   }
 
   /**
@@ -266,34 +269,41 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     log(`job 完成：${date} ${slot}`);
   }
 
-  /** 巡检：把今天所有「已到点、未跑、在补跑窗内」的 slot 按时间顺序跑一遍；超窗的落 skipped。 */
+  /** 巡检：把所有「已到点、未跑、在补跑窗内」的 slot（含昨日 24:00）按时间顺序跑一遍；超窗的落 skipped。 */
   async function evaluate(): Promise<void> {
     const now = deps.now();
     const nowMs = now.getTime();
-    const date = localDay(nowMs);
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
     const windowMs = deps.catchupWindowMs?.() ?? CATCHUP_WINDOW_MS;
     const jobs = await readAll();
-    const due: SlotEntry[] = [];
-    const expired: string[] = [];
+    const due: { entry: SlotEntry; date: string }[] = [];
+    const expired: { slot: string; date: string }[] = [];
+    const candidates: { day: Date; date: string; entry: SlotEntry }[] = [];
     for (const entry of validSlots()) {
-      const at = slotTimeOn(now, entry.minutes);
+      if (entry.minutes >= 24 * 60) {
+        candidates.push({ day: yesterday, date: localDay(yesterday.getTime()), entry });
+      }
+      candidates.push({ day: now, date: localDay(nowMs), entry });
+    }
+    for (const { day, date, entry } of candidates) {
+      const at = slotTimeOn(day, entry.minutes);
       if (at.getTime() > nowMs) continue;
       if (settled(jobs[jobKeyOf(date, entry.slot)], nowMs, Math.max(1, deps.jobTimeoutMs()))) continue;
-      if (nowMs - at.getTime() <= windowMs) due.push(entry);
-      else expired.push(entry.slot);
+      if (nowMs - at.getTime() <= windowMs) due.push({ entry, date });
+      else expired.push({ slot: entry.slot, date });
     }
-    for (const slot of expired) {
+    for (const { slot, date } of expired) {
       await writeRecord({ date, slot, state: "skipped", startedAt: nowMs, finishedAt: nowMs, error: "missed_window" });
       log(`slot 超出补跑窗，记 skipped：${date} ${slot}`);
     }
-    for (const entry of due) {
+    for (const { entry, date } of due) {
       if (stopped) return;
       await runJob(entry.slot, date);
     }
   }
 
   async function cycle(): Promise<void> {
-    if (evaluating) return;
+    if (stopped || evaluating) return;
     evaluating = true;
     try {
       await evaluate();

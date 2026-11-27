@@ -57,7 +57,29 @@ export function createNewsJob(deps: NewsJobDeps) {
   const active = new Set<string>();
   const expired = new Set<string>();
   const timers = new Map<string, { deadline: unknown; watchdog: unknown }>();
+  const backoffs = new Map<string, () => void>();
   const submitting = new Set<string>();
+  let stopEpoch = 0;
+
+  const backoffDelayMs = (attempts: number): number => (attempts <= 1 ? 15_000 : 30_000);
+
+  const sleepBackoff = async (key: string, delayMs: number, publishAt: number, epoch: number): Promise<void> => {
+    const waitMs = Math.min(delayMs, Math.max(0, publishAt - deps.now()));
+    if (waitMs <= 0 || epoch !== stopEpoch || expired.has(key)) return;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      let timer: unknown;
+      const done = (): void => {
+        if (settled) return;
+        settled = true;
+        deps.clearTimer(timer);
+        if (backoffs.get(key) === done) backoffs.delete(key);
+        resolve();
+      };
+      backoffs.set(key, done);
+      timer = deps.setTimer(done, waitMs);
+    });
+  };
 
   const clearTimers = (key: string): void => {
     const current = timers.get(key);
@@ -69,6 +91,7 @@ export function createNewsJob(deps: NewsJobDeps) {
 
   const finish = (key: string, chatKey: string): void => {
     clearTimers(key);
+    backoffs.get(key)?.();
     deps.unfreeze(chatKey, key);
     deps.setCandidates(key, undefined);
     active.delete(key);
@@ -95,6 +118,7 @@ export function createNewsJob(deps: NewsJobDeps) {
   const onDeadline = async (run: NewsRunRecord, chatKey: string): Promise<void> => {
     const key = newsRunKeyOf(run.localDay, run.targetGroup);
     expired.add(key);
+    backoffs.get(key)?.();
     deps.expire(chatKey, key);
     let current: NewsRunRecord | undefined;
     try {
@@ -163,17 +187,20 @@ export function createNewsJob(deps: NewsJobDeps) {
       return;
     }
 
+    const epoch = stopEpoch;
     let cached: { feeds: NewsTopicFeed[]; input: NewsCandidateInput } | undefined;
     try {
       for (;;) {
-        if (expired.has(key) || deps.now() >= initial.publishAt) return;
+        if (epoch !== stopEpoch || expired.has(key) || deps.now() >= initial.publishAt) return;
         let current = await deps.store.read(initial.localDay, initial.targetGroup);
+        if (epoch !== stopEpoch) return;
         if (!current || current.state !== "preparing") {
           if (current?.state === "prepared") return;
           finish(key, chatKey);
           return;
         }
         const claimed = await deps.store.claim(initial.localDay, initial.targetGroup, deps.now());
+        if (epoch !== stopEpoch) return;
         if (!claimed) {
           current = await deps.store.read(initial.localDay, initial.targetGroup);
           if (current?.state === "prepared") return;
@@ -190,13 +217,20 @@ export function createNewsJob(deps: NewsJobDeps) {
             feeds = await deps.collect();
           } catch (error) {
             deps.log(`新闻取料失败 ${key} ${error instanceof Error ? error.message : String(error)}`);
-            if (claimed.attempts! < NEWS_MAX_ATTEMPTS && deps.now() < initial.publishAt) continue;
+            if (epoch !== stopEpoch) return;
+            if (claimed.attempts! < NEWS_MAX_ATTEMPTS && deps.now() < initial.publishAt) {
+              await sleepBackoff(key, backoffDelayMs(claimed.attempts!), initial.publishAt, epoch);
+              continue;
+            }
             throw error;
           }
-          if (expired.has(key) || deps.now() >= initial.publishAt) return;
+          if (epoch !== stopEpoch || expired.has(key) || deps.now() >= initial.publishAt) return;
           const present = feeds.filter((feed) => feed.items.length > 0);
           if (present.length === 0) {
             cached = undefined;
+            if (claimed.attempts! < NEWS_MAX_ATTEMPTS && deps.now() < initial.publishAt) {
+              await sleepBackoff(key, backoffDelayMs(claimed.attempts!), initial.publishAt, epoch);
+            }
             continue;
           }
           cached = { feeds: present, input: deps.candidates(present) };
@@ -313,8 +347,13 @@ export function createNewsJob(deps: NewsJobDeps) {
     },
 
     stop(): void {
+      stopEpoch += 1;
       for (const key of [...timers.keys()]) clearTimers(key);
+      for (const cancel of [...backoffs.values()]) cancel();
+      backoffs.clear();
+      for (const key of [...active]) deps.setCandidates(key, undefined);
       active.clear();
+      expired.clear();
       submitting.clear();
     },
   };

@@ -49,6 +49,38 @@ interface VideoArgs {
 
 const activeVideoTemps = new Set<string>();
 const HEADERS = { "user-agent": "Mozilla/5.0", referer: "https://www.bilibili.com/" };
+const OPUS_IMAGE_MAX_BYTES = 15 * 1024 * 1024;
+
+function isAbortOrCancelled(error: unknown, signal?: AbortSignal): boolean {
+  return Boolean(signal?.aborted) || (error instanceof Error && error.name === "AbortError");
+}
+
+async function readBytesCapped(res: Response, maxBytes: number): Promise<Buffer | null> {
+  const declared = Number(res.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await Promise.resolve(res.body?.cancel()).catch(() => undefined);
+    return null;
+  }
+  const reader = res.body?.getReader();
+  if (reader === undefined) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.byteLength > maxBytes ? null : buf;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value === undefined) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await Promise.resolve(reader.cancel()).catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks, total);
+}
 
 /**
  * 清理上次崩溃/重启留下的抽帧临时目录。
@@ -93,8 +125,12 @@ export function videoErrorText(raw: string, error: unknown, messages: Record<str
   return renderTemplate(messages["video_failed"] ?? "视频没打开：{{url}}", { url: raw });
 }
 
-export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration {
-  const doFetch = fetch;
+export function createVideoTool(
+  manifest: ToolManifest,
+  deps: ToolPackageDeps,
+  options: { fetch?: typeof fetch; client?: BiliClient } = {},
+): ToolRegistration {
+  const doFetch = options.fetch ?? fetch;
   const timeoutMs = 20_000;
   const maxMinutes = 30;
   const qqErrors: Record<string, string> = {
@@ -116,14 +152,17 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
 
   async function getJson(url: string, signal?: AbortSignal): Promise<any> {
     const res = await doFetch(url, { headers: HEADERS, signal: mergedSignal(signal) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      await Promise.resolve(res.body?.cancel()).catch(() => undefined);
+      throw new Error(`HTTP ${res.status}`);
+    }
     return await res.json();
   }
 
   /** 弹幕 XML → {time, text}[]；拿不到返回空数组（不影响主流程）。XML 经 bili-client 取。 */
-  async function fetchDanmaku(client: BiliClient, cid: string): Promise<{ time: number; text: string }[]> {
+  async function fetchDanmaku(client: BiliClient, cid: string, signal?: AbortSignal): Promise<{ time: number; text: string }[]> {
     try {
-      const xml = await client.danmakuXml(cid);
+      const xml = await client.danmakuXml(cid, signal);
       const out: { time: number; text: string }[] = [];
       for (const m of xml.matchAll(/<d p="([^"]+)"[^>]*>([^<]*)<\/d>/g)) {
         const time = Number(m[1].split(",")[0]);
@@ -131,7 +170,8 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         if (Number.isFinite(time) && text.length > 0) out.push({ time, text });
       }
       return out;
-    } catch {
+    } catch (error) {
+      if (isAbortOrCancelled(error, signal)) throw error;
       return [];
     }
   }
@@ -143,13 +183,10 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
     parameters: manifestParameters<VideoArgs>(manifest),
     execute: async (input, api, context) => {
       const args = input as VideoArgs;
-      // 宿主机械提示：本轮第一次调用先说一句「在做了」（working_video），再开始耗时工作；
-      // 拿不到轮标识（live.run.inputs[0]）就不发，不影响后续行为
-      const live = await api.snapshot(LiveDoc, api.conversationId, context);
-      const round = live?.run?.inputs?.[0];
-      deps.onLongWork?.("video", round);
       // 合并后的取消信号：本工具内的直连 fetch / 抽帧子进程 / 视觉描述都消费它
       const signal = context.abortSignal;
+      const live = await api.snapshot(LiveDoc, api.conversationId, context);
+      const round = live?.run?.inputs?.[0];
 
       // 策略在调用侧，工具不做轮类型授权：能不能看由 prompt 的 `[本轮要求]` 与宿主给的
       // 工具面决定。这里只留纯资源闸——每轮成功观看数上限（video.browseMaxViewsPerRound，
@@ -164,16 +201,21 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
       if (!raw || raw.length > 4096) {
         throw new Error(deps.prompts.messages["video_invalid"] ?? "链接不对");
       }
+      if (args.ref !== undefined) {
+        if (!deps.downloadVideo || round === undefined) throw new Error(qqErrors["video_ref_denied"] ?? "video_ref_denied");
+        if (!deps.models || !deps.visionModel) throw new Error(qqErrors["video_vision_missing"] ?? "video_vision_missing");
+      }
+
+      // 宿主机械提示：参数与额度校验通过后再发送「在做了」（working_video）
+      deps.onLongWork?.("video", round);
 
       const startedAt = Date.now();
-      const client = getBiliClient();
+      const client = options.client ?? getBiliClient();
       const tmp = mkdtempSync(join(tmpdir(), "yg-video-"));
       activeVideoTemps.add(tmp);
       try {
         if (args.ref !== undefined) {
-          if (!deps.downloadVideo || round === undefined) throw new Error("video_ref_denied");
-          if (!deps.models || !deps.visionModel) throw new Error("video_vision_missing");
-          const source = await deps.downloadVideo(String(api.conversationId), String(round), raw, tmp, signal);
+          const source = await deps.downloadVideo!(String(api.conversationId), String(round), raw, tmp, signal);
           const data = await extractVideoFrames({ kind: "local", file: source.file }, tmp, signal);
           const described = await describeVideoFrames(deps, data, signal);
           if (!described.lines.length) throw new Error("video_no_frames");
@@ -191,6 +233,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         if (/^https?:\/\/b23\.tv\//.test(raw)) {
           const res = await doFetch(raw, { headers: HEADERS, redirect: "follow", signal: mergedSignal(signal) });
           target = res.url;
+          await Promise.resolve(res.body?.cancel()).catch(() => undefined);
         }
         const bv = target.match(/BV[0-9A-Za-z]{10}/)?.[0];
         if (!bv) {
@@ -232,12 +275,17 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
                 pics.map(async (url, index) => {
                   try {
                     const res = await doFetch(url, { headers: HEADERS, signal: mergedSignal(signal) });
-                    if (!res.ok) return null;
-                    const bytes = Buffer.from(await res.arrayBuffer());
+                    if (!res.ok) {
+                      await Promise.resolve(res.body?.cancel()).catch(() => undefined);
+                      return null;
+                    }
+                    const bytes = await readBytesCapped(res, OPUS_IMAGE_MAX_BYTES);
+                    if (bytes === null) return null;
                     // 被内容审核拒/描述失败的单张图直接跳过，不影响其它图
                     const described = await describeImage(deps, bytes.toString("base64"), res.headers.get("content-type")?.split(";")[0] ?? "image/jpeg", signal);
                     return described.ok ? `[图${index + 1}] ${described.text.replace(/\s+/g, " ").slice(0, 200)}` : null;
-                  } catch {
+                  } catch (error) {
+                    if (isAbortOrCancelled(error, signal)) throw error;
                     return null;
                   }
                 }),
@@ -248,6 +296,8 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
               }
             }
 
+            signal?.throwIfAborted();
+            if (round !== undefined) recordVideoResource(round, `opus:${opusId}`);
             console.log("[鱼缸] video opus", opusId, "总用时", Date.now() - startedAt, "ms");
             return { output: [{ type: "text", text: head.join("\n") + picText }] };
           }
@@ -255,7 +305,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         }
 
         // view / 弹幕 / 热评三类请求经 bili-client（频控共享）；信封检查与错误映射在客户端内完成
-        const d = await client.view(bv);
+        const d = await client.view(bv, signal);
         const duration = d.durationSeconds;
         const cid = d.cid !== undefined ? String(d.cid) : "";
         const capSeconds = Math.min(duration, maxMinutes * 60);
@@ -278,7 +328,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         if (desc) head.push(desc);
 
         // 弹幕
-        const danmaku = await fetchDanmaku(client, cid);
+        const danmaku = await fetchDanmaku(client, cid, signal);
         let danmakuText = "";
         if (danmaku.length > 0) {
           const hot = [...danmaku].sort((a, b) => b.time - a.time).slice(0, 4);
@@ -298,13 +348,16 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
             const data = await extractVideoFrames({ kind: "bilibili", bvid: bv, cid, timestamps: pickVideoTimestamps(danmaku, capSeconds) }, tmp, signal);
             const described = await describeVideoFrames(deps, data, signal);
             if (described.lines.length > 0) framesText = "\n" + deps.prompts.messages["video_frames_header"] + "\n" + described.lines.join("\n");
-          } catch { signal?.throwIfAborted(); console.warn("[鱼缸] B站视频抽帧或描述失败"); }
+          } catch (error) {
+            if (isAbortOrCancelled(error, signal)) throw error;
+            console.warn("[鱼缸] B站视频抽帧或描述失败");
+          }
         }
 
         // 热评（拿不到就略过）；经 bili-client 的 reply 端点（type=1，mode=3 热评序）
         let comments = "";
         try {
-          const replies = (await client.hotReplies(d.aid, 1)).slice(0, 3);
+          const replies = (await client.hotReplies(d.aid, 1, signal)).slice(0, 3);
           if (replies.length > 0) {
             comments =
               "\n" +
@@ -312,7 +365,8 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
               "\n" +
               replies.map((c, i) => `${i + 1}. ${sanitizeExternalText(c.message, { maxLen: 100 })}`).join("\n");
           }
-        } catch {
+        } catch (error) {
+          if (isAbortOrCancelled(error, signal)) throw error;
           // 评论区拿不到不影响
         }
 
@@ -328,6 +382,7 @@ export function createVideoTool(manifest: ToolManifest, deps: ToolPackageDeps): 
         console.log("[鱼缸] video", bv, "总用时", Date.now() - startedAt, "ms");
         return { output: [{ type: "text", text }] };
       } catch (error) {
+        if (isAbortOrCancelled(error, signal)) throw error;
         if (args.ref !== undefined) {
           const key = error instanceof Error && /^video_[a-z_]+$/.test(error.message) ? error.message : "video_download_failed";
           throw new Error(qqErrors[key] ?? deps.prompts.messages["video_download_failed"]);

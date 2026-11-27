@@ -20,7 +20,13 @@ import {
   type DeepSeekSearchOptions,
   type deepseekSearch,
 } from "../src/external/deepseek-search.ts";
-import { DEFAULT_BILI_FILTERS } from "../src/external/bili-client.ts";
+import {
+  DEFAULT_BILI_FILTERS,
+  createBiliClient,
+} from "../src/external/bili-client.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { VideoPoolDoc, type VideoPoolState } from "../src/external/video-pool.ts";
 import { extractLinks } from "../src/egress/seen-links.ts";
 import {
@@ -432,5 +438,158 @@ test("createBiliSearchTool：context.abortSignal 中止时中止底层请求、�
     const { tool } = makeTool(makeDeps(), [[a, b, c]]);
     const text = textOf(await tool.execute({ query: "y", days: 0 } as never, api, ctx) as never);
     assert.ok(text.includes("BV1eqZJYaESc"));
+  }
+});
+
+test("createBiliSearchTool：api.commit 期间遇 AbortError 归还额度并原样上抛", async () => {
+  const a = item("BV1eqZJYaESc");
+  const b = item("BV2eqZJYaESc");
+  const c = item("BV3eqZJYaESc");
+  const d = item("BV4eqZJYaESc");
+  const e = item("BV5eqZJYaESc");
+  const f = item("BV6eqZJYaESc");
+  const poolState: VideoPoolState = { items: [] };
+  const ctrl = new AbortController();
+  let failCommit = true;
+  const api = {
+    conversationId: "conv-commit-abort",
+    callId: 1,
+    snapshot: async (doc: unknown) => {
+      if (doc === LiveDoc) return { run: { inputs: [1] } };
+      if (doc === VideoPoolDoc) return poolState;
+      return undefined;
+    },
+    commit: async (fn: (tx: { doc: () => Promise<VideoPoolState> }) => Promise<void>) => {
+      if (failCommit) {
+        failCommit = false;
+        const abortErr = new Error("aborted during commit");
+        abortErr.name = "AbortError";
+        ctrl.abort(abortErr);
+        throw abortErr;
+      }
+      await fn({ doc: async () => poolState });
+    },
+  } as never;
+  const { tool } = makeTool(makeDeps(), [[a, b, c], [a, b, c], [d, e, f]]);
+  await assert.rejects(
+    tool.execute({ query: "q1", days: 0 } as never, api, { abortSignal: ctrl.signal } as never),
+    (err: unknown) => err instanceof Error && err.name === "AbortError",
+  );
+  // 额度未被占用：仍可成功搜索 2 次
+  const r1 = textOf(await tool.execute({ query: "q2", days: 0 } as never, api, ctx) as never);
+  assert.ok(r1.includes("BV1eqZJYaESc"));
+  const r2 = textOf(await tool.execute({ query: "q3", days: 0 } as never, api, ctx) as never);
+  assert.ok(r2.includes("BV4eqZJYaESc"));
+});
+
+test("createBiliClient：读体挂死超时释放全局 enqueue 锁、4MB 上限 cancel、缺 code 拒放行与 AbortSignal 排队取消", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "yg-bili-test-"));
+  try {
+    // 1. 响应头 200 但响应体永久挂死：超时中断并释放锁，后续请求正常执行
+    {
+      let call = 0;
+      let streamCancelled = false;
+      const client = createBiliClient({
+        varDir: join(dir, "case1"),
+        sameEndpointIntervalMs: 0,
+        timeoutMs: 40,
+        fetchImpl: (async (url: string | URL | Request) => {
+          const u = String(url);
+          if (u.includes("/finger/spi")) {
+            return new Response(JSON.stringify({ code: 0, data: { b_3: "buvid-ok" } }), { status: 200 });
+          }
+          call += 1;
+          if (call === 1) {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start() {},
+                cancel() { streamCancelled = true; },
+              }),
+              { status: 200 },
+            );
+          }
+          return new Response(JSON.stringify({ code: 0, data: { bvid: "BV1eqZJYaESc", aid: 1, title: "ok", desc: "", duration: 10, pubdate: 1, owner: { mid: 1, name: "up" }, stat: {} } }), { status: 200 });
+        }) as unknown as typeof fetch,
+      });
+      await assert.rejects(client.view("BV1eqZJYaESc"));
+      assert.equal(streamCancelled, true, "超时应取消挂起的响应体流");
+      const card = await client.view("BV1eqZJYaESc");
+      assert.equal(card.title, "ok");
+    }
+
+    // 2. 响应体超 4MB 上限拒绝并 cancel()
+    {
+      let cancelled = false;
+      const bigChunk = new Uint8Array(2 * 1024 * 1024);
+      const client = createBiliClient({
+        varDir: join(dir, "case2"),
+        sameEndpointIntervalMs: 0,
+        fetchImpl: (async (url: string | URL | Request) => {
+          if (String(url).includes("/finger/spi")) {
+            return new Response(JSON.stringify({ code: 0, data: { b_3: "buvid-ok" } }), { status: 200 });
+          }
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(bigChunk);
+                controller.enqueue(bigChunk);
+                controller.enqueue(new Uint8Array(1024));
+              },
+              cancel() { cancelled = true; },
+            }),
+            { status: 200 },
+          );
+        }) as unknown as typeof fetch,
+      });
+      await assert.rejects(client.view("BV1eqZJYaESc"), /超限/);
+      assert.equal(cancelled, true);
+    }
+
+    // 3. 缺 code 的 {} 响应拒绝而非当成功 code=0
+    {
+      const client = createBiliClient({
+        varDir: join(dir, "case3"),
+        sameEndpointIntervalMs: 0,
+        fetchImpl: (async (url: string | URL | Request) => {
+          if (String(url).includes("/finger/spi")) {
+            return new Response(JSON.stringify({ code: 0, data: { b_3: "buvid-ok" } }), { status: 200 });
+          }
+          return new Response(JSON.stringify({}), { status: 200 });
+        }) as unknown as typeof fetch,
+      });
+      await assert.rejects(client.view("BV1eqZJYaESc"), /code/);
+    }
+
+    // 4. 外部 AbortSignal 取消时排队/间隔等待立即退出且不消耗预算
+    {
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((r) => { releaseFirst = r; });
+      const client = createBiliClient({
+        varDir: join(dir, "case4"),
+        sameEndpointIntervalMs: 5_000,
+        fetchImpl: (async (url: string | URL | Request) => {
+          if (String(url).includes("/finger/spi")) {
+            return new Response(JSON.stringify({ code: 0, data: { b_3: "buvid-ok" } }), { status: 200 });
+          }
+          await firstGate;
+          return new Response(JSON.stringify({ code: 0, data: { bvid: "BV1eqZJYaESc", aid: 1, title: "ok", desc: "", duration: 10, pubdate: 1, owner: { mid: 1, name: "up" }, stat: {} } }), { status: 200 });
+        }) as unknown as typeof fetch,
+      });
+      // 先热身一次占住 lastStartAt 并获取 buvid
+      releaseFirst();
+      await client.view("BV1eqZJYaESc");
+      const usedBefore = client.snapshot().used;
+
+      // 第二次在 spacingWait (5000ms) 内被外部取消：应立刻退出且不消耗预算
+      const ctrl = new AbortController();
+      const started = Date.now();
+      const p = (client.view as (bvid: string, signal?: AbortSignal) => Promise<unknown>)("BV1eqZJYaESc", ctrl.signal);
+      setTimeout(() => ctrl.abort(new Error("user_abort")), 15);
+      await assert.rejects(p, /user_abort/);
+      assert.ok(Date.now() - started < 1000, "间隔等待期间取消应立即退出");
+      assert.equal(client.snapshot().used, usedBefore, "取消不应消耗预算");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
