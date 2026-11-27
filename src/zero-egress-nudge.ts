@@ -6,8 +6,10 @@
  * 宿主绝不把裸文本直发出去，而是纯追加一条宿主提醒（prompt/messages.md 的
  * zero_egress_nudge）补跑最多 1 次，既守住正文不出境边界，也不击穿前缀缓存。
  *
- * 例外：已触发机械直发工具（draw / qwen_draw / draw_remote / wan_gif / restart）的轮
+ * 例外：已触发机械直发工具（draw / qwen_draw / wan_gif / restart）的轮
  * 由宿主直接经 outbox 交付成品或重启，不要求再调 say_*，不触发补跑。
+ * （draw_remote 于 2026-11-27 改为异步立即返回并取消 working_draw_remote 机械提示，
+ * 本轮须由模型自行 say_words 告知群友，不再豁免。）
  */
 import type { RoundKind } from "./tools/types.ts";
 
@@ -15,7 +17,6 @@ import type { RoundKind } from "./tools/types.ts";
 export const DIRECT_EGRESS_TOOL_FAMILIES: ReadonlySet<string> = new Set([
   "draw",
   "qwen_draw",
-  "draw_remote",
   "wan_gif",
   "restart",
 ]);

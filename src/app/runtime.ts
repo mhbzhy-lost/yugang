@@ -137,6 +137,9 @@ const fishConfig = createConfigLoader();
 // 人格身份丢失 → personaOf 回退「默认」→ 拿默认音色开口（长征机用爱莉声音说话）
 const mappingKeys = new Map<string, string>();
 
+/** 进程停机时用于中止在途异步 draw_remote 后台任务的控制器（在 drainOnStop 第一行触发）。 */
+const drawRemoteAbort = new AbortController();
+
 /** draw 的本地管线变体：onLongWork 里归入同一个 "draw" 家族（同轮只发一条提示）。 */
 const DRAW_VARIANTS = new Set(["draw_fast", "draw_interaction"]);
 
@@ -150,7 +153,6 @@ function workingTextOf(tool: string): string {
     case "draw": return fish.prompts.messages["working_draw"] ?? "";
     case "draw_fast": return fish.prompts.messages["working_draw_fast"] ?? "";
     case "draw_interaction": return fish.prompts.messages["working_draw_interaction"] ?? "";
-    case "draw_remote": return fish.prompts.messages["working_draw_remote"] ?? "";
     case "qwen_draw": return fish.prompts.messages["working_qwen_draw"] ?? "";
     case "meme_import": return fish.prompts.messages["working_meme_import"] ?? "";
     case "meme_add": return fish.prompts.messages["working_meme_add"] ?? "";
@@ -446,9 +448,9 @@ export async function bootRuntime(): Promise<void> {
   thinkingLevel: resolveThinking(fishConfig().config.thinking, modelSelection.main),
   toolTimeoutSeconds: fishConfig().config.toolTimeoutSeconds,
   // 重耗时工具单独放宽：say_voice 要等 GPT-SoVITS 合成（默认超时 120s，覆盖 250s 含空响应重试一次的最坏 240s），
-  // video 要下视频、抽帧、逐帧过视觉模型；draw_remote 各通道内部请求超时 180s，遇 401 强刷重试一次最坏可能触达 210s 外层超时；
+  // video 要下视频、抽帧、逐帧过视觉模型；draw_remote 已改异步立即返回（后台单次请求 600s / 整体 660s），不再需要覆盖；
   // 全局 toolTimeoutSeconds 保持 30 不动
-  toolTimeoutOverrides: { say_voice: 250, video: 90, draw_remote: 210, draw: 1800, qwen_draw: 600, wan_gif: 1200 },
+  toolTimeoutOverrides: { say_voice: 250, video: 90, draw: 1800, qwen_draw: 600, wan_gif: 1200 },
   // codex 订阅走 WebSocket（Node 的 WS 不吃 --use-env-proxy），过代理时在 main provider 写 transport: "sse"
   ...(modelSelection.transport ? { streamTransport: modelSelection.transport } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时
@@ -487,9 +489,19 @@ export async function bootRuntime(): Promise<void> {
       }
     : undefined,
   // 远程静态生图（draw_remote）：通道、各通道模型与总开关只认 fish.config.json 的 drawRemote（热加载），
-  // 每次调用现读，不再从 models.json 的 models.image 选模型；provider 端点与凭据由适配器按 modelsPath 现读
+  // 每次调用现读，不再从 models.json 的 models.image 选模型；provider 端点与凭据由适配器按 modelsPath 现读。
+  // 异步受理后后台出图经 deliverDrawRemote 同事务写 fish.outbound + outbox 并立即冲刷，停机由 drawRemoteAbort 中止。
   drawRemote: () => fishConfig().config.drawRemote,
   drawRemoteRun: runDrawRemote,
+  drawRemoteSignal: drawRemoteAbort.signal,
+  deliverDrawRemote: async (conversationId, payloads) => {
+    if (drawRemoteAbort.signal.aborted) return;
+    for (const payload of payloads) {
+      if (drawRemoteAbort.signal.aborted) return;
+      await fish.enqueue(conversationId, payload, { recordTranscript: true });
+    }
+    if (!drawRemoteAbort.signal.aborted) await drainLoop();
+  },
   // config 工具写回 models 角色表用同一份文件
   modelsPath: modelSelection.main.configSource,
   // config 工具判定「主人私聊轮」用：与 chatKeyFor 同源（两种历史键写法都认）
@@ -532,7 +544,7 @@ export async function bootRuntime(): Promise<void> {
     const count = sayCalled.get(key);
     if (count !== undefined) sayCalled.set(key, count + 1);
   },
-  // 重耗时工具（video/draw〔含管线变体 draw_fast/draw_interaction〕/draw_remote/meme_import/meme_add/restart）execute 入口的机械提示：
+  // 重耗时工具（video/draw〔含管线变体 draw_fast/draw_interaction〕/qwen_draw/meme_import/meme_add/restart）execute 入口的机械提示：
   // 本轮第一次调用时经 outbox 唯一出口发一条拟人文案（prompt/messages.md 的 working_*），
   // 幂等键 working:<tool>:<submissionId> 防崩溃重放；拿不到轮标识或会话映射就不发、不报错。
   // restart 返回 Promise：工具会 await 它，保证提示在进程退出前入队并冲一次 outbox。
@@ -545,8 +557,6 @@ export async function bootRuntime(): Promise<void> {
     if (!shouldSendWorkingReceipt(triggerOf.get(round)?.kind, tool)) return;
     // 只有 draw 的本地管线变体（draw_fast/draw_interaction）算同一家族：同轮只发一条提示，
     // 幂等键也用家族名，换变体重试不会多发（与旧 working:draw:<round> 键兼容）。
-    // 不按 draw_ 前缀聚合：draw_remote 是独立家族，同轮先本地画再远程画各发各的提示，
-    // 零出口豁免（DIRECT_EGRESS_TOOL_FAMILIES）也按各自的家族名判
     const family = DRAW_VARIANTS.has(tool) ? "draw" : tool;
     const sentTools = workingSent.get(round);
     if (sentTools?.has(family)) return; // 同轮同工具家族只发一次
@@ -2506,8 +2516,9 @@ export function stopNews(): void {
   newsJob?.stop();
 }
 
-/** 退出前冲刷 outbox（已承诺发送的消息不丢；在途生成轮会被中断）。 */
+/** 退出前中止在途异步远程生图并冲刷 outbox（先于 closeOnebot 切断新入队，避免断 WS 后留 sending 队首卡死）。 */
 export async function drainOnStop(): Promise<void> {
+  drawRemoteAbort.abort();
   try {
     const sent = await fish.drain();
     if (sent > 0) console.log(`[鱼缸] 退出前补发 ${sent} 条`);

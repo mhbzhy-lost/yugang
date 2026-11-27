@@ -22,7 +22,7 @@ Git 操作优先使用 `git1`；仅在 `git1` 不可用时回退使用 `git`。
 工具面：`say_words`/`say_media`/`say_meme`/`say_voice`（四个出口工具，共享每轮 3 次调用额度，
 可引用，除语音外可点名 @ 群友）、`react`（只贴表情）、
 `look`（看群里的图）、`meme`/`meme_add`（表情包检索与收录）、`meme_import`（主人本地批量导入的登记入口）、
-`draw`（本地 SD 生图）、`draw_remote`（远程生图：GPT Image / Wan / Qwen / Gemini 四通道，通道与模型由 `fish.config.json` 的 `drawRemote` 热配置，出图经 outbox 机械直发）、`search`/`video`（联网查）、
+`draw`（本地 SD 生图）、`draw_remote`（异步远程生图：GPT Image / Wan / Qwen / Gemini 四通道，通道与模型由 `fish.config.json` 的 `drawRemote` 热配置；预检通过立即返回，每群同时最多 1 个在途，后台最长等 600s / 整体 660s，成功经 outbox 机械直发并写 `fish.outbound` transcript，失败静默记日志）、`search`/`video`（联网查）、
 `bili_search`/`bili_video`（关键词检索 B 站候选与元数据核实，实际观看走 `video`）、`tags`（danbooru 词表）；
 以及主人专属的 `read`/`grep`/`write`（草稿区）、`tree`、`config`（改 fish.config.json 受控字段与 models 角色表）、`watch`（特别关注）
 与 `restart`。
@@ -229,7 +229,7 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 - 只有 `say_words` / `say_media` / `say_meme` / `say_voice` 能把东西发到 QQ，且都必须
   `callers: ["model"]`（脚本/嵌套调用不能绕）；四工具共享每轮 3 次**调用**额度（无豁免、
   被拒不计数），额度规划守则（表情包/语音保开口防吞）在 `prompt/runtime.md`
-- **draw 出图机械直发**（主人裁定 2026-11-13）：draw 生成图后由工具经 `enqueueOutbound` 直接入 outbox 发出（同提交写 `fish.outbound` transcript），不再让模型调 say_media、不占开口额度；与 working_*/新闻播报同属宿主机械消息。入队失败回退提示模型手动 say_media 补发。模型侧出口仍只有 say_* 一族；`qwen_draw` / `draw_remote` / `wan_gif` 的成品同款机械直发（`draw_remote` 幂等键 `<conv>:draw_remote:<round>:<file>`，引用锚点钉本轮触发消息）
+- **draw 出图机械直发**（主人裁定 2026-11-13）：draw 生成图后由工具经 `enqueueOutbound` 直接入 outbox 发出（同提交写 `fish.outbound` transcript），不再让模型调 say_media、不占开口额度；与 working_*/新闻播报同属宿主机械消息。入队失败回退提示模型手动 say_media 补发。模型侧出口仍只有 say_* 一族；`qwen_draw` / `wan_gif` 的成品同款机械直发；`draw_remote` 于 2026-11-27 改为异步受理（预检通过立刻返回，取消 `working_draw_remote` 机械提示且移出零出口豁免，由模型本轮自行 `say_words` 告知群友；后台画完经宿主 `fish.enqueue(..., { recordTranscript: true })` + `drainLoop()` 机械直发，幂等键 `<conv>:draw_remote:<round>:<file>`，引用锚点快照自受理时的本轮触发消息；后台失败静默只打已脱敏日志，重启直接中止不重 POST）
 - 任何新增工具都不许直接调用 `emit()`
 - **普通正文永不补发**：无论私聊或被 @，未调用 say_* 的 assistant 正文不进入 outbox；仅保留零出口轮日志，正文自动补发配置已退役。
 - 校验失败必须以 tool 错误返回给模型（文案来自 `prompt/messages.md` 或该工具 `TOOL.md` 的 tool-messages 块），不许静默丢弃
@@ -444,8 +444,8 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 
 - 日志统一带 `HH:MM:SS` 前缀（`src/index.ts` 启动时包一层 console），排查按时间对齐
 - 单次工具调用超时 30 秒（`fish.config` 的 `toolTimeoutSeconds`），个别重耗时工具按 `toolTimeoutOverrides`
-  单独放宽（代码内置：say_voice 250s / video 90s / draw_remote 210s（各通道内部请求 180s，401 强刷重试最坏触达）/ draw 1800s——V8 双人 2 倍域 pass 实测约 8 分半，
-  交互管线 history 等待 1500s，外层另留取图与存储余量），超时以 tool 错误返回，
+  单独放宽（代码内置：say_voice 250s / video 90s / draw 1800s——V8 双人 2 倍域 pass 实测约 8 分半，
+  交互管线 history 等待 1500s，外层另留取图与存储余量；`draw_remote` 已改为异步受理不设工具超时覆盖，后台单次 HTTP 超时 600s / 整体硬顶 660s 并记录分阶段耗时），超时以 tool 错误返回，
   **没有整轮超时**
 
 ### 16. 长期记忆（审批闸 + 公共/私有双轨）

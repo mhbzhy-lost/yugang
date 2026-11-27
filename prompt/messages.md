@@ -102,7 +102,6 @@ working_draw: 在画了，单人一张大概两分钟，稍等一下下
 working_draw_fast: 快速模式起笔，一分钟出头就好，稍等
 working_draw_interaction: 这张要先摆姿势构图，工序多，大概四分钟，稍等哦
 working_qwen_draw: Qwen 在画了，分辨率高的话要一分钟上下，稍等
-working_draw_remote: 这张交给在线画师，稍等
 working_meme_import: 新表情到货，我一张张过目
 working_meme_add: 正在把新表情收进柜子，一张张来
 working_restart: 我去重启一下，马上回来
