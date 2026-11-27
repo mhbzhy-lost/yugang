@@ -4,7 +4,7 @@
  * 出口是「一条消息序列」而不是一段文本：模型一次可以连说几句，每句都要单独过检。
  * 这里只做机械判定，返回错误码；给模型看的文案在 prompt/messages.md 里。
  */
-import { statSync, readFileSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { resolve, sep, extname } from "node:path";
 import { fenceReadablePath } from "../tools/fs-shared.ts";
 
@@ -171,7 +171,15 @@ export function validateMedia(rawPath: string, limits: EgressLimits): Rejection 
     if (st.size > limits.maxMediaBytes) {
       return { code: "media_big", vars: { size: (st.size / 1048576).toFixed(1) } };
     }
-    const head = readFileSync(full).subarray(0, 16);
+    const buf = Buffer.alloc(16);
+    const fd = openSync(full, "r");
+    let bytesRead = 0;
+    try {
+      bytesRead = readSync(fd, buf, 0, 16, 0);
+    } finally {
+      closeSync(fd);
+    }
+    const head = buf.subarray(0, bytesRead);
     const isImage =
       MAGIC.some((sig) => head.subarray(0, sig.length).equals(sig)) ||
       (head.subarray(0, 4).toString("ascii") === "RIFF" && head.subarray(8, 12).toString("ascii") === "WEBP");
@@ -217,7 +225,7 @@ export function findProvenanceLeak(text: string, secrets: readonly string[], min
     if (!secret) continue;
     const masked = maskUrls(secret);
     if (masked.length < minOverlap) continue;
-    const n = longestCommonSubstring(maskedText, masked);
+    const n = longestCommonSubstring(maskedText, masked, minOverlap);
     if (n >= minOverlap) return n;
   }
   return null;
@@ -228,18 +236,21 @@ function maskUrls(text: string): string {
   return text.replace(/https?:\/\/[^\s，。！？、；）)】」』"']+/gi, " ");
 }
 
-/** 经典 DP，带长度上限早退；文本都很短，够用。 */
-export function longestCommonSubstring(a: string, b: string): number {
+/** 经典 DP，使用 Uint32Array 防超长输入溢出，达到 stopAt 立即早退。 */
+export function longestCommonSubstring(a: string, b: string, stopAt?: number): number {
   if (a.length === 0 || b.length === 0) return 0;
-  let prev = new Uint16Array(b.length + 1);
-  let cur = new Uint16Array(b.length + 1);
+  let prev = new Uint32Array(b.length + 1);
+  let cur = new Uint32Array(b.length + 1);
   let best = 0;
   for (let i = 1; i <= a.length; i++) {
     for (let j = 1; j <= b.length; j++) {
       if (a.charCodeAt(i - 1) === b.charCodeAt(j - 1)) {
         const v = prev[j - 1] + 1;
         cur[j] = v;
-        if (v > best) best = v;
+        if (v > best) {
+          best = v;
+          if (stopAt !== undefined && best >= stopAt) return best;
+        }
       } else {
         cur[j] = 0;
       }

@@ -25,13 +25,13 @@ export function installDrain(state: FishBase & { harness: Harness }): DrainParts
     const conversation = await harness.conversation(conversationId, ctx);
     if (!conversation) return undefined;
     const view = await conversation.context(ctx);
-    let found: number | undefined;
-    for (const entry of view.entries) {
+    for (let i = view.entries.length - 1; i >= 0; i--) {
+      const entry = view.entries[i];
       if (entry.kind === "fish.outbound" && (entry.data as { key?: unknown } | undefined)?.key === key) {
-        found = entry.id as number;
+        return entry.id as number;
       }
     }
-    return found;
+    return undefined;
   }
 
   /** drain 后记 sentmap（决策 11b）：每条实际发出的 QQ 消息 id → outbound entryId，30 天滚动
@@ -124,6 +124,19 @@ export function installDrain(state: FishBase & { harness: Harness }): DrainParts
         // 发送链记账（T6，/评 定位）：每条实际发出的 QQ 消息写 fish.sentmap
         await recordSentmap(conversationId, head.key, Array.isArray(result) ? result : []);
       } catch (error) {
+        // 确定尚未送出（如 OneBot 未连接）：直接丢弃队首，避免重连后卡死 sending 600s
+        if ((error as { notSent?: unknown } | null | undefined)?.notSent === true) {
+          await harness.commit(async (tx) => {
+            const doc = await tx.doc(OutboxDoc, conversationId);
+            const index = doc.queue.findIndex((item) => item.key === head.key);
+            if (index >= 0) doc.queue.splice(index, 1);
+          }, ctx);
+          console.error(
+            `[鱼缸] ${String(conversationId)} 发送未发出，丢弃队首：` +
+              `${error instanceof Error ? error.message : error}`,
+          );
+          continue;
+        }
         // 部分发送失败只记成功条目：emit 可能把已发出的 id 挂在错误的 sentIds 上
         //（onebot.SendFailure 约定），成功记完再沿用既有语义（保留 sending 不重试）。
         const partial = (error as { sentIds?: unknown }).sentIds;
@@ -154,32 +167,46 @@ export function installDrain(state: FishBase & { harness: Harness }): DrainParts
 
   const redrain = new Set<string>();
 
+  async function drainOne(conversationId: ConversationId): Promise<number> {
+    const key = String(conversationId);
+    if (state.sending.has(key)) {
+      // 正在发送中时收到新 drain 请求（例如异步生图刚入队）：记下补冲标记，当前循环收尾时复查
+      redrain.add(key);
+      return 0;
+    }
+    state.sending.add(key);
+    let sentCount = 0;
+    try {
+      for (;;) {
+        redrain.delete(key);
+        sentCount += await drainConversation(conversationId);
+        if (!redrain.has(key)) break;
+        // 在 snapshot 挂起前先清除标记，避免期间新到的 redrain 在旧快照返回时被误擦除
+        redrain.delete(key);
+        const box = await harness.snapshot(OutboxDoc, conversationId, ctx);
+        // 队首停在 sending（发送异常未解除）时不再重复空转
+        if (box?.queue[0]?.status === "sending") break;
+        if (!box?.queue[0] && !redrain.has(key)) break;
+      }
+    } finally {
+      state.sending.delete(key);
+    }
+    return sentCount;
+  }
+
   async function drain(extra: readonly ConversationId[] = []): Promise<number> {
     const snapshot = await harness.snapshot(ChatsDoc, ctx);
-    const ids = new Set<ConversationId>([...Object.values(snapshot?.chats ?? {}), ...extra]);
+    const ids = [...new Set<ConversationId>([...Object.values(snapshot?.chats ?? {}), ...extra])];
+    const results = await Promise.allSettled(ids.map((id) => drainOne(id)));
     let total = 0;
-    for (const conversationId of ids) {
-      const key = String(conversationId);
-      if (state.sending.has(key)) {
-        // 正在发送中时收到新 drain 请求（例如异步生图刚入队）：记下补冲标记，当前循环收尾时复查
-        redrain.add(key);
-        continue;
-      }
-      state.sending.add(key);
-      try {
-        for (;;) {
-          redrain.delete(key);
-          total += await drainConversation(conversationId);
-          if (!redrain.has(key)) break;
-          // 在 snapshot 挂起前先清除标记，避免期间新到的 redrain 在旧快照返回时被误擦除
-          redrain.delete(key);
-          const box = await harness.snapshot(OutboxDoc, conversationId, ctx);
-          // 队首停在 sending（发送异常未解除）时不再重复空转
-          if (box?.queue[0]?.status === "sending") break;
-          if (!box?.queue[0] && !redrain.has(key)) break;
-        }
-      } finally {
-        state.sending.delete(key);
+    for (const [index, result] of results.entries()) {
+      if (result.status === "fulfilled") {
+        total += result.value;
+      } else {
+        console.error(
+          `[鱼缸] drain(${String(ids[index])}) 异常:`,
+          result.reason instanceof Error ? result.reason.message : result.reason,
+        );
       }
     }
     return total;

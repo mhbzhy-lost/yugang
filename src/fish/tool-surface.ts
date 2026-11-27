@@ -5,6 +5,7 @@
  * 这是装配链第一步：后面的 extensions / harness 都要消费 `tools` 与 `surface.manifests`。
  */
 import { LiveDoc, type ToolRegistration } from "@earendil-works/pi-durable";
+import { recordTurnSecret } from "../egress/absorb.ts";
 import { REJECTION_CODES } from "../egress/policy.ts";
 import { loadToolSurface, type ToolSurface } from "../tools/loader.ts";
 import { withSeenLinkHarvest, withToolTimeout } from "../tools/timeout.ts";
@@ -124,12 +125,41 @@ export async function installToolSurface(base: FishBase): Promise<ToolSurfacePar
   const tools: readonly ToolRegistration[] = surface.tools.map((tool) => {
     const override = options.toolTimeoutOverrides?.[tool.name];
     const wrapped = withToolTimeout(tool, override === undefined ? toolTimeoutMs : override * 1000, toolTimeoutMessage);
-    return withSeenLinkHarvest(wrapped, async (api, context) => {
+    const linkHarvested = withSeenLinkHarvest(wrapped, async (api, context) => {
       const live = (await (api as { snapshot: (doc: unknown, id: string, c: unknown) => Promise<unknown>; conversationId: string })
         .snapshot(LiveDoc, (api as { conversationId: string }).conversationId, context)) as { run?: { inputs?: unknown[] } } | undefined;
       return live?.run?.inputs?.[0];
     });
+    return withTurnSecretHarvest(linkHarvested);
   });
 
   return { surface, registered, tools };
+}
+
+/** 增量把工具返回文本写入当轮 secrets，零额外 SQLite 读取即可防同轮抄写泄漏。 */
+function withTurnSecretHarvest<T extends ToolRegistration>(tool: T): T {
+  const original = tool.execute as (...args: unknown[]) => Promise<unknown>;
+  return {
+    ...tool,
+    execute: (async (...args: unknown[]) => {
+      const result = await original.apply(tool, args);
+      try {
+        const conversationId = (args[1] as { conversationId?: string | number } | undefined)?.conversationId;
+        if (conversationId !== undefined) {
+          const output = (result as { output?: unknown } | undefined)?.output;
+          if (Array.isArray(output)) {
+            const text = output
+              .filter((block): block is { type?: unknown; text?: unknown } => typeof block === "object" && block !== null)
+              .filter((block) => block.type === "text" && typeof block.text === "string")
+              .map((block) => block.text as string)
+              .join("\n");
+            if (text.length > 0) recordTurnSecret(conversationId, text);
+          }
+        }
+      } catch {
+        // 记账异常不影响工具结果
+      }
+      return result;
+    }) as T["execute"],
+  };
 }

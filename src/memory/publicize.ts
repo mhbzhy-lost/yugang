@@ -1,5 +1,5 @@
 import { renderTemplate } from "../prompt/index.ts";
-import { FACT_TEXT_CHARS, MEMORY_CAPS, type MemoryPatch } from "./model.ts";
+import { FACT_TEXT_CHARS, MEMORY_CAPS, stripInvisible, type MemoryPatch } from "./model.ts";
 
 // ---------------------------------------------------------------- 公共批准的 AI 脱敏
 
@@ -7,8 +7,8 @@ import { FACT_TEXT_CHARS, MEMORY_CAPS, type MemoryPatch } from "./model.ts";
 export interface PublicizeDeps {
   /** prompt/memory-publicize.md 的原文，含 {{patch}}。 */
   template: string;
-  /** 单轮模型调用：输入整份 prompt，返回模型输出原文；异常在本函数内捕获转 failed。 */
-  complete: (prompt: string) => Promise<string>;
+  /** 单轮模型调用：输入整份 prompt 与可选超时信号，返回模型输出原文；异常在本函数内捕获转 failed。 */
+  complete: (prompt: string, signal?: AbortSignal) => Promise<string>;
 }
 
 /**
@@ -19,11 +19,18 @@ export type PublicizeOutcome =
   | { status: "ok"; patch: MemoryPatch }
   | { status: "failed"; reason: "no_json" | "bad_json" | "shape_mismatch" | "unsafe_text" | "model_error" };
 
-/** 与 memory-extract.ts 的 safeShort 同款机械过滤（本地副本，两处常量须同步维护）：
- *  trim、限长、拒绝空串/控制字符/`<>` 标记/注入与隐私模式；不合格返回 undefined。 */
-const PUBLICIZE_INJECTION_RES: readonly RegExp[] = [/忽略(之前|以上|前面)/, /system prompt/i, /系统提示/, /ignore (all )?previous/i];
-const PUBLICIZE_FACT_INJECTION_RES: readonly RegExp[] = [/忽略/, /系统提示/, /system prompt/i, /ignore previous/i, /以后都/, /你必须/, /从现在开始/];
-const PUBLICIZE_PRIVACY_RES: readonly RegExp[] = [
+/** 抽取与公共化共用的机械过滤规则：不可见字符剥离 + trim/限长/控制字符/`<>` 标记/注入与隐私模式。 */
+export const MEMORY_INJECTION_RES: readonly RegExp[] = [/忽略(之前|以上|前面)/, /system prompt/i, /系统提示/, /ignore (all )?previous/i];
+export const MEMORY_FACT_INJECTION_RES: readonly RegExp[] = [
+  /忽略/,
+  /系统提示/,
+  /system prompt/i,
+  /ignore (all )?previous/i,
+  /以后都/,
+  /你必须/,
+  /从现在开始/,
+];
+export const MEMORY_PRIVACY_RES: readonly RegExp[] = [
   /\d{7,}/,
   /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+/,
   /https?:\/\/|www\./i,
@@ -31,12 +38,21 @@ const PUBLICIZE_PRIVACY_RES: readonly RegExp[] = [
   /\b(sk|pk|ghp|gho|xoxb?)[-_a-zA-Z0-9]{10,}/i,
 ];
 
-function publicSafeText(value: string, max: number, extraInjections: readonly RegExp[]): string | undefined {
-  const text = value.trim();
+/** 公共过滤：先移除不可见字符再 trim、限长、拒绝控制字符/`<>`/注入与隐私模式；不合格返回 undefined。 */
+export function sanitizeMemoryText(
+  value: unknown,
+  max: number,
+  extraInjections: readonly RegExp[] = MEMORY_INJECTION_RES,
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = stripInvisible(value).trim();
   if (text.length === 0 || text.length > max) return undefined;
   if (/[\u0000-\u001F\u007F]/.test(text)) return undefined;
   if (text.includes("<") || text.includes(">")) return undefined;
-  for (const pattern of [...extraInjections, ...PUBLICIZE_PRIVACY_RES]) {
+  for (const pattern of extraInjections) {
+    if (pattern.test(text)) return undefined;
+  }
+  for (const pattern of MEMORY_PRIVACY_RES) {
     if (pattern.test(text)) return undefined;
   }
   return text;
@@ -56,7 +72,7 @@ function publicSafeText(value: string, max: number, extraInjections: readonly Re
  *     任一条不合格整体失败；
  *   - 没有可改写文本（空 patch / 只有 supersede）时不调模型，原样返回。
  */
-export async function publicizePatch(patch: MemoryPatch, deps: PublicizeDeps): Promise<PublicizeOutcome> {
+export async function publicizePatch(patch: MemoryPatch, deps: PublicizeDeps, signal?: AbortSignal): Promise<PublicizeOutcome> {
   const inPeople = patch.people ?? [];
   const inLore = patch.lore ?? [];
   const inCards = patch.cards ?? [];
@@ -71,7 +87,9 @@ export async function publicizePatch(patch: MemoryPatch, deps: PublicizeDeps): P
 
   let output: string;
   try {
-    output = await deps.complete(renderTemplate(deps.template, { patch: JSON.stringify(input, null, 2) }));
+    const timeout = AbortSignal.timeout(180_000);
+    const effectiveSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    output = await deps.complete(renderTemplate(deps.template, { patch: JSON.stringify(input, null, 2) }), effectiveSignal);
   } catch {
     return { status: "failed", reason: "model_error" };
   }
@@ -131,18 +149,18 @@ export async function publicizePatch(patch: MemoryPatch, deps: PublicizeDeps): P
   // 机械过滤：facts 用 fact 级注入模式，lore/cards 用通用模式；任一条不合格整体失败
   for (let i = 0; i < factTexts.length; i++) {
     for (let j = 0; j < factTexts[i].length; j++) {
-      const clean = publicSafeText(factTexts[i][j], FACT_TEXT_CHARS, PUBLICIZE_FACT_INJECTION_RES);
+      const clean = sanitizeMemoryText(factTexts[i][j], FACT_TEXT_CHARS, MEMORY_FACT_INJECTION_RES);
       if (clean === undefined) return { status: "failed", reason: "unsafe_text" };
       factTexts[i][j] = clean;
     }
   }
   for (let i = 0; i < loreTexts.length; i++) {
-    const clean = publicSafeText(loreTexts[i], MEMORY_CAPS.loreTextChars, PUBLICIZE_INJECTION_RES);
+    const clean = sanitizeMemoryText(loreTexts[i], MEMORY_CAPS.loreTextChars, MEMORY_INJECTION_RES);
     if (clean === undefined) return { status: "failed", reason: "unsafe_text" };
     loreTexts[i] = clean;
   }
   for (let i = 0; i < cardTexts.length; i++) {
-    const clean = publicSafeText(cardTexts[i], MEMORY_CAPS.cardTextChars, PUBLICIZE_INJECTION_RES);
+    const clean = sanitizeMemoryText(cardTexts[i], MEMORY_CAPS.cardTextChars, MEMORY_INJECTION_RES);
     if (clean === undefined) return { status: "failed", reason: "unsafe_text" };
     cardTexts[i] = clean;
   }

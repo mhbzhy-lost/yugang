@@ -121,6 +121,7 @@ export function parseMessageTable(text: string, path = "messages.md"): Record<st
     if (!line || line.startsWith("#")) continue;
     const match = /^([a-z0-9_]+):\s*(.+)$/.exec(line);
     if (!match) throw new Error(`${path}:${index + 1} 不是 "key: text" 形式：${line}`);
+    if (Object.hasOwn(table, match[1])) throw new Error(`${path}:${index + 1} 重复的文案 key：${match[1]}`);
     table[match[1]] = match[2].trim();
   }
   return table;
@@ -129,14 +130,28 @@ export function parseMessageTable(text: string, path = "messages.md"): Record<st
 /** `{{name}}` 严格替换：缺变量直接报错，避免半渲染的 prompt 偷偷上线。 */
 export function renderTemplate(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi, (_all, name: string) => {
-    if (!(name in vars)) throw new Error(`prompt 模板缺少变量：${name}`);
+    if (!Object.hasOwn(vars, name) || vars[name] === undefined) throw new Error(`prompt 模板缺少变量：${name}`);
     return vars[name];
   });
 }
 
 /** 审查用：列出所有 prompt 文件、大小与 sha256。工具说明在 src/tools/<name>/TOOL.md，不在 prompt/ 下。 */
 export function auditPrompts(root: string): { file: string; bytes: number; sha256: string }[] {
-  const files = ["runtime.md", "persona.md", "ops.md", "handoff.md", "memory-extract.md", "memory-extract-review.md", "memory-publicize.md", "news-digest.md", "group-profile.md", "people.md", "messages.md"];
+  const files = [
+    "runtime.md",
+    "persona.md",
+    "ops.md",
+    "handoff.md",
+    "memory-extract.md",
+    "memory-extract-review.md",
+    "memory-publicize.md",
+    "news-digest.md",
+    "group-profile.md",
+    "people.md",
+    "meme-tags.md",
+    "meme-retag.md",
+    "messages.md",
+  ];
   const personasDir = join(root, "personas");
   if (existsSync(personasDir)) {
     for (const entry of readdirSync(personasDir).sort()) {

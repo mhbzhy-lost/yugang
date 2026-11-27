@@ -122,27 +122,38 @@ export function monthAnchor(at: number): string {
 
 /** 单人一行：事实在前（带 YYYY-MM 锚点），风格与口头禅在后；超预算时从后往前丢整段。 */
 function personBlock(person: MemoryPerson, display: string): string | undefined {
+  const safeDisplay = sectionSafe(display);
   const facts = person.facts
     .filter((fact) => fact.invalidAt === undefined)
     .sort((a, b) => b.at - a.at)
     .slice(0, 3);
   const segments: string[] = [];
   const factText = facts
-    .filter((fact) => sectionSafe(fact.text).length > 0)
-    .map((fact) => `${sectionSafe(fact.text)}（${monthAnchor(fact.at)}）`)
+    .map((fact) => ({ text: sectionSafe(fact.text), at: fact.at }))
+    .filter((fact) => fact.text.length > 0)
+    .map((fact) => `${fact.text}（${monthAnchor(fact.at)}）`)
     .join("；");
   if (factText) segments.push(factText);
   if (person.style) segments.push(`风格：${sectionSafe(person.style)}`);
   if (person.catchphrases.length > 0) segments.push(`口头禅：${person.catchphrases.map(sectionSafe).join(" / ")}`);
   if (segments.length === 0) return undefined;
-  const total = () => `- ${sectionSafe(display)}：${segments.join("；")}`.length;
+  const prefix = `- ${safeDisplay}：`;
+  const total = () => prefix.length + segments.join("；").length;
   while (total() > PERSON_BUDGET && segments.length > 1) segments.pop();
   if (total() > PERSON_BUDGET) {
-    // 单段仍超预算：截断该段（保持完整行，不产生标记碎片）
-    const over = total() - PERSON_BUDGET;
-    segments[0] = segments[0].slice(0, Math.max(1, segments[0].length - over));
+    // 单段仍超预算：按码点截断该段（保持完整行且不切碎 UTF-16 代理对）
+    const budget = Math.max(1, PERSON_BUDGET - prefix.length);
+    const chars = [...segments[0]];
+    let len = 0;
+    let count = 0;
+    for (const ch of chars) {
+      if (count > 0 && len + ch.length > budget) break;
+      len += ch.length;
+      count += 1;
+    }
+    segments[0] = chars.slice(0, Math.max(1, count)).join("");
   }
-  return `- ${sectionSafe(display)}：${segments.join("；")}`;
+  return `${prefix}${segments.join("；")}`;
 }
 
 /** 命中判定：正文里出现该 key（忽略首尾空白）即算命中。 */

@@ -119,11 +119,20 @@ test("pi-durable 的 compaction 已关掉", async () => {
 
 test("模板缺变量直接报错，不留半渲染的 prompt", () => {
   assert.throws(() => renderTemplate("a {{missing}} b", {}), /缺少变量/);
+  assert.throws(() => renderTemplate("{{toString}}", {}), /缺少变量/);
+  assert.throws(() => renderTemplate("{{a}}", { a: undefined as never }), /缺少变量/);
   assert.equal(renderTemplate("{{what}}", { what: "x" }), "x");
 });
 
-test("messages.md 格式错误会报出行号", () => {
+test("messages.md 格式错误会报出行号，重复 key 直接报错", () => {
   assert.throws(() => parseMessageTable("ok: fine\n这不是 key value", "m.md"), /m\.md:2/);
+  assert.throws(() => parseMessageTable("dup: 一\ndup: 二", "m.md"), /m\.md:2.*重复/);
+});
+
+test("auditPrompts 包含 meme-tags.md 与 meme-retag.md", () => {
+  const files = auditPrompts(PROMPTS).map((f) => f.file);
+  assert.ok(files.includes("meme-tags.md"), "auditPrompts 缺少 meme-tags.md");
+  assert.ok(files.includes("meme-retag.md"), "auditPrompts 缺少 meme-retag.md");
 });
 
 test("messages.md 里没有死文案，tools/ 里没有死文件", async () => {

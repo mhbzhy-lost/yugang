@@ -14,6 +14,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { installStartupMigrations } from "../src/fish/startup.ts";
 
 const FATAL = new Set(["TS2304", "TS2448", "TS2454", "TS2451", "TS2552"]);
 
@@ -48,4 +50,37 @@ test("入口脚本能通过「未声明/重复声明/提前使用」检查", () 
     });
 
   assert.deepEqual(fatal, [], `入口脚本有启动级错误：\n${fatal.join("\n")}`);
+});
+
+test("installStartupMigrations 将多会话 configure 合并进单次事务提交", async () => {
+  const configured: number[] = [];
+  let commitCalls = 0;
+  const fakeHarness = {
+    async snapshot() {
+      return { chats: { "qq:group:1": 101, "qq:group:2": 102, "qq:group:3": 103 } };
+    },
+    async conversation(id: number) {
+      return { id };
+    },
+    async commit(fn: (tx: unknown) => Promise<void>) {
+      commitCalls += 1;
+      const fakeTx = {
+        async doc(_token: unknown, convId: number) {
+          configured.push(convId);
+          return { model: undefined, maxTurns: 1 };
+        },
+      };
+      await fn(fakeTx);
+    },
+  };
+
+  await installStartupMigrations({
+    harness: fakeHarness as never,
+    options: { model: { provider: "faux", modelId: "faux-1" } } as never,
+    personaExtensions: new Map(),
+    ctx: BACKGROUND_CONTEXT,
+  } as never);
+
+  assert.equal(commitCalls, 1, "多会话 configure 应合并为单次事务提交");
+  assert.equal(configured.length, 3);
 });

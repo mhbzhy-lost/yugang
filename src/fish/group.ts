@@ -98,6 +98,10 @@ export function installGroup(
         return conversation;
       });
       groups.set(key, existing);
+      // 首次建会话失败不得永久缓存坏 Promise，清理后允许后续重试
+      existing.catch(() => {
+        if (groups.get(key) === existing) groups.delete(key);
+      });
     }
     return existing;
   }
