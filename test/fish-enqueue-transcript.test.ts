@@ -151,3 +151,53 @@ test("fish.drain：会话正在发送期间有新消息入队并触发 drain，�
   assert.equal(total, 2, "第一趟 drain 应顺带补冲并发期间新入队的 k2");
   assert.deepEqual(emitted, ["k1", "k2"]);
 });
+
+test("fish.drain：发送失败留 sending 队首时，并发 drain 触发补冲应直接收敛不死循环", async (t) => {
+  const mediaRoot = createTempDir("yg-drain-stuck-m-");
+  const workspaceRoot = createTempDir("yg-drain-stuck-w-");
+  t.after(() => {
+    rmSync(mediaRoot, { recursive: true, force: true });
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  let releaseFail!: () => void;
+  let notifyEntered!: () => void;
+  const waitEntered = new Promise<void>((resolve) => {
+    notifyEntered = resolve;
+  });
+  const waitFail = new Promise<void>((resolve) => {
+    releaseFail = resolve;
+  });
+  let emitCount = 0;
+
+  const fish = await openFish({
+    storage: new MemoryStorage(),
+    models: makeModels(),
+    model: { provider: "faux", modelId: "faux-1" },
+    promptRoot: PROMPTS,
+    mediaRoot,
+    workspaceRoot,
+    emit: async () => {
+      emitCount++;
+      notifyEntered();
+      await waitFail;
+      throw new Error("onebot disconnected");
+    },
+    react: () => {},
+  });
+  t.after(async () => {
+    await fish.close();
+  });
+
+  const conv = await fish.group("qq:group:2003");
+  await fish.enqueue(conv.id, { items: ["会失败"], quote: false, at: Date.now(), key: "fail-1" });
+
+  const first = fish.drain();
+  await waitEntered;
+  await fish.enqueue(conv.id, { items: ["后到"], quote: false, at: Date.now(), key: "after-1" });
+  await fish.drain([conv.id]);
+  releaseFail();
+  const sent = await first;
+  assert.equal(sent, 0);
+  assert.equal(emitCount, 1, "队首卡 sending 时不得重试或死循环");
+});

@@ -323,6 +323,8 @@ try {
   const watchChanges: { conversationId: string; people: { userId: string; note?: string }[] }[] = [];
   let watched = new Set<string>();
   let currentTrigger: { messageId?: number | string; mentionsBot: boolean; userId?: number } = { mentionsBot: true, userId: 100001 };
+  const drawRemoteDeliverWaiters: Array<() => void> = [];
+  let drawRemoteDeliveredCount = 0;
 
   fish = await openFish({
     storage: new MemoryStorage(),
@@ -335,12 +337,20 @@ try {
     master: MASTER,
     modelsPath: tmpModelsPath,
     searchKey,
-    // 远程生图：与 runtime 同款注入（热配置现读 + 适配器本体）；通道钉 gpt，凭据 / 端点都读隔离副本
+    // 远程生图：与 runtime 同款注入（热配置现读 + 适配器本体 + 异步出图投递）；通道钉 gpt，凭据 / 端点都读隔离副本
     drawRemote: () => s10DrawRemote,
     drawRemoteRun: runDrawRemote,
+    deliverDrawRemote: async (cid, payloads) => {
+      for (const payload of payloads) {
+        await fish.enqueue(cid, payload, { recordTranscript: true });
+      }
+      await fish.drain([cid]);
+      drawRemoteDeliveredCount += payloads.length;
+      while (drawRemoteDeliverWaiters.length > 0) drawRemoteDeliverWaiters.shift()?.();
+    },
     comfyUrl: process.env.COMFYUI_URL,
     tagsCsv: tagsCsvPath,
-    toolTimeoutOverrides: { video: 90, draw_remote: 210, draw: 600 },
+    toolTimeoutOverrides: { video: 90, draw: 600 },
     triggerOf: (roundId) => currentTrigger,
     mentionPolicyOf: (_cid, uid) => {
       if (uid === undefined) return "not_privileged";
@@ -715,10 +725,12 @@ try {
             });
             return;
           }
-          // ── S10 draw_remote（真实 GPT Image 通道；通道未就绪在装配期已 blocked）──
+          // ── S10 draw_remote（真实 GPT Image 异步通道；通道未就绪在装配期已 blocked）──
           case "s10": {
             // 提示合同：先 tool_search(query=draw_remote) 精确命中，下一请求才调用 draw_remote；
-            // 出图经 outbox 机械直发（宿主行为，不需要模型调 say_media）
+            // 异步受理后立刻返回，后台出图经 deliverDrawRemote + outbox 机械直发（不需要模型调 say_media）
+            const beforeOutbox = outbox.length;
+            const beforeDelivered = drawRemoteDeliveredCount;
             const r = await round(
               "s10-draw-remote",
               hostLine(
@@ -731,13 +743,25 @@ try {
               ),
               member(100001, 5010),
             );
-            const genFiles = existsSync(join(MEDIA, "gen")) ? readdirSync(join(MEDIA, "gen")) : [];
             const imgRes = r.toolResults.find((x) => x.name === "draw_remote");
-            const mediaRef = r.newOutbox.flatMap((o) => (typeof o.media === "string" && o.media.startsWith("gen/") ? [o.media] : []))[0];
+            if (imgRes?.ok === true && drawRemoteDeliveredCount === beforeDelivered) {
+              await new Promise<void>((resolve) => {
+                const timer = setTimeout(resolve, 240_000);
+                timer.unref?.();
+                drawRemoteDeliverWaiters.push(() => {
+                  clearTimeout(timer);
+                  resolve();
+                });
+              });
+            }
+            const genFiles = existsSync(join(MEDIA, "gen")) ? readdirSync(join(MEDIA, "gen")) : [];
+            const mediaRef = outbox
+              .slice(beforeOutbox)
+              .flatMap((o) => (typeof o.media === "string" && o.media.startsWith("gen/") ? [o.media] : []))[0];
             const ok = hasCall(r, "draw_remote") && imgRes?.ok === true && genFiles.length >= 1 && mediaRef !== undefined;
             mark("s10", {
               status: ok ? "pass" : "fail",
-              expected: "先 tool_search(query=draw_remote) 精确命中、下一请求才调用：draw_remote 调用成功、gen 目录落盘 ≥1 个文件且经 outbox 机械直发（media=gen/…）",
+              expected: "先 tool_search(query=draw_remote) 精确命中、下一请求才调用：draw_remote 异步受理成功，后台落盘 ≥1 个文件并经 outbox 机械直发（media=gen/…）",
               observed: `seq=${seqOf(r)} genFiles=${genFiles.length} ok=${imgRes?.ok} autoSent=${mediaRef ?? "-"} summary=${imgRes?.summary.slice(0, 80) ?? ""}`,
             });
             return;

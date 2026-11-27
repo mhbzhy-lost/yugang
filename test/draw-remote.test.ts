@@ -467,6 +467,20 @@ test("停机取消信号与整体硬超时（C2 / Review Focus #2）：中止后
   await hung.tool.execute({ prompt: "恢复" } as never, hung.api(2), ctx());
   await s3;
   assert.equal(hung.outbox.length, 1);
+
+  // 3. deliver 执行期间停机中止：不能误记为 status="ok"（Minor #1）
+  const stopInDeliver = new AbortController();
+  const deliverHold = deferred<void>();
+  const midDeliver = setup({ drawRemoteSignal: stopInDeliver.signal });
+  midDeliver.setDeliver(async () => {
+    stopInDeliver.abort();
+    await deliverHold.promise;
+  });
+  const s4 = midDeliver.waitSettled(1);
+  await midDeliver.tool.execute({ prompt: "投递中途停机" } as never, midDeliver.api(1), ctx());
+  deliverHold.resolve();
+  await s4;
+  assert.equal(midDeliver.settled[0]?.status, "aborted");
 });
 
 test("热切配置：通道与模型随 fish.config.json 现值切换，不传比例不透传 aspectRatio", async () => {

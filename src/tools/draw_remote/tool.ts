@@ -228,6 +228,7 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
 
       const jobTimeoutMs = deps.drawRemoteJobTimeoutMs ?? DRAW_REMOTE_JOB_TIMEOUT_MS;
       const jobTimer = setTimeout(() => {
+        if (jobController.signal.aborted) return;
         jobTimedOut = true;
         jobController.abort(new DOMException(`draw_remote job timeout (${jobTimeoutMs}ms)`, "TimeoutError"));
       }, jobTimeoutMs);
@@ -296,6 +297,21 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
           }
 
           await deliver(convId, payloads);
+          if (jobController.signal.aborted) {
+            const elapsed = now() - started;
+            if (jobTimedOut) {
+              console.error(
+                `[fish] draw_remote background timeout: ${provider} ${model} / ${elapsed}ms / ${formatStages(stages)}`,
+              );
+              settled = { status: "failed" };
+            } else {
+              console.log(
+                `[fish] draw_remote background aborted(shutdown): ${provider} ${model} / ${elapsed}ms / ${formatStages(stages)}`,
+              );
+              settled = { status: "aborted" };
+            }
+            return;
+          }
           console.log(
             `[fish] draw_remote ok: ${provider} ${model} / ${files.length} 张 / ${now() - started}ms / 参考图${images.length}张 / ${formatStages(stages)}`,
           );

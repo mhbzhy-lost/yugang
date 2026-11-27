@@ -171,12 +171,12 @@ export function installDrain(state: FishBase & { harness: Harness }): DrainParts
           redrain.delete(key);
           total += await drainConversation(conversationId);
           if (!redrain.has(key)) break;
-          // 队首停在 sending（发送异常未解除）时不再重复空转
+          // 在 snapshot 挂起前先清除标记，避免期间新到的 redrain 在旧快照返回时被误擦除
+          redrain.delete(key);
           const box = await harness.snapshot(OutboxDoc, conversationId, ctx);
-          if (!box?.queue[0] || box.queue[0].status === "sending") {
-            redrain.delete(key);
-            break;
-          }
+          // 队首停在 sending（发送异常未解除）时不再重复空转
+          if (box?.queue[0]?.status === "sending") break;
+          if (!box?.queue[0] && !redrain.has(key)) break;
         }
       } finally {
         state.sending.delete(key);
