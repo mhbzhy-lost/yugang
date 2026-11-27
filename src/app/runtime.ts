@@ -83,6 +83,7 @@ import {
   shouldFallbackContinueToInput,
   stripRoundImages,
 } from "../round-image-strip.ts";
+import { createInFlightTracker, shouldRetryRoundAttempt } from "../round-guard.ts";
 import { runDrawRemote } from "../media/draw-remote/index.ts";
 import type { Middleware } from "./app.ts";
 import {
@@ -298,78 +299,26 @@ const chatKeys = new Map<string | number, string>();
 // 换页（自动 / 手动 `/压缩`）中的会话：期间不受理新提交，被@只回机械忙碌语
 const compacting = new Set<string>();
 // 会话忙（换页 / next 在途轮）的判定：起新提交与起换页前都要先看它。
-// 在途轮登记见 nextInFlight（shard 到期与开窗注入据此退避，同一会话绝不并发提交）。
+// 在途轮登记见 inFlight（shard 到期与开窗注入据此退避，同一会话绝不并发提交）。
 export function conversationBusy(id: string | number): boolean {
   const key = String(id);
-  return compacting.has(key) || nextInFlight.has(key);
+  return compacting.has(key) || inFlight.isBusy(key);
 }
 
 // ── 携话 next（开窗两态）的轮级互斥（决策 8 + shard 修订）─────────────────
-// 在途轮登记：conversationId → 在途轮的 kind 集合。submit 前登记、settle 的 finally 释放；
+// 在途轮登记（引用计数）：submit 前登记、settle 的 finally 释放；
 // 仅 GROUPS 群聊登记（私聊 / worker 会话不登记，行为与历史一致）。@ 轮（answer）也登记——
 // shard 到期与开窗注入据此退避，不与必答轮并发；但 @ 轮自己的等待队列只等 ambient/injection
-// 清零（两个必答轮并发提交是既有行为，不引入排队）。
-const nextInFlight = new Map<string, Set<RoundKind>>();
-// 等待在途 ambient/injection 轮清零的 @ 轮唤醒器：清零（或超时）时逐个唤醒
-const ambientWaiters = new Map<string, Set<(ok: boolean) => void>>();
-const EMPTY_KINDS: ReadonlySet<RoundKind> = new Set();
-
-function registerInFlight(id: string | number, kind: RoundKind): void {
-  const key = String(id);
-  const kinds = nextInFlight.get(key) ?? new Set<RoundKind>();
-  kinds.add(kind);
-  nextInFlight.set(key, kinds);
-}
-
-function releaseInFlight(id: string | number, kind: RoundKind): void {
-  const key = String(id);
-  const kinds = nextInFlight.get(key);
-  if (!kinds) return;
-  kinds.delete(kind);
-  if (kinds.size === 0) nextInFlight.delete(key);
-  // 在途 ambient/injection 清零才唤醒等待的 @ 轮（其它在途 @ 轮不阻塞它们）
-  if (!kinds.has("ambient") && !kinds.has("injection")) {
-    const waiters = ambientWaiters.get(key);
-    if (waiters) {
-      ambientWaiters.delete(key);
-      for (const wake of waiters) wake(true);
-    }
-  }
-}
+// 清零（两个必答轮并发提交是既有行为，不引入排队，且各自对称计数释放）。
+const inFlight = createInFlightTracker();
 
 function hasAmbientInFlight(id: string | number): boolean {
-  const kinds = nextInFlight.get(String(id)) ?? EMPTY_KINDS;
-  return kinds.has("ambient") || kinds.has("injection");
+  return inFlight.hasAmbient(id);
 }
 
 /** @ 轮等待在途 ambient（shard）/ injection 轮清零：上限 timeoutMs，超时返回 false（转 busy_reply）。 */
-async function waitAmbientClear(id: string | number, timeoutMs: number): Promise<boolean> {
-  const key = String(id);
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if (!hasAmbientInFlight(key)) return true;
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) return false;
-    const woken = await new Promise<boolean>((resolve) => {
-      let done = false;
-      const finish = (ok: boolean): void => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        const waiters = ambientWaiters.get(key);
-        if (waiters) {
-          waiters.delete(finish);
-          if (waiters.size === 0) ambientWaiters.delete(key);
-        }
-        resolve(ok);
-      };
-      const timer = setTimeout(() => finish(false), remaining);
-      const waiters = ambientWaiters.get(key) ?? new Set<(ok: boolean) => void>();
-      waiters.add(finish);
-      ambientWaiters.set(key, waiters);
-    });
-    if (!woken) return false;
-  }
+function waitAmbientClear(id: string | number, timeoutMs: number): Promise<boolean> {
+  return inFlight.waitAmbientClear(id, timeoutMs);
 }
 
 // ── 已读标记（决策 20）─────────────────────────────────────────────
@@ -904,11 +853,15 @@ export async function submitRound(input: {
   if (input.deadline !== undefined && Date.now() >= input.deadline) throw new NewsDeadlineError();
   // 在途登记要在任何 await 之前（busy 检查与提交之间不开窗口）：仅 next 登记对称登记/释放
   const trackInFlight = engageNextOf(chatKey);
-  let inFlightRegistered = Boolean(trackInFlight);
+  let inFlightRegistered = false;
+  if (trackInFlight) {
+    inFlight.register(conv.id, roundKind);
+    inFlightRegistered = true;
+  }
   const releaseTrackedInFlight = (): void => {
     if (!inFlightRegistered) return;
     inFlightRegistered = false;
-    releaseInFlight(conv.id, roundKind);
+    inFlight.release(conv.id, roundKind);
   };
   try {
   await absorbSecrets(conv);
@@ -1008,7 +961,7 @@ export async function submitRound(input: {
       workingSent.delete(subId);
     }
   };
-  let lastSayCount = 0;
+  let totalSayCount = 0;
   let lastWorkingTools: ReadonlySet<string> = new Set();
   const placedImageEntries: EntryId[] = [];
   let lastPlacedEntryId: EntryId | undefined;
@@ -1051,11 +1004,11 @@ export async function submitRound(input: {
         lastPlacedEntryId = settled.entry;
         if (imageBlocks.length > 0) placedImageEntries.push(settled.entry);
       }
-      lastSayCount = run.sayCount;
+      totalSayCount += run.sayCount;
       lastWorkingTools = run.workingTools;
-      // 模型错误且还有重试余量：轮内重试（第三次前已强制换页）；其它结果直接出循环
+      // 模型错误、未开口且还有重试余量：轮内重试（第三次前已强制换页）；已通过 say_* 开口入队则绝不重投
       const reason = (settled as { reason?: string }).reason;
-      if (settled.status === "done" || reason !== "model_error" || attempt >= MAX_MODEL_ATTEMPTS) break;
+      if (!shouldRetryRoundAttempt({ status: settled.status, reason, attempt, maxAttempts: MAX_MODEL_ATTEMPTS, sayCount: totalSayCount })) break;
       console.log(`[鱼缸] ${chatKey} 模型错误，轮内重试 ${attempt}/${MAX_MODEL_ATTEMPTS - 1}`);
     }
     // 必答轮（@ / 私聊）零出口自愈：模型正常结束却没调任何 say_*（且非机械直发画图/重启）时，
@@ -1064,7 +1017,7 @@ export async function submitRound(input: {
     if (shouldNudgeZeroEgress({
       roundKind,
       status: settled.status,
-      sayCount: lastSayCount,
+      sayCount: totalSayCount,
       workingTools: lastWorkingTools,
       alreadyNudged: false,
     })) {
@@ -1073,6 +1026,7 @@ export async function submitRound(input: {
         console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say_*，提醒补跑 1 次`);
         const nudgeRun = await runSubmission("input", submitContentOf(nudgeText, []), false);
         settled = nudgeRun.result;
+        totalSayCount += nudgeRun.sayCount;
         if (settled.status === "done") {
           if (nudgeRun.sayCount === 0) console.log(`[鱼缸] ${chatKey} 零出口轮：提醒补跑后仍未调 say_*`);
           else console.log(`[鱼缸] ${chatKey} 零出口轮补跑成功（say=${nudgeRun.sayCount}）`);
@@ -1099,7 +1053,12 @@ export async function submitRound(input: {
     const why = [settled.status, (settled as { reason?: string }).reason, (settled as { detail?: string }).detail]
       .filter(Boolean)
       .join(" · ");
-    console.error(`[鱼缸] ${chatKey} 这一轮没答上来：${why}`);
+    if (totalSayCount > 0) {
+      console.warn(`[鱼缸] ${chatKey} 这一轮已开口（say=${totalSayCount}），收尾模型异常不再重试：${why}`);
+      if (roundKind !== "news") await drainLoop();
+    } else {
+      console.error(`[鱼缸] ${chatKey} 这一轮没答上来：${why}`);
+    }
     // 新闻备料失败不压缩：它不携带群对话，且换页会越过备料硬截止。
     if (roundKind === "news") return settled.status;
     // 轮内重试与强制换页都试过仍失败：再尝试一次常规自动换页（阈值满足时），保持既有行为
