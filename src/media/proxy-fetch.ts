@@ -28,14 +28,26 @@ function nullBodyStatus(status: number): boolean {
   return status === 204 || status === 205 || status === 304;
 }
 
+/** 默认 socket 空闲超时：每次收到字节都会自动续期，防止半开连接在代理上干挂 600s。 */
+export const DEFAULT_PROXY_IDLE_TIMEOUT_MS = 120_000;
+
+export interface ProxyFetchOptions {
+  /** 底层 socket 空闲超时（毫秒），缺省 120s。 */
+  idleTimeoutMs?: number;
+}
+
 /**
  * 造一条走代理的 fetch（形状对齐 globalThis.fetch，只覆盖本仓实际用到的部分：
  * method / headers / string body / signal，返回全局 Response）。
- * 目标只支持 https —— draw_remote 各通道的端点都是 https，别的协议直接抛，不静默直连。
+ * 目标只支持 https —— draw_remote 与模型通道端点都是 https，别的协议直接抛，不静默直连。
  */
-export function createProxyFetch(proxy: string): typeof fetch | undefined {
+export function createProxyFetch(proxy: string, options: ProxyFetchOptions = {}): typeof fetch | undefined {
   if (!validProxy(proxy)) return undefined;
   const agent = new HttpsProxyAgent(proxy.trim());
+  const idleTimeoutMs =
+    typeof options.idleTimeoutMs === "number" && Number.isFinite(options.idleTimeoutMs) && options.idleTimeoutMs > 0
+      ? options.idleTimeoutMs
+      : DEFAULT_PROXY_IDLE_TIMEOUT_MS;
 
   const proxied = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
     const target = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
@@ -51,7 +63,7 @@ export function createProxyFetch(proxy: string): typeof fetch | undefined {
           ? undefined
           : Buffer.from(init.body as ArrayBuffer);
 
-    const reply = await new Promise<{ status: number; statusText: string; body: Buffer; contentType: string }>((resolve, reject) => {
+    const reply = await new Promise<{ status: number; statusText: string; body: Buffer; contentType: string; retryAfter: string }>((resolve, reject) => {
       const request = httpsRequest(
         target,
         {
@@ -63,7 +75,8 @@ export function createProxyFetch(proxy: string): typeof fetch | undefined {
         (response) => {
           const chunks: Buffer[] = [];
           response.on("data", (chunk: Buffer | string) => chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk));
-          response.on("end", () =>
+          response.on("end", () => {
+            request.setTimeout(0);
             resolve({
               status: response.statusCode ?? 0,
               statusText: response.statusMessage ?? "",
@@ -71,20 +84,25 @@ export function createProxyFetch(proxy: string): typeof fetch | undefined {
               // 图片下载回来就是坏图
               body: Buffer.concat(chunks),
               contentType: response.headers["content-type"] ?? "",
-            }),
-          );
+              retryAfter: typeof response.headers["retry-after"] === "string" ? response.headers["retry-after"] : "",
+            });
+          });
           response.on("error", reject);
         },
       );
+      request.setTimeout(idleTimeoutMs, () => {
+        request.destroy(new Error(`proxy fetch timed out after ${idleTimeoutMs}ms`));
+      });
       request.on("error", reject);
       request.end(body);
     });
     if (reply.status === 0) throw new Error("proxy fetch: no response status");
 
     // 状态码与正文原样带回（正文保持原始字节，文本 / JSON / 二进制都逐字节无损；上游给了
-    // content-type 就一并带回）；调用方只关心 ok / status / json()，这里不做重试、解压或重定向
+    // content-type / retry-after 就一并带回）；这里不做重试、解压或重定向
     const responseHeaders = new Headers();
     if (reply.contentType) responseHeaders.set("content-type", reply.contentType);
+    if (reply.retryAfter) responseHeaders.set("retry-after", reply.retryAfter);
     return new Response(nullBodyStatus(reply.status) ? null : new Uint8Array(reply.body), {
       status: reply.status,
       statusText: reply.statusText,

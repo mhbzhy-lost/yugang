@@ -62,6 +62,8 @@ const DEFAULT_BASE_URL = "https://cloudcode-pa.googleapis.com";
 export const ANTIGRAVITY_BASE_URL = "https://daily-cloudcode-pa.googleapis.com";
 const PROJECT_HEADER = "x-yugang-ca-project";
 const DEFAULT_MAX_RETRIES = 3;
+/** 单次 HTTP 请求与 SSE 空闲的默认超时上限（毫秒），防止半开连接在代理/直连下干挂 5–10 分钟。 */
+export const DEFAULT_CODE_ASSIST_TIMEOUT_MS = 120_000;
 
 /** 档位编码在模型 ID 后缀的 tiered 模型（Gemini 4 / Gemini 3.8 Flash / Claude 5.5）：
  * 2026-11-21 交叉实测证实：ID 后缀只是 Antigravity 网关 SKU 路由名，真正控制推理预算的是
@@ -145,8 +147,67 @@ interface SsePart {
   functionCall?: { name?: string; args?: Record<string, unknown>; id?: string };
 }
 
-/** SSE 行缓冲解析：data 行累积、空行 flush；TextDecoder stream:true 处理跨 chunk 的多字节。 */
-async function* readSseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+function resolveTimeoutMs(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : DEFAULT_CODE_ASSIST_TIMEOUT_MS;
+}
+
+/** 构造单次 HTTP 尝试的联动取消信号：父 signal 取消或超过 timeoutMs 任一触发即中止，不留悬挂定时器。 */
+function createAttemptAbort(parentSignal: AbortSignal | undefined, timeoutMs: number): {
+  signal: AbortSignal;
+  timedOut: () => boolean;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  let isTimedOut = false;
+  const onParentAbort = () => controller.abort(parentSignal?.reason);
+  if (parentSignal) {
+    if (parentSignal.aborted) {
+      controller.abort(parentSignal.reason);
+    } else {
+      parentSignal.addEventListener("abort", onParentAbort, { once: true });
+    }
+  }
+  const timer = setTimeout(() => {
+    isTimedOut = true;
+    controller.abort(new Error(`Google Code Assist request timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+  timer.unref?.();
+  return {
+    signal: controller.signal,
+    timedOut: () => isTimedOut,
+    cleanup: () => {
+      clearTimeout(timer);
+      parentSignal?.removeEventListener("abort", onParentAbort);
+    },
+  };
+}
+
+/**
+ * Antigravity（尤其 gemini-4-hydrogen-low）在静默或调用工具后空文本收尾时，
+ * 上游常在输出 thinking 块 + 带 thoughtSignature 的空文本封口块 + usageMetadata
+ * 后直接结束 SSE，但漏发 candidates[0].finishReason。
+ * 只有同时满足「有 responseId + 有用量 + 有带签名的空文本封口块 + 无非空正文/工具调用」
+ * 时才按正常 stop 收口；真正的半途断流、空响应与安全策略拒绝文本仍照旧抛错。
+ */
+function isSignedEmptyStop(output: AssistantMessage): boolean {
+  if (!output.responseId || output.usage.totalTokens <= 0) return false;
+  let hasSignedEmptyText = false;
+  for (const block of output.content) {
+    if (block.type === "toolCall") return false;
+    if (block.type === "text") {
+      if (block.text.length > 0) return false;
+      if (block.textSignature) hasSignedEmptyText = true;
+    }
+  }
+  return hasSignedEmptyText;
+}
+
+/** SSE 行缓冲解析：data 行累积、空行 flush；TextDecoder stream:true 处理跨 chunk 的多字节；支持单 chunk 空闲超时。 */
+async function* readSseEvents(
+  body: ReadableStream<Uint8Array>,
+  idleTimeoutMs: number,
+  signal?: AbortSignal,
+): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   const reader = body.getReader();
   let buffer = "";
@@ -162,20 +223,49 @@ async function* readSseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<
     }
     // 其它行（event:/id:/注释）按 gemini-cli server.ts 的解析一样忽略
   };
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let newline = buffer.indexOf("\n");
-    while (newline >= 0) {
-      yield* feed(buffer.slice(0, newline).replace(/\r$/, ""));
-      buffer = buffer.slice(newline + 1);
-      newline = buffer.indexOf("\n");
+  const readChunk = async () => {
+    if (signal?.aborted) throw new Error("Request was aborted");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    try {
+      return await new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
+        timer = setTimeout(() => {
+          void reader.cancel().catch(() => {});
+          reject(new Error(`Google Code Assist stream timed out after ${idleTimeoutMs}ms`));
+        }, idleTimeoutMs);
+        timer.unref?.();
+        if (signal) {
+          onAbort = () => {
+            void reader.cancel().catch(() => {});
+            reject(new Error("Request was aborted"));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
+        reader.read().then(resolve, reject);
+      });
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
     }
+  };
+  try {
+    for (;;) {
+      const { done, value } = await readChunk();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        yield* feed(buffer.slice(0, newline).replace(/\r$/, ""));
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf("\n");
+      }
+    }
+    buffer += decoder.decode();
+    yield* feed(buffer.replace(/\r$/, ""));
+    yield* feed("");
+  } finally {
+    reader.releaseLock();
   }
-  buffer += decoder.decode();
-  yield* feed(buffer.replace(/\r$/, ""));
-  yield* feed("");
 }
 
 /** 从 options.headers 摘走 x-yugang-ca-project（值进信封 project 字段）；该头不转发出站。 */
@@ -322,20 +412,31 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
         params = nextParams;
       }
       const url = `${(model.baseUrl || defaultBaseUrl(flavor)).replace(/\/+$/, "")}/v1internal:streamGenerateContent?alt=sse`;
+      const timeoutMs = resolveTimeoutMs(options?.timeoutMs);
       const attemptOnce = () => retryProviderRequest(
         async () => {
-          const attempt = await (options?.fetch ?? globalThis.fetch)(url, {
-            method: "POST",
-            // gemini：出站只留这两个头（含 x-yugang-ca-project 在内的其余头都不转发）；
-            // antigravity：另加当前 IDE User-Agent 与流式 accept
-            headers: requestHeaders(flavor, apiKey, true, options?.userAgent),
-            body: JSON.stringify(encodeBody(params, flavor)),
-            ...(options?.signal ? { signal: options.signal } : {}),
-          });
-          await options?.onResponse?.({ status: attempt.status, headers: headersToRecord(attempt.headers) }, model);
-          if (!attempt.ok) throw await toResponseError(model.provider, attempt);
-          if (!attempt.body) throw new Error("Google Code Assist response has no body");
-          return attempt;
+          const attemptAbort = createAttemptAbort(options?.signal, timeoutMs);
+          try {
+            const attempt = await (options?.fetch ?? globalThis.fetch)(url, {
+              method: "POST",
+              // gemini：出站只留这两个头（含 x-yugang-ca-project 在内的其余头都不转发）；
+              // antigravity：另加当前 IDE User-Agent 与流式 accept
+              headers: requestHeaders(flavor, apiKey, true, options?.userAgent),
+              body: JSON.stringify(encodeBody(params, flavor)),
+              signal: attemptAbort.signal,
+            });
+            await options?.onResponse?.({ status: attempt.status, headers: headersToRecord(attempt.headers) }, model);
+            if (!attempt.ok) throw await toResponseError(model.provider, attempt);
+            if (!attempt.body) throw new Error("Google Code Assist response has no body");
+            return attempt;
+          } catch (error) {
+            if (attemptAbort.timedOut() && !options?.signal?.aborted) {
+              throw new Error(`Google Code Assist request timed out after ${timeoutMs}ms`);
+            }
+            throw error;
+          } finally {
+            attemptAbort.cleanup();
+          }
         },
         {
           maxRetries: options?.maxRetries ?? DEFAULT_MAX_RETRIES,
@@ -362,7 +463,7 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
       let currentBlock: null | { type: "text"; text: string; textSignature?: string } | { type: "thinking"; thinking: string; thinkingSignature?: string } = null;
       const blocks = output.content;
       const blockIndex = () => blocks.length - 1;
-      for await (const eventData of readSseEvents(response.body)) {
+      for await (const eventData of readSseEvents(response.body, timeoutMs, options?.signal)) {
         if (!eventData) continue;
         const parsed = JSON.parse(eventData) as { response?: SseChunk } & SseChunk;
         await options?.onProviderStreamEvent?.(parsed, model);
@@ -514,7 +615,11 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
         throw new Error("Request was aborted");
       }
       if (output.stopReason === "pending") {
-        throw new Error("Google stream ended without a finish reason");
+        if (isSignedEmptyStop(output)) {
+          output.stopReason = "stop";
+        } else {
+          throw new Error("Google stream ended without a finish reason");
+        }
       }
       if (output.stopReason === "aborted" || output.stopReason === "error") {
         const errorMessage = output.rawStopReason
