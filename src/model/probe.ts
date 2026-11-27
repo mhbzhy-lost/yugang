@@ -4,6 +4,7 @@
  */
 import { loadProviderConfig, type FishModelConfig } from "./config.ts";
 import { assertModelExists, createFishModels } from "./models.ts";
+import { redactSecrets } from "./quota.ts";
 
 export interface ModelProbeResult {
   provider: string;
@@ -18,29 +19,33 @@ export interface ModelProbeOptions {
   modelsPath?: string;
   credentialsPath?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 function safeError(error: unknown, config: FishModelConfig): string {
-  let text = error instanceof Error ? error.message : String(error);
-  const secrets = [config.key, config.oauth?.access, config.oauth?.refresh]
-    .filter((value): value is string => typeof value === "string" && value.length > 0);
-  for (const secret of secrets) text = text.split(secret).join("[已隐藏]");
-  return text
-    .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [已隐藏]")
-    .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]\s*)[^\s,;]+/gi, "$1[已隐藏]")
-    .slice(0, 500);
+  const text = error instanceof Error ? error.message : String(error);
+  const secrets = [
+    config.key,
+    config.oauth?.access,
+    config.oauth?.refresh,
+    config.oauthClient?.secret,
+    typeof config.oauth?.["clientSecret"] === "string" ? config.oauth["clientSecret"] : undefined,
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+  return redactSecrets(text, secrets).slice(0, 500);
 }
 
 export async function probeModelConfig(config: FishModelConfig, options: ModelProbeOptions = {}): Promise<ModelProbeResult> {
-  const models = createFishModels(config);
+  const models = createFishModels(config, { registerGlobalProxy: false });
   assertModelExists(models, config.providerId, config.modelId);
   const model = models.getModel(config.providerId, config.modelId)!;
+  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? 25_000);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
   const started = Date.now();
   try {
     const message = await models.streamSimple(model, {
       messages: [{ role: "user", content: "只回复两个字：在的" }],
     }, {
-      signal: AbortSignal.timeout(options.timeoutMs ?? 25_000),
+      signal,
       ...(config.transport ? { transport: config.transport } : {}),
     }).result();
     const text = message.content

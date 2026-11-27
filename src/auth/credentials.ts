@@ -35,7 +35,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -63,15 +63,46 @@ export interface CredentialStoreLike {
 
 type Store = Record<string, Credential>;
 
+/**
+ * 进程级启动标识：同 host + 同 pid 但 bootId 不同，即可判定是容器/宿主机重启后的 PID 复用残留锁。
+ */
+export const BOOT_ID = randomUUID();
+
 /** 等锁上限：pi-ai 的 OAuth 刷新自带 15s 超时，这里留一倍余量；超时抛错，不写盘。 */
 const LOCK_WAIT_MS = 30_000;
 const LOCK_POLL_MIN_MS = 20;
 const LOCK_POLL_MAX_MS = 250;
-/** 身份记录读不出来的锁（崩溃残留）旧到这个程度才回收；正常持有 = 一次刷新 + 写盘，远小于它。 */
+/**
+ * 残留锁过期阈值。
+ * 不变量：所有持锁刷新任务（google.ts / openai.ts / quota.ts）超时均严格 ≤ 15s，远小于 LOCK_STALE_MS（120s），
+ * 因此超过 120s 仍未释放的锁必为进程崩溃残留，可安全自动回收。
+ */
 const LOCK_STALE_MS = 120_000;
 
 function errnoOf(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | undefined)?.code;
+}
+
+/** 归一化凭据条目：将裸非空字符串与缺 type 但含非空 key 字符串的条目统一为 { type: "api_key", key }。 */
+export function normalizeCredential(raw: unknown): Credential | undefined {
+  if (typeof raw === "string") {
+    return raw.length > 0 ? { type: "api_key", key: raw } : undefined;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const rec = raw as Record<string, unknown>;
+  if (rec["type"] === "api_key") {
+    return raw as ApiKeyCredential;
+  }
+  if (rec["type"] === "oauth") {
+    if (typeof rec["refresh"] === "string" && typeof rec["access"] === "string") {
+      return raw as OAuthCredential;
+    }
+    return undefined;
+  }
+  if (rec["type"] === undefined && typeof rec["key"] === "string" && rec["key"].length > 0) {
+    return { type: "api_key", key: rec["key"] };
+  }
+  return undefined;
 }
 
 /** 锁与进程内队列的键：目录取 realpath，免得相对路径 / 软链各拿一把锁。 */
@@ -89,7 +120,13 @@ function load(path: string): Store {
   if (!existsSync(path)) return {};
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Store) : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Store = {};
+    for (const [providerId, raw] of Object.entries(parsed)) {
+      const normalized = normalizeCredential(raw);
+      if (normalized) out[providerId] = normalized;
+    }
+    return out;
   } catch {
     return {};
   }
@@ -156,7 +193,7 @@ export function writeCredentialFileSync(path: string, value: unknown): void {
   }
 }
 
-type LockOwner = { pid: number; host: string; token: string; at: number };
+type LockOwner = { pid: number; host: string; token: string; at: number; bootId?: string };
 
 function lockPathOf(file: string): string {
   return `${file}.lock`;
@@ -184,14 +221,16 @@ function processAlive(pid: number): boolean {
 }
 
 /**
- * 回收「持有者已经没了」的残留锁（kill -9 / 掉电）：
- *   • 同机 + 身份记录里的 pid 确认不在 → 立刻回收（不等 stale 门槛，重启后第一次刷新就能写）
- *   • 身份记录读不出来（创建到写入之间的崩溃残留）→ 只有足够旧才当残留
- *   • 跨机 / 跨容器（host 不同，pid 不可比）或 pid 还活着 → 一律不抢，等超时 fail closed
+ * 回收「持有者已经没了」的残留锁（kill -9 / 掉电 / 容器重建）：
+ *   • 同机 + 同 pid 但 bootId 不同 → 重启 PID 复用残留，立即回收
+ *   • 锁年龄（max(owner.at, mtimeMs)）≥ LOCK_STALE_MS(120s) → 过期必死，自动回收
+ *     （依赖不变量：所有持锁刷新任务超时严格 ≤ 15s ≪ 120s）
+ *   • 未过期且同机 + pid 确认不在 → 立刻回收
+ *   • 未过期且跨机/跨容器或同机 pid 仍活 → 不抢锁，继续等待
  * 摘锁用 rename（同一时刻只有一个进程能成功），摘完再核对 ino/mtime，
  * 万一摘掉的是别人刚建的新锁就原样 link 回去，本次写入放弃。
  */
-function reclaimStaleLock(lockPath: string): boolean {
+export function reclaimStaleLock(lockPath: string): boolean {
   let before: ReturnType<typeof statSync>;
   try {
     before = statSync(lockPath);
@@ -200,8 +239,15 @@ function reclaimStaleLock(lockPath: string): boolean {
   }
   const owner = readLockOwner(lockPath);
   if (owner) {
-    if (owner.host !== hostname()) return false;
-    if (processAlive(owner.pid)) return false;
+    const sameHost = owner.host === hostname();
+    const pidReused =
+      sameHost && owner.pid === process.pid && typeof owner.bootId === "string" && owner.bootId.length > 0 && owner.bootId !== BOOT_ID;
+    const ownerAt = typeof owner.at === "number" && Number.isFinite(owner.at) ? owner.at : 0;
+    const stale = Date.now() - Math.max(ownerAt, before.mtimeMs) >= LOCK_STALE_MS;
+    if (!pidReused && !stale) {
+      if (!sameHost) return false;
+      if (processAlive(owner.pid)) return false;
+    }
   } else if (Date.now() - before.mtimeMs < LOCK_STALE_MS) {
     return false;
   }
@@ -252,7 +298,7 @@ function releaseLock(lockPath: string, token: string): void {
 async function acquireLock(file: string, signal?: AbortSignal): Promise<() => void> {
   const lockPath = lockPathOf(file);
   const token = randomBytes(12).toString("hex");
-  const owner: LockOwner = { pid: process.pid, host: hostname(), token, at: Date.now() };
+  const owner: LockOwner = { pid: process.pid, host: hostname(), token, at: Date.now(), bootId: BOOT_ID };
   const deadline = Date.now() + LOCK_WAIT_MS;
   let poll = LOCK_POLL_MIN_MS;
   for (;;) {
@@ -343,7 +389,8 @@ export function fileCredentialStore(path: string): CredentialStoreLike {
         path,
         async () => {
           const store = loadForWrite(path);
-          const current = Object.hasOwn(store, providerId) ? store[providerId] : undefined;
+          const rawCurrent = Object.hasOwn(store, providerId) ? store[providerId] : undefined;
+          const current = rawCurrent !== undefined ? (normalizeCredential(rawCurrent) ?? rawCurrent) : undefined;
           const next = await fn(current);
           // pi-ai 契约：undefined = 这条不动（并发下别人刚刷新过），删除只走 delete()
           if (next === undefined) return current;

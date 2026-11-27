@@ -3,7 +3,7 @@
  *
  * 为什么不用 `--use-env-proxy` / NODE_USE_ENV_PROXY：那是进程级的，pi-ai 的模型请求
  * 同样走 globalThis.fetch，一开就把 zai / deepseek 也塞进代理，代理挂了两边一起哑。
- * 这里照 pi-config 的 openai-proxy 思路，只把 openai-codex 的请求交给
+ * 这里照 pi-config 的 openai-proxy 思路，只把需要走隧道的 provider 交给
  * https-proxy-agent 建的 CONNECT 隧道，其它 provider 照旧直连。
  *
  * 没有用 undici 的 ProxyAgent：鱼没有 undici 依赖，而 https-proxy-agent 已经是
@@ -28,85 +28,293 @@ function nullBodyStatus(status: number): boolean {
   return status === 204 || status === 205 || status === 304;
 }
 
-/** 默认 socket 空闲超时：每次收到字节都会自动续期，防止半开连接在代理上干挂 600s。 */
+/** 默认建连与 body 空闲超时：每次收到 chunk 会自动续期，防止半开连接在代理上干挂 600s。 */
 export const DEFAULT_PROXY_IDLE_TIMEOUT_MS = 120_000;
 
 export interface ProxyFetchOptions {
-  /** 底层 socket 空闲超时（毫秒），缺省 120s。 */
+  /** 建连及 body 逐 chunk 空闲超时（毫秒），缺省 120s。 */
   idleTimeoutMs?: number;
+  /** 响应体最大字节数（可选）；超出时销毁流并报错。 */
+  maxResponseBytes?: number;
+}
+
+const HOP_BY_HOP_AND_ENCODING = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailers",
+  "transfer-encoding",
+  "upgrade",
+  "content-encoding",
+]);
+
+/** 按 proxyUrl 复用 keepAlive Agent（不压低默认 maxSockets，避免长 SSE 阻塞同代理普通请求）。 */
+const agentPool = new Map<string, HttpsProxyAgent<string>>();
+
+function getProxyAgent(proxyUrl: string): HttpsProxyAgent<string> {
+  let agent = agentPool.get(proxyUrl);
+  if (!agent) {
+    agent = new HttpsProxyAgent(proxyUrl, { keepAlive: true });
+    agentPool.set(proxyUrl, agent);
+  }
+  return agent;
+}
+
+function toAbortError(reason: unknown): Error {
+  if (reason instanceof Error && reason.name === "AbortError") return reason;
+  const err = new Error(reason instanceof Error ? reason.message : "The operation was aborted.");
+  err.name = "AbortError";
+  return err;
+}
+
+async function resolveBody(input: string | URL | Request, init: RequestInit): Promise<string | Buffer | undefined> {
+  const raw = init.body !== undefined ? init.body : undefined;
+  if (raw !== undefined) {
+    if (raw === null) return undefined;
+    if (typeof raw === "string") return raw;
+    if (raw instanceof URLSearchParams) return raw.toString();
+    if (ArrayBuffer.isView(raw)) return Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
+    if (raw instanceof ArrayBuffer) return Buffer.from(raw);
+    return Buffer.from(await new Response(raw).arrayBuffer());
+  }
+  if (input instanceof Request && input.body !== null) {
+    return Buffer.from(await input.arrayBuffer());
+  }
+  return undefined;
 }
 
 /**
- * 造一条走代理的 fetch（形状对齐 globalThis.fetch，只覆盖本仓实际用到的部分：
- * method / headers / string body / signal，返回全局 Response）。
+ * 造一条走代理的流式 fetch（形状对齐 globalThis.fetch：收到响应头即 resolve Response，
+ * body 阶段保留逐 chunk 空闲超时与可选 maxResponseBytes 保护）。
  * 目标只支持 https —— draw_remote 与模型通道端点都是 https，别的协议直接抛，不静默直连。
  */
 export function createProxyFetch(proxy: string, options: ProxyFetchOptions = {}): typeof fetch | undefined {
   if (!validProxy(proxy)) return undefined;
-  const agent = new HttpsProxyAgent(proxy.trim());
+  const normalizedProxy = proxy.trim();
+  const agent = getProxyAgent(normalizedProxy);
   const idleTimeoutMs =
     typeof options.idleTimeoutMs === "number" && Number.isFinite(options.idleTimeoutMs) && options.idleTimeoutMs > 0
       ? options.idleTimeoutMs
       : DEFAULT_PROXY_IDLE_TIMEOUT_MS;
+  const maxResponseBytes =
+    typeof options.maxResponseBytes === "number" && Number.isFinite(options.maxResponseBytes) && options.maxResponseBytes > 0
+      ? options.maxResponseBytes
+      : undefined;
 
   const proxied = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
     const target = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     if (target.protocol !== "https:") throw new Error("proxy fetch supports https targets only");
 
-    const headers = new Headers(init.headers);
-    const body = typeof init.body === "string"
-      ? init.body
-      : // URLSearchParams 与全局 fetch 对齐：自动转成 urlencoded 字符串再发
-        init.body instanceof URLSearchParams
-        ? init.body.toString()
-        : init.body === undefined || init.body === null
-          ? undefined
-          : Buffer.from(init.body as ArrayBuffer);
+    const method = init.method ?? (input instanceof Request ? input.method : "GET");
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    if (init.headers) {
+      new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+    }
+    headers.set("accept-encoding", "identity");
 
-    const reply = await new Promise<{ status: number; statusText: string; body: Buffer; contentType: string; retryAfter: string }>((resolve, reject) => {
+    const signal =
+      input instanceof Request && init.signal && input.signal !== init.signal
+        ? AbortSignal.any([input.signal, init.signal])
+        : (init.signal ?? (input instanceof Request ? input.signal : undefined));
+    if (signal?.aborted) throw toAbortError(signal.reason);
+
+    const body = await resolveBody(input, init);
+    if (signal?.aborted) throw toAbortError(signal.reason);
+
+    return await new Promise<Response>((resolve, reject) => {
+      let headerSettled = false;
+      let connectTimer: ReturnType<typeof setTimeout> | undefined;
+      let onConnectAbort: (() => void) | undefined;
+
+      const clearConnectGuards = () => {
+        if (connectTimer !== undefined) {
+          clearTimeout(connectTimer);
+          connectTimer = undefined;
+        }
+        if (signal && onConnectAbort) {
+          signal.removeEventListener("abort", onConnectAbort);
+          onConnectAbort = undefined;
+        }
+      };
+
+      const failBeforeHeaders = (error: unknown) => {
+        if (headerSettled) return;
+        headerSettled = true;
+        clearConnectGuards();
+        reject(error);
+      };
+
       const request = httpsRequest(
         target,
         {
-          method: init.method ?? "GET",
+          method,
           headers: Object.fromEntries(headers.entries()),
           agent,
-          ...(init.signal ? { signal: init.signal } : {}),
         },
         (response) => {
-          const chunks: Buffer[] = [];
-          response.on("data", (chunk: Buffer | string) => chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk));
-          response.on("end", () => {
-            request.setTimeout(0);
-            resolve({
-              status: response.statusCode ?? 0,
-              statusText: response.statusMessage ?? "",
-              // 保留原始字节：先 toString("utf8") 会把 PNG/JPEG 里不成对的字节（如 0x89）换成 U+FFFD，
-              // 图片下载回来就是坏图
-              body: Buffer.concat(chunks),
-              contentType: response.headers["content-type"] ?? "",
-              retryAfter: typeof response.headers["retry-after"] === "string" ? response.headers["retry-after"] : "",
-            });
+          if (headerSettled) {
+            response.resume();
+            return;
+          }
+          headerSettled = true;
+          clearConnectGuards();
+
+          const status = response.statusCode ?? 0;
+          if (status === 0) {
+            response.resume();
+            reject(new Error("proxy fetch: no response status"));
+            return;
+          }
+
+          const responseHeaders = new Headers();
+          for (const [name, value] of Object.entries(response.headers)) {
+            if (value === undefined) continue;
+            if (HOP_BY_HOP_AND_ENCODING.has(name.toLowerCase())) continue;
+            if (Array.isArray(value)) {
+              for (const item of value) responseHeaders.append(name, item);
+            } else {
+              responseHeaders.set(name, value);
+            }
+          }
+
+          if (nullBodyStatus(status)) {
+            response.resume();
+            resolve(
+              new Response(null, {
+                status,
+                statusText: response.statusMessage ?? "",
+                headers: responseHeaders,
+              }),
+            );
+            return;
+          }
+
+          let streamClosed = false;
+          let bodyEnded = false;
+          let totalBytes = 0;
+          let bodyIdleTimer: ReturnType<typeof setTimeout> | undefined;
+          let onBodyAbort: (() => void) | undefined;
+
+          const clearBodyGuards = () => {
+            if (bodyIdleTimer !== undefined) {
+              clearTimeout(bodyIdleTimer);
+              bodyIdleTimer = undefined;
+            }
+            if (signal && onBodyAbort) {
+              signal.removeEventListener("abort", onBodyAbort);
+              onBodyAbort = undefined;
+            }
+          };
+
+          const bodyStream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              const failStream = (error: Error) => {
+                if (streamClosed) return;
+                streamClosed = true;
+                clearBodyGuards();
+                response.destroy();
+                request.destroy();
+                controller.error(error);
+              };
+
+              const resetBodyIdleTimer = () => {
+                if (bodyIdleTimer !== undefined) clearTimeout(bodyIdleTimer);
+                bodyIdleTimer = setTimeout(() => {
+                  failStream(new Error(`proxy fetch timed out after ${idleTimeoutMs}ms`));
+                }, idleTimeoutMs);
+                bodyIdleTimer.unref?.();
+              };
+
+              resetBodyIdleTimer();
+
+              if (signal) {
+                onBodyAbort = () => failStream(toAbortError(signal.reason));
+                if (signal.aborted) {
+                  onBodyAbort();
+                  return;
+                }
+                signal.addEventListener("abort", onBodyAbort, { once: true });
+              }
+
+              response.on("data", (chunk: Buffer | string) => {
+                if (streamClosed) return;
+                resetBodyIdleTimer();
+                const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+                totalBytes += buf.byteLength;
+                if (maxResponseBytes !== undefined && totalBytes > maxResponseBytes) {
+                  failStream(new Error(`proxy fetch response exceeded ${maxResponseBytes} bytes`));
+                  return;
+                }
+                controller.enqueue(new Uint8Array(buf));
+                if ((controller.desiredSize ?? 0) <= 0) response.pause();
+              });
+
+              response.on("end", () => {
+                if (streamClosed) return;
+                bodyEnded = true;
+                if (!response.complete) {
+                  failStream(new Error("proxy fetch: upstream truncated response"));
+                  return;
+                }
+                streamClosed = true;
+                clearBodyGuards();
+                controller.close();
+              });
+
+              response.on("error", (error) => {
+                failStream(error instanceof Error ? error : new Error(String(error)));
+              });
+
+              response.on("close", () => {
+                if (!bodyEnded && !streamClosed) {
+                  failStream(new Error("proxy fetch: upstream connection closed prematurely"));
+                }
+              });
+            },
+            pull() {
+              if (!streamClosed && !bodyEnded) response.resume();
+            },
+            cancel() {
+              if (streamClosed) return;
+              streamClosed = true;
+              clearBodyGuards();
+              response.destroy();
+              request.destroy();
+            },
           });
-          response.on("error", reject);
+
+          resolve(
+            new Response(bodyStream, {
+              status,
+              statusText: response.statusMessage ?? "",
+              headers: responseHeaders,
+            }),
+          );
         },
       );
-      request.setTimeout(idleTimeoutMs, () => {
-        request.destroy(new Error(`proxy fetch timed out after ${idleTimeoutMs}ms`));
-      });
-      request.on("error", reject);
-      request.end(body);
-    });
-    if (reply.status === 0) throw new Error("proxy fetch: no response status");
 
-    // 状态码与正文原样带回（正文保持原始字节，文本 / JSON / 二进制都逐字节无损；上游给了
-    // content-type / retry-after 就一并带回）；这里不做重试、解压或重定向
-    const responseHeaders = new Headers();
-    if (reply.contentType) responseHeaders.set("content-type", reply.contentType);
-    if (reply.retryAfter) responseHeaders.set("retry-after", reply.retryAfter);
-    return new Response(nullBodyStatus(reply.status) ? null : new Uint8Array(reply.body), {
-      status: reply.status,
-      statusText: reply.statusText,
-      headers: responseHeaders,
+      connectTimer = setTimeout(() => {
+        const err = new Error(`proxy fetch timed out after ${idleTimeoutMs}ms`);
+        request.destroy(err);
+        failBeforeHeaders(err);
+      }, idleTimeoutMs);
+      connectTimer.unref?.();
+
+      if (signal) {
+        onConnectAbort = () => {
+          const err = toAbortError(signal.reason);
+          request.destroy(err);
+          failBeforeHeaders(err);
+        };
+        signal.addEventListener("abort", onConnectAbort, { once: true });
+      }
+
+      request.on("error", (error) => {
+        failBeforeHeaders(error);
+      });
+      request.end(body);
     });
   };
 

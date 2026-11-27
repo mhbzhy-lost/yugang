@@ -8,6 +8,7 @@
  *  - access 就是请求用的 bearer token，accountId 只是给人看，请求头由 API 层从 JWT 里取
  *  - refresh 换新 token，pi-ai 在请求路径上按 expires 判断并回写 config/auth.json
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import type { OAuthCredential } from "./credentials.ts";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -19,6 +20,13 @@ const DEVICE_REDIRECT_URI = `${AUTH_BASE}/deviceauth/callback`;
 const DEVICE_VERIFICATION_URI = `${AUTH_BASE}/codex/device`;
 const DEVICE_TIMEOUT_MS = 15 * 60 * 1000;
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
+/** 与 pi-ai resolveStoredOAuth / credentials.ts LOCK_STALE_MS(120s) 对齐的持锁刷新硬上限（≤ 15s）。 */
+const DEFAULT_REFRESH_TIMEOUT_MS = 15_000;
+
+function mergeTimeoutSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
 
 /** 登录交互：只用到 notify（把设备码/链接给用户）。 */
 export interface LoginInteraction {
@@ -54,8 +62,20 @@ async function readTokens(response: Response, operation: string): Promise<{ acce
     const text = await response.text().catch(() => "");
     throw new Error(`OpenAI token ${operation} 失败 (${response.status}): ${text.slice(0, 200)}`);
   }
-  const json = (await response.json()) as TokenResponse;
-  if (!json.access_token || !json.refresh_token || typeof json.expires_in !== "number") {
+  const raw = (await response.json()) as unknown;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`OpenAI token ${operation} 响应格式非法`);
+  }
+  const json = raw as TokenResponse;
+  if (
+    typeof json.access_token !== "string" ||
+    !json.access_token ||
+    typeof json.refresh_token !== "string" ||
+    !json.refresh_token ||
+    typeof json.expires_in !== "number" ||
+    !Number.isFinite(json.expires_in) ||
+    json.expires_in <= 0
+  ) {
     throw new Error(`OpenAI token ${operation} 响应缺字段`);
   }
   return { access: json.access_token, refresh: json.refresh_token, expires: Date.now() + json.expires_in * 1000 };
@@ -95,7 +115,7 @@ export async function loginWithDeviceCode(interaction: LoginInteraction): Promis
   for (;;) {
     if (signal.aborted) throw new Error("登录已取消");
     if (Date.now() > deadline) throw new Error("设备码登录超时");
-    await new Promise((r) => setTimeout(r, waitMs));
+    await sleep(waitMs, undefined, { signal });
     const poll = await fetch(DEVICE_TOKEN_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -121,11 +141,19 @@ export async function loginWithDeviceCode(interaction: LoginInteraction): Promis
       return toCredential(await readTokens(exchanged, "exchange"));
     }
     const body = (await poll.text().catch(() => "")).slice(0, 300);
+    if (body.includes("expired_token") || body.includes("access_denied")) {
+      throw new Error(`设备码授权失败 (${poll.status}): ${body}`);
+    }
     if (body.includes("slow_down")) waitMs = Math.max(1000, waitMs + 5000);
   }
 }
 
-export async function refreshTokens(credential: OAuthCredential, signal?: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<OAuthCredential> {
+export async function refreshTokens(
+  credential: OAuthCredential,
+  signal?: AbortSignal,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = DEFAULT_REFRESH_TIMEOUT_MS,
+): Promise<OAuthCredential> {
   const response = await fetchImpl(TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -135,7 +163,7 @@ export async function refreshTokens(credential: OAuthCredential, signal?: AbortS
       refresh_token: credential.refresh,
       client_id: CLIENT_ID,
     }).toString(),
-    ...(signal ? { signal } : {}),
+    signal: mergeTimeoutSignal(signal, timeoutMs),
   });
   return toCredential(await readTokens(response, "refresh"));
 }

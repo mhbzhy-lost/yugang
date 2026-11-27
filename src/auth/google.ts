@@ -54,6 +54,13 @@ export const ANTIGRAVITY_SCOPES = [
 
 const AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
+/** 与 pi-ai resolveStoredOAuth / credentials.ts LOCK_STALE_MS(120s) 对齐的持锁刷新硬上限（≤ 15s）。 */
+const DEFAULT_REFRESH_TIMEOUT_MS = 15_000;
+
+function mergeTimeoutSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
 
 export interface BrowserLoginStart {
   url: string;
@@ -97,8 +104,20 @@ async function readTokens(
     const text = await response.text().catch(() => "");
     throw new Error(`Google token ${operation} 失败 (${response.status}): ${text.slice(0, 200)}`);
   }
-  const json = (await response.json()) as TokenResponse;
-  if (!json.access_token || !json.refresh_token || typeof json.expires_in !== "number") {
+  const raw = (await response.json()) as unknown;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`Google token ${operation} 响应格式非法`);
+  }
+  const json = raw as TokenResponse;
+  if (
+    typeof json.access_token !== "string" ||
+    !json.access_token ||
+    typeof json.refresh_token !== "string" ||
+    !json.refresh_token ||
+    typeof json.expires_in !== "number" ||
+    !Number.isFinite(json.expires_in) ||
+    json.expires_in <= 0
+  ) {
     throw new Error(`Google token ${operation} 响应缺字段`);
   }
   const email = emailOf(json.id_token);
@@ -204,6 +223,7 @@ export async function refreshTokens(
   credential: OAuthCredential,
   signal?: AbortSignal,
   fetchImpl: typeof fetch = fetch,
+  timeoutMs = DEFAULT_REFRESH_TIMEOUT_MS,
 ): Promise<OAuthCredential> {
   const { clientId, clientSecret } = credential;
   if (typeof clientId !== "string" || !clientId || typeof clientSecret !== "string" || !clientSecret) {
@@ -219,20 +239,30 @@ export async function refreshTokens(
       client_id: clientId,
       client_secret: clientSecret,
     }).toString(),
-    ...(signal ? { signal } : {}),
+    signal: mergeTimeoutSignal(signal, timeoutMs),
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     throw new Error(`Google token refresh 失败 (${response.status}): ${text.slice(0, 200)}`);
   }
-  const json = (await response.json()) as TokenResponse;
-  if (!json.access_token || typeof json.expires_in !== "number") {
+  const raw = (await response.json()) as unknown;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Google token refresh 响应格式非法");
+  }
+  const json = raw as TokenResponse;
+  if (
+    typeof json.access_token !== "string" ||
+    !json.access_token ||
+    typeof json.expires_in !== "number" ||
+    !Number.isFinite(json.expires_in) ||
+    json.expires_in <= 0
+  ) {
     throw new Error("Google token refresh 响应缺字段");
   }
   return {
     ...credential,
     access: json.access_token,
-    refresh: json.refresh_token ?? credential.refresh,
+    refresh: typeof json.refresh_token === "string" && json.refresh_token ? json.refresh_token : credential.refresh,
     expires: Date.now() + json.expires_in * 1000,
   };
 }

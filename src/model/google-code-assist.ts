@@ -29,6 +29,7 @@
  * x-yugang-ca-project，本适配器在出站前把头摘掉、转进信封；Google 后端对未知头敏感，
  * 出站只留 Content-Type 与 Authorization（antigravity flavor 另加它识别客户端的那三个头）。
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import { calculateCost, clampThinkingLevel } from "@earendil-works/pi-ai/models";
 import type { Api, AssistantMessage, Model, SimpleStreamOptions, StreamOptions, TranscriptContext } from "@earendil-works/pi-ai";
 import {
@@ -61,7 +62,11 @@ const DEFAULT_BASE_URL = "https://cloudcode-pa.googleapis.com";
 // “生产端点实测 429”实为 prod 桶耗尽，当年选 sandbox 是误判（sandbox 能用但额度另算）。
 export const ANTIGRAVITY_BASE_URL = "https://daily-cloudcode-pa.googleapis.com";
 const PROJECT_HEADER = "x-yugang-ca-project";
-const DEFAULT_MAX_RETRIES = 3;
+/**
+ * 内层默认 0 重试：重试权交由外层 pi-durable GenerationTask / submitRound 单点调度，
+ * 消除 4×4×3 = 48× 重试风暴（明确接受外层固定退避而不消费 retry-after 头的取舍）。
+ */
+const DEFAULT_MAX_RETRIES = 0;
 /** 单次 HTTP 请求与 SSE 空闲的默认超时上限（毫秒），防止半开连接在代理/直连下干挂 5–10 分钟。 */
 export const DEFAULT_CODE_ASSIST_TIMEOUT_MS = 120_000;
 
@@ -210,6 +215,7 @@ async function* readSseEvents(
 ): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   const reader = body.getReader();
+  let streamDone = false;
   let buffer = "";
   let dataLines: string[] = [];
   const feed = function* (line: string): Generator<string> {
@@ -251,7 +257,10 @@ async function* readSseEvents(
   try {
     for (;;) {
       const { done, value } = await readChunk();
-      if (done) break;
+      if (done) {
+        streamDone = true;
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       let newline = buffer.indexOf("\n");
       while (newline >= 0) {
@@ -261,9 +270,16 @@ async function* readSseEvents(
       }
     }
     buffer += decoder.decode();
-    yield* feed(buffer.replace(/\r$/, ""));
-    yield* feed("");
+    const trailing = buffer.replace(/\r$/, "");
+    if (trailing.trim() === "data: [DONE]" || trailing.trim() === "data:[DONE]") {
+      return;
+    }
+    if (trailing.length > 0 || dataLines.length > 0) {
+      // 命中 pi-ai RETRYABLE_PROVIDER_ERROR_PATTERN（"ended without"），交由外层安全重试
+      throw new Error("Google stream ended without completion (incomplete SSE chunk)");
+    }
   } finally {
+    if (!streamDone) await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }
@@ -413,7 +429,7 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
       }
       const url = `${(model.baseUrl || defaultBaseUrl(flavor)).replace(/\/+$/, "")}/v1internal:streamGenerateContent?alt=sse`;
       const timeoutMs = resolveTimeoutMs(options?.timeoutMs);
-      const attemptOnce = () => retryProviderRequest(
+      const attemptOnce = (maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES) => retryProviderRequest(
         async () => {
           const attemptAbort = createAttemptAbort(options?.signal, timeoutMs);
           try {
@@ -439,7 +455,7 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
           }
         },
         {
-          maxRetries: options?.maxRetries ?? DEFAULT_MAX_RETRIES,
+          maxRetries,
           maxRetryDelayMs: options?.maxRetryDelayMs,
           signal: options?.signal,
         },
@@ -453,7 +469,7 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
         if (isImageFormat400(error) && hasInlineData(params)) {
           console.warn(`[fish] ${model.provider} inline image rejected, retry without images`);
           params = stripInlineData(params);
-          response = await attemptOnce();
+          response = await attemptOnce(0);
         } else {
           throw error;
         }
@@ -464,8 +480,18 @@ export const stream = (model: CodeAssistModel, context: TranscriptContext, optio
       const blocks = output.content;
       const blockIndex = () => blocks.length - 1;
       for await (const eventData of readSseEvents(response.body, timeoutMs, options?.signal)) {
-        if (!eventData) continue;
-        const parsed = JSON.parse(eventData) as { response?: SseChunk } & SseChunk;
+        const trimmedEvent = eventData.trim();
+        if (!trimmedEvent || trimmedEvent === "[DONE]") continue;
+        const parsed = JSON.parse(trimmedEvent) as {
+          response?: SseChunk & { error?: { code?: number | string; status?: string; message?: string } };
+          error?: { code?: number | string; status?: string; message?: string };
+        } & SseChunk;
+        const inlineError = parsed.error ?? parsed.response?.error;
+        if (inlineError) {
+          const code = inlineError.code ?? inlineError.status ?? "unknown";
+          const message = inlineError.message ?? JSON.stringify(inlineError);
+          throw new Error(`${model.provider} 流内错误 (${code}): ${message}`);
+        }
         await options?.onProviderStreamEvent?.(parsed, model);
         const chunk = parsed.response ?? parsed;
         output.responseId ||= chunk.responseId;
@@ -765,6 +791,8 @@ export interface CodeAssistRequestOptions {
   userAgent?: string;
 }
 
+const DISCOVER_REQUEST_TIMEOUT_MS = 20_000;
+
 export async function discoverProject(
   accessToken: string,
   flavor: CodeAssistFlavor = "gemini",
@@ -774,12 +802,16 @@ export async function discoverProject(
 ): Promise<CodeAssistDiscovery> {
   const baseUrl = (options?.baseUrl ?? defaultBaseUrl(flavor)).replace(/\/+$/, "");
   const metadata = flavor === "antigravity" ? ANTIGRAVITY_METADATA : DISCOVERY_METADATA;
+  const requestSignal = () => {
+    const timeout = AbortSignal.timeout(DISCOVER_REQUEST_TIMEOUT_MS);
+    return signal ? AbortSignal.any([signal, timeout]) : timeout;
+  };
   const post = (path: string) =>
     fetchImpl(`${baseUrl}${path}`, {
       method: "POST",
       headers: requestHeaders(flavor, accessToken, false, options?.userAgent),
       body: JSON.stringify({ metadata }),
-      ...(signal ? { signal } : {}),
+      signal: requestSignal(),
     });
 
   const load = async (): Promise<CodeAssistDiscovery> => {
@@ -795,10 +827,10 @@ export async function discoverProject(
   if (!onboard.ok) throw new Error(`onboardUser 失败 (${onboard.status})`);
   let operation = (await onboard.json()) as { done?: boolean; name?: string };
   for (let tries = 0; operation.done !== true && operation.name && tries < 12; tries++) {
-    await new Promise((r) => setTimeout(r, 5000));
+    await sleep(5000, undefined, { signal });
     const poll = await fetchImpl(`${baseUrl}/v1internal/${operation.name}`, {
       headers: requestHeaders(flavor, accessToken, false, options?.userAgent),
-      ...(signal ? { signal } : {}),
+      signal: requestSignal(),
     });
     if (!poll.ok) throw new Error(`onboard 轮询失败 (${poll.status})`);
     operation = (await poll.json()) as { done?: boolean; name?: string };
