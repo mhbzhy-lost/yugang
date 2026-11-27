@@ -16,6 +16,36 @@
 export type DrawRemoteProviderId = "gpt" | "wan" | "qwen" | "gemini";
 export type DrawRemoteAspectRatio = "1:1" | "3:4" | "4:3" | "9:16" | "16:9";
 
+/** 单次远程生图 HTTP 请求默认超时（10 分钟）。 */
+export const DRAW_REMOTE_TIMEOUT_MS = 600_000;
+/** 异步后台任务的整体超时硬顶（含前置 OAuth 刷新 / discoverProject，比生成超时多留 60 秒余量）。 */
+export const DRAW_REMOTE_JOB_TIMEOUT_MS = 660_000;
+
+export type DrawRemoteStage = "prepare" | "post" | "parse" | "download";
+
+/** 单阶段耗时遥测事件：ms 为该阶段独立耗时（非累计）。 */
+export interface DrawRemoteStageEvent {
+  stage: DrawRemoteStage;
+  ms: number;
+  status?: number;
+  urls?: number;
+  bytes?: number;
+}
+
+/** 同步预检入参：只校验输入与本机配置/凭据存在性，不发任何网络请求。 */
+export interface DrawRemotePreflightRequest {
+  provider: DrawRemoteProviderId;
+  prompt: string;
+  imagesCount: number;
+  modelsPath: string;
+  credentialsPath?: string;
+}
+
+/** 超时时长格式化：不足 1 秒保留 ms，否则取整秒。 */
+export function formatTimeoutLabel(timeoutMs: number): string {
+  return timeoutMs < 1000 ? `${timeoutMs}ms` : `${Math.round(timeoutMs / 1000)} 秒`;
+}
+
 /** 参考图：MIME 由上层按真实字节魔数核实过，bytes 是原始文件内容（只在内存里过一遍）。 */
 export interface DrawRemoteReferenceImage {
   mimeType: string;
@@ -43,8 +73,10 @@ export interface DrawRemoteRunRequest {
   onSubmitted?: () => void;
   /** 宿主取消信号；与各通道内部请求超时经 AbortSignal.any 合并。 */
   signal?: AbortSignal;
-  /** 单次生成请求的超时，缺省 180 秒。 */
+  /** 单次生成请求的超时，缺省 600 秒（DRAW_REMOTE_TIMEOUT_MS）。 */
   timeoutMs?: number;
+  /** 分阶段耗时回调（prepare / post / parse / download，用于日志可观测性）。 */
+  onStage?: (event: DrawRemoteStageEvent) => void;
   /** 注入的 fetch（测试 / 上层代理）；缺省各通道自己选直连或 provider 代理。 */
   fetchImpl?: typeof fetch;
 }
@@ -112,6 +144,7 @@ export interface DrawRemoteChannelRequest {
   onSubmitted?: () => void;
   signal?: AbortSignal;
   timeoutMs?: number;
+  onStage?: (event: DrawRemoteStageEvent) => void;
   fetchImpl?: typeof fetch;
 }
 

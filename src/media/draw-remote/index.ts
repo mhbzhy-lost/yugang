@@ -13,12 +13,13 @@
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ModelsFile, ProviderConfig } from "../../model/config.ts";
+import { readCredentialFile, type ModelsFile, type ProviderConfig } from "../../model/config.ts";
 import { runGeminiChannel } from "./gemini.ts";
 import { runGptChannel } from "./gpt.ts";
 import { DrawRemoteError } from "./types.ts";
 import type {
   DrawRemoteChannelRequest,
+  DrawRemotePreflightRequest,
   DrawRemoteProviderId,
   DrawRemoteRunRequest,
   DrawRemoteRunResult,
@@ -34,6 +35,7 @@ export const DRAW_REMOTE_PROVIDER_IDS: Readonly<Record<DrawRemoteProviderId, str
 });
 
 const PROMPT_MAX = 4000;
+const COMPAT_PREFIX = /\/compatible-mode\/v1$/i;
 
 /**
  * 各通道一次最多收几张参考图。工具层 prepareReferences 按它先拦（回执能点名是第几张），
@@ -46,12 +48,9 @@ export const MAX_REFERENCE_IMAGES_BY_PROVIDER: Readonly<Record<DrawRemoteProvide
   gemini: 5,
 });
 
-export async function runDrawRemote(request: DrawRemoteRunRequest): Promise<DrawRemoteRunResult> {
-  const { provider } = request;
-  // 已经取消的调用直接退出：不读配置、不触发钩子
-  request.signal?.throwIfAborted();
-
-  const prompt = request.prompt.trim();
+/** 纯输入预检（prompt 非空/长度上限 + 通道参考图张数上限），返回去首尾空白后的 prompt。 */
+export function validateDrawRemoteInput(provider: DrawRemoteProviderId, rawPrompt: string, imagesCount: number): string {
+  const prompt = rawPrompt.trim();
   if (!prompt || prompt.length > PROMPT_MAX) {
     throw new DrawRemoteError(
       provider,
@@ -60,16 +59,91 @@ export async function runDrawRemote(request: DrawRemoteRunRequest): Promise<Draw
       false,
     );
   }
-  const images = request.images ?? [];
   const maxImages = MAX_REFERENCE_IMAGES_BY_PROVIDER[provider];
-  if (images.length > maxImages) {
+  if (imagesCount > maxImages) {
     throw new DrawRemoteError(
       provider,
       "bad_ref",
-      `${provider} 通道最多接受 ${maxImages} 张参考图（当前 ${images.length} 张），请删到 ${maxImages} 张以内`,
+      `${provider} 通道最多接受 ${maxImages} 张参考图（当前 ${imagesCount} 张），请删到 ${maxImages} 张以内`,
       false,
     );
   }
+  return prompt;
+}
+
+/**
+ * 同步预检（不发任何网络请求）：校验 prompt/参考图上限、models.json provider 与 baseUrl，
+ * 以及 auth.json 凭据存在且类型形状合规。所有 JSON 读取异常均吞掉原文统一报 unconfigured。
+ */
+export function preflightDrawRemote(request: DrawRemotePreflightRequest): string {
+  const { provider } = request;
+  const prompt = validateDrawRemoteInput(provider, request.prompt, request.imagesCount);
+  const providerId = DRAW_REMOTE_PROVIDER_IDS[provider];
+  const config = readProviderConfig(request.modelsPath, providerId, provider);
+  const authPath = request.credentialsPath ?? join(dirname(request.modelsPath), "auth.json");
+
+  let stored: ReturnType<typeof readCredentialFile>;
+  try {
+    stored = readCredentialFile(authPath, providerId);
+  } catch {
+    // JSON 解析错误会截一段原文，凭据文件内容绝不经错误文案出境
+    stored = undefined;
+  }
+
+  if (provider === "wan" || provider === "qwen") {
+    const baseUrl = (config.baseUrl ?? "").trim().replace(/\/+$/, "").replace(COMPAT_PREFIX, "");
+    if (!/^https?:\/\/[^\s/]+/i.test(baseUrl)) {
+      throw new DrawRemoteError(
+        provider,
+        "unconfigured",
+        `draw_remote 未配置：models.json 的 provider「${providerId}」缺少 baseUrl（${provider} 通道要用它拼原生生图接口）`,
+        false,
+      );
+    }
+    if (!stored || stored.type !== "api_key" || typeof stored.key !== "string" || stored.key === "") {
+      throw new DrawRemoteError(provider, "unconfigured", `draw_remote 未配置：auth.json 缺少「${providerId}」的 API key`, false);
+    }
+    return prompt;
+  }
+
+  if (provider === "gpt") {
+    const accountId = stored && stored.type === "oauth" ? stored["accountId"] : undefined;
+    if (
+      !stored
+      || stored.type !== "oauth"
+      || typeof stored.access !== "string"
+      || stored.access === ""
+      || typeof stored.refresh !== "string"
+      || stored.refresh === ""
+      || typeof accountId !== "string"
+      || accountId === ""
+    ) {
+      throw new DrawRemoteError(provider, "unconfigured", `draw_remote 未配置：auth.json 缺少「${providerId}」的 OAuth 凭据`, false);
+    }
+    return prompt;
+  }
+
+  // gemini：projectId 允许在后台走 discoverProject 兜底，同步预检只核对 OAuth 凭据就绪
+  if (
+    !stored
+    || stored.type !== "oauth"
+    || typeof stored.access !== "string"
+    || stored.access === ""
+    || typeof stored.refresh !== "string"
+    || stored.refresh === ""
+  ) {
+    throw new DrawRemoteError(provider, "unconfigured", `draw_remote 未配置：auth.json 缺少「${providerId}」的 OAuth 凭据`, false);
+  }
+  return prompt;
+}
+
+export async function runDrawRemote(request: DrawRemoteRunRequest): Promise<DrawRemoteRunResult> {
+  const { provider } = request;
+  // 已经取消的调用直接退出：不读配置、不触发钩子
+  request.signal?.throwIfAborted();
+
+  const images = request.images ?? [];
+  const prompt = validateDrawRemoteInput(provider, request.prompt, images.length);
 
   const providerId = DRAW_REMOTE_PROVIDER_IDS[provider];
   const config = readProviderConfig(request.modelsPath, providerId, provider);
@@ -87,6 +161,7 @@ export async function runDrawRemote(request: DrawRemoteRunRequest): Promise<Draw
     onSubmitted: request.onSubmitted,
     signal: request.signal,
     timeoutMs: request.timeoutMs,
+    onStage: request.onStage,
     fetchImpl: request.fetchImpl,
   };
   let files: string[];

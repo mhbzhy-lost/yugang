@@ -28,14 +28,21 @@ import { ANTIGRAVITY_BASE_URL, antigravityUserAgent, discoverProject } from "../
 import { extensionOf } from "../gpt-image.ts";
 import { createProxyFetch } from "../proxy-fetch.ts";
 import { cleanUpstreamText, collectSecrets } from "./redact.ts";
-import { DrawRemoteError, errorMessage, isAbortError, isTimeoutError } from "./types.ts";
-import type { DrawRemoteAspectRatio, DrawRemoteChannelRequest, DrawRemoteReferenceImage } from "./types.ts";
+import {
+  DRAW_REMOTE_TIMEOUT_MS,
+  DrawRemoteError,
+  errorMessage,
+  formatTimeoutLabel,
+  isAbortError,
+  isTimeoutError,
+} from "./types.ts";
+import type { DrawRemoteAspectRatio, DrawRemoteChannelRequest, DrawRemoteReferenceImage, DrawRemoteStageEvent } from "./types.ts";
 
 /** 过期前这么多毫秒之内就提前刷新。 */
 const REFRESH_AHEAD_MS = 60_000;
 /** 小于这个体积的 inlineData 当不成图（截断的包 / 占位图），拒落盘。 */
 const MIN_IMAGE_BYTES = 1024;
-const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_TIMEOUT_MS = DRAW_REMOTE_TIMEOUT_MS;
 const GEMINI = "gemini" as const;
 
 export interface GeminiImageRequest {
@@ -54,9 +61,10 @@ export interface GeminiImageRequest {
   mediaRoot: string;
   /** 同步提交钩子：首个生成 POST 之前调用一次；这里抛错 = 请求不发出。 */
   onSubmitted?: () => void;
-  /** 单次生成请求超时，缺省 180 秒。 */
+  /** 单次生成请求超时，缺省 600 秒。 */
   timeoutMs?: number;
   signal?: AbortSignal;
+  onStage?: (event: DrawRemoteStageEvent) => void;
   fetchImpl?: typeof fetch;
   /** provider 级代理；非法值回落直连。 */
   proxy?: string;
@@ -92,6 +100,7 @@ function textOf(value: unknown): string {
 }
 
 export async function generateGeminiImage(request: GeminiImageRequest): Promise<string[]> {
+  const prepareStart = Date.now();
   const baseUrl = (request.baseUrl?.trim() || ANTIGRAVITY_BASE_URL).replace(/\/+$/, "");
   const userAgent = request.userAgent?.trim() || antigravityUserAgent();
   const doFetch = request.fetchImpl ?? (request.proxy ? createProxyFetch(request.proxy) : undefined) ?? fetch;
@@ -168,7 +177,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   const afterPost = (error: unknown, what: string): unknown => {
     if (signal?.aborted) return error;
     // 走到这里的 AbortError / TimeoutError 只剩内部请求超时
-    if (isTimeoutError(error) || isAbortError(error)) return fail(`gemini ${what}超时（${timeoutMs}ms），结果不明`, true, error);
+    if (isTimeoutError(error) || isAbortError(error)) return fail(`gemini ${what}超时（${formatTimeoutLabel(timeoutMs)}），结果不明`, true, error);
     return fail(`gemini ${what}失败：${clean(errorMessage(error))}`, true, error);
   };
   const rethrowIfAborted = (): void => {
@@ -206,8 +215,11 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
     });
   };
 
+  request.onStage?.({ stage: "prepare", ms: Date.now() - prepareStart });
+
   // 提交钩子：凭据与 projectId 都就绪、请求尚未发出；钩子抛错直接上抛（如总闸中途关闭）
   request.onSubmitted?.();
+  let postStart = Date.now();
   let response: Response;
   try {
     response = await post(credential.access);
@@ -221,12 +233,14 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
     await response.body?.cancel().catch(() => undefined);
     const usedAccess = credential.access;
     credential = await refreshInLock((latest) => latest.access === usedAccess, "401 后 OAuth 强刷");
+    postStart = Date.now();
     try {
       response = await post(credential.access);
     } catch (error) {
       throw afterPost(error, "生图重试");
     }
   }
+  request.onStage?.({ stage: "post", ms: Date.now() - postStart, status: response.status });
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
@@ -237,6 +251,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
     );
   }
 
+  const parseStart = Date.now();
   let json: unknown;
   try {
     json = await response.json();
@@ -251,6 +266,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   const images = parts
     .map((part) => part.inlineData)
     .filter((item): item is { mimeType?: unknown; data: string } => typeof item?.data === "string" && item.data.length > 0);
+  request.onStage?.({ stage: "parse", ms: Date.now() - parseStart, urls: images.length });
 
   if (images.length === 0) {
     const blockReason = textOf(envelope.response?.promptFeedback?.blockReason) || textOf(envelope.promptFeedback?.blockReason);
@@ -303,6 +319,7 @@ export async function runGeminiChannel(request: DrawRemoteChannelRequest): Promi
     onSubmitted: request.onSubmitted,
     timeoutMs: request.timeoutMs,
     signal: request.signal,
+    onStage: request.onStage,
     fetchImpl: request.fetchImpl,
     proxy: request.proxy,
   });

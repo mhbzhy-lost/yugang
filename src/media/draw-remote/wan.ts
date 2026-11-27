@@ -11,7 +11,15 @@
 import { readCredentialFile } from "../../model/config.ts";
 import { generateWanImage } from "../wan-image.ts";
 import { cleanUpstreamText, collectSecrets } from "./redact.ts";
-import { DrawRemoteError, errorMessage, httpStatusOf, isAbortError, isTimeoutError } from "./types.ts";
+import {
+  DRAW_REMOTE_TIMEOUT_MS,
+  DrawRemoteError,
+  errorMessage,
+  formatTimeoutLabel,
+  httpStatusOf,
+  isAbortError,
+  isTimeoutError,
+} from "./types.ts";
 import type { DrawRemoteAspectRatio, DrawRemoteChannelRequest } from "./types.ts";
 
 /** 走百炼原生生图接口的两条通道。 */
@@ -39,7 +47,7 @@ const CLIENT_FAILURES: Readonly<Record<string, string>> = {
   wan_image_not_image: "返回的内容不是图片",
 };
 
-const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_TIMEOUT_MS = DRAW_REMOTE_TIMEOUT_MS;
 const COMPAT_PREFIX = /\/compatible-mode\/v1$/i;
 
 export async function runDashScopeImageChannel(provider: DashScopeImageProvider, request: DrawRemoteChannelRequest): Promise<string[]> {
@@ -72,6 +80,7 @@ export async function runDashScopeImageChannel(provider: DashScopeImageProvider,
 
   // 用对象装着：钩子在闭包里改它，裸变量会被控制流分析误判成恒为 prepare
   const progress: { phase: "prepare" | "submitting" | "posted" } = { phase: "prepare" };
+  const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   try {
     return await generateWanImage({
       apiKey: stored.key,
@@ -81,7 +90,9 @@ export async function runDashScopeImageChannel(provider: DashScopeImageProvider,
       mediaRoot: request.mediaRoot,
       ...(images.length > 0 ? { images } : {}),
       ...(size !== undefined ? { size } : {}),
+      timeoutMs,
       signal: request.signal,
+      onStage: request.onStage,
       // 组图（n / enable_sequential）与思考 / 改写定制不开放，客户端不再发送这些参数
       fetchImpl: request.fetchImpl,
       proxy: request.proxy,
@@ -109,11 +120,18 @@ export async function runDashScopeImageChannel(provider: DashScopeImageProvider,
         { cause: error },
       );
     }
-    // 走到这里的 AbortError / TimeoutError 只剩 generateWanImage 内部的 180 秒定时器（宿主取消已在上面原样上抛）
+    // 走到这里的 AbortError / TimeoutError 只剩 generateWanImage 内部定时器（宿主取消已在上面原样上抛）
     if (isTimeoutError(error) || isAbortError(error)) {
-      throw new DrawRemoteError(provider, "failed", `${provider} 生图超时（${DEFAULT_TIMEOUT_MS / 1000} 秒），结果不明`, true, {
-        cause: error,
-      });
+      const stage = typeof (error as { stage?: unknown } | null)?.stage === "string"
+        ? (error as { stage: string }).stage
+        : undefined;
+      throw new DrawRemoteError(
+        provider,
+        "failed",
+        `${provider} 生图超时（${formatTimeoutLabel(timeoutMs)}${stage ? `，阶段：${stage}` : ""}），结果不明`,
+        true,
+        { cause: error },
+      );
     }
     throw new DrawRemoteError(
       provider,

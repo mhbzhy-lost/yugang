@@ -12,11 +12,19 @@
 import { fileCredentialStore } from "../../auth/credentials.ts";
 import { generateGptImages } from "../gpt-image.ts";
 import { cleanUpstreamText, collectSecrets } from "./redact.ts";
-import { DrawRemoteError, errorMessage, httpStatusOf, isAbortError, isTimeoutError } from "./types.ts";
+import {
+  DRAW_REMOTE_TIMEOUT_MS,
+  DrawRemoteError,
+  errorMessage,
+  formatTimeoutLabel,
+  httpStatusOf,
+  isAbortError,
+  isTimeoutError,
+} from "./types.ts";
 import type { DrawRemoteChannelRequest } from "./types.ts";
 
 const GPT = "gpt" as const;
-const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_TIMEOUT_MS = DRAW_REMOTE_TIMEOUT_MS;
 
 export async function runGptChannel(request: DrawRemoteChannelRequest): Promise<string[]> {
   const dataUrls = (request.images ?? []).map((image) => `data:${image.mimeType};base64,${image.bytes.toString("base64")}`);
@@ -40,6 +48,7 @@ export async function runGptChannel(request: DrawRemoteChannelRequest): Promise<
       mediaRoot: request.mediaRoot,
       timeoutMs: request.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       signal: request.signal,
+      onStage: request.onStage,
       fetchImpl: request.fetchImpl,
       proxy: request.proxy,
       onSubmitted: () => {
@@ -70,7 +79,7 @@ export async function runGptChannel(request: DrawRemoteChannelRequest): Promise<
     }
     // 走到这里的 AbortError / TimeoutError 只剩内部请求超时（宿主取消已在上面原样上抛）
     if (isTimeoutError(error) || isAbortError(error)) {
-      throw new DrawRemoteError(GPT, "failed", `gpt 生图超时（${request.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms），结果不明`, true, {
+      throw new DrawRemoteError(GPT, "failed", `gpt 生图超时（${formatTimeoutLabel(request.timeoutMs ?? DEFAULT_TIMEOUT_MS)}），结果不明`, true, {
         cause: error,
       });
     }

@@ -25,11 +25,15 @@ import { createProxyFetch } from "../src/media/proxy-fetch.ts";
 import { generateGptImages } from "../src/media/gpt-image.ts";
 import { generateWanImage } from "../src/media/wan-image.ts";
 import {
+  DRAW_REMOTE_JOB_TIMEOUT_MS,
+  DRAW_REMOTE_TIMEOUT_MS,
   DrawRemoteError,
   generateGeminiImage,
+  preflightDrawRemote,
   runDrawRemote,
   type DrawRemoteAspectRatio,
   type DrawRemoteRunRequest,
+  type DrawRemoteStageEvent,
   type GeminiImageRequest,
 } from "../src/media/draw-remote/index.ts";
 
@@ -1622,4 +1626,182 @@ test("unconfigured 文案收敛：逐通道点名 models.json / auth.json，不�
   writeFileSync(ws.modelsPath, '{"providers": {"x": broken-secret');
   await assert.rejects(call(), expectDrawRemoteError("gemini", "unconfigured", false, ["models.json"], [...leaks, "broken-secret"]));
   assert.equal(silent.calls.length, 0);
+});
+
+// =====================================================================
+// Task 1：600s 超时常量、wan/qwen 透传 timeoutMs、分阶段耗时 onStage 与同步预检
+// =====================================================================
+
+test("超时常量与透传：默认 600s / 整体 660s；qwen/wan 透传 timeoutMs 并在文案标明卡住阶段", async (t) => {
+  assert.equal(DRAW_REMOTE_TIMEOUT_MS, 600_000);
+  assert.equal(DRAW_REMOTE_JOB_TIMEOUT_MS, 660_000);
+
+  const ws = workspace();
+  t.after(() => ws.cleanup());
+  ws.models({ [QWEN]: { baseUrl: "https://dashscope.test/compatible-mode/v1" } });
+  ws.credentials({ [QWEN]: "sk-wan-key-0123456789" });
+
+  // POST 阶段卡住：40ms 触发，文案含 40ms 与 post
+  const hangingPost = fakeFetch((_url, init) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new DOMException("aborted", "AbortError")), { once: true });
+  }));
+  await assert.rejects(
+    runDrawRemote(runRequest(ws, { provider: "qwen", model: "qwen-image-3.0-pro", timeoutMs: 40, fetchImpl: hangingPost.impl })),
+    expectDrawRemoteError("qwen", "failed", true, ["超时", "40ms", "post"]),
+  );
+
+  // 下载阶段卡住：POST 秒回 URL，下载挂起触发超时，文案含 download
+  const stages: DrawRemoteStageEvent[] = [];
+  const hangingDownload = fakeFetch((url, init) => {
+    if (url.endsWith("/generation")) {
+      return jsonResponse({ output: { choices: [{ message: { content: [{ image: "https://img.test/slow.png" }] } }] } });
+    }
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new DOMException("aborted", "AbortError")), { once: true });
+    });
+  });
+  await assert.rejects(
+    runDrawRemote(runRequest(ws, {
+      provider: "qwen",
+      model: "qwen-image-3.0-pro",
+      timeoutMs: 40,
+      fetchImpl: hangingDownload.impl,
+      onStage: (ev) => stages.push(ev),
+    })),
+    expectDrawRemoteError("qwen", "failed", true, ["超时", "40ms", "download"]),
+  );
+  assert.deepEqual(stages.map((s) => s.stage), ["post", "parse"]);
+  assert.equal(stages[0]?.status, 200);
+  assert.equal(stages[1]?.urls, 1);
+});
+
+test("分阶段耗时遥测：qwen 顺序汇报 post/parse/download（4xx 仍发 post），gpt 与 gemini 汇报 prepare/post/parse", async (t) => {
+  const ws = workspace();
+  t.after(() => ws.cleanup());
+  ws.models({
+    [QWEN]: { baseUrl: "https://dashscope.test/compatible-mode/v1" },
+    [CODEX]: { auth: "oauth" },
+    [AG]: AG_PROVIDER,
+  });
+  ws.credentials({
+    [QWEN]: "sk-wan-key-0123456789",
+    [CODEX]: { type: "oauth", access: "codex-access", refresh: "codex-refresh", expires: Date.now() + 3600_000, accountId: "acct-1" },
+    [AG]: agCredential(),
+  });
+
+  // qwen 两张图成功
+  const qwenStages: DrawRemoteStageEvent[] = [];
+  const qwenFetch = fakeFetch((url) =>
+    url.endsWith("/generation")
+      ? jsonResponse({ output: { choices: [{ message: { content: [{ image: "https://img.test/1.png" }, { image: "https://img.test/2.jpg" }] } }] } })
+      : bytesResponse(url.endsWith(".png") ? PNG : JPEG),
+  );
+  await runDrawRemote(runRequest(ws, {
+    provider: "qwen",
+    model: "qwen-image-3.0-pro",
+    fetchImpl: qwenFetch.impl,
+    onStage: (ev) => qwenStages.push(ev),
+  }));
+  assert.deepEqual(qwenStages.map((s) => s.stage), ["post", "parse", "download", "download"]);
+  assert.equal(qwenStages[0]?.status, 200);
+  assert.equal(qwenStages[1]?.urls, 2);
+  assert.equal(qwenStages[2]?.bytes, PNG.length);
+  assert.equal(qwenStages[3]?.bytes, JPEG.length);
+  for (const s of qwenStages) assert.ok(Number.isFinite(s.ms) && s.ms >= 0);
+
+  // qwen 400：仍汇报 post 带 status: 400
+  const errStages: DrawRemoteStageEvent[] = [];
+  const badFetch = fakeFetch(() => jsonResponse({ message: "bad prompt" }, 400));
+  await assert.rejects(
+    runDrawRemote(runRequest(ws, { provider: "qwen", model: "qwen-image-3.0-pro", fetchImpl: badFetch.impl, onStage: (ev) => errStages.push(ev) })),
+    expectDrawRemoteError("qwen", "failed", false, ["400"]),
+  );
+  assert.deepEqual(errStages.map((s) => s.stage), ["post"]);
+  assert.equal(errStages[0]?.status, 400);
+
+  // gpt：prepare -> post -> parse
+  const gptStages: DrawRemoteStageEvent[] = [];
+  const gptFetch = fakeFetch(() => jsonResponse({ data: [{ b64_json: PNG.toString("base64") }] }));
+  await runDrawRemote(runRequest(ws, { provider: "gpt", model: "gpt-image-2.6-flare", fetchImpl: gptFetch.impl, onStage: (ev) => gptStages.push(ev) }));
+  assert.deepEqual(gptStages.map((s) => s.stage), ["prepare", "post", "parse"]);
+  assert.equal(gptStages[1]?.status, 200);
+  assert.equal(gptStages[2]?.urls, 1);
+
+  // gemini：prepare -> post -> parse
+  const gemStages: DrawRemoteStageEvent[] = [];
+  const gemFetch = fakeFetch(() => jsonResponse({ candidates: [{ content: { parts: [geminiImageParts()] }, finishReason: "STOP" }] }));
+  await runDrawRemote(runRequest(ws, { provider: "gemini", model: "gemini-3.1-flash-image", fetchImpl: gemFetch.impl, onStage: (ev) => gemStages.push(ev) }));
+  assert.deepEqual(gemStages.map((s) => s.stage), ["prepare", "post", "parse"]);
+  assert.equal(gemStages[1]?.status, 200);
+  assert.equal(gemStages[2]?.urls, 1);
+});
+
+test("preflightDrawRemote：同步校验输入、models.json 与 auth.json，不发网络请求，损坏凭据文件不泄密", async (t) => {
+  const ws = workspace();
+  t.after(() => ws.cleanup());
+  const codex = { type: "oauth", access: "codex-access", refresh: "codex-refresh", expires: Date.now() + 3600_000, accountId: "acct-1" };
+
+  // 输入校验：空 prompt / 超 4000 字 / 张数超限
+  assert.throws(
+    () => preflightDrawRemote({ provider: "qwen", prompt: "   ", imagesCount: 0, modelsPath: ws.modelsPath }),
+    expectDrawRemoteError("qwen", "prompt", false),
+  );
+  assert.throws(
+    () => preflightDrawRemote({ provider: "qwen", prompt: "a".repeat(4001), imagesCount: 0, modelsPath: ws.modelsPath }),
+    expectDrawRemoteError("qwen", "prompt", false),
+  );
+  assert.throws(
+    () => preflightDrawRemote({ provider: "qwen", prompt: "ok", imagesCount: 4, modelsPath: ws.modelsPath }),
+    expectDrawRemoteError("qwen", "bad_ref", false),
+  );
+  assert.throws(
+    () => preflightDrawRemote({ provider: "gpt", prompt: "ok", imagesCount: 6, modelsPath: ws.modelsPath }),
+    expectDrawRemoteError("gpt", "bad_ref", false),
+  );
+
+  // 缺 provider / baseUrl / 凭据
+  ws.models({ [QWEN]: {}, [CODEX]: { auth: "oauth" }, [AG]: AG_PROVIDER });
+  ws.credentials({});
+  assert.throws(
+    () => preflightDrawRemote({ provider: "qwen", prompt: "ok", imagesCount: 0, modelsPath: ws.modelsPath }),
+    expectDrawRemoteError("qwen", "unconfigured", false, ["models.json", "baseUrl"]),
+  );
+  ws.models({ [QWEN]: { baseUrl: "https://dashscope.test/compatible-mode/v1" }, [CODEX]: { auth: "oauth" }, [AG]: AG_PROVIDER });
+  assert.throws(
+    () => preflightDrawRemote({ provider: "qwen", prompt: "ok", imagesCount: 0, modelsPath: ws.modelsPath }),
+    expectDrawRemoteError("qwen", "unconfigured", false, ["auth.json", QWEN]),
+  );
+  assert.throws(
+    () => preflightDrawRemote({ provider: "gpt", prompt: "ok", imagesCount: 0, modelsPath: ws.modelsPath }),
+    expectDrawRemoteError("gpt", "unconfigured", false, ["auth.json", CODEX]),
+  );
+  assert.throws(
+    () => preflightDrawRemote({ provider: "gemini", prompt: "ok", imagesCount: 0, modelsPath: ws.modelsPath }),
+    expectDrawRemoteError("gemini", "unconfigured", false, ["auth.json", AG]),
+  );
+
+  // gpt 缺 accountId → unconfigured
+  ws.credentials({ [QWEN]: "sk-wan-key", [CODEX]: { ...codex, accountId: "" }, [AG]: agCredential() });
+  assert.throws(
+    () => preflightDrawRemote({ provider: "gpt", prompt: "ok", imagesCount: 0, modelsPath: ws.modelsPath }),
+    expectDrawRemoteError("gpt", "unconfigured", false, ["auth.json", CODEX]),
+  );
+
+  // 损坏的 auth.json 含敏感串 → unconfigured 且绝不泄密
+  writeFileSync(ws.credentialsPath, '{"qwen-token-plan-cn": sk-secret-leak-test');
+  for (const provider of ["qwen", "gpt", "gemini"] as const) {
+    assert.throws(
+      () => preflightDrawRemote({ provider, prompt: "ok", imagesCount: 0, modelsPath: ws.modelsPath }),
+      expectDrawRemoteError(provider, "unconfigured", false, ["auth.json"], ["sk-secret-leak-test"]),
+    );
+  }
+
+  // 全部就绪：返回去空白后的 prompt
+  ws.credentials({ [QWEN]: "sk-wan-key", [CODEX]: codex, [AG]: agCredential() });
+  for (const provider of ["qwen", "wan", "gpt", "gemini"] as const) {
+    assert.equal(
+      preflightDrawRemote({ provider, prompt: "  画只猫  ", imagesCount: 1, modelsPath: ws.modelsPath }),
+      "画只猫",
+    );
+  }
 });

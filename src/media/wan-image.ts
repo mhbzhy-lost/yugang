@@ -22,9 +22,13 @@ export interface WanImageRequest {
   /** 参考图（图生图 / 改图）：`data:{mime};base64,...` 或公网 URL，按给定顺序排在提示词之前。 */
   images?: readonly string[];
   mediaRoot: string;
+  /** 单次生成与下载总超时，缺省 600 秒。 */
+  timeoutMs?: number;
   signal?: AbortSignal;
   /** provider 级代理（只有需要翻墙时才有意义）；非法值回落直连。 */
   proxy?: string;
+  /** 分阶段耗时回调（post / parse / download）。 */
+  onStage?: (event: { stage: "post" | "parse" | "download"; ms: number; status?: number; urls?: number; bytes?: number }) => void;
   /** 上层 / 测试注入的 fetch：生成请求与图片下载都走它。 */
   fetchImpl?: typeof fetch;
   /**
@@ -44,13 +48,15 @@ function httpError(message: string, status: number): Error {
 
 export async function generateWanImage(request: WanImageRequest): Promise<string[]> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 180_000);
+  const timeout = setTimeout(() => controller.abort(), request.timeoutMs ?? 600_000);
   const signal = request.signal ? AbortSignal.any([controller.signal, request.signal]) : controller.signal;
   const doFetch = request.fetchImpl ?? (request.proxy ? createProxyFetch(request.proxy) : undefined) ?? fetch;
+  let stage: "post" | "parse" | "download" = "post";
   try {
     // 已取消就不发请求、不触发提交钩子
     signal.throwIfAborted();
     request.onSubmitted?.();
+    let stageStart = Date.now();
     const response = await doFetch(`${request.baseUrl.replace(/\/+$/, "")}/api/v1/services/aigc/multimodal-generation/generation`, {
       method: "POST",
       headers: { authorization: `Bearer ${request.apiKey}`, "content-type": "application/json", accept: "application/json" },
@@ -64,20 +70,27 @@ export async function generateWanImage(request: WanImageRequest): Promise<string
       }),
       signal,
     });
+    request.onStage?.({ stage: "post", ms: Date.now() - stageStart, status: response.status });
     if (!response.ok) {
       const detail = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 300);
       throw httpError(`wan_image_http_${response.status}${detail ? `: ${detail}` : ""}`, response.status);
     }
+    stage = "parse";
+    stageStart = Date.now();
     const parsed = await response.json() as { output?: { choices?: Array<{ message?: { content?: Array<{ image?: string }> } }> } };
     const urls = parsed.output?.choices?.flatMap((choice) => choice.message?.content ?? [])
       .map((item) => item.image).filter((image): image is string => typeof image === "string");
+    request.onStage?.({ stage: "parse", ms: Date.now() - stageStart, urls: urls.length });
     if (urls.length === 0) throw new Error("wan_image_empty");
     const files: string[] = [];
     let dir: string | undefined;
+    stage = "download";
     for (const url of urls) {
+      stageStart = Date.now();
       const image = await doFetch(url, { signal });
       if (!image.ok) throw httpError(`wan_image_download_${image.status}`, image.status);
       const bytes = Buffer.from(await image.arrayBuffer());
+      request.onStage?.({ stage: "download", ms: Date.now() - stageStart, bytes: bytes.length });
       // 取消后不落盘：逐张复核，第一张之前的 gen/ 目录也不建
       signal.throwIfAborted();
       if (bytes.length < 1024) throw new Error("wan_image_too_small");
@@ -94,6 +107,11 @@ export async function generateWanImage(request: WanImageRequest): Promise<string
       files.push(file);
     }
     return files;
+  } catch (error) {
+    if (error && typeof error === "object" && !("stage" in error)) {
+      (error as { stage?: string }).stage = stage;
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }

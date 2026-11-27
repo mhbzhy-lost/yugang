@@ -40,10 +40,12 @@ export interface GptImageRequest {
   /** 参考图 data URL；给了就走 edits 端点（Codex 最多 5 张）。 */
   images?: string[];
   mediaRoot: string;
-  /** 超时，默认 180 秒（实测单张 14–27 秒）。 */
+  /** 超时，默认 600 秒。 */
   timeoutMs?: number;
   /** 工具超时/宿主取消的合并信号；与请求超时 AbortSignal.any 合并。后端已接受的请求不重 POST。 */
   signal?: AbortSignal;
+  /** 分阶段耗时回调（prepare / post / parse）。 */
+  onStage?: (event: { stage: "prepare" | "post" | "parse"; ms: number; status?: number; urls?: number }) => void;
   fetchImpl?: typeof fetch;
   /** provider 级代理（只有 OpenAI 需要翻墙时才有意义）；非法值会回落到直连。 */
   proxy?: string;
@@ -61,6 +63,7 @@ function httpError(message: string, status: number): Error {
 
 /** 出图成功返回相对 mediaRoot 的引用列表（gen/xxx.png）；失败抛错，错误里不带凭据。 */
 export async function generateGptImages(request: GptImageRequest): Promise<string[]> {
+  const prepareStart = Date.now();
   // provider 级代理：只影响这一次生图（含 token 刷新），不碰 globalThis.fetch
   const doFetch = request.fetchImpl ?? (request.proxy ? createProxyFetch(request.proxy) : undefined) ?? fetch;
   const store = fileCredentialStore(request.authPath);
@@ -87,6 +90,7 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
       throw new Error("gpt_image_bad_auth");
     }
   }
+  request.onStage?.({ stage: "prepare", ms: Date.now() - prepareStart });
 
   // prompt 以 request.prompt 为准；params 里其余字段原样透传（model 由调用方按 models.image 填）
   const { prompt: _ignored, model, ...rest } = (request.params ?? {}) as Record<string, unknown> & {
@@ -102,10 +106,11 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
     body["images"] = request.images.map((image_url) => ({ image_url }));
   }
 
-  const timeout = AbortSignal.timeout(request.timeoutMs ?? 180_000);
+  const timeout = AbortSignal.timeout(request.timeoutMs ?? 600_000);
   // 已取消就不发请求、不触发提交钩子
   request.signal?.throwIfAborted();
   request.onSubmitted?.();
+  const postStart = Date.now();
   const response = await doFetch(request.images && request.images.length > 0 ? EDIT_ENDPOINT : GEN_ENDPOINT, {
     method: "POST",
     headers: {
@@ -119,6 +124,7 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
     body: JSON.stringify(body),
     signal: request.signal ? AbortSignal.any([timeout, request.signal]) : timeout,
   });
+  request.onStage?.({ stage: "post", ms: Date.now() - postStart, status: response.status });
 
   if (!response.ok) {
     // 400 + 这句 = 通道级开关没开（Codex 订阅后端 2026-11 实测：换任何 2.6 型号都一样），
@@ -129,8 +135,10 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
     }
     throw httpError(`gpt_image_http_${response.status}`, response.status);
   }
+  const parseStart = Date.now();
   const parsed = (await response.json()) as { data?: { b64_json?: string }[] };
   const entries = (parsed.data ?? []).filter((item) => typeof item.b64_json === "string");
+  request.onStage?.({ stage: "parse", ms: Date.now() - parseStart, urls: entries.length });
   if (entries.length === 0) throw new Error("gpt_image_empty");
 
   // 取消后不落盘：超时晚到的图不再写进 gen/（后端可能仍在算，状态不明，不重 POST）
