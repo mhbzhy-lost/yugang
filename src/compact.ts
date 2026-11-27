@@ -705,19 +705,22 @@ function entryTimestamp(entry: { kind: string; model?: unknown; data?: unknown }
  * stopReason:error 的空 assistant entry（生产观察：失败轮会留一条 content 空的错误
  * entry 在活跃链，重放成噪音）在这里显式跳过，不进摘要也不进尾巴。
  */
-/** 最近一次普通模型请求的实际上下文：input + cacheRead；错误/无 usage 时不猜 token。 */
-async function latestRequestTokens(conversation: Conversation): Promise<number | undefined> {
+/** 最近一次有效普通模型请求的实际上下文：input + cacheRead；跳过 error / aborted 与零 usage 条目。 */
+export async function latestRequestTokens(conversation: Conversation): Promise<number | undefined> {
   const view = await conversation.context(ctx);
   for (const entry of [...view.entries].reverse()) {
-      if (entry.kind !== "pi.assistant") continue;
-      const messages = Array.isArray(entry.model) ? entry.model : [entry.model];
-      for (const message of [...messages].reverse()) {
-        const usage = (message as { usage?: { input?: unknown; cacheRead?: unknown } } | undefined)?.usage;
-        if (typeof usage?.input === "number" && typeof usage.cacheRead === "number") {
-          return usage.input + usage.cacheRead;
-        }
+    if (entry.kind !== "pi.assistant") continue;
+    const messages = Array.isArray(entry.model) ? entry.model : [entry.model];
+    for (const message of [...messages].reverse()) {
+      const stopReason = (message as { stopReason?: unknown } | undefined)?.stopReason;
+      if (stopReason === "error" || stopReason === "aborted") continue;
+      const usage = (message as { usage?: { input?: unknown; cacheRead?: unknown } } | undefined)?.usage;
+      if (typeof usage?.input === "number" && typeof usage.cacheRead === "number" && Number.isFinite(usage.input) && Number.isFinite(usage.cacheRead)) {
+        const total = usage.input + usage.cacheRead;
+        if (total > 0) return total;
       }
     }
+  }
   return undefined;
 }
 

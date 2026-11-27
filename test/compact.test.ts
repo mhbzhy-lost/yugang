@@ -13,9 +13,9 @@ import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { MemoryStorage } from "@earendil-works/pi-durable";
+import { AssistantEntry, MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
-import { renderTranscript } from "../src/compact.ts";
+import { latestRequestTokens, renderTranscript } from "../src/compact.ts";
 import { compactTokenLimitOf, loadFishConfig } from "../src/fish-config.ts";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -140,5 +140,128 @@ test("没配 compact 就永不压缩", async () => {
     assert.equal(result.compacted, false);
   } finally {
     await fish.close();
+  }
+});
+
+const ZERO_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+test("latestRequestTokens 跳过 error 与 aborted 条目，不被错误轮重算的 usage 污染", async () => {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let maxTokens = 999_999;
+  const open = await openFish({
+    storage: new MemoryStorage(),
+    models,
+    model: { provider: faux.provider.id, modelId: faux.models[0].id },
+    promptRoot: PROMPTS,
+    mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
+    workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
+    compact: { maxTokens: 999_999, limits: () => ({ maxTokens }) },
+    emit: () => {},
+    react: () => {},
+  });
+  try {
+    const root = await open.harness.root(ctx, {
+      agent: { model: { provider: faux.provider.id, modelId: faux.models[0].id } },
+    });
+
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("say_words", { text: "在的" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("好了"),
+    ]);
+    await (await root.submit({ type: "input", content: `> 消息起始\n[m:1] 群友: ${"正常消息".repeat(120)}\n> 消息结束` }, ctx)).wait(ctx);
+
+    const before = await latestRequestTokens(root);
+    assert.equal(typeof before, "number");
+    assert.ok((before ?? 0) > 0, `期望首轮有效 token > 0，实际 ${String(before)}`);
+
+    // 不可重试错误轮：faux 会重算更大的 cacheRead，未修复实现会采纳错误轮数值
+    faux.setResponses([
+      fauxAssistantMessage("", { stopReason: "error", errorMessage: "400 content_filter_1301" }),
+    ]);
+    await (await root.submit({ type: "input", content: `> 消息起始\n[m:2] 群友: ${"触发错误".repeat(60)}\n> 消息结束` }, ctx)).wait(ctx);
+
+    assert.equal(await latestRequestTokens(root), before, "错误轮不应覆盖上一正常轮的 token 采样");
+    maxTokens = (before as number) + 1;
+    const below = await open.compact(root);
+    assert.equal(below.compacted, false, "阈值高于正常轮时不应受错误轮 usage 误触发换页");
+    assert.equal(below.reason, "below_threshold");
+    assert.equal(below.tokens, before);
+
+    // aborted 条目即使携带高额 usage 也必须跳过
+    const aborted = {
+      ...fauxAssistantMessage("", { stopReason: "aborted" }),
+      usage: { ...ZERO_USAGE, input: (before as number) + 50_000, totalTokens: (before as number) + 50_000 },
+    };
+    await open.harness.commit(async (tx) => {
+      await tx.appendEntry(AssistantEntry, root.id, { model: [aborted] });
+    }, ctx);
+    assert.equal(await latestRequestTokens(root), before, "aborted 条目不应覆盖正常轮采样");
+  } finally {
+    await open.close();
+  }
+});
+
+test("latestRequestTokens 跳过线上全零 usage 错误条目，换页正常触发", async () => {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let maxTokens = 999_999;
+  const open = await openFish({
+    storage: new MemoryStorage(),
+    models,
+    model: { provider: faux.provider.id, modelId: faux.models[0].id },
+    promptRoot: PROMPTS,
+    mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
+    workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
+    compact: { maxTokens: 999_999, limits: () => ({ maxTokens }) },
+    emit: () => {},
+    react: () => {},
+  });
+  try {
+    const root = await open.harness.root(ctx, {
+      agent: { model: { provider: faux.provider.id, modelId: faux.models[0].id } },
+    });
+
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("say_words", { text: "收到" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("好了"),
+    ]);
+    await (await root.submit({ type: "input", content: `> 消息起始\n[m:10] 群友: ${"高图量消息".repeat(150)}\n> 消息结束` }, ctx)).wait(ctx);
+
+    const before = await latestRequestTokens(root);
+    assert.ok(typeof before === "number" && before > 0);
+
+    // 模拟线上流中断写入的全零 usage 错误条目 + 异常零 usage 条目
+    const zeroErr = {
+      ...fauxAssistantMessage("", { stopReason: "error", errorMessage: "Google stream ended without a finish reason" }),
+      usage: ZERO_USAGE,
+    };
+    const zeroStop = {
+      ...fauxAssistantMessage("空"),
+      usage: ZERO_USAGE,
+    };
+    await open.harness.commit(async (tx) => {
+      await tx.appendEntry(AssistantEntry, root.id, { model: [zeroErr] });
+      await tx.appendEntry(AssistantEntry, root.id, { model: [zeroStop] });
+    }, ctx);
+
+    assert.equal(await latestRequestTokens(root), before, "全零 usage 条目不应把采样归零");
+
+    maxTokens = before;
+    faux.setResponses([fauxAssistantMessage('{"threads":[],"promises":[],"mood":"闲聊"}')]);
+    const done = await open.compact(root);
+    assert.equal(done.compacted, true, "回退到上一有效轮 token 后应正常触发换页");
+    assert.equal(done.tokens, before);
+  } finally {
+    await open.close();
   }
 });
