@@ -79,7 +79,13 @@ import { shouldSendWorkingReceipt } from "../working-receipt.ts";
 import { shouldNudgeZeroEgress } from "../zero-egress-nudge.ts";
 import { runDrawRemote } from "../media/draw-remote/index.ts";
 import type { Middleware } from "./app.ts";
-import { planInlineImages, planRoundImages, rewriteRoundForwardImages } from "../qq/round-images.ts";
+import {
+  planInlineImages,
+  planRoundImages,
+  rewriteRoundForwardImages,
+  SHARD_GIF_MAX_FRAMES,
+  SHARD_INLINE_IMAGE_MAX,
+} from "../qq/round-images.ts";
 import { assembleRoundContent, backgroundTextOf, renderBrowseOpportunity, renderOpenMessageList, renderOpenQuotedText, submitContentOf } from "../qq/round-input.ts";
 import { buildNewsCandidateInput, renderNewsBroadcast, validateNewsDigest, type NewsCandidateInput, type NewsDigest } from "../external/news-broadcast.ts";
 import { createNewsJob, type NewsJob } from "../external/news-job.ts";
@@ -872,8 +878,8 @@ export async function submitRound(input: {
   /** 记忆：结构化入站 entry（fish.inbound，原始文本）与本轮在场人物（memory scope）。 */
   /** 不传（injection / shard 轮）= 不写 fish.inbound、不压 scope（背景板非对话输入） */
   memory?: { inbound: MemoryInbound; speakers: { subject: string; name: string }[] };
-  /** inline 附图（已压缩的 image blocks，≤2 张）：按编号顺序附在唯一 text block 之后，
-   * 与文本里的 [图片#N] / [图片#N 压缩图] 标签对齐（压缩与编号在 planRoundImages 完成） */
+  /** inline 附图（已压缩的 image blocks）：按编号顺序附在唯一 text block 之后，
+   * 与文本里的 [图片#N] / [图片#N 压缩图] 标签对齐（压缩与编号在 planRoundImages / planInlineImages 完成） */
   imageBlocks?: ReadonlyArray<{ type: "image"; data: string; mimeType: string }>;
   /** entry kind：缺省 fish.inbound（写结构化数据）；injection / shard 轮传 fish.engage_tick */
   entryKind?: string;
@@ -1345,7 +1351,10 @@ async function submitShardRound(chatKey: string, items: readonly EngageShardItem
     for (const match of item.text.matchAll(IMAGE_REF_PATTERN)) pushRef(match[1] ?? "");
     for (const ref of item.quoted?.images ?? []) pushRef(ref);
   }
-  const imagePlan = planInlineImages(refs, config.mediaRoot, inline, fish.prompts.messages);
+  const imagePlan = planInlineImages(refs, config.mediaRoot, inline, fish.prompts.messages, undefined, undefined, {
+    maxImages: SHARD_INLINE_IMAGE_MAX,
+    maxGifFrames: SHARD_GIF_MAX_FRAMES,
+  });
   // 直发行文本换编（含 GIF 的双边标记）；fallback 模式不换，保留 inbound 路径 + look 提示。
   // 双边收录标记只在 gifAutoCollect 开着时附（关着 = 动图也要主人点头，不引导当场收）
   const collectHint = fishConfig().config.gifAutoCollect ? (fish.prompts.messages["image_gif_collect_hint"] ?? "") : "";

@@ -9,11 +9,20 @@ import { gifCompressedTagOf, gifTagOf, imageCompressedTagOf, imageTagOf, type Fo
 
 // vision==main 时静态图应全部直读（主人裁定 2026-11-06：不再为省额度强制 look 转述），
 // 上限只为防一轮几十张图把上下文撑爆；GIF 同样参与编号（算 1 张），帧数另算
-const INLINE_IMAGE_MAX = 8;
-/** GIF 抽帧上限（普通轮 / shard 批）。 */
-const GIF_MAX_FRAMES = 4;
+export const INLINE_IMAGE_MAX = 8;
+/** GIF 抽帧上限（@ 必答轮默认）。 */
+export const GIF_MAX_FRAMES = 4;
+/** 自由拍单拍 inline 上限：控图量避免每 120s 拍次把页内 token 顶爆。 */
+export const SHARD_INLINE_IMAGE_MAX = 4;
+/** 自由拍单张 GIF 抽帧上限（首末两帧，看清梗同时减半 block 数）。 */
+export const SHARD_GIF_MAX_FRAMES = 2;
 const IMAGE_REF_PATTERN = /\[图片 (inbound\/[^\]\s]+)\]/g;
 const FORWARD_IMAGE_PATTERN = /\[图片#\d+\]/g;
+
+export interface InlineImageLimits {
+  maxImages?: number;
+  maxGifFrames?: number;
+}
 
 export interface RoundImageBlock { type: "image"; data: string; mimeType: string }
 
@@ -82,20 +91,24 @@ export function planInlineImages(
   inline: boolean,
   messages: MessageTable,
   shrink: (input: { file: string }) => ShrinkResult = shrinkForModel,
-  gifFramesOf: (file: string, maxFrames: number) => GifFramePlan = extractGifFrames,
+  gifFramesOf?: (file: string, maxFrames: number) => GifFramePlan,
+  limits?: InlineImageLimits,
 ): InlineImagePlan {
   const numbers = new Map<string, number>();
   const blocks: RoundImageBlock[] = [];
   const tags: string[] = [];
   const gifFrames = new Map<string, number>();
   if (!inline) return { numbers, blocks, tags, gifFrames };
+  const maxImages = limits?.maxImages ?? INLINE_IMAGE_MAX;
+  const maxGifFrames = limits?.maxGifFrames ?? GIF_MAX_FRAMES;
+  const extractGif = gifFramesOf ?? ((file: string, maxFrames: number) => extractGifFrames(file, maxFrames, shrink));
   const eligible = refs.filter((ref) => ref && existsSync(join(mediaRoot, ref)));
   // 逻辑编号计数器：每张图（含 GIF）只占 1 个号；不能用 blocks.length 推编号，
   // 否则 GIF 抽帧后后续静态图的编号会按帧数跳号
   let numbered = 0;
-  for (const ref of eligible.slice(0, INLINE_IMAGE_MAX)) {
+  for (const ref of eligible.slice(0, maxImages)) {
     if (ref.toLowerCase().endsWith(".gif")) {
-      const plan = gifFramesOf(join(mediaRoot, ref), GIF_MAX_FRAMES);
+      const plan = extractGif(join(mediaRoot, ref), maxGifFrames);
       if (plan.frames.length === 0) continue;
       const n = ++numbered;
       numbers.set(ref, n);

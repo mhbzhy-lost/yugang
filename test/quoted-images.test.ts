@@ -17,7 +17,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPrompts } from "../src/prompt/index.ts";
-import { planRoundImages } from "../src/qq/round-images.ts";
+import {
+  GIF_MAX_FRAMES,
+  planInlineImages,
+  planRoundImages,
+  SHARD_GIF_MAX_FRAMES,
+  SHARD_INLINE_IMAGE_MAX,
+} from "../src/qq/round-images.ts";
 import { withContext, type BurstMessage } from "../src/qq/debounce.ts";
 import type { IncomingMessage } from "../src/qq/onebot.ts";
 import type { QuotedMessage } from "../src/qq/model-input.ts";
@@ -150,4 +156,45 @@ test("引用图与文字同时存在时都保留，读图失败标记不误伤",
   const q = { ...quoted([JPG]), text: "这是我刚发的" };
   const round = withContext(anchor(), [], [burstLine(q)], { master: "", messages });
   assert.match(round.content, /「这是我刚发的 \[图片 inbound\/replied\.jpg\]」/);
+});
+
+test("自由拍限额：planInlineImages 支持独立收紧单拍图片数与 GIF 帧数上限", () => {
+  const refs: string[] = [];
+  for (let i = 1; i <= 6; i++) {
+    const ref = `inbound/shard-${i}.jpg`;
+    writeFileSync(join(mediaRoot, ref), "fixture");
+    refs.push(ref);
+  }
+  const shardPlan = planInlineImages(refs, mediaRoot, true, messages, shrink, undefined, {
+    maxImages: SHARD_INLINE_IMAGE_MAX,
+    maxGifFrames: SHARD_GIF_MAX_FRAMES,
+  });
+  assert.equal(SHARD_INLINE_IMAGE_MAX, 4);
+  assert.equal(SHARD_GIF_MAX_FRAMES, 2);
+  assert.equal(shardPlan.numbers.size, 4, "自由拍单拍最多编号 4 张图");
+  assert.equal(shardPlan.blocks.length, 4, "超出上限的图不进 blocks");
+
+  const captured: number[] = [];
+  const spyGif = (_file: string, maxFrames: number) => {
+    captured.push(maxFrames);
+    return {
+      frames: Array.from({ length: maxFrames }, (_, idx) => Buffer.from(`f${idx}`).toString("base64")),
+      count: maxFrames,
+      total: 10,
+    };
+  };
+  planInlineImages([GIF], mediaRoot, true, messages, shrink, spyGif);
+  planInlineImages([GIF], mediaRoot, true, messages, shrink, spyGif, {
+    maxImages: SHARD_INLINE_IMAGE_MAX,
+    maxGifFrames: SHARD_GIF_MAX_FRAMES,
+  });
+  assert.deepEqual(captured, [GIF_MAX_FRAMES, SHARD_GIF_MAX_FRAMES]);
+});
+
+test("自由拍接线契约：submitShardRound 传入 SHARD_INLINE_IMAGE_MAX 与 SHARD_GIF_MAX_FRAMES", () => {
+  const runtimeSrc = readFileSync(fileURLToPath(new URL("../src/app/runtime.ts", import.meta.url)), "utf8");
+  const start = runtimeSrc.indexOf("async function submitShardRound(");
+  assert.notEqual(start, -1, "未找到 submitShardRound");
+  const snippet = runtimeSrc.slice(start, start + 1800);
+  assert.match(snippet, /planInlineImages\([\s\S]*SHARD_INLINE_IMAGE_MAX[\s\S]*SHARD_GIF_MAX_FRAMES/);
 });
