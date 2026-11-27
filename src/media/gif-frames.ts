@@ -19,11 +19,14 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { shrinkForModel, type ShrinkResult } from "./shrink-image.ts";
 
 /** GIF 帧的目标长边（px）：比静态图 1280 低一档，控制单帧 token。 */
 export const GIF_FRAME_LONG_SIDE = 640;
-/** JPEG 质量。 */
-const GIF_FRAME_QUALITY = "80";
+/** ffmpeg mjpeg 输出质量档位（-q:v，2–31 越大越省体积；6 约等效 JPEG q75–80）。 */
+export const GIF_FRAME_QSCALE = "6";
+/** GIF 单帧字节预算（与静态图 shrink-image 的 50KB 上限对齐）。 */
+export const GIF_FRAME_TARGET_BYTES = 50 * 1024;
 
 export interface GifFramePlan {
   /** 按时间顺序排列的 JPEG 帧（base64）；抽帧失败时是首帧单张的降级结果。 */
@@ -66,27 +69,61 @@ function probeGif(file: string): { frames: number; seconds: number } | null {
   }
 }
 
-/** 抽指定帧号列表：select 滤镜 + 缩放，输出 JPEG 到临时目录后读回。
+/** 拼装 ffmpeg 等距抽帧参数：-q:v 必须位于 -i 之后作为输出选项。 */
+export function buildGifExtractArgs(file: string, indices: readonly number[], outPattern: string): string[] {
+  const select = "select=" + indices.map((i) => "eq(n\\," + i + ")").join("+");
+  return [
+    "-y",
+    "-loglevel",
+    "error",
+    "-i",
+    file,
+    "-vf",
+    `${select},${frameScaleArgs().join(",")}`,
+    "-fps_mode",
+    "vfr",
+    "-q:v",
+    GIF_FRAME_QSCALE,
+    outPattern,
+  ];
+}
+
+/** 单帧落盘后的字节收口：≤50KB 直返；超限走 shrinkForModel 压回预算，失败或未变小回退原帧。 */
+export function finalizeGifFrame(
+  framePath: string,
+  shrink: (input: { file: string }) => ShrinkResult = shrinkForModel,
+): Buffer | null {
+  const buf = readFileSync(framePath);
+  if (buf.length === 0) return null;
+  if (buf.length <= GIF_FRAME_TARGET_BYTES) return buf;
+  const shrunk = shrink({ file: framePath });
+  if (shrunk.ok && shrunk.buffer.length > 0 && shrunk.buffer.length < buf.length) {
+    return shrunk.buffer;
+  }
+  return buf;
+}
+
+/** 抽指定帧号列表：select 滤镜 + 缩放 + 输出质量控制，输出 JPEG 到临时目录后读回。
  *  注意 select 表达式不加引号：spawnSync 的 argv 不经 shell，字面引号会被 ffmpeg
  *  当成表达式的一部分导致滤镜解析失败（2026-11-06 实测踩坑）。`\,` 转义保留——
  *  逗号在滤镜链里是分隔符。 */
-function extractFrames(file: string, indices: readonly number[]): Buffer[] {
+function extractFrames(
+  file: string,
+  indices: readonly number[],
+  shrink: (input: { file: string }) => ShrinkResult = shrinkForModel,
+): Buffer[] {
   const dir = mkdtempSync(join(tmpdir(), "gif-frames-"));
   try {
-    const select = "select=" + indices.map((i) => "eq(n\\," + i + ")").join("+");
     const res = spawnSync(
       "ffmpeg",
-      ["-y", "-loglevel", "error", "-i", file, "-vf", `${select},${frameScaleArgs().join(",")}`, "-fps_mode", "vfr", join(dir, "f%03d.jpg")],
+      buildGifExtractArgs(file, indices, join(dir, "f%03d.jpg")),
       { timeout: 30_000 },
     );
     if (res.status !== 0) return [];
     return readdirSync(dir)
       .filter((name) => name.startsWith("f") && name.endsWith(".jpg"))
       .sort()
-      .map((name) => {
-        const buf = readFileSync(join(dir, name));
-        return buf.length > 0 ? buf : null;
-      })
+      .map((name) => finalizeGifFrame(join(dir, name), shrink))
       .filter((b): b is Buffer => b !== null);
   } catch {
     return [];
@@ -98,18 +135,22 @@ function extractFrames(file: string, indices: readonly number[]): Buffer[] {
 /**
  * 等距抽帧。帧号含首末两端（`Math.round(i * (total - 1) / (count - 1))`），
  * 保证「开头什么样、落点什么样」都在场——梗的落点常在最后。
- * maxFrames 建议值：普通轮 / 收图轮 4，导入轮 2（打标够用、控批量）。
+ * maxFrames 建议值：普通轮 / 收图轮 4，导入轮 / 自由拍 2（打标够用、控批量）。
  */
-export function extractGifFrames(file: string, maxFrames: number): GifFramePlan {
+export function extractGifFrames(
+  file: string,
+  maxFrames: number,
+  shrink: (input: { file: string }) => ShrinkResult = shrinkForModel,
+): GifFramePlan {
   const cap = Math.max(2, Math.min(maxFrames, 8));
   const info = probeGif(file);
   if (!info) {
     // 探不到帧数（损坏 / 非法 GIF）：降级首帧
-    const fallback = extractFrames(file, [0]);
+    const fallback = extractFrames(file, [0], shrink);
     return fallback.length > 0 ? { frames: [fallback[0].toString("base64")], count: 1, total: 0 } : { frames: [], count: 0, total: 0 };
   }
   if (info.frames <= 1) {
-    const single = extractFrames(file, [0]);
+    const single = extractFrames(file, [0], shrink);
     if (single.length > 0) return { frames: [single[0].toString("base64")], count: 1, total: info.frames };
     return { frames: [], count: 0, total: info.frames };
   }
@@ -122,9 +163,9 @@ export function extractGifFrames(file: string, maxFrames: number): GifFramePlan 
   // 去重（极短 GIF 可能让相邻采样点落在同一帧）
   const unique = [...new Set(indices)];
   if (unique.length === 1) unique.push(info.frames - 1);
-  const frames = extractFrames(file, unique);
+  const frames = extractFrames(file, unique, shrink);
   if (frames.length === 0) {
-    const fallback = extractFrames(file, [0]);
+    const fallback = extractFrames(file, [0], shrink);
     return fallback.length > 0
       ? { frames: [fallback[0].toString("base64")], count: 1, total: info.frames }
       : { frames: [], count: 0, total: info.frames };
