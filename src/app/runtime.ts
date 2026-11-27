@@ -23,7 +23,7 @@ import { describeModel, loadFishModels, resolveThinking, thinkingOffWarning } fr
 import { cleanupStaleVideoTemps } from "../tools/video/tool.ts";
 import { isLookDisabled } from "../tools/look/tool.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { Conversation, ConversationId, EntryId, SettledSubmissionRecord } from "@earendil-works/pi-durable";
+import { ConversationBusy, type Conversation, type ConversationId, type EntryId, type SettledSubmissionRecord } from "@earendil-works/pi-durable";
 import { openFish, SentmapDoc, type Fish, type GroupProfile } from "../harness.ts";
 import { OneBot, orderByArrival, type IncomingMessage, type OneBotSendFailure } from "../qq/onebot.ts";
 import { DEFAULT_PERSONA_NAME, personaOf, pickVoice } from "../qq/voice-route.ts";
@@ -77,6 +77,11 @@ import { clearViewedVideos } from "../external/video-browse.ts";
 import { clearSeenLinks, recordSeenLinks } from "../egress/seen-links.ts";
 import { shouldSendWorkingReceipt } from "../working-receipt.ts";
 import { shouldNudgeZeroEgress } from "../zero-egress-nudge.ts";
+import {
+  retrySubmissionMode,
+  shouldFallbackContinueToInput,
+  stripRoundImages,
+} from "../round-image-strip.ts";
 import { runDrawRemote } from "../media/draw-remote/index.ts";
 import type { Middleware } from "./app.ts";
 import {
@@ -930,21 +935,24 @@ export async function submitRound(input: {
   // 摘要同源失败会走机械降级把可能的中毒内容清出活跃页，一次输入就能自愈，不依赖用户重发
   const MAX_MODEL_ATTEMPTS = input.modelAttempts ?? 3;
   // 跑单次提交并回收轮级状态；返回结算结果、本轮出口次数与已触发的重耗时工具集合，
-  // 供下方模型错误重试与 answer 轮零出口补跑复用。
+  // 供下方模型错误重试（支持 continue 复用已有输入）与 answer 轮零出口补跑复用。
   const runSubmission = async (
+    mode: "input" | "continue",
     payloadContent: typeof submitContent,
     recordEntry: boolean,
   ): Promise<{ result: SettledSubmissionRecord; sayCount: number; workingTools: ReadonlySet<string> }> => {
-    const submission = await conv.submit(
-      {
-        type: "input",
-        content: payloadContent,
-        entry: recordEntry
-          ? (input.memory !== undefined ? { kind: entryKind, data: input.memory.inbound } : { kind: entryKind })
-          : undefined,
-      },
-      ctx,
-    );
+    const submission = mode === "continue"
+      ? await conv.submit({ type: "continue" }, ctx)
+      : await conv.submit(
+          {
+            type: "input",
+            content: payloadContent,
+            entry: recordEntry
+              ? (input.memory !== undefined ? { kind: entryKind, data: input.memory.inbound } : { kind: entryKind })
+              : undefined,
+          },
+          ctx,
+        );
     const subId = String(submission.id);
     if (chatKey.startsWith("qq:group:")) {
       try { onebot.videos?.bind(String(conv.id), subId, chatKey, input.videoRefs ?? []); }
@@ -1001,6 +1009,8 @@ export async function submitRound(input: {
   };
   let lastSayCount = 0;
   let lastWorkingTools: ReadonlySet<string> = new Set();
+  const placedImageEntries: EntryId[] = [];
+  let hasPlacedEntryOnCurrentPage = false;
   try {
     for (let attempt = 1; ; attempt++) {
       assertNewsAdmission(chatKey, conv, trigger);
@@ -1008,15 +1018,36 @@ export async function submitRound(input: {
       if (roundKind !== "news" && attempt === MAX_MODEL_ATTEMPTS && MAX_MODEL_ATTEMPTS > 1) {
         const cleared = await compactWithGuard(conv, true, chatKey);
         if (cleared.compacted) {
+          hasPlacedEntryOnCurrentPage = false;
           console.log(`[鱼缸] ${chatKey} 换页 ${cleared.entries}条/${cleared.chars}字/${cleared.tokens ?? "-"}tok ·强制`);
         }
       }
       // 触发消息绑在 submission 上：轮在跑时新消息进来也不会把引用目标顶掉（否则回复会串到别人的消息上）。
       // entry 是记忆的唯一原始输入：chatKey / QQ / 昵称 / 原话，不带任何宿主文案；
-      // 重试不重复落库，只有首次尝试携带 entry。injection / shard 轮不写 fish.inbound
-      //（fish.engage_tick：背景板非对话输入，不进摘要与抽取）
-      const run = await runSubmission(submitContent, attempt === 1);
+      // 重试优先走 continue 复用当前页已落盘输入，避免带图消息重复落盘；仅首次或强制换页后走 input。
+      const mode = attempt === 1 ? "input" : retrySubmissionMode(hasPlacedEntryOnCurrentPage);
+      let run: { result: SettledSubmissionRecord; sayCount: number; workingTools: ReadonlySet<string> };
+      if (mode === "continue") {
+        try {
+          run = await runSubmission("continue", submitContent, false);
+          if (shouldFallbackContinueToInput(run.result)) {
+            run = await runSubmission("input", submitContent, false);
+          }
+        } catch (err) {
+          if (err instanceof ConversationBusy) {
+            run = await runSubmission("input", submitContent, false);
+          } else {
+            throw err;
+          }
+        }
+      } else {
+        run = await runSubmission("input", submitContent, attempt === 1);
+      }
       settled = run.result;
+      if (settled.entry !== undefined) {
+        hasPlacedEntryOnCurrentPage = true;
+        if (imageBlocks.length > 0) placedImageEntries.push(settled.entry);
+      }
       lastSayCount = run.sayCount;
       lastWorkingTools = run.workingTools;
       // 模型错误且还有重试余量：轮内重试（第三次前已强制换页）；其它结果直接出循环
@@ -1037,7 +1068,7 @@ export async function submitRound(input: {
       const nudgeText = fish.prompts.messages["zero_egress_nudge"];
       if (nudgeText) {
         console.log(`[鱼缸] ${chatKey} 零出口轮：模型没调 say_*，提醒补跑 1 次`);
-        const nudgeRun = await runSubmission(submitContentOf(nudgeText, []), false);
+        const nudgeRun = await runSubmission("input", submitContentOf(nudgeText, []), false);
         settled = nudgeRun.result;
         if (settled.status === "done") {
           if (nudgeRun.sayCount === 0) console.log(`[鱼缸] ${chatKey} 零出口轮：提醒补跑后仍未调 say_*`);
@@ -1050,6 +1081,14 @@ export async function submitRound(input: {
   } finally {
     // scope 队列满（scopeToken undefined）时本轮没压过 scope，不能弹掉别人的队首
     if (scopeToken !== undefined) shiftScope(String(conv.id), scopeToken);
+    // 当轮结算立刻剥离本轮落盘的 image block（不动更早历史以保前缀缓存；忙态入队不阻塞）
+    if (placedImageEntries.length > 0) {
+      try {
+        await stripRoundImages(conv, placedImageEntries, ctx);
+      } catch (stripError) {
+        console.warn("[鱼缸] 剥离本轮历史图片失败", chatKey, stripError instanceof Error ? stripError.message : stripError);
+      }
+    }
     // 在途登记对称释放（仅 next 登记过）；ambient/injection 清零时唤醒等待的 @ 轮
     releaseTrackedInFlight();
   }
