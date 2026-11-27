@@ -528,14 +528,7 @@ export class OneBot {
     const ids: (number | string)[] = [];
     for (const [index, text] of texts.entries()) {
       // 段顺序固定：quote → at → text。@ 只挂在第一条：连说几句时每句都带一遍 @ 会刷屏
-      const segments: OneBotSegment[] = [];
-      if (options.quote !== undefined && index === 0) {
-        segments.push({ type: "reply", data: { id: String(options.quote) } });
-      }
-      if (index === 0) {
-        for (const qq of options.mentions ?? []) segments.push({ type: "at", data: { qq } });
-      }
-      segments.push({ type: "text", data: { text } });
+      const segments = buildGroupTextSegments(text, index === 0 ? { quote: options.quote, mentions: options.mentions } : {});
       try {
         const id = messageIdOf(
           await this.#pacedSend(`qq:group:${groupId}`, () =>
@@ -578,10 +571,7 @@ export class OneBot {
     // NapCat 直接用数据发图，不经文件系统。局域网 WS 内传几 MB 无压力。
     const { readFileSync } = await import("node:fs");
     const data = readFileSync(filePath).toString("base64");
-    const segments: OneBotSegment[] = [];
-    if (options.quote !== undefined) segments.push({ type: "reply", data: { id: String(options.quote) } });
-    for (const qq of options.mentions ?? []) segments.push({ type: "at", data: { qq } });
-    segments.push({ type: "image", data: { file: `base64://${data}` } });
+    const segments = buildGroupImageSegments(data, options);
     return messageIdOf(
       await this.#pacedSend(`qq:group:${groupId}`, () =>
         this.call("send_group_msg", { group_id: groupId, message: segments }),
@@ -1160,4 +1150,42 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
     return { ...base, chatKey: `qq:private:${userId}`, mentionsBot: true };
   }
   return null;
+}
+
+/**
+ * 组装群文本消息的 OneBot 段数组：顺序固定 quote → at → text。
+ * 主动 @ 时在每个 @ 之间及最后一个 @ 与正文之间补一个空格（正文已以空白开头时不重复补），
+ * 避免 QQ 端把「@昵称」和正文黏在一起。
+ */
+export function buildGroupTextSegments(
+  text: string,
+  options: { quote?: number | string; mentions?: readonly string[] } = {},
+): OneBotSegment[] {
+  const segments: OneBotSegment[] = [];
+  if (options.quote !== undefined) {
+    segments.push({ type: "reply", data: { id: String(options.quote) } });
+  }
+  const mentions = options.mentions ?? [];
+  for (let i = 0; i < mentions.length; i++) {
+    segments.push({ type: "at", data: { qq: mentions[i]! } });
+    if (i < mentions.length - 1) segments.push({ type: "text", data: { text: " " } });
+  }
+  const body = mentions.length > 0 && !/^\s/.test(text) ? ` ${text}` : text;
+  segments.push({ type: "text", data: { text: body } });
+  return segments;
+}
+
+/** 构造群图片消息的 OneBot 段数组（quote → at → image）；每个 @ 后补空格与 QQ 原生一致。 */
+export function buildGroupImageSegments(
+  base64Data: string,
+  options: { quote?: number | string; mentions?: readonly string[] } = {},
+): OneBotSegment[] {
+  const segments: OneBotSegment[] = [];
+  if (options.quote !== undefined) segments.push({ type: "reply", data: { id: String(options.quote) } });
+  for (const qq of options.mentions ?? []) {
+    segments.push({ type: "at", data: { qq } });
+    segments.push({ type: "text", data: { text: " " } });
+  }
+  segments.push({ type: "image", data: { file: `base64://${base64Data}` } });
+  return segments;
 }

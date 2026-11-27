@@ -5,7 +5,14 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseEvent, completeAtNames, fillAtName, type OneBotEvent } from "../src/qq/onebot.ts";
+import {
+  parseEvent,
+  completeAtNames,
+  fillAtName,
+  buildGroupTextSegments,
+  buildGroupImageSegments,
+  type OneBotEvent,
+} from "../src/qq/onebot.ts";
 
 const SELF = 1000;
 
@@ -76,4 +83,34 @@ test("completeAtNames：名单里有的才补，空名 / @全体 / 非法号码�
   const before = unknown.text;
   await completeAtNames(unknown, () => "   ");
   assert.equal(unknown.text, before, "空名不能把正文改成 @(12)");
+});
+
+test("buildGroupTextSegments：主动 @ 后自动补空格与正文分隔，多 @ 间也隔开且不重复补", () => {
+  assert.deepEqual(buildGroupTextSegments("你好"), [{ type: "text", data: { text: "你好" } }]);
+  assert.deepEqual(buildGroupTextSegments("你好", { mentions: ["123"] }), [
+    { type: "at", data: { qq: "123" } },
+    { type: "text", data: { text: " 你好" } },
+  ]);
+  assert.deepEqual(buildGroupTextSegments(" 你好", { mentions: ["123"] }), [
+    { type: "at", data: { qq: "123" } },
+    { type: "text", data: { text: " 你好" } },
+  ]);
+  assert.deepEqual(buildGroupTextSegments("开黑", { quote: 99, mentions: ["123", "456"] }), [
+    { type: "reply", data: { id: "99" } },
+    { type: "at", data: { qq: "123" } },
+    { type: "text", data: { text: " " } },
+    { type: "at", data: { qq: "456" } },
+    { type: "text", data: { text: " 开黑" } },
+  ]);
+});
+
+test("buildGroupImageSegments：带 @ 发图时每个 @ 后补空格再接图片段", () => {
+  assert.deepEqual(buildGroupImageSegments("AAAA", { quote: 7, mentions: ["123", "456"] }), [
+    { type: "reply", data: { id: "7" } },
+    { type: "at", data: { qq: "123" } },
+    { type: "text", data: { text: " " } },
+    { type: "at", data: { qq: "456" } },
+    { type: "text", data: { text: " " } },
+    { type: "image", data: { file: "base64://AAAA" } },
+  ]);
 });
