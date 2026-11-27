@@ -15,8 +15,11 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { AssistantEntry, MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
-import { latestRequestTokens, renderTranscript } from "../src/compact.ts";
+import { createCompactor, latestRequestTokens, renderTranscript } from "../src/compact.ts";
 import { compactTokenLimitOf, loadFishConfig } from "../src/fish-config.ts";
+import { loadPrompts } from "../src/prompt/index.ts";
+import { localDay } from "../src/records/usage.ts";
+import { weeklyStats, weeklyStatsAsync } from "../src/records/stats.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
@@ -263,5 +266,144 @@ test("latestRequestTokens 跳过线上全零 usage 错误条目，换页正常�
     assert.equal(done.tokens, before);
   } finally {
     await open.close();
+  }
+});
+
+test("maybeCompact 单次读取 conversation.context：未达阈值直接短路，换页复用同一 view 且透传 180s signal", async () => {
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let maxTokens = 999_999;
+  const open = await openFish({
+    storage: new MemoryStorage(),
+    models,
+    model: { provider: faux.provider.id, modelId: faux.models[0].id },
+    promptRoot: PROMPTS,
+    mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
+    workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
+    compact: { maxTokens: 999_999, limits: () => ({ maxTokens }) },
+    emit: () => {},
+    react: () => {},
+  });
+  try {
+    const root = await open.harness.root(ctx, {
+      agent: { model: { provider: faux.provider.id, modelId: faux.models[0].id } },
+    });
+
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("say_words", { text: "先聊着" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("好了"),
+    ]);
+    await (await root.submit({ type: "input", content: `> 消息起始\n[m:1] 群友: ${"正常长对话".repeat(400)}\n> 消息结束` }, ctx)).wait(ctx);
+
+    let contextCalls = 0;
+    const origContext = root.context.bind(root);
+    root.context = (async (...args: Parameters<typeof root.context>) => {
+      contextCalls++;
+      return origContext(...args);
+    }) as typeof root.context;
+
+    // 1. 未达阈值：只读 1 次 context
+    const below = await open.compact(root);
+    assert.equal(below.compacted, false);
+    assert.equal(below.reason, "below_threshold");
+    assert.equal(contextCalls, 1, "未达阈值时 maybeCompact 只应调 1 次 conversation.context");
+
+    // 2. 触发换页：检查 streamSimple 收到 AbortSignal 且未覆写 timeoutMs、未截断正常长 transcript，且仍只读 1 次 context
+    const streamCalls: { options: unknown; promptText: string }[] = [];
+    const origStreamSimple = models.streamSimple.bind(models);
+    models.streamSimple = ((model, context, options) => {
+      const first = context.messages[0];
+      const promptText = typeof first?.content === "string" ? first.content : JSON.stringify(first?.content ?? "");
+      streamCalls.push({ options, promptText });
+      return origStreamSimple(model, context, options);
+    }) as typeof models.streamSimple;
+
+    contextCalls = 0;
+    maxTokens = 1;
+    faux.setResponses([fauxAssistantMessage('{"threads":[],"promises":[{"quote":"先聊着","status":"open"}],"mood":"闲聊"}')]);
+    const compacted = await open.compact(root);
+    assert.equal(compacted.compacted, true);
+    assert.equal(contextCalls, 1, "触发换页时也只应读 1 次 conversation.context");
+    assert.equal(streamCalls.length, 1);
+    const callOpts = streamCalls[0]!.options as { signal?: AbortSignal; timeoutMs?: number } | undefined;
+    assert.ok(callOpts?.signal instanceof AbortSignal, "buildProfile 应传入 AbortSignal");
+    assert.equal(callOpts.signal.aborted, false);
+    assert.equal(callOpts?.timeoutMs, undefined, "buildProfile 不应覆写 timeoutMs");
+    assert.ok(streamCalls[0]!.promptText.includes("正常长对话".repeat(400)), "不应误截断正常页 transcript");
+
+    // 3. 开启记忆抽取时也复用同一 view（仅 1 次 conversation.context）
+    const prompts = loadPrompts(PROMPTS);
+    let savedPending = 0;
+    const directCompactor = createCompactor({
+      models,
+      model: { provider: faux.provider.id, modelId: faux.models[0].id },
+      prompts,
+      maxTokens: 1,
+      extract: { models, model: { provider: faux.provider.id, modelId: faux.models[0].id }, prompts },
+      memoryKeyOf: () => "elysia",
+      savePendingMemories: async () => {
+        savedPending++;
+        return { zeroStreak: 0 };
+      },
+    });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("say_words", { text: "记住了" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("好了"),
+    ]);
+    await (await root.submit({ type: "input", content: "> 消息起始\n[m:2] 群友: 再聊一句\n> 消息结束" }, ctx)).wait(ctx);
+    contextCalls = 0;
+    faux.setResponses([
+      fauxAssistantMessage('{"threads":[],"promises":[{"quote":"记住了","status":"open"}],"mood":"轻松"}'),
+      fauxAssistantMessage('{"candidates":[],"skipped":0}'),
+    ]);
+    const extracted = await directCompactor.maybeCompact(root);
+    assert.equal(extracted.compacted, true);
+    assert.equal(contextCalls, 1, "开启记忆抽取的完整换页路径也只应调 1 次 conversation.context");
+    assert.equal(savedPending, 1);
+  } finally {
+    await open.close();
+  }
+});
+
+test("weeklyStatsAsync 流式统计与 weeklyStats 结果一致", async () => {
+  const root = mkdtempSync(join(tmpdir(), "yg-stats-"));
+  const chatKey = "qq:group:42";
+  const now = new Date(2026, 10, 27, 21, 30, 0).getTime();
+  try {
+    const { mkdirSync } = await import("node:fs");
+    const day0 = localDay(now - 6 * 86_400_000);
+    const day3 = localDay(now - 3 * 86_400_000);
+    const day6 = localDay(now);
+    for (const day of [day0, day3, day6]) mkdirSync(join(root, day), { recursive: true });
+    writeFileSync(
+      join(root, day0, "qq_group_42.jsonl"),
+      [
+        JSON.stringify({ kind: "in", from: "张三", at: now - 6 * 86_400_000 }),
+        "not-json-corrupt-line",
+        JSON.stringify({ kind: "out", at: now - 6 * 86_400_000 + 1000 }),
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(root, day3, "qq_group_42.jsonl"),
+      `${JSON.stringify({ kind: "in", from: "李四", at: now - 3 * 86_400_000 })}\n\n`,
+    );
+    writeFileSync(
+      join(root, day6, "qq_group_42.jsonl"),
+      [
+        JSON.stringify({ kind: "in", from: "张三", at: now }),
+        JSON.stringify({ kind: "in", from: "王五", at: now }),
+        JSON.stringify({ kind: "out", at: now }),
+      ].join("\n"),
+    );
+
+    const syncResult = weeklyStats(root, chatKey, now);
+    const asyncResult = await weeklyStatsAsync(root, chatKey, now);
+    assert.ok(syncResult);
+    assert.deepEqual(asyncResult, syncResult);
+    assert.equal(await weeklyStatsAsync(root, "qq:group:999", now), undefined);
+  } finally {
+    const { rmSync } = await import("node:fs");
+    rmSync(root, { recursive: true, force: true });
   }
 });

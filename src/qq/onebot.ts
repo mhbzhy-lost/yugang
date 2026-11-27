@@ -128,6 +128,14 @@ export interface OneBotOptions {
   onSent?: (chatKey: string) => void;
   /** 戳一戳鱼的群事件回调；客户端会在回调前延迟 1 秒，宿主负责校验群域并执行回戳。 */
   onPoke?: (event: { groupId: number; userId: number }) => void | Promise<void>;
+  /** 是否允许下载入站图片（未传兼容原行为：全部下载）。 */
+  shouldDownloadMedia?: (frame: OneBotEvent) => boolean;
+  /** 首次连上后断线是否自动按指数退避重连（默认 true）。 */
+  reconnect?: boolean;
+  /** 心跳/活跃超时（毫秒，默认 90_000）；超时后发 get_status 探测，失败即断链重连。 */
+  heartbeatTimeoutMs?: number;
+  /** 断线重连成功后的回调。 */
+  onReconnect?: () => void;
 }
 
 interface Pending {
@@ -174,6 +182,19 @@ export class OneBot {
   /** 会话键 → 上一条物理消息实际发送成功的时刻：配速按它算等待（内存态，重启归零，首条不等待）。 */
   #lastSentAt = new Map<string, number>();
 
+  #shouldDownloadMedia?: (frame: OneBotEvent) => boolean;
+  #reconnect: boolean;
+  #heartbeatTimeoutMs: number;
+  #onReconnect?: () => void;
+  #everConnected = false;
+  #closed = false;
+  #connecting = false;
+  #reconnectAttempt = 0;
+  #reconnectTimer?: ReturnType<typeof setTimeout>;
+  #heartbeatTimer?: ReturnType<typeof setInterval>;
+  #lastActivityAt = 0;
+  #probing = false;
+
   constructor(url: string, token?: string, mediaRoot?: string, options: OneBotOptions = {}) {
     this.#url = url;
     this.#token = token;
@@ -183,6 +204,10 @@ export class OneBot {
     this.#pacingSeconds = options.pacingSeconds;
     this.#onSent = options.onSent;
     this.#onPoke = options.onPoke;
+    this.#shouldDownloadMedia = options.shouldDownloadMedia;
+    this.#reconnect = options.reconnect ?? true;
+    this.#heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 90_000;
+    this.#onReconnect = options.onReconnect;
   }
 
   get selfId(): number {
@@ -194,26 +219,178 @@ export class OneBot {
   }
 
   async connect(): Promise<void> {
+    if (this.#closed) throw new Error("OneBot 已关闭");
+    await this.#openSocket(false);
+  }
+
+  async #openSocket(isReconnect: boolean): Promise<void> {
+    if (this.#closed || this.#connecting) return;
+    if (this.#ws && (this.#ws.readyState === 0 || this.#ws.readyState === 1)) return;
+    this.#connecting = true;
     const ws = new WebSocket(this.#token ? withAccessToken(this.#url, this.#token) : this.#url);
     this.#ws = ws;
-    await new Promise<void>((resolve, reject) => {
-      ws.addEventListener("open", () => resolve(), { once: true });
-      ws.addEventListener("error", () => reject(new Error("连不上 OneBot WebSocket")), { once: true });
-    });
-    ws.addEventListener("message", (event) => void this.#onFrame(event.data));
-    ws.addEventListener("close", () => {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const cleanup = (): void => {
+          clearTimeout(handshakeTimer);
+          ws.removeEventListener?.("open", onOpen);
+          ws.removeEventListener?.("error", onError);
+          ws.removeEventListener?.("close", onClose);
+        };
+        const fail = (error: Error): void => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          if (this.#ws === ws) this.#ws = undefined;
+          try {
+            ws.close?.();
+          } catch {
+            /* 已断则罢 */
+          }
+          reject(error);
+        };
+        const onOpen = (): void => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve();
+        };
+        const onError = (): void => fail(new Error("连不上 OneBot WebSocket"));
+        const onClose = (): void => fail(new Error("连不上 OneBot WebSocket"));
+        const handshakeTimer = setTimeout(() => fail(new Error("OneBot WebSocket 握手超时")), 15_000);
+        handshakeTimer.unref?.();
+        ws.addEventListener("open", onOpen, { once: true });
+        ws.addEventListener("error", onError, { once: true });
+        ws.addEventListener("close", onClose, { once: true });
+      });
+    } finally {
+      this.#connecting = false;
+    }
+
+    if (this.#closed) {
+      if (this.#ws === ws) this.#ws = undefined;
+      try {
+        ws.close?.();
+      } catch {
+        /* 已断则罢 */
+      }
+      return;
+    }
+
+    this.#everConnected = true;
+    this.#reconnectAttempt = 0;
+    this.#lastActivityAt = Date.now();
+    this.#probing = false;
+
+    let socketClosed = false;
+    const teardown = (): void => {
+      if (socketClosed) return;
+      socketClosed = true;
+      if (this.#ws === ws) {
+        this.#ws = undefined;
+        this.#stopHeartbeat();
+      }
       for (const [, p] of this.#pending) p.reject(new Error("连接已断开"));
       this.#pending.clear();
+      if (!this.#closed && this.#everConnected && this.#reconnect) {
+        this.#scheduleReconnect();
+      }
+    };
+
+    ws.addEventListener("message", (event) => {
+      void this.#onFrame(event.data).catch((err) => {
+        console.error("[鱼缸] OneBot 帧处理异常", err instanceof Error ? err.message : err);
+      });
     });
+    ws.addEventListener("error", (event) => {
+      console.error("[鱼缸] OneBot WebSocket 异常", (event as { message?: unknown })?.message ?? "");
+    });
+    ws.addEventListener("close", () => {
+      teardown();
+    });
+
+    this.#startHeartbeat(ws, teardown);
+    if (isReconnect) {
+      try {
+        this.#onReconnect?.();
+      } catch (err) {
+        console.error("[鱼缸] onReconnect 回调失败", err instanceof Error ? err.message : err);
+      }
+    }
+  }
+
+  #stopHeartbeat(): void {
+    if (this.#heartbeatTimer) {
+      clearInterval(this.#heartbeatTimer);
+      this.#heartbeatTimer = undefined;
+    }
+    this.#probing = false;
+  }
+
+  #startHeartbeat(ws: WebSocket, teardown: () => void): void {
+    this.#stopHeartbeat();
+    if (!Number.isFinite(this.#heartbeatTimeoutMs) || this.#heartbeatTimeoutMs <= 0) return;
+    const intervalMs = Math.max(25, Math.min(10_000, Math.floor(this.#heartbeatTimeoutMs / 3)));
+    const probeTimeoutMs = Math.min(10_000, Math.max(50, this.#heartbeatTimeoutMs));
+    this.#heartbeatTimer = setInterval(() => {
+      if (this.#closed || this.#ws !== ws || ws.readyState !== 1) return;
+      if (this.#probing) return;
+      if (Date.now() - this.#lastActivityAt < this.#heartbeatTimeoutMs) return;
+      this.#probing = true;
+      const controller = new AbortController();
+      const probeTimer = setTimeout(() => controller.abort(new Error("OneBot 心跳探测超时")), probeTimeoutMs);
+      probeTimer.unref?.();
+      void this.call("get_status", {}, controller.signal)
+        .then(() => {
+          this.#lastActivityAt = Date.now();
+        })
+        .catch(() => {
+          if (this.#closed || this.#ws !== ws) return;
+          teardown();
+          try {
+            ws.close?.();
+          } catch {
+            /* 已断则罢 */
+          }
+        })
+        .finally(() => {
+          clearTimeout(probeTimer);
+          this.#probing = false;
+        });
+    }, intervalMs);
+    this.#heartbeatTimer.unref?.();
+  }
+
+  #scheduleReconnect(): void {
+    if (this.#closed || !this.#reconnect || !this.#everConnected) return;
+    if (this.#reconnectTimer || this.#connecting) return;
+    if (this.#ws && (this.#ws.readyState === 0 || this.#ws.readyState === 1)) return;
+    const base = Math.min(30_000, 1_000 * 2 ** Math.min(this.#reconnectAttempt, 10));
+    const jitter = Math.floor(Math.random() * Math.min(1_000, Math.max(200, base * 0.2)));
+    const delay = base + jitter;
+    this.#reconnectAttempt++;
+    this.#reconnectTimer = setTimeout(() => {
+      this.#reconnectTimer = undefined;
+      if (this.#closed) return;
+      void this.#openSocket(true).catch(() => {
+        if (!this.#closed && this.#reconnect) {
+          this.#scheduleReconnect();
+        }
+      });
+    }, delay);
+    this.#reconnectTimer.unref?.();
   }
 
   async #onFrame(raw: unknown): Promise<void> {
+    this.#lastActivityAt = Date.now();
     let data: unknown;
     try {
       data = JSON.parse(String(raw));
     } catch {
       return;
     }
+    if (!data || typeof data !== "object") return;
     const frame = data as { echo?: string; retcode?: number } & OneBotEvent;
     if (frame.echo && this.#pending.has(frame.echo)) {
       const p = this.#pending.get(frame.echo)!;
@@ -274,6 +451,7 @@ export class OneBot {
     // 回复引用：取回被引消息水合成结构化 quoted（引用原文不再拼进 parsed.text，
     // 附加段由装配方后置渲染）；被引消息若是合并转发：只有同时 @ 了鱼才结构化展开
     // （主人定案 2026-11-04：看合集得 @），引用原文与合集附件分开渲染、不重复展开。
+    const allowMedia = this.#shouldDownloadMedia?.(frame) ?? true;
     for (const replyId of parsed.replyIds ?? []) {
       if (!replyId) continue;
       try {
@@ -329,9 +507,11 @@ export class OneBot {
           : "";
         if (!parsed.quoted?.forward) {
           const savedList: string[] = [];
-          for (const seg of imageSegs) {
-            const saved = await this.downloadImage(seg, this.#mediaRoot);
-            if (saved) savedList.push(saved.ref);
+          if (allowMedia) {
+            for (const seg of imageSegs) {
+              const saved = await this.downloadImage(seg, this.#mediaRoot);
+              if (saved) savedList.push(saved.ref);
+            }
           }
           parsed.quoted = {
             id: replyId,
@@ -355,7 +535,7 @@ export class OneBot {
     }
     // 直发图、合集子图和回复合集子图统一在结构化水合完成后落盘；引用正文仍不回写 parsed.text。
     if (parsed.imageSegments.length > 0 && this.#mediaRoot) {
-      const skipImages = isLookDisabled() && !parsed.mentionsBot;
+      const skipImages = !allowMedia || (isLookDisabled() && !parsed.mentionsBot);
       for (const [index, segment] of parsed.imageSegments.entries()) {
         if (skipImages) {
           parsed.text = parsed.text.replace(`[图片#${index}]`, "[图]");
@@ -471,7 +651,11 @@ export class OneBot {
 
   async call(action: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<any> {
     const ws = this.#ws;
-    if (!ws || ws.readyState !== 1) throw new Error("OneBot 未连接");
+    if (!ws || ws.readyState !== 1) {
+      const err = new Error("OneBot 未连接") as Error & { notSent?: boolean };
+      err.notSent = true;
+      throw err;
+    }
     const echo = `yg${++this.#seq}`;
     signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
@@ -537,8 +721,12 @@ export class OneBot {
         );
         if (id !== undefined) ids.push(id);
       } catch (error) {
-        // 部分失败：已成功条目随错误上抛（/评 定位链路只记成功条，见 fish.sentmap）
-        if (ids.length > 0 && error instanceof Error) (error as OneBotSendFailure).sentIds = ids;
+        // 部分失败：已成功条目随错误上抛（/评 定位链路只记成功条，见 fish.sentmap）；
+        // 已有部分发出时清除 notSent，避免外层把它误当成「整条完全未发出」而丢弃。
+        if (ids.length > 0 && error instanceof Error) {
+          (error as OneBotSendFailure).sentIds = ids;
+          delete (error as { notSent?: boolean }).notSent;
+        }
         throw error;
       }
       if (index < texts.length - 1) await sleep(delay());
@@ -554,14 +742,14 @@ export class OneBot {
   }
 
   async sendImagePrivate(userId: number, filePath: string): Promise<void> {
-    const { readFileSync } = await import("node:fs");
-    const data = readFileSync(filePath).toString("base64");
-    await this.#pacedSend(`qq:private:${userId}`, () =>
-      this.call("send_private_msg", {
+    const { readFile } = await import("node:fs/promises");
+    await this.#pacedSend(`qq:private:${userId}`, async () => {
+      const data = (await readFile(filePath)).toString("base64");
+      await this.call("send_private_msg", {
         user_id: userId,
         message: [{ type: "image", data: { file: `base64://${data}` } }],
-      }),
-    );
+      });
+    });
   }
 
   /** 发群图片：段顺序与 sendGroup 一致（quote → at → image），无字纯图也走这里；私聊发图不变。
@@ -569,13 +757,13 @@ export class OneBot {
   async sendImageGroup(groupId: number, filePath: string, options: { quote?: number | string; mentions?: readonly string[] } = {}): Promise<number | string | undefined> {
     // QQ 是沙盒应用，读不了容器外的本地文件（EPERM）；自己读好后以 base64 传入，
     // NapCat 直接用数据发图，不经文件系统。局域网 WS 内传几 MB 无压力。
-    const { readFileSync } = await import("node:fs");
-    const data = readFileSync(filePath).toString("base64");
-    const segments = buildGroupImageSegments(data, options);
+    const { readFile } = await import("node:fs/promises");
     return messageIdOf(
-      await this.#pacedSend(`qq:group:${groupId}`, () =>
-        this.call("send_group_msg", { group_id: groupId, message: segments }),
-      ),
+      await this.#pacedSend(`qq:group:${groupId}`, async () => {
+        const data = (await readFile(filePath)).toString("base64");
+        const segments = buildGroupImageSegments(data, options);
+        return this.call("send_group_msg", { group_id: groupId, message: segments });
+      }),
     );
   }
 
@@ -605,15 +793,31 @@ export class OneBot {
 
   /** 群成员名单（5 分钟缓存）：只为把 @ 的 QQ 号换成看得懂的名字，不参与判定。 */
   #memberCache = new Map<number, { at: number; members: { nickname: string; userId: string }[] }>();
+  #memberLoading = new Map<number, Promise<{ nickname: string; userId: string }[]>>();
 
   async #memberName(groupId: number, qq: string): Promise<string | undefined> {
     const cached = this.#memberCache.get(groupId);
-    if (!cached || Date.now() - cached.at > 300_000) {
-      const members = await this.groupMembers(groupId, 10_000);
-      this.#memberCache.set(groupId, { at: Date.now(), members });
-      return members.find((m) => m.userId === qq)?.nickname;
+    if (cached && Date.now() - cached.at <= 300_000) {
+      return cached.members.find((m) => m.userId === qq)?.nickname;
     }
-    return cached.members.find((m) => m.userId === qq)?.nickname;
+    let loading = this.#memberLoading.get(groupId);
+    if (!loading) {
+      loading = this.groupMembers(groupId, 10_000)
+        .then((members) => {
+          if (members.length > 0) {
+            this.#memberCache.set(groupId, { at: Date.now(), members });
+          }
+          return members;
+        })
+        .finally(() => {
+          if (this.#memberLoading.get(groupId) === loading) {
+            this.#memberLoading.delete(groupId);
+          }
+        });
+      this.#memberLoading.set(groupId, loading);
+    }
+    const members = await loading;
+    return members.find((m) => m.userId === qq)?.nickname;
   }
 
   async groupMembers(groupId: number, limit = 30): Promise<{ nickname: string; userId: string }[]> {
@@ -679,6 +883,7 @@ export class OneBot {
       const images: string[] = [];
       const imageSlots: number[] = [];
       for (const seg of sub.message ?? []) {
+        if (!seg || typeof seg !== "object") continue;
         if (seg.type === "text") body += String(seg.data?.["text"] ?? "");
         else if (seg.type === "image") {
           if (subImages < 2) {
@@ -814,14 +1019,23 @@ export class OneBot {
 
   /** 优雅退出用：显式断开 WS，让协议端立即感知重连，不等它自己的超时。 */
   close(): void {
+    this.#closed = true;
+    if (this.#reconnectTimer) {
+      clearTimeout(this.#reconnectTimer);
+      this.#reconnectTimer = undefined;
+    }
+    this.#stopHeartbeat();
     for (const timer of this.#pokeTimers) clearTimeout(timer);
     this.#pokeTimers.clear();
+    for (const [, p] of this.#pending) p.reject(new Error("连接已断开"));
+    this.#pending.clear();
+    const ws = this.#ws;
+    this.#ws = undefined;
     try {
-      this.#ws?.close();
+      ws?.close?.();
     } catch {
       /* 已断则罢 */
     }
-    this.#ws = undefined;
   }
 }
 
@@ -1101,6 +1315,7 @@ export function parseEvent(frame: OneBotEvent, selfId: number): IncomingMessage 
 
   if (Array.isArray(message)) {
     for (const seg of message) {
+      if (!seg || typeof seg !== "object") continue;
       if (seg.type === "text") text += String(seg.data?.["text"] ?? "");
       else if (seg.type === "at") {
         const applied = applyMention(String(seg.data?.["qq"] ?? ""), String(seg.data?.["name"] ?? ""), self, atTargets);

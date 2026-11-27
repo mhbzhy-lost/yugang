@@ -102,21 +102,25 @@ export interface Compactor {
 export function createCompactor(options: CompactorOptions): Compactor {
   return {
     async maybeCompact(conversation, force = false) {
+      const view = await conversation.context(ctx);
+      if (view.entries.length === 0) return { compacted: false, reason: "empty" };
+
+      const limits = options.limits ? options.limits() : { maxTokens: options.maxTokens };
+      const tokens = latestRequestTokensFromView(view);
+      // 只在完整轮次结束后按真实 usage 判断；即使这一轮越过阈值，也先保留并处理完整消息。
+      // 未超阈值直接短路返回，不再遍历渲染全量上下文。
+      if (!force && (tokens === undefined || tokens < limits.maxTokens)) {
+        return { compacted: false, reason: "below_threshold", ...(tokens !== undefined ? { tokens } : {}) };
+      }
+
       const self = options.selfOf?.(conversation.id) ?? { nickname: "Elysia", userId: "" };
-      const counted = await renderCountedEntries(conversation, self);
+      const counted = renderCountedEntriesFromView(view, self);
       const transcript = counted.flatMap((e) => e.lines).join("\n");
       if (counted.length === 0) return { compacted: false, reason: "empty" };
 
       const entries = counted.length;
       // chars 仅用于审计日志；触发阈值只看下面真实请求的 tokens，不再按条数或字符数换页。
       const chars = counted.reduce((sum, entry) => sum + entry.chars, 0);
-      const limits = options.limits ? options.limits() : { maxTokens: options.maxTokens };
-      const tokens = await latestRequestTokens(conversation);
-      // 只在完整轮次结束后按真实 usage 判断；即使这一轮越过阈值，也先保留并处理完整消息。
-      if (!force && (tokens === undefined || tokens < limits.maxTokens)) {
-        return { compacted: false, reason: "below_threshold", entries, chars, ...(tokens !== undefined ? { tokens } : {}) };
-      }
-
       const measured = { entries, chars, ...(tokens !== undefined ? { tokens } : {}) };
 
       // 页里只有 engage_tick 这类无文本 entry（背景板轮把条数/字符阈值顶到）时没有可摘要的内容：
@@ -134,7 +138,7 @@ export function createCompactor(options: CompactorOptions): Compactor {
       try {
         // T12 正常路径：剖面卡片（严格字段化 + 逐字校验），不再生成自由叙事摘要。
         // 上一页剖面从 pi.reset head 提取作字段级合并的输入；提取失败按无旧剖面处理（首换页语义）。
-        const previous = await extractPreviousProfile(conversation);
+        const previous = extractPreviousProfileFromView(view);
         const profile = await profileBounded(options, transcript, previous);
         const handoff = buildProfileHandoff(profile, counted, options.prompts.messages);
 
@@ -155,7 +159,7 @@ export function createCompactor(options: CompactorOptions): Compactor {
             const known = options.knownMemory
               ? await options.knownMemory(memoryKey, conversation.id)
               : { text: "", subjects: [] };
-            const memoryTranscript = await renderMemoryTranscript(conversation);
+            const memoryTranscript = renderMemoryTranscriptFromView(view);
             const extractInput = {
               transcript: memoryTranscript.transcript,
               known: known.text,
@@ -372,7 +376,11 @@ async function buildProfile(
     transcript,
     previous: previous ? renderPreviousProfile(previous, options.prompts.messages) : "（无）",
   });
-  const stream = options.models.streamSimple(model, { messages: [{ role: "user", content: prompt }] });
+  const stream = options.models.streamSimple(
+    model,
+    { messages: [{ role: "user", content: prompt }] },
+    { signal: AbortSignal.timeout(180_000) },
+  );
   const message = await stream.result();
   if (message.stopReason === "error" || message.stopReason === "aborted") {
     throw new Error(message.errorMessage ?? `profile_${message.stopReason}`);
@@ -537,9 +545,10 @@ function activeMembers(counted: CountedEntry[]): string[] {
  * text（整份旧换页文本）作为带入条目逐字校验的 corpus 一并返回；at 是落页时间
  * （pi.reset head 的 entry 时间戳），T13 开窗弹药行的「N 天前」锚点消费它，拿不到为 undefined。
  */
-async function extractPreviousProfile(conversation: Conversation): Promise<PreviousProfile | undefined> {
+type ContextView = Awaited<ReturnType<Conversation["context"]>>;
+
+function extractPreviousProfileFromView(view: ContextView): PreviousProfile | undefined {
   try {
-    const view = await conversation.context(ctx);
     let text = "";
     let at: number | undefined;
     const head = view.entries.find((entry) => entry.kind === "pi.reset");
@@ -563,6 +572,14 @@ async function extractPreviousProfile(conversation: Conversation): Promise<Previ
     };
     if (open.threads.length + open.promises.length === 0) return undefined;
     return { profile: open, text, ...(at !== undefined ? { at } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
+async function extractPreviousProfile(conversation: Conversation): Promise<PreviousProfile | undefined> {
+  try {
+    return extractPreviousProfileFromView(await conversation.context(ctx));
   } catch {
     return undefined;
   }
@@ -706,12 +723,13 @@ function entryTimestamp(entry: { kind: string; model?: unknown; data?: unknown }
  * entry 在活跃链，重放成噪音）在这里显式跳过，不进摘要也不进尾巴。
  */
 /** 最近一次有效普通模型请求的实际上下文：input + cacheRead；跳过 error / aborted 与零 usage 条目。 */
-export async function latestRequestTokens(conversation: Conversation): Promise<number | undefined> {
-  const view = await conversation.context(ctx);
-  for (const entry of [...view.entries].reverse()) {
+function latestRequestTokensFromView(view: ContextView): number | undefined {
+  for (let i = view.entries.length - 1; i >= 0; i--) {
+    const entry = view.entries[i]!;
     if (entry.kind !== "pi.assistant") continue;
     const messages = Array.isArray(entry.model) ? entry.model : [entry.model];
-    for (const message of [...messages].reverse()) {
+    for (let j = messages.length - 1; j >= 0; j--) {
+      const message = messages[j];
       const stopReason = (message as { stopReason?: unknown } | undefined)?.stopReason;
       if (stopReason === "error" || stopReason === "aborted") continue;
       const usage = (message as { usage?: { input?: unknown; cacheRead?: unknown } } | undefined)?.usage;
@@ -724,8 +742,11 @@ export async function latestRequestTokens(conversation: Conversation): Promise<n
   return undefined;
 }
 
-async function renderCountedEntries(conversation: Conversation, self: { nickname: string; userId: string } = { nickname: "Elysia", userId: "" }): Promise<CountedEntry[]> {
-  const view = await conversation.context(ctx);
+export async function latestRequestTokens(conversation: Conversation): Promise<number | undefined> {
+  return latestRequestTokensFromView(await conversation.context(ctx));
+}
+
+function renderCountedEntriesFromView(view: ContextView, self: { nickname: string; userId: string } = { nickname: "Elysia", userId: "" }): CountedEntry[] {
   const counted: CountedEntry[] = [];
 
   for (const entry of view.entries) {
@@ -784,6 +805,10 @@ async function renderCountedEntries(conversation: Conversation, self: { nickname
   return counted;
 }
 
+async function renderCountedEntries(conversation: Conversation, self: { nickname: string; userId: string } = { nickname: "Elysia", userId: "" }): Promise<CountedEntry[]> {
+  return renderCountedEntriesFromView(await conversation.context(ctx), self);
+}
+
 function entryText(model: unknown): string {
   // 只取 text block：主会话 inline 附图（docs/plans/2026-11-01-inline-vision.md）的 image block
   // 在这里被有意丢弃——摘要永远只吃文本，图片随换页退出活跃上下文
@@ -827,8 +852,7 @@ export interface MemoryTranscript {
  * 只进待审（savePendingMemories）；kind="feedback" 的 fact 仅由审批链机器装配（T7），
  * 不经抽取器。
  */
-export async function renderMemoryTranscript(conversation: Conversation): Promise<MemoryTranscript> {
-  const view = await conversation.context(ctx);
+function renderMemoryTranscriptFromView(view: ContextView): MemoryTranscript {
   const lines: string[] = [];
   const subjects = new Map<string, string>();
   const inboundTexts: string[] = [];
@@ -870,6 +894,10 @@ export async function renderMemoryTranscript(conversation: Conversation): Promis
     subjects: [...subjects.entries()].map(([subject, name]) => ({ subject, name })),
     inboundTexts,
   };
+}
+
+export async function renderMemoryTranscript(conversation: Conversation): Promise<MemoryTranscript> {
+  return renderMemoryTranscriptFromView(await conversation.context(ctx));
 }
 
 /** 时间戳 → 本地「MM-DD」：抽取转录行的日期锚点（年份由提示词的 {{today}} 补全）。 */
