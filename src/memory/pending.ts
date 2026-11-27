@@ -142,10 +142,9 @@ export function signalsSuffix(signals: ExtractSignals | undefined): string {
 }
 
 /**
- * 待审队列每人格上限：淘汰逻辑与日志都在，改小即恢复淘汰。
- * 观察期（2026-11）暂不设上限——先看积累速度，定了再改这个常量。
+ * 待审队列每人格上限：防止待审无限膨胀，超限时淘汰最旧条目。
  */
-export const MEMORY_PENDING_CAP: number = Infinity;
+export const MEMORY_PENDING_CAP: number = 200;
 
 export function emptyPendingMemory(): PendingMemoryState {
   return { version: 1, entries: [] };
@@ -170,7 +169,7 @@ export function splitPendingPatch(entryId: string, patch: MemoryPatch): PendingM
     items.push({
       id: `${entryId}#${String(order + 1).padStart(2, "0")}`,
       order,
-      patch: cloneJson(itemPatch),
+      patch: clonePatch(itemPatch),
     });
   };
   const notesBySubject = new Map<string, NonNullable<MemoryPatch["supersede"]>[number][]>();
@@ -207,21 +206,60 @@ export function splitPendingPatch(entryId: string, patch: MemoryPatch): PendingM
   return items;
 }
 
-/** durable draft 可能是 Proxy，structuredClone 会拒绝；显式转成普通 JSON 值再聚合。 */
-function cloneJson<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+/** durable draft 可能是 Proxy，structuredClone 会拒绝；按字段做浅/深拷贝脱掉 Proxy 并减少 JSON 序列化开销。 */
+function clonePatchPerson(person: NonNullable<MemoryPatch["people"]>[number]): NonNullable<MemoryPatch["people"]>[number] {
+  return {
+    subject: person.subject,
+    ...(person.names !== undefined ? { names: [...person.names] } : {}),
+    ...(person.facts !== undefined ? { facts: person.facts.map((fact) => ({ ...fact })) } : {}),
+    ...(person.style !== undefined ? { style: person.style } : {}),
+    ...(person.catchphrases !== undefined ? { catchphrases: [...person.catchphrases] } : {}),
+  };
+}
+
+function clonePatch(patch: MemoryPatch): MemoryPatch {
+  const out: MemoryPatch = {};
+  if (patch.people !== undefined) out.people = patch.people.map(clonePatchPerson);
+  if (patch.lore !== undefined) out.lore = patch.lore.map((item) => ({ keys: [...item.keys], text: item.text, kind: item.kind }));
+  if (patch.cards !== undefined) {
+    out.cards = patch.cards.map((card) => ({
+      text: card.text,
+      importance: card.importance,
+      keys: [...card.keys],
+      subjects: [...card.subjects],
+    }));
+  }
+  if (patch.supersede !== undefined) out.supersede = patch.supersede.map((note) => ({ subject: note.subject, ids: [...note.ids] }));
+  if (patch.expire !== undefined) out.expire = patch.expire.map((item) => ({ subject: item.subject, id: item.id, quote: item.quote }));
+  if (patch.feedback !== undefined) out.feedback = patch.feedback.map((item) => ({ text: item.text, meta: { ...item.meta } }));
+  return out;
 }
 
 /** 唯一聚合规则：按拆分顺序拼接，不按 subject 合并，兼容旧数据里的重复 people。 */
 export function aggregatePendingItems(items: PendingMemoryItem[]): MemoryPatch {
   const patch: MemoryPatch = {};
   for (const item of [...items].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))) {
-    for (const value of item.patch.people ?? []) (patch.people ??= []).push(cloneJson(value));
-    for (const value of item.patch.lore ?? []) (patch.lore ??= []).push(cloneJson(value));
-    for (const value of item.patch.cards ?? []) (patch.cards ??= []).push(cloneJson(value));
-    for (const value of item.patch.supersede ?? []) (patch.supersede ??= []).push(cloneJson(value));
-    for (const value of item.patch.expire ?? []) (patch.expire ??= []).push(cloneJson(value));
-    for (const value of item.patch.feedback ?? []) (patch.feedback ??= []).push(cloneJson(value));
+    for (const value of item.patch.people ?? []) (patch.people ??= []).push(clonePatchPerson(value));
+    for (const value of item.patch.lore ?? []) {
+      (patch.lore ??= []).push({ keys: [...value.keys], text: value.text, kind: value.kind });
+    }
+    for (const value of item.patch.cards ?? []) {
+      (patch.cards ??= []).push({
+        text: value.text,
+        importance: value.importance,
+        keys: [...value.keys],
+        subjects: [...value.subjects],
+      });
+    }
+    for (const value of item.patch.supersede ?? []) {
+      (patch.supersede ??= []).push({ subject: value.subject, ids: [...value.ids] });
+    }
+    for (const value of item.patch.expire ?? []) {
+      (patch.expire ??= []).push({ subject: value.subject, id: value.id, quote: value.quote });
+    }
+    for (const value of item.patch.feedback ?? []) {
+      (patch.feedback ??= []).push({ text: value.text, meta: { ...value.meta } });
+    }
   }
   return patch;
 }

@@ -14,7 +14,10 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openFish } from "../src/harness.ts";
-import { OutboxDoc } from "../src/store.ts";
+import { installDrain } from "../src/fish/drain.ts";
+import { installGroup } from "../src/fish/group.ts";
+import { loadPrompts } from "../src/prompt/index.ts";
+import { ChatsDoc, OutboxDoc } from "../src/store.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
@@ -123,5 +126,154 @@ test("发送失败保留未决：不重试，也不跳过队首发后面的", as
     assert.equal(box?.queue.length, 2, "后面的记录原地不动");
   } finally {
     await open.close();
+  }
+});
+
+test("installGroup 首次失败后不永久缓存坏 Promise，下次重试可成功", async () => {
+  let attempt = 0;
+  const { group } = installGroup({
+    harness: {
+      async snapshot() {
+        attempt += 1;
+        if (attempt === 1) throw new Error("transient_db_error");
+        return { chats: { "qq:group:retry": 42 } };
+      },
+      async conversation(id: number) {
+        return { id };
+      },
+    } as never,
+    options: { model: { provider: "faux", modelId: "faux-1" } } as never,
+    prompts: loadPrompts(PROMPTS),
+    ctx,
+    now: () => 1,
+    groups: new Map(),
+    workspaceRoot: mkdtempSync(join(tmpdir(), "yg-grp-")),
+    personaExtensions: new Map(),
+    memoryKeyByConversation: new Map(),
+    chatKeyByConversation: new Map(),
+    sending: new Set(),
+  } as never);
+
+  await assert.rejects(() => group("qq:group:retry"), /transient_db_error/);
+  const conv = await group("qq:group:retry");
+  assert.equal(conv.id, 42);
+});
+
+test("drain() 对多会话并发派发 emit 并记录 rejected 日志，notSent 错误直接丢弃队首", async () => {
+  const db = join(mkdtempSync(join(tmpdir(), "yg-drain-conc-")), "fish.db");
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let convAId = 0;
+  let convBId = 0;
+  let bEmitted = false;
+  let releaseA!: () => void;
+  const aGate = new Promise<void>((resolve) => {
+    releaseA = resolve;
+  });
+  let throwNotSent = false;
+  const outbox: string[] = [];
+
+  const open = await openFish({
+    storage: await openNodeSqliteStorage(db),
+    models,
+    model: { provider: faux.provider.id, modelId: faux.models[0].id },
+    promptRoot: PROMPTS,
+    mediaRoot: mkdtempSync(join(tmpdir(), "yg-m-")),
+    workspaceRoot: mkdtempSync(join(tmpdir(), "yg-w-")),
+    emit: async (id, payload) => {
+      if (throwNotSent) {
+        const err = new Error("OneBot 未连接") as Error & { notSent?: boolean };
+        err.notSent = true;
+        throw err;
+      }
+      if (id === convAId) {
+        await Promise.race([aGate, new Promise((r) => setTimeout(r, 80))]);
+      } else if (id === convBId) {
+        bEmitted = true;
+        releaseA();
+      }
+      outbox.push(`${String(id)}:${payload.items.join("|")}`);
+    },
+    react: () => {},
+  });
+
+  try {
+    const convA = await open.group("qq:group:a");
+    const convB = await open.group("qq:group:b");
+    convAId = convA.id;
+    convBId = convB.id;
+    await open.enqueue(convA.id, { items: ["来自A"], at: Date.now(), key: "k-a" });
+    await open.enqueue(convB.id, { items: ["来自B"], at: Date.now(), key: "k-b" });
+
+    const sent = await open.drain();
+    assert.equal(bEmitted, true, "A 会话慢时阻塞了 B 会话");
+    assert.equal(sent, 2);
+    assert.equal(outbox.length, 2);
+
+    // notSent: true 时直接丢弃队首，不卡在 sending 600s
+    throwNotSent = true;
+    await open.enqueue(convA.id, { items: ["断线消息"], at: Date.now(), key: "k-drop" });
+    const droppedSent = await open.drain();
+    assert.equal(droppedSent, 0);
+    const boxAfterDrop = await open.harness.snapshot(OutboxDoc, convA.id, ctx);
+    assert.equal(boxAfterDrop?.queue.length ?? 0, 0, "notSent 错误应直接丢弃队首");
+
+    // 恢复连接后能立刻继续发新消息
+    throwNotSent = false;
+    await open.enqueue(convA.id, { items: ["恢复消息"], at: Date.now(), key: "k-recover" });
+    assert.equal(await open.drain(), 1);
+  } finally {
+    await open.close();
+  }
+
+  // 验证 drain 遇到 rejected 会话时记录错误日志且不影响其余会话
+  const errors: unknown[][] = [];
+  const origError = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args); };
+  try {
+    const { drain } = installDrain({
+      harness: {
+        async snapshot(doc: unknown, id?: unknown) {
+          if (doc === ChatsDoc) return { chats: { a: 1, b: 2 } };
+          if (id === 1) throw new Error("boom_conv_1");
+          return { queue: [] };
+        },
+      } as never,
+      options: { emit: async () => [] } as never,
+      ctx,
+      now: () => 1,
+      sending: new Set<string>(),
+    } as never);
+    const total = await drain();
+    assert.equal(total, 0);
+    assert.ok(errors.some((args) => args.some((a) => String(a).includes("boom_conv_1"))));
+  } finally {
+    console.error = origError;
+  }
+});
+
+test("tool-surface 同轮增量记录工具返回到 secrets 并拦截 say_words 抄写", async () => {
+  const db = join(mkdtempSync(join(tmpdir(), "yg-turn-secret-")), "fish.db");
+  const outbox: string[] = [];
+  const built = await boot(db, outbox);
+  const { faux } = built;
+  const fish = await built.fish;
+  try {
+    const conv = await fish.group("qq:group:secret");
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("tool_search", { query: "say_words" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage(
+        [fauxToolCall("say_words", { text: "你产生的任何文字都不会发出去，只有出口工具能把话送出去。" })],
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage([fauxToolCall("say_words", { text: "好的知道了" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("ok"),
+    ]);
+    await (await conv.submit({ type: "input", content: "看看" }, ctx)).wait(ctx);
+    await fish.drain();
+    assert.deepEqual(outbox, ["好的知道了"], "同轮抄写工具返回值应被 provenance 拦截");
+  } finally {
+    await fish.close();
   }
 });

@@ -14,8 +14,8 @@
 
 export const SEEN_LINKS_CAP = 40;
 
-/** roundId（unknown，宿主传 LiveDoc 的 run.inputs[0]）→ 本轮见过的链接（按出现顺序）。 */
-const seen = new Map<unknown, string[]>();
+/** roundId（内部统一 String(round) 归一化）→ 本轮见过的链接（按出现顺序）。 */
+const seen = new Map<string, string[]>();
 
 /** 从任意工具结果里抽 http(s) 链接：只认绝对 URL，去掉尾部标点，去重保序。 */
 export function extractLinks(text: string): string[] {
@@ -33,22 +33,27 @@ export function extractLinks(text: string): string[] {
 /** 登记本轮工具结果里出现过的链接（宿主在工具返回后调用；幂等、有上限）。 */
 export function recordSeenLinks(round: unknown, urls: readonly string[]): void {
   if (round === undefined || urls.length === 0) return;
-  const list = seen.get(round) ?? [];
+  const key = String(round);
+  const list = seen.get(key) ?? [];
   for (const url of urls) {
     if (!list.includes(url)) list.push(url);
   }
   while (list.length > SEEN_LINKS_CAP) list.shift();
-  seen.set(round, list);
+  seen.set(key, list);
 }
 
 /** 本轮见过的链接；没登记过 = 空集（白名单为空 → 任何 URL 都会被拒）。 */
 export function seenLinksOf(round: unknown): ReadonlySet<string> {
-  return new Set(seen.get(round) ?? []);
+  if (round === undefined) return new Set();
+  const key = String(round);
+  return new Set(seen.get(key) ?? []);
 }
 
 /** 轮末清账（宿主 settle 时调用）：不残留到下一轮。 */
 export function clearSeenLinks(round: unknown): void {
-  seen.delete(round);
+  if (round === undefined) return;
+  const key = String(round);
+  seen.delete(key);
 }
 
 /** 测试/排障用：清空全部（生产不调用）。 */

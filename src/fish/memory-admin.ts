@@ -274,6 +274,7 @@ export function installMemoryAdmin(state: FishBase & { harness: Harness }): Memo
     const shown = entries.slice(0, 30);
     const lines: string[] = [];
     for (const { entry, persona } of shown) {
+      const effective = effectivePendingPatch(entry);
       lines.push(
         renderTemplate(messages["cmd_memory_entry"] ?? "", {
           id: entry.id,
@@ -286,18 +287,18 @@ export function installMemoryAdmin(state: FishBase & { harness: Harness }): Memo
           digest: (entry.feedback
             ? summarizeFeedback(entry.feedback)
               + (entry.feedback.quotedFromMissing === true ? messages["memory_feedback_missing_quote"] ?? "" : "")
-            : summarizePatch(effectivePendingPatch(entry))) + signalsSuffix(entry.signals),
+            : summarizePatch(effective)) + signalsSuffix(entry.signals),
           count: String(pendingItems(entry).length),
         }),
       );
-      for (const note of effectivePendingPatch(entry).supersede ?? []) {
+      for (const note of effective.supersede ?? []) {
         for (const id of note.ids) {
           const text = await factTextOf(persona, id);
           lines.push(renderTemplate(messages["cmd_memory_supersede_note"] ?? "", { id, text: text || "-" }));
         }
       }
       // EXPIRE 的审计展示：原事实 + 依据原话（主人靠这两样判断语义相关性）
-      for (const note of effectivePendingPatch(entry).expire ?? []) {
+      for (const note of effective.expire ?? []) {
         const text = await factTextOf(persona, note.id);
         lines.push(renderTemplate(messages["cmd_memory_expire_note"] ?? "", { id: note.id, text: text || "-", quote: note.quote }));
       }

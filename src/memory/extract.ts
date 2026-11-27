@@ -27,7 +27,9 @@ import {
   MEMORY_CAPS,
   MEMORY_EXPIRE_PER_PAGE,
   MEMORY_EXPIRE_QUOTE_CHARS,
-  stripInvisible,
+  MEMORY_FACT_INJECTION_RES,
+  MEMORY_INJECTION_RES,
+  sanitizeMemoryText,
   type ExtractSignals,
   type FactSource,
   type MemoryPatch,
@@ -37,6 +39,7 @@ export interface ExtractOptions {
   models: Models;
   model: { provider: string; modelId: string };
   prompts: PromptSet;
+  signal?: AbortSignal;
 }
 
 /** 主体格式：QQ 号或受控长度的 name: 昵称。 */
@@ -48,21 +51,6 @@ const CANDIDATE_ACTIONS = ["ADD", "SUPERSEDE", "EXPIRE"] as const;
 const CANDIDATE_TYPES = ["fact", "profile", "lore", "card"] as const;
 /** confidence 枚举（终审 #3 加严）：缺失或不认识的值整条丢弃，不再默认放行。 */
 const CONFIDENCE_LEVELS = ["high", "medium", "low"] as const;
-
-/** 所有字段共用的明显隐私模式：手机号/连续 7 位以上数字、邮箱、URL、密钥样式。 */
-const PRIVACY_RES: readonly RegExp[] = [
-  /\d{7,}/,
-  /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+/,
-  /https?:\/\/|www\./i,
-  /(api[_-]?key|token|password|passwd|secret|密码|密钥)/i,
-  /\b(sk|pk|ghp|gho|xoxb?)[-_a-zA-Z0-9]{10,}/i,
-];
-
-/** 所有字段共用的明显注入模式。 */
-const INJECTION_RES: readonly RegExp[] = [/忽略(之前|以上|前面)/, /system prompt/i, /系统提示/, /ignore (all )?previous/i];
-
-/** fact text 额外拒绝的指令式说法。 */
-const FACT_INJECTION_RES: readonly RegExp[] = [/忽略/, /系统提示/, /system prompt/i, /ignore previous/i, /以后都/, /你必须/, /从现在开始/];
 
 /**
  * 抽取结果三态（T11）：ok = 产出非空 patch；empty = 模型成功响应但没有值得记的
@@ -96,7 +84,8 @@ export async function extractMemories(
     subjects: input.subjects.map((entry) => entry.subject).join("\n"),
     today: localDay(Date.now()),
   });
-  const stream = options.models.streamSimple(model, { messages: [{ role: "user", content: prompt }] });
+  const signal = options.signal ?? AbortSignal.timeout(180_000);
+  const stream = options.models.streamSimple(model, { messages: [{ role: "user", content: prompt }] }, { signal });
   const message = await stream.result();
   // 网关拦截/断流只回来一条 error 消息（content 为空）：翻成异常走抽取失败通道，
   // 不算 parse_failed（那是「模型回了但输出不可解析」），也不算零提取
@@ -332,7 +321,7 @@ function readExpire(
   const subject = known.idToSubject.get(id);
   if (subject === undefined) return undefined;
   const quote = safeShort(candidate["quote"], MEMORY_EXPIRE_QUOTE_CHARS);
-  if (quote === undefined) return undefined;
+  if (quote === undefined || quote.length < 4) return undefined;
   if (!inboundTexts.some((text) => text.includes(quote))) return undefined;
   return { id, quote, signalPeople: known.people.has(subject), patchEntry: { subject, id, quote } };
 }
@@ -343,7 +332,7 @@ function readFact(
   action: string,
   known: KnownIndex,
 ): { person: { subject: string }; fact: { text: string; source: FactSource; by?: string }; factId: string; signalPeople: boolean } | undefined {
-  const text = safeShort(candidate["text"], FACT_TEXT_CHARS, FACT_INJECTION_RES);
+  const text = safeShort(candidate["text"], FACT_TEXT_CHARS, MEMORY_FACT_INJECTION_RES);
   if (text === undefined) return undefined;
   const factSource = candidate["source"];
   if (typeof factSource !== "string" || !FACT_SOURCES.includes(factSource as FactSource)) return undefined;
@@ -432,16 +421,8 @@ function asArray(value: unknown): unknown[] {
  * `<>` 标记、明显注入与隐私模式（长度与模式匹配都作用于移除后的可见文本，防夹带绕过）。
  * 不合格返回 undefined（该条丢弃）。
  */
-function safeShort(value: unknown, max: number, extraInjections: readonly RegExp[] = INJECTION_RES): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const text = stripInvisible(value).trim();
-  if (text.length === 0 || text.length > max) return undefined;
-  if (/[\u0000-\u001F\u007F]/.test(text)) return undefined;
-  if (text.includes("<") || text.includes(">")) return undefined;
-  for (const pattern of [...extraInjections, ...PRIVACY_RES]) {
-    if (pattern.test(text)) return undefined;
-  }
-  return text;
+function safeShort(value: unknown, max: number, extraInjections: readonly RegExp[] = MEMORY_INJECTION_RES): string | undefined {
+  return sanitizeMemoryText(value, max, extraInjections);
 }
 
 /** 允许主体集合：本次 subjects（结构化入站 + 已知人物）与 known 文本行首的主体。 */

@@ -29,6 +29,7 @@ export function makeFishExtension(
     engagementOf: (chatKey: string) => EngagementMode;
   },
 ): Extension {
+  const toolCatalog = renderToolCatalog(parts.manifests, parts.prompts.messages);
   return defineExtension({
     name,
     tools: parts.tools,
@@ -37,9 +38,9 @@ export function makeFishExtension(
       // 搭话协议段（自由活动群）按会话模式动态裁剪（见 qq/runtime-text.ts）
       section("runtime", (input) => runtimeTextOf(parts.prompts.runtime, parts.engagementOf(parts.chatKeyOf?.(String(input.conversationId)) ?? "")), { tag: false }),
       section("persona", () => persona, { tag: false }),
-      // 工具目录：每次请求由 trusted manifest 现渲染，只列已启用工具的 name + 顶部摘要；
+      // 工具目录：启动期由 trusted manifest 预渲染，只列已启用工具的 name + 顶部摘要；
       // 「目录 ≠ 已加载」的行为说明在 prompt/runtime.md，这里不内嵌提示词
-      section("tool_catalog", () => renderToolCatalog(parts.manifests, parts.prompts.messages), { tag: true }),
+      section("tool_catalog", () => toolCatalog, { tag: true }),
       // 运维书：只给主人用的管理工具怎么用（模型切换 + 重启）
       section("ops", () => parts.prompts.ops, { tag: true }),
       // 手工维护的人物档：比对话记忆更牢，和 handoff 互补
@@ -60,9 +61,12 @@ export function makeFishExtension(
       // src/memory/model.ts 的安全边界注释：记忆抽取只读结构化原始 entry，必须继续排除
       // pi.system、宿主任务文案和工具结果，否则「记忆 → 抽取 → 记忆」的自我污染闭环会复活。
       section("memory", async (input, context) => {
-        const memoryKey = parts.memoryKeyOf(String(input.conversationId));
+        const convId = String(input.conversationId);
+        const scope = peekScope(convId);
+        if (!scope) return undefined;
+        const memoryKey = parts.memoryKeyOf(convId);
         if (!memoryKey) return undefined;
-        const chatKey = parts.chatKeyOf(String(input.conversationId));
+        const chatKey = parts.chatKeyOf(convId);
         const [pub, priv] = await Promise.all([
           input.read.snapshot(MemoryDoc, memoryKey, context),
           chatKey === undefined
@@ -70,7 +74,7 @@ export function makeFishExtension(
             : input.read.snapshot(MemoryPrivateDoc, privateMemoryKeyOf(memoryKey, chatKey), context),
         ]);
         if (!pub && !priv) return undefined;
-        return renderMemorySection(mergeMemoryStates(pub, priv), peekScope(String(input.conversationId)), parts.prompts.messages);
+        return renderMemorySection(mergeMemoryStates(pub, priv), scope, parts.prompts.messages);
       }, { tag: true }),
     ],
   });

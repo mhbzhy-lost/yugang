@@ -37,17 +37,24 @@ export async function installStartupMigrations(
   // 所以每次启动把已有会话的 model 对齐回当前配置；只写 model，不动 extensions/cwd。
   {
     const snapshot = await harness.snapshot(ChatsDoc, ctx);
-    const ids = new Set<number>(Object.values(snapshot?.chats ?? {}).map(Number));
+    const ids = [...new Set<number>(Object.values(snapshot?.chats ?? {}).map(Number))].filter((id) =>
+      Number.isFinite(id),
+    );
+    const validIds: ConversationId[] = [];
     for (const id of ids) {
-      if (!Number.isFinite(id)) continue;
       const conversation = await harness.conversation(id as ConversationId, ctx);
-      if (!conversation) continue;
+      if (conversation) validIds.push(id as ConversationId);
+    }
+    if (validIds.length > 0) {
+      const change = {
+        model: options.model,
+        maxTurns: AGENT_MAX_TURNS,
+        ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
+      };
       await harness.commit(async (tx) => {
-        await configure(tx, id as ConversationId, {
-          model: options.model,
-          maxTurns: AGENT_MAX_TURNS,
-          ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
-        });
+        for (const id of validIds) {
+          await configure(tx, id, change);
+        }
       }, ctx);
     }
   }

@@ -9,6 +9,13 @@ import {
 } from "./model.ts";
 import { byAgeHits, feedbackSignature } from "./patch.ts";
 
+function cloneFact(fact: MemoryFact): MemoryFact {
+  return {
+    ...fact,
+    ...(fact.meta !== undefined ? { meta: { ...fact.meta } } : {}),
+  };
+}
+
 export function mergeMemoryStates(
   publicState: MemoryState | undefined,
   privateState: MemoryState | undefined,
@@ -18,7 +25,7 @@ export function mergeMemoryStates(
   const clone = (person: MemoryPerson): MemoryPerson => ({
     ...person,
     names: [...person.names],
-    facts: person.facts.map((fact) => ({ ...fact })),
+    facts: person.facts.map(cloneFact),
     catchphrases: [...person.catchphrases],
   });
 
@@ -39,8 +46,20 @@ export function mergeMemoryStates(
     existing.updatedAt = Math.max(existing.updatedAt, person.updatedAt);
   }
 
-  const lore = mergeByIdentity(pub.lore, priv.lore, (item) => loreSignature(item.keys), (a, b) => b.hits - a.hits || b.at - a.at);
-  const cards = mergeByIdentity(pub.cards, priv.cards, (card) => normalizeText(card.text), (a, b) => b.importance - a.importance || b.at - a.at);
+  const lore = mergeByIdentity(
+    pub.lore,
+    priv.lore,
+    (item) => loreSignature(item.keys),
+    (a, b) => b.hits - a.hits || b.at - a.at,
+    (item) => ({ ...item, keys: [...item.keys] }),
+  );
+  const cards = mergeByIdentity(
+    pub.cards,
+    priv.cards,
+    (card) => normalizeText(card.text),
+    (a, b) => b.importance - a.importance || b.at - a.at,
+    (card) => ({ ...card, keys: [...card.keys], subjects: [...card.subjects] }),
+  );
   // 评价 fact：同签名去重（方向+原文+被评摘要），保留 hits 更高（平手取更新）的那条
   const feedback = mergeByIdentity(
     pub.feedback ?? [],
@@ -50,6 +69,7 @@ export function mergeMemoryStates(
         ? feedbackSignature(fact.meta.direction, fact.text, fact.meta.targetSummary)
         : `id:${fact.id}`,
     (a, b) => b.hits - a.hits || b.at - a.at,
+    cloneFact,
   );
 
   return {
@@ -67,16 +87,28 @@ export function mergeMemoryStates(
 
 /** 有效事实按归一化文本去重：重复保留 hits 更高（平手取更新）的那条；失效事实原样保留。 */
 function mergeFacts(a: MemoryFact[], b: MemoryFact[]): MemoryFact[] {
-  const out = a.map((fact) => ({ ...fact }));
+  const out: MemoryFact[] = [];
+  const validIndex = new Map<string, number>();
+  for (const fact of a) {
+    const idx = out.length;
+    out.push(cloneFact(fact));
+    if (fact.invalidAt === undefined) {
+      const key = normalizeText(fact.text);
+      if (!validIndex.has(key)) validIndex.set(key, idx);
+    }
+  }
   for (const fact of b) {
     if (fact.invalidAt === undefined) {
-      const dup = out.find((item) => item.invalidAt === undefined && normalizeText(item.text) === normalizeText(fact.text));
-      if (dup) {
-        if (fact.hits > dup.hits || (fact.hits === dup.hits && fact.at > dup.at)) out[out.indexOf(dup)] = { ...fact };
+      const key = normalizeText(fact.text);
+      const idx = validIndex.get(key);
+      if (idx !== undefined) {
+        const dup = out[idx];
+        if (fact.hits > dup.hits || (fact.hits === dup.hits && fact.at > dup.at)) out[idx] = cloneFact(fact);
         continue;
       }
+      validIndex.set(key, out.length);
     }
-    out.push({ ...fact });
+    out.push(cloneFact(fact));
   }
   return out;
 }
@@ -87,15 +119,25 @@ function mergeByIdentity<T extends { at: number }>(
   b: T[],
   identity: (item: T) => string,
   score: (x: T, y: T) => number,
+  cloneItem: (item: T) => T,
 ): T[] {
-  const out = a.map((item) => ({ ...item }));
+  const out: T[] = [];
+  const byId = new Map<string, number>();
+  for (const item of a) {
+    const id = identity(item);
+    const idx = out.length;
+    out.push(cloneItem(item));
+    if (!byId.has(id)) byId.set(id, idx);
+  }
   for (const item of b) {
-    const dup = out.find((existing) => identity(existing) === identity(item));
-    if (dup) {
-      if (score(dup, item) > 0) out[out.indexOf(dup)] = { ...item };
+    const id = identity(item);
+    const idx = byId.get(id);
+    if (idx !== undefined) {
+      if (score(out[idx], item) > 0) out[idx] = cloneItem(item);
       continue;
     }
-    out.push({ ...item });
+    byId.set(id, out.length);
+    out.push(cloneItem(item));
   }
   return out;
 }

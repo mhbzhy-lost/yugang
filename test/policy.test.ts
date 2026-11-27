@@ -3,7 +3,22 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_LIMITS, longestCommonSubstring, validateOutbound, type EgressContext } from "../src/egress/policy.ts";
+import {
+  DEFAULT_LIMITS,
+  findProvenanceLeak,
+  longestCommonSubstring,
+  validateMedia,
+  validateOutbound,
+  type EgressContext,
+} from "../src/egress/policy.ts";
+import {
+  clearAllSeenLinks,
+  clearSeenLinks,
+  recordSeenLinks,
+  seenLinksOf,
+} from "../src/egress/seen-links.ts";
+import { absorbSecrets, recordTurnSecret } from "../src/egress/absorb.ts";
+import { clearSecrets, ledgerOf } from "../src/egress/ledger.ts";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 
@@ -71,4 +86,61 @@ test("溯源：连续重合超过阈值判为抄袭", () => {
   assert.ok(longestCommonSubstring(secret.slice(0, 30), secret) >= 24);
   assert.equal(validateOutbound({ messages: [secret.slice(0, 30)] }, ctx({ secrets: [secret] }))?.code, "provenance");
   assert.equal(validateOutbound({ messages: ["你们在聊啥呢"] }, ctx({ secrets: [secret] })), null);
+});
+
+test("seen-links 统一按 String(round) 存取与清空", () => {
+  clearAllSeenLinks();
+  recordSeenLinks(42, ["https://a.test"]);
+  assert.equal(seenLinksOf("42").has("https://a.test"), true);
+  clearSeenLinks("42");
+  assert.equal(seenLinksOf(42).size, 0);
+  assert.equal(seenLinksOf("42").size, 0);
+});
+
+test("absorbSecrets 感知 headId 换页重置游标、截断 thinking 且支持增量 recordTurnSecret", async () => {
+  const convId = "conv-absorb-test";
+  clearSecrets(convId);
+  let headId = 10;
+  let entries: unknown[] = [
+    { kind: "pi.tool-result", model: { content: "第一页工具输出内容超过二十四个字的秘密片段在这里" } },
+    { kind: "pi.tool-result", model: { content: "第一页第二条" } },
+  ];
+  const fakeConv = {
+    id: convId,
+    async context() {
+      return { head: { id: headId }, entries };
+    },
+  };
+  await absorbSecrets(fakeConv as never);
+  assert.ok(ledgerOf(convId).secrets.length >= 2);
+
+  // 模拟换页后 entries.length 变小且 head.id 变化，thinking 超过 4000 字
+  clearSecrets(convId);
+  headId = 20;
+  const longThinking = `秘密前缀超过二十四个字符一定要被截断检查到${"哈".repeat(4500)}`;
+  entries = [
+    { kind: "pi.assistant", model: [{ content: [{ type: "thinking", thinking: longThinking }] }] },
+  ];
+  await absorbSecrets(fakeConv as never);
+  assert.equal(ledgerOf(convId).secrets.length, 1, "换页后应重置游标重新扫描");
+  assert.equal(ledgerOf(convId).secrets[0]?.length, 4000, "thinking 应截断至 4000 字符");
+
+  // 增量 recordTurnSecret 立即可被 findProvenanceLeak 命中
+  clearSecrets(convId);
+  const turnSecret = "这是同轮刚刚执行完的工具返回内容应该立刻进入溯源防泄漏集合";
+  recordTurnSecret(convId, turnSecret);
+  assert.ok(findProvenanceLeak(turnSecret, ledgerOf(convId).secrets) !== null);
+});
+
+test("longestCommonSubstring 支持早退与超长输入不溢出，validateMedia 只读文件头 16B", () => {
+  const big = "x".repeat(70_000);
+  assert.equal(longestCommonSubstring(big, big), 70_000);
+  assert.equal(longestCommonSubstring("a".repeat(200), "a".repeat(200), 24), 24);
+
+  const root = mkdtempSync(join(tmpdir(), "yg-head-"));
+  const file = join(root, "big.png");
+  const bigTail = Buffer.alloc(1024 * 1024, 0x41);
+  PNG.copy(bigTail, 0);
+  writeFileSync(file, bigTail);
+  assert.equal(validateMedia(file, { ...DEFAULT_LIMITS, mediaRoot: root }), null);
 });

@@ -249,28 +249,36 @@ function cleanFeedbackMeta(meta: FeedbackFactMeta): FeedbackFactMeta | undefined
 
 /** 每人 facts 超 8 条或总字数超 320：先淘汰已失效的，再淘汰有效里的；两层内都按 at+hits 组合（零命中更旧优先）。 */
 function evictFacts(person: MemoryPerson): void {
-  const victim = (): MemoryFact | undefined => {
-    const invalid = person.facts.filter((fact) => fact.invalidAt !== undefined).sort(byAgeHits)[0];
-    return invalid ?? person.facts.filter((fact) => fact.invalidAt === undefined).sort(byAgeHits)[0];
-  };
-  while (person.facts.length > MEMORY_CAPS.factsPerPerson) {
-    const drop = victim();
-    if (!drop) break;
-    person.facts.splice(person.facts.indexOf(drop), 1);
+  let remainingChars = personTextTotal(person);
+  let remainingCount = person.facts.length;
+  if (remainingCount <= MEMORY_CAPS.factsPerPerson && remainingChars <= MEMORY_CAPS.textPerPerson) return;
+
+  const evictionOrder = [...person.facts].sort((a, b) => {
+    const ai = a.invalidAt !== undefined ? 0 : 1;
+    const bi = b.invalidAt !== undefined ? 0 : 1;
+    return ai - bi || byAgeHits(a, b);
+  });
+  const dropped = new Set<MemoryFact>();
+  for (const fact of evictionOrder) {
+    if (remainingCount <= MEMORY_CAPS.factsPerPerson && remainingChars <= MEMORY_CAPS.textPerPerson) break;
+    dropped.add(fact);
+    remainingCount -= 1;
+    remainingChars -= fact.text.length;
   }
-  while (person.facts.length > 0 && personTextTotal(person) > MEMORY_CAPS.textPerPerson) {
-    const drop = victim();
-    if (!drop) break;
-    person.facts.splice(person.facts.indexOf(drop), 1);
+  if (dropped.size > 0) {
+    person.facts = person.facts.filter((fact) => !dropped.has(fact));
   }
 }
 
 /** 超限淘汰：victim 由 compare 排出（升序 = 最先淘汰）。lore 用 at+hits 组合，cards 按 importance 再 at。 */
 function evictList<T extends { at: number }>(items: T[], cap: number, compare: (a: T, b: T) => number): void {
-  while (items.length > cap) {
-    const victim = [...items].sort(compare)[0];
-    items.splice(items.indexOf(victim), 1);
+  if (items.length <= cap) return;
+  const victims = new Set([...items].sort(compare).slice(0, items.length - cap));
+  let write = 0;
+  for (let i = 0; i < items.length; i++) {
+    if (!victims.has(items[i])) items[write++] = items[i];
   }
+  items.length = write;
 }
 
 /**
