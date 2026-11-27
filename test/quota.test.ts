@@ -420,12 +420,14 @@ test("HTTP 500 与网络异常：脱敏后标 error，不阻断其它 provider",
   assert.ok(!net.providers[0]!.message!.includes("sk-deepseek-secret-key-123"));
 });
 
-test("redactSecrets：已知字面量 + Bearer/sk- 通用形态", () => {
-  const text = "token=abc123456 Bearer ya29.a0AfB_x sk-liveabcdef123456";
+test("redactSecrets：已知字面量 + Bearer/sk-/JSON 引号键值形态", () => {
+  const text = 'token=abc123456 Bearer ya29.a0AfB_x sk-liveabcdef123456 {"refresh_token": "rt-secret-999", "client_secret":"cs-888"}';
   const out = redactSecrets(text, ["abc123456"]);
   assert.ok(!out.includes("abc123456"));
   assert.ok(!out.includes("ya29.a0AfB_x"));
   assert.ok(!out.includes("sk-liveabcdef123456"));
+  assert.ok(!out.includes("rt-secret-999"));
+  assert.ok(!out.includes("cs-888"));
 });
 
 // ---------- OAuth 刷新 ----------
@@ -651,4 +653,40 @@ test("凭据文件缺失时全部标 unconfigured，不崩溃", async () => {
     },
   });
   assert.equal(report.providers[0]!.status, "unconfigured");
+});
+
+test("queryQuotas：所有 fetchImpl 调用均附带超时 AbortSignal", async () => {
+  const paths = scratch(
+    { deepseek: { baseUrl: "https://api.deepseek.com", models: [] } },
+    {},
+    { deepseek: { key: "sk-deepseek-secret-key-123" } },
+  );
+  let sawSignal: AbortSignal | undefined;
+  await queryQuotas({
+    ...paths,
+    fetchImpl: async (_input, init) => {
+      sawSignal = init?.signal ?? undefined;
+      return jsonRes({ is_available: true, balance_infos: [] });
+    },
+  });
+  assert.ok(sawSignal instanceof AbortSignal, "quota fetchImpl 必须注入超时 AbortSignal");
+});
+
+test("auth.json 损坏时仅将该 provider 标为 error 而不打崩整批 queryQuotas", async () => {
+  const paths = scratch({
+    deepseek: { baseUrl: "https://api.deepseek.com", models: [] },
+    "qwen-token-plan-cn": { api: "openai-completions", baseUrl: "https://example.com/v1", models: [] },
+  });
+  writeFileSync(paths.credentialsPath, '{"deepseek": sk-secret-corrupt-value', { mode: 0o600 });
+  const report = await queryQuotas({
+    ...paths,
+    fetchImpl: async () => {
+      throw new Error("不应发起请求");
+    },
+  });
+  const deepseek = report.providers.find((p) => p.providerId === "deepseek")!;
+  const qwen = report.providers.find((p) => p.providerId === "qwen-token-plan-cn")!;
+  assert.equal(deepseek.status, "error");
+  assert.ok(!deepseek.message?.includes("sk-secret-corrupt-value"), "损坏凭据报错不得泄露原文");
+  assert.equal(qwen.status, "unsupported");
 });

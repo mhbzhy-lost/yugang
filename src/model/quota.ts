@@ -100,6 +100,16 @@ export interface QuotaQueryOptions {
 
 const ROLE_ORDER: ModelRole[] = ["main", "vision", "image", "wan_image", "vision_fallback"];
 const OAUTH_EXPIRY_MARGIN_MS = 60_000;
+/** 单次 quota 请求与锁内 OAuth 刷新硬超时（≤ 15s，严格短于 credentials LOCK_WAIT_MS）。 */
+const QUOTA_REQUEST_TIMEOUT_MS = 15_000;
+
+function withQuotaTimeout(fetchImpl: typeof fetch): typeof fetch {
+  return (input, init) => {
+    const timeout = AbortSignal.timeout(QUOTA_REQUEST_TIMEOUT_MS);
+    const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+    return fetchImpl(input, { ...init, signal });
+  };
+}
 
 /** 带 HTTP 状态码的错误：401 触发受控刷新重试，其余直接进 error 报告。 */
 class HttpStatusError extends Error {
@@ -153,7 +163,7 @@ function collectSecrets(credential: Credential | undefined, provider: ProviderCo
   return secrets;
 }
 
-/** 抹除已知秘密字面量 + 通用 Bearer/sk- 形态，错误文案才能安全出境。 */
+/** 抹除已知秘密字面量 + 通用 Bearer/sk- 与 JSON 引号键名形态，错误文案才能安全出境。 */
 export function redactSecrets(text: string, secrets: string[]): string {
   let out = text;
   for (const secret of secrets) {
@@ -161,6 +171,11 @@ export function redactSecrets(text: string, secrets: string[]): string {
   }
   out = out.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer ***");
   out = out.replace(/\bsk-[A-Za-z0-9_-]{6,}/g, "***");
+  out = out.replace(
+    /(\\"|")((?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret))\1\s*:\s*\1(?:\\.|[^"\\])*\1/gi,
+    "$1$2$1: $1***$1",
+  );
+  out = out.replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret)\s*[:=]\s*)[^\s,;"]+/gi, "$1***");
   return out;
 }
 
@@ -193,7 +208,7 @@ async function refreshIfNeeded(args: {
     } else if (!isExpired(current)) {
       return undefined;
     }
-    return await args.refreshFn(current, undefined, args.fetchImpl);
+    return await args.refreshFn(current, AbortSignal.timeout(QUOTA_REQUEST_TIMEOUT_MS), args.fetchImpl);
   });
   const after = (result ?? args.credential) as OAuthCredential;
   return { credential: after, refreshed: after.access !== args.credential.access };
@@ -595,19 +610,20 @@ async function queryProvider(
     roles,
   };
   const kind = detectKind(providerId, provider);
-  const credential = readCredentialFile(credentialsPath, providerId) as Credential | undefined;
-  const secrets = collectSecrets(credential, provider);
-  const proxyFetch = provider.proxy ? createProxyFetch(provider.proxy) : undefined;
-  const fetchImpl = options.fetchImpl ?? proxyFetch ?? fetch;
-
   if (!kind) {
     return { ...base, status: "unsupported", message: "暂无公开额度查询接口" };
   }
   base.kind = kind;
-  if (!credential) {
-    return { ...base, status: "unconfigured", message: "未配置凭据（config/auth.json 缺该 provider 条目）" };
-  }
+
+  const proxyFetch = provider.proxy ? createProxyFetch(provider.proxy) : undefined;
+  const fetchImpl = withQuotaTimeout(options.fetchImpl ?? proxyFetch ?? fetch);
+  const secrets = collectSecrets(undefined, provider);
   try {
+    const credential = readCredentialFile(credentialsPath, providerId) as Credential | undefined;
+    secrets.push(...collectSecrets(credential, provider));
+    if (!credential) {
+      return { ...base, status: "unconfigured", message: "未配置凭据（config/auth.json 缺该 provider 条目）" };
+    }
     if (kind === "antigravity" || kind === "codex") {
       if (credential.type !== "oauth") {
         return { ...base, status: "unconfigured", message: "该 provider 需要 OAuth 凭据，当前条目不是 oauth" };

@@ -17,7 +17,8 @@ import type { Duplex } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Model, TranscriptContext } from "@earendil-works/pi-ai";
-import { stream as streamCodeAssist } from "../src/model/google-code-assist.ts";
+import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
+import { discoverProject, stream as streamCodeAssist } from "../src/model/google-code-assist.ts";
 import { createProxyFetch } from "../src/media/proxy-fetch.ts";
 
 const TEST_MODEL: Model<"google-code-assist"> = {
@@ -298,4 +299,147 @@ test("proxy-fetch：挂起连接按 idleTimeoutMs 及时拒绝，并透传 retry
     if (previousTls === undefined) delete process.env["NODE_TLS_REJECT_UNAUTHORIZED"];
     else process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = previousTls;
   }
+});
+
+test("google-code-assist：默认内层重试为 0；isImageFormat400 剥图仅重试 1 次且不触发内层重试", async () => {
+  let calls429 = 0;
+  const fetch429: typeof fetch = async () => {
+    calls429 += 1;
+    return new Response("too many requests", { status: 429, headers: { "retry-after-ms": "1" } });
+  };
+  const msg429 = await streamCodeAssist(TEST_MODEL, TEST_CONTEXT, {
+    apiKey: "test-token",
+    flavor: "antigravity",
+    fetch: fetch429,
+  }).result();
+  assert.equal(msg429.stopReason, "error");
+  assert.equal(calls429, 1, "默认内层重试必须为 0（429 只发 1 次请求，交给外层 pi-durable）");
+
+  // isImageFormat400：带 inlineData 首轮 400 后剥图再试 1 次；即使降级分支遇 503 也不内层重试
+  const imageCtx: TranscriptContext = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "describe" },
+          { type: "image", data: "AQID", mimeType: "image/png" },
+        ],
+        timestamp: 1,
+      },
+    ],
+  };
+  let imageCalls = 0;
+  const fetchImage400Then503: typeof fetch = async () => {
+    imageCalls += 1;
+    if (imageCalls === 1) return new Response("invalid inline image payload", { status: 400 });
+    return new Response("upstream unavailable", { status: 503 });
+  };
+  const msgImg = await streamCodeAssist(TEST_MODEL, imageCtx, {
+    apiKey: "test-token",
+    flavor: "antigravity",
+    fetch: fetchImage400Then503,
+    maxRetries: 3,
+  }).result();
+  assert.equal(msgImg.stopReason, "error");
+  assert.equal(imageCalls, 2, "剥图降级只发 1 次降级请求，且强制 maxRetries: 0");
+});
+
+test("google-code-assist：readSseEvents 跳过 [DONE]、识别行内 parsed.error、早退 cancel()、EOF 半包命中可重试正则", async () => {
+  // 1) [DONE] 被跳过，正常结束
+  const doneEvents =
+    `data: ${JSON.stringify({
+      response: {
+        responseId: "resp_done",
+        candidates: [{ content: { role: "model", parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+        usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+      },
+    })}\n\n` + "data: [DONE]\n\n";
+  const msgDone = await streamCodeAssist(TEST_MODEL, TEST_CONTEXT, {
+    apiKey: "test-token",
+    flavor: "antigravity",
+    fetch: async () => new Response(doneEvents, { status: 200, headers: { "content-type": "text/event-stream" } }),
+  }).result();
+  assert.equal(msgDone.stopReason, "stop");
+
+  // 2) 行内 parsed.error 立即抛错（含状态码与消息）
+  const inlineErrSse = `data: ${JSON.stringify({ error: { code: 503, message: "service temporarily overloaded" } })}\n\n`;
+  const msgInlineErr = await streamCodeAssist(TEST_MODEL, TEST_CONTEXT, {
+    apiKey: "test-token",
+    flavor: "antigravity",
+    fetch: async () => new Response(inlineErrSse, { status: 200, headers: { "content-type": "text/event-stream" } }),
+  }).result();
+  assert.equal(msgInlineErr.stopReason, "error");
+  assert.match(msgInlineErr.errorMessage ?? "", /503/);
+  assert.match(msgInlineErr.errorMessage ?? "", /service temporarily overloaded/);
+
+  // 3) EOF 残留半包 JSON 抛出的错误必须命中 pi-durable isRetryableAssistantError === true
+  const truncatedSse =
+    `data: ${JSON.stringify({
+      response: { responseId: "resp_partial", candidates: [{ content: { role: "model", parts: [{ text: "hi" }] } }] },
+    })}\n\n` + 'data: {"response":{"candidates":[{"content":{"parts":[{"text":"cut';
+  const msgTruncated = await streamCodeAssist(TEST_MODEL, TEST_CONTEXT, {
+    apiKey: "test-token",
+    flavor: "antigravity",
+    fetch: async () => new Response(truncatedSse, { status: 200, headers: { "content-type": "text/event-stream" } }),
+  }).result();
+  assert.equal(msgTruncated.stopReason, "error");
+  assert.equal(
+    isRetryableAssistantError(msgTruncated),
+    true,
+    `EOF 半包错必须命中 isRetryableAssistantError，实际 errorMessage=${msgTruncated.errorMessage}`,
+  );
+
+  // 4) 早退 / 取消时必须调用 reader.cancel()
+  let cancelled = false;
+  const ac = new AbortController();
+  const s = streamCodeAssist(TEST_MODEL, TEST_CONTEXT, {
+    apiKey: "test-token",
+    flavor: "antigravity",
+    signal: ac.signal,
+    fetch: async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              `data: ${JSON.stringify({
+                response: { responseId: "r_cancel", candidates: [{ content: { role: "model", parts: [{ text: "part1" }] } }] },
+              })}\n\n`,
+            ),
+          );
+          setTimeout(() => ac.abort(new Error("user cancelled")), 30);
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  const msgCancelled = await s.result();
+  assert.equal(msgCancelled.stopReason, "aborted");
+  assert.equal(cancelled, true, "早退时必须调用 reader.cancel()");
+});
+
+test("discoverProject：5000ms 轮询响应 AbortSignal 立即退出", async () => {
+  const ac = new AbortController();
+  let calls = 0;
+  const fakeFetch: typeof fetch = async (input) => {
+    calls += 1;
+    const url = String(input);
+    if (url.endsWith(":loadCodeAssist")) {
+      return new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.endsWith(":onboardUser")) {
+      setTimeout(() => ac.abort(new Error("aborted-poll")), 40);
+      return new Response(JSON.stringify({ done: false, name: "operations/op-1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected ${url}`);
+  };
+  const t0 = Date.now();
+  await assert.rejects(discoverProject("tok", "gemini", fakeFetch, ac.signal));
+  assert.ok(Date.now() - t0 < 1000, "discoverProject 轮询应立即响应 AbortSignal");
+  assert.equal(calls, 2);
 });

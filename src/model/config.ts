@@ -288,6 +288,9 @@ export function loadProviderConfig(providerId: string, options: ProviderLoadOpti
   const { file, configSource } = readModelsFile(options.modelsPath ?? defaultModelsPath());
   const provider = file.providers[providerId];
   if (!provider) throw new Error(`models.json 里没有 provider：${providerId}`);
+  if (!Array.isArray(provider.models)) {
+    throw new Error(`models.json 的 provider「${providerId}」缺少 models 数组`);
+  }
   const modelId = options.modelId ?? provider.models[0]?.id ?? "";
   const credentialsPath = options.credentialsPath ?? defaultAuthPath(configSource);
   return buildConfig(file.providers, configSource, credentialsPath, undefined, { provider: providerId, model: modelId });
@@ -347,12 +350,24 @@ type StoredCredential =
 /** auth.json 的一个 provider 条目：字符串/`{key}` 当 api_key，`{type:"oauth"}` 当订阅凭据。 */
 export function readCredentialFile(path: string, providerId: string): StoredCredential | undefined {
   if (!existsSync(path)) return undefined;
-  const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-  const entry = parsed[providerId];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    throw new Error(`凭据文件 JSON 损坏（${path}）`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const entry = (parsed as Record<string, unknown>)[providerId];
   if (typeof entry === "string") return { type: "api_key", key: entry };
-  if (!entry || typeof entry !== "object") return undefined;
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
   const rec = entry as Record<string, unknown>;
-  if (rec["type"] === "oauth" && typeof rec["refresh"] === "string" && typeof rec["access"] === "string") {
+  if (
+    rec["type"] === "oauth" &&
+    typeof rec["refresh"] === "string" &&
+    typeof rec["access"] === "string" &&
+    typeof rec["expires"] === "number" &&
+    Number.isFinite(rec["expires"])
+  ) {
     return rec as StoredCredential;
   }
   if (typeof rec["key"] === "string") return { type: "api_key", key: rec["key"] };
@@ -367,6 +382,10 @@ function withCompat(models: ProviderModelConfig[], providerCompat: Record<string
 
 /** 打印用：不含任何 key 内容。 */
 export function describeModel(config: FishModelConfig): Record<string, string | number> {
+  const expiryText =
+    config.oauth && typeof config.oauth.expires === "number" && Number.isFinite(config.oauth.expires)
+      ? new Date(config.oauth.expires).toISOString()
+      : "未知";
   return {
     provider: config.providerId,
     model: config.modelId,
@@ -374,7 +393,7 @@ export function describeModel(config: FishModelConfig): Record<string, string | 
     key:
       config.authMode === "oauth"
         ? config.oauth
-          ? `oauth 已登录 / 有效期至 ${new Date(config.oauth.expires).toISOString()}`
+          ? `oauth 已登录 / 有效期至 ${expiryText}`
           : "oauth 未登录"
         : config.key
           ? `已加载 / ${config.key.length} 字符`

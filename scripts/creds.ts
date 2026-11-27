@@ -34,10 +34,10 @@ if (command === "import") {
 
   const wanted = Object.keys((JSON.parse(readFileSync(MODELS, "utf8")) as { providers: object }).providers);
   const source = JSON.parse(readFileSync(from, "utf8")) as Record<string, { key?: string }>;
-  const out: Record<string, { key: string }> = {};
+  const out: Record<string, { type: "api_key"; key: string }> = {};
   for (const provider of wanted) {
     const key = source[provider]?.key;
-    if (key) out[provider] = { key };
+    if (key) out[provider] = { type: "api_key", key };
   }
 
   if (Object.keys(out).length === 0) {

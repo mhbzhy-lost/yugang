@@ -8,12 +8,18 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import https from "node:https";
+import net from "node:net";
+import type { Duplex } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describeModel, loadFishModels, loadProviderConfig } from "../src/model/config.ts";
-import { assertModelExists, createFishModels } from "../src/model/models.ts";
+import { describeModel, loadFishModels, loadProviderConfig, readCredentialFile } from "../src/model/config.ts";
+import { assertModelExists, createFishModels, providerProxyHosts } from "../src/model/models.ts";
+import { probeModelConfig } from "../src/model/probe.ts";
 
 const EXAMPLE_MODELS = fileURLToPath(new URL("../config/models.example.json", import.meta.url));
 const FAKE_KEY = "test-key-0123456789abcdef";
@@ -129,4 +135,330 @@ test("build 出来的 Models 能找到配置里的模型，找不到时报可用
   const models = createFishModels(selection.main);
   assert.doesNotThrow(() => assertModelExists(models, "gw", "Fast"));
   assert.throws(() => assertModelExists(models, "gw", "不存在"), /Fast, Slow/);
+});
+
+test("providerProxyHosts 包含 daily-cloudcode-pa.googleapis.com 与 chatgpt.com", () => {
+  const agHosts = providerProxyHosts({
+    providerId: "google-antigravity",
+    modelId: "gemini-4",
+    baseUrl: "",
+    api: "antigravity-code-assist",
+    authMode: "oauth",
+    models: [],
+    key: "",
+    keySource: "",
+    configSource: "",
+    credentialsPath: "",
+  });
+  assert.ok(agHosts.includes("daily-cloudcode-pa.googleapis.com"));
+  assert.ok(agHosts.includes("oauth2.googleapis.com"));
+
+  const codexHosts = providerProxyHosts({
+    providerId: "openai-codex",
+    modelId: "gpt-5",
+    baseUrl: "",
+    api: "openai-codex-responses",
+    authMode: "oauth",
+    models: [],
+    key: "",
+    keySource: "",
+    configSource: "",
+    credentialsPath: "",
+  });
+  assert.ok(codexHosts.includes("chatgpt.com"));
+  assert.ok(codexHosts.includes("auth.openai.com"));
+});
+
+test("readCredentialFile / describeModel / loadProviderConfig：损坏 JSON 不泄原文、非有限 expires 不抛 RangeError、缺 models 报语义错", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "fish-model-cfg-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const badAuth = join(dir, "bad-auth.json");
+  writeFileSync(badAuth, '{"gw": "sk-top-secret-raw-text', { mode: 0o600 });
+
+  assert.throws(
+    () => readCredentialFile(badAuth, "gw"),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.ok(!err.message.includes("sk-top-secret-raw-text"), "不得泄露损坏 auth.json 原文");
+      return true;
+    },
+  );
+
+  // 非有限 expires 不得令 readCredentialFile 放行，也不得令 describeModel 抛 RangeError
+  const nullExpAuth = join(dir, "null-exp-auth.json");
+  writeFileSync(
+    nullExpAuth,
+    JSON.stringify({ codex: { type: "oauth", access: "a", refresh: "r", expires: null } }),
+    { mode: 0o600 },
+  );
+  assert.equal(readCredentialFile(nullExpAuth, "codex"), undefined);
+
+  const described = describeModel({
+    providerId: "codex",
+    modelId: "gpt-5",
+    baseUrl: "",
+    api: "openai-codex-responses",
+    authMode: "oauth",
+    models: [],
+    key: "",
+    oauth: { access: "a", refresh: "r", expires: Number.NaN },
+    keySource: nullExpAuth,
+    configSource: "",
+    credentialsPath: nullExpAuth,
+  });
+  assert.match(String(described.key), /未知/);
+
+  const badModels = join(dir, "bad-models.json");
+  writeFileSync(badModels, JSON.stringify({ providers: { broken: { api: "openai-completions" } } }));
+  assert.throws(
+    () => loadProviderConfig("broken", { modelsPath: badModels, credentialsPath: "/nonexistent" }),
+    /models/,
+  );
+});
+
+test("probeModelConfig：不覆写全局 scopedProxies、通过局部代理发请求且 safeError 抹除 oauthClient.secret 与引号 refresh_token", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "fish-probe-proxy-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const keyPath = join(dir, "key.pem");
+  const certPath = join(dir, "cert.pem");
+  const cert = spawnSync(
+    "openssl",
+    ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=127.0.0.1", "-keyout", keyPath, "-out", certPath],
+    { encoding: "utf8" },
+  );
+  if (cert.status !== 0) {
+    t.skip("需要 openssl");
+    return;
+  }
+
+  let proxyHits = 0;
+  let proxyTokenHits = 0;
+  let directHits = 0;
+  const tlsServer = https.createServer({ key: readFileSync(keyPath), cert: readFileSync(certPath) }, (req, res) => {
+    req.resume();
+    if (req.headers["x-via-proxy-check"] === "direct") directHits += 1;
+    if (req.url === "/token") {
+      proxyTokenHits += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ access_token: "refreshed-acc", expires_in: 3600 }));
+      return;
+    }
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: 'failed with clientSecret=my-oauth-client-secret and "refresh_token": "rt-quoted-secret-777"',
+      }),
+    );
+  });
+  await new Promise<void>((r) => tlsServer.listen(0, "127.0.0.1", r));
+  const tlsAddr = tlsServer.address();
+  assert.ok(tlsAddr && typeof tlsAddr !== "string");
+
+  const proxySockets = new Set<Duplex>();
+  const proxyServer = http.createServer();
+  proxyServer.on("connect", (req, clientSocket, head) => {
+    proxyHits += 1;
+    const [rawHost, rawPort] = String(req.url).split(":");
+    const targetHost = rawHost === "oauth2.googleapis.com" ? "127.0.0.1" : rawHost;
+    const targetPort = rawHost === "oauth2.googleapis.com" ? tlsAddr.port : Number(rawPort);
+    const upstream = net.connect(targetPort, targetHost, () => {
+      clientSocket.write("HTTP/1.1 200 Connection established\r\n\r\n");
+      if (head.length > 0) upstream.write(head);
+      upstream.pipe(clientSocket);
+      clientSocket.pipe(upstream);
+    });
+    proxySockets.add(clientSocket);
+    proxySockets.add(upstream);
+    const drop = () => {
+      upstream.destroy();
+      clientSocket.destroy();
+    };
+    upstream.on("error", drop);
+    clientSocket.on("error", drop);
+  });
+  await new Promise<void>((r) => proxyServer.listen(0, "127.0.0.1", r));
+  const proxyAddr = proxyServer.address();
+  assert.ok(proxyAddr && typeof proxyAddr !== "string");
+
+  const prevTls = process.env["NODE_TLS_REJECT_UNAUTHORIZED"];
+  process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
+  t.after(async () => {
+    if (prevTls === undefined) delete process.env["NODE_TLS_REJECT_UNAUTHORIZED"];
+    else process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = prevTls;
+    for (const s of proxySockets) s.destroy();
+    proxyServer.closeAllConnections();
+    tlsServer.closeAllConnections();
+    await new Promise<void>((r) => proxyServer.close(() => r()));
+    await new Promise<void>((r) => tlsServer.close(() => r()));
+  });
+
+  const authPath = join(dir, "auth.json");
+  writeFileSync(
+    authPath,
+    JSON.stringify({
+      "probe-ag-isolated": {
+        type: "oauth",
+        access: "acc-123456",
+        refresh: "ref-123456",
+        expires: Date.now() - 1000,
+        clientId: "cid-1",
+        clientSecret: "my-oauth-client-secret",
+      },
+    }),
+    { mode: 0o600 },
+  );
+
+  const err = await probeModelConfig({
+    providerId: "probe-ag-isolated",
+    modelId: "gemini-4-flash",
+    baseUrl: `https://127.0.0.1:${tlsAddr.port}`,
+    api: "antigravity-code-assist",
+    authMode: "oauth",
+    models: [
+      {
+        id: "gemini-4-flash",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 100000,
+        maxTokens: 8192,
+      },
+    ],
+    key: "",
+    oauth: { access: "acc-123456", refresh: "ref-123456", expires: Date.now() - 1000 },
+    keySource: authPath,
+    configSource: "",
+    credentialsPath: authPath,
+    proxy: `http://127.0.0.1:${proxyAddr.port}`,
+    oauthClient: { id: "cid-1", secret: "my-oauth-client-secret" },
+  }).catch((e) => e as Error);
+
+  assert.ok(err instanceof Error);
+  assert.ok(proxyTokenHits >= 1, "probeModelConfig 的 OAuth refresh 应经局部 proxyFetch 发送");
+  assert.ok(proxyHits >= 2, "probeModelConfig 应经局部 proxyFetch 发送 OAuth 与模型请求");
+  assert.ok(!err.message.includes("my-oauth-client-secret"), "safeError 必须抹除 oauthClient.secret");
+  assert.ok(!err.message.includes("rt-quoted-secret-777"), "safeError 必须抹除 JSON 引号形式 refresh_token");
+
+  // 验证全局 globalThis.fetch 未被 probeModelConfig 注入 127.0.0.1 的 scopedProxies 污染
+  const hitsBefore = proxyHits;
+  const directRes = await fetch(`https://127.0.0.1:${tlsAddr.port}/direct`, {
+    headers: { "x-via-proxy-check": "direct" },
+  });
+  assert.equal(directRes.status, 500);
+  assert.equal(directHits, 1);
+  assert.equal(proxyHits, hitsBefore, "probeModelConfig 不得覆写全局 scopedProxies");
+});
+
+test("buildProvider：配置 transport 时为未显式传 transport 的调用自动注入默认 transport", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "fish-transport-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const keyPath = join(dir, "key.pem");
+  const certPath = join(dir, "cert.pem");
+  const cert = spawnSync(
+    "openssl",
+    ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=127.0.0.1", "-keyout", keyPath, "-out", certPath],
+    { encoding: "utf8" },
+  );
+  if (cert.status !== 0) {
+    t.skip("需要 openssl");
+    return;
+  }
+
+  let httpHits = 0;
+  const tlsServer = https.createServer({ key: readFileSync(keyPath), cert: readFileSync(certPath) }, (req, res) => {
+    req.resume();
+    httpHits += 1;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(
+      'data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[{"type":"message","id":"m1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"在的"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n',
+    );
+  });
+  await new Promise<void>((r) => tlsServer.listen(0, "127.0.0.1", r));
+  const tlsAddr = tlsServer.address();
+  assert.ok(tlsAddr && typeof tlsAddr !== "string");
+
+  const proxySockets = new Set<Duplex>();
+  const proxyServer = http.createServer();
+  proxyServer.on("connect", (req, clientSocket, head) => {
+    const [host, port] = String(req.url).split(":");
+    const upstream = net.connect(Number(port), host, () => {
+      clientSocket.write("HTTP/1.1 200 Connection established\r\n\r\n");
+      if (head.length > 0) upstream.write(head);
+      upstream.pipe(clientSocket);
+      clientSocket.pipe(upstream);
+    });
+    proxySockets.add(clientSocket);
+    proxySockets.add(upstream);
+    const drop = () => {
+      upstream.destroy();
+      clientSocket.destroy();
+    };
+    upstream.on("error", drop);
+    clientSocket.on("error", drop);
+  });
+  await new Promise<void>((r) => proxyServer.listen(0, "127.0.0.1", r));
+  const proxyAddr = proxyServer.address();
+  assert.ok(proxyAddr && typeof proxyAddr !== "string");
+
+  const prevTls = process.env["NODE_TLS_REJECT_UNAUTHORIZED"];
+  process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
+  t.after(async () => {
+    if (prevTls === undefined) delete process.env["NODE_TLS_REJECT_UNAUTHORIZED"];
+    else process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = prevTls;
+    for (const s of proxySockets) s.destroy();
+    proxyServer.closeAllConnections();
+    tlsServer.closeAllConnections();
+    await new Promise<void>((r) => proxyServer.close(() => r()));
+    await new Promise<void>((r) => tlsServer.close(() => r()));
+  });
+
+  const payload = Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-test" } }),
+  ).toString("base64url");
+  const authPath = join(dir, "auth.json");
+  writeFileSync(
+    authPath,
+    JSON.stringify({
+      "codex-sse-test": {
+        type: "oauth",
+        access: `hdr.${payload}.sig`,
+        refresh: "ref-1",
+        expires: Date.now() + 3600_000,
+      },
+    }),
+    { mode: 0o600 },
+  );
+
+  const models = createFishModels(
+    {
+      providerId: "codex-sse-test",
+      modelId: "gpt-5",
+      baseUrl: `https://127.0.0.1:${tlsAddr.port}/codex`,
+      api: "openai-codex-responses",
+      authMode: "oauth",
+      models: [
+        {
+          id: "gpt-5",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 100000,
+          maxTokens: 4096,
+        },
+      ],
+      key: "",
+      keySource: authPath,
+      configSource: "",
+      credentialsPath: authPath,
+      proxy: `http://127.0.0.1:${proxyAddr.port}`,
+      transport: "sse",
+    },
+    { registerGlobalProxy: false },
+  );
+  const model = models.getModel("codex-sse-test", "gpt-5")!;
+  // 不显式传 transport：若未注入 "sse"，codex 默认走 "auto" 会先尝试 WebSocket 建连失败再降级；
+  // 注入 "sse" 后直接走 local proxyFetch 的 HTTPS SSE 路径。
+  const msg = await models.streamSimple(model, { messages: [{ role: "user", content: "hi" }] }).result();
+  assert.equal(msg.stopReason, "stop");
+  assert.equal(httpHits, 1);
 });
