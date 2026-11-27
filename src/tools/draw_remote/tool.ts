@@ -1,13 +1,17 @@
 /**
- * draw_remote —— 统一远程生图（gpt / wan / qwen / gemini 四通道），出图经 outbox 机械直发。
+ * draw_remote —— 异步远程生图（gpt / wan / qwen / gemini 四通道），出图经 outbox 机械直发。
  *
- * 与 draw（本地 SD）、qwen_draw（本地 Qwen）、wan_gif（动图）并列：这里只管「走远程接口把静态图画出来」。
- * 通道与模型不由模型选：每次执行现读 fish.config.json 的 drawRemote（热加载），入口与提交前各复核一次总开关。
+ * 与 draw（本地 SD）、qwen_draw（本地 Qwen）、wan_gif（动图）并列：这里只管「把远程静态生图异步派给后台」。
+ * 通道与模型不由模型选：每次执行现读 fish.config.json 的 drawRemote（热加载），入口、预检与后台真正 POST 前
+ * 各复核一次总开关。
  *
- * 状态机（按会话：{ round, pending, submitted, used }）与 draw 同规矩，外加一条——适配器用
- * DrawRemoteError.submitted 精确说明「生成请求发出去没有」，这里据此决定本轮锁不锁：
- *   submitted=false（没提交，或上游 400 / 403 / 429 这类确定性拒绝）→ 不锁轮，改参数 / 切通道后同轮可重试；
- *   submitted=true（5xx / 超时 / POST 之后断网或取消，结果不明）→ 锁轮，同轮重试报 draw_remote_uncertain。
+ * 异步语义（2026-11-27 拍板）：
+ *   - 同步阶段做完总开关 / 停机态 / 投递能力 / 群单飞 / 同轮防重 / 参考图安全围栏 / 同步预检（models.json + auth.json）后
+ *     立即返回 draw_remote_accepted，释放当前群聊轮次；由模型本轮自行 say_words 告知群友（不再发 working_draw_remote）。
+ *   - 每群（按 chatKeyOf 归群，缺失退回 conversationId）同时最多 1 个在途任务，不同群可并发；单轮最多提交 1 次。
+ *   - 后台任务拥有独立 AbortController（叠加停机信号与 660s 整体硬超时），不绑定当前轮的 context.abortSignal；
+ *     画好后通过宿主注入的 deliverDrawRemote 写入 fish.outbound + outbox 并立即冲刷；
+ *     失败静默只打已脱敏日志（绝不往群里发失败提示、绝不打印未脱敏 cause），finally 释放群槽位。
  *
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest（factory 只消费它，不再有第二份运行时定义）。
  */
@@ -17,16 +21,21 @@ import { renderTemplate } from "../../prompt/index.ts";
 import { DRAW_REMOTE_DEFAULTS, type DrawRemoteConfig, type DrawRemoteProvider } from "../../fish-config.ts";
 import { MODELS_CONFIG_PATH } from "../../paths.ts";
 import {
+  DRAW_REMOTE_JOB_TIMEOUT_MS,
+  DRAW_REMOTE_TIMEOUT_MS,
   DrawRemoteError,
-  isAbortError,
+  errorMessage,
   MAX_REFERENCE_IMAGES_BY_PROVIDER,
+  preflightDrawRemote,
   runDrawRemote,
   type DrawRemoteAspectRatio,
   type DrawRemoteReferenceImage,
+  type DrawRemoteStageEvent,
 } from "../../media/draw-remote/index.ts";
+import { cleanUpstreamText } from "../../media/draw-remote/redact.ts";
 import { readBoundedFile, sniffImageMagic } from "../../media/image-ops.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
-import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
+import type { OutboundPayload } from "../say-shared.ts";
 import { fenceReadablePath } from "../fs-shared.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 
@@ -36,9 +45,6 @@ interface DrawRemoteArgs {
   images?: string[];
   aspect_ratio?: DrawRemoteAspectRatio;
 }
-
-type RoundState = { round: unknown; pending: boolean; submitted: boolean; used: boolean };
-const rounds = new Map<string, RoundState>();
 
 const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
 /** gemini 的参考图走 inline 载荷：原始字节合计上限（给约 20MB 的 inline 上限留余量）。 */
@@ -70,11 +76,29 @@ const REFERENCE_MIME: Readonly<Record<DrawRemoteProvider, readonly string[]>> = 
   gemini: ["image/png", "image/jpeg", "image/webp"],
 };
 
+function formatStages(stages: readonly DrawRemoteStageEvent[]): string {
+  if (stages.length === 0) return "stages=none";
+  return stages
+    .map((ev) => {
+      const parts = [`${ev.stage}=${ev.ms}ms`];
+      if (ev.status !== undefined) parts.push(`http=${ev.status}`);
+      if (ev.urls !== undefined) parts.push(`n=${ev.urls}`);
+      if (ev.bytes !== undefined) parts.push(`bytes=${ev.bytes}`);
+      return parts.join(":");
+    })
+    .join(" ");
+}
+
 export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration {
   const root = resolve(deps.mediaRoot);
-  /** 热读当前配置：宿主注入的现读函数优先；没注入（离线 / 测试装配）按冻结的默认值，缺凭据留到执行期由适配器报。 */
+  /** 热读当前配置：宿主注入的现读函数优先；没注入（离线 / 测试装配）按冻结的默认值，缺凭据留到预检期报。 */
   const configOf = (): DrawRemoteConfig => deps.drawRemote?.() ?? DRAW_REMOTE_DEFAULTS;
+  const now = (): number => (deps.now ?? Date.now)();
   const messages = deps.prompts.messages;
+  /** 实例级状态（不污染模块全局）：每群在途槽位（按 chatKeyOf 归群）+ 每会话末次受理轮。 */
+  const inflight = new Map<string, AbortController>();
+  const lastRound = new Map<string, unknown>();
+
   /**
    * 本工具的回执文案：逐 key 字面取（prompt 审查的死文案扫描只认 messages["…"] 这种写法），
    * 缺 key 退化成 key 名——与其它工具 `messages["x"] ?? "x"` 的容错一致。
@@ -84,29 +108,22 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
     round_missing: messages["draw_remote_round_missing"] ?? "draw_remote_round_missing",
     inflight: messages["draw_remote_inflight"] ?? "draw_remote_inflight",
     used: messages["draw_remote_used"] ?? "draw_remote_used",
-    uncertain: messages["draw_remote_uncertain"] ?? "draw_remote_uncertain",
     prompt: messages["draw_remote_prompt"] ?? "draw_remote_prompt",
     bad_ref: messages["draw_remote_bad_ref"] ?? "draw_remote_bad_ref",
     unconfigured: messages["draw_remote_unconfigured"] ?? "draw_remote_unconfigured",
-    done: messages["draw_remote_done"] ?? "draw_remote_done",
-    done_fallback: messages["draw_remote_done_fallback"] ?? "draw_remote_done_fallback",
-    failed: messages["draw_remote_failed"] ?? "draw_remote_failed",
-    failed_uncertain: messages["draw_remote_failed_uncertain"] ?? "draw_remote_failed_uncertain",
-    failed_internal: messages["draw_remote_failed_internal"] ?? "draw_remote_failed_internal",
+    accepted: messages["draw_remote_accepted"] ?? "draw_remote_accepted",
   };
   const say = (key: keyof typeof templates, vars: Record<string, string> = {}): string => renderTemplate(templates[key], vars);
   const badRef = (ref: string): Error => new Error(say("bad_ref", { ref }));
 
   /**
-   * 参考图安全围栏（全部在 onSubmitted 之前，任何一张不过整批拒）：路径只在媒体目录内、
+   * 参考图安全围栏（全部在同步受理之前，任何一张不过整批拒）：路径只在媒体目录内、
    * 不跟随符号链接、按真实字节魔数定类型且与后缀一致、通道认这个类型、单张与聚合体积、张数。
-   * 返回的 bytes 是原始文件内容，只在内存里过一遍直接交给适配器。
+   * 返回的 bytes 是原始文件内容，只在内存里过一遍直接交给后台适配器。
    */
   const prepareReferences = (provider: DrawRemoteProvider, rawImages: readonly string[]): DrawRemoteReferenceImage[] => {
-    // 兼容模型把编号标签原样抄过来：[inbound/xxx.jpg]
     const refs = rawImages.map((raw) => (typeof raw === "string" ? raw.trim().replace(/^\[|\]$/g, "") : ""));
     const maxImages = MAX_REFERENCE_IMAGES_BY_PROVIDER[provider];
-    // 超限点名第一张多余的：回执里的张数上限按通道如实写
     if (refs.length > maxImages) throw badRef(refs[maxImages] ?? "");
     const accepted = REFERENCE_MIME[provider];
     const totalLimit = TOTAL_REFERENCE_BYTES[provider];
@@ -114,10 +131,8 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
     let total = 0;
     for (const ref of refs) {
       const full = resolve(root, ref);
-      // 词法越界（../、绝对路径、根本不在媒体目录下）与符号链接（最终分量是链接 / realpath 越界 / 不存在）一律 fail-closed
       const fence = ref && (full !== root && full.startsWith(root + sep)) ? fenceReadablePath(root, full) : undefined;
       if (!fence?.ok) throw badRef(ref);
-      // 有界读取：超限 / 非普通文件直接 null，不先把大文件读进内存
       const bytes = readBoundedFile(fence.real, MAX_REFERENCE_BYTES);
       if (!bytes || bytes.length === 0) throw badRef(ref);
       const magic = sniffImageMagic(bytes.subarray(0, 16));
@@ -136,123 +151,194 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
     callers: ["model"],
     parameters: manifestParameters<DrawRemoteArgs>(manifest),
     execute: async (args, api, context) => {
-      // 入口总闸（fish.config.json 的 drawRemote.enabled，热加载）：关闭时在 snapshot / 轮状态 / onLongWork /
-      // 任何校验之前就走，不占位 rounds
+      // 入口总闸与停机态检查：关闭或停机时直接拒，不占位
       if (configOf().enabled === false) throw new Error(say("disabled"));
+      if (deps.drawRemoteSignal?.aborted) throw new Error(say("disabled"));
+      const deliver = deps.deliverDrawRemote;
+      if (!deliver) {
+        throw new Error(say("unconfigured", { reason: "宿主未装配异步出图投递回调" }));
+      }
+
       const live = (await api.snapshot(LiveDoc, api.conversationId, context)) as { run?: { inputs?: unknown[] } } | undefined;
       const round = live?.run?.inputs?.[0];
       if (round === undefined) throw new Error(say("round_missing"));
-      const previous = rounds.get(api.conversationId);
-      if (previous?.pending) throw new Error(say("inflight"));
-      if (previous?.round === round && previous.used) throw new Error(say("used"));
-      if (previous?.round === round && previous.submitted) throw new Error(say("uncertain"));
 
-      // 轮状态查完再读一次配置：通道、模型与参考图预检都以这一刻的现值为准（snapshot 期间主人可能已切换）
+      const convId = api.conversationId;
+      const convKey = String(convId);
+      const slotKey = deps.chatKeyOf?.(convKey) ?? convKey;
+      if (inflight.has(slotKey)) throw new Error(say("inflight"));
+      if (lastRound.get(convKey) === round) throw new Error(say("used"));
+
+      // 轮状态查完再读一次配置：通道、模型与参考图预检都以这一刻的现值为准
       const config = configOf();
       if (config.enabled === false) throw new Error(say("disabled"));
+      if (deps.drawRemoteSignal?.aborted) throw new Error(say("disabled"));
       const provider = config.provider;
       const model = config.models[provider] || DRAW_REMOTE_DEFAULTS.models[provider];
-      // prompt 的空 / 超长（4000 字）由适配器统一预检并给出具体原因，这里只规整
-      const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+      const rawPrompt = typeof args.prompt === "string" ? args.prompt : "";
       const images = prepareReferences(provider, args.images ?? []);
-      context.abortSignal?.throwIfAborted();
+      const modelsPath = deps.modelsPath ?? MODELS_CONFIG_PATH;
 
-      const state: RoundState = { round, pending: true, submitted: false, used: false };
-      rounds.set(api.conversationId, state);
-      const started = Date.now();
-      const run = deps.drawRemoteRun ?? runDrawRemote;
+      // 同步预检（始终执行，不按是否注入 drawRemoteRun 分支）：校验 prompt、models.json 与 auth.json
+      const preflight = deps.drawRemotePreflight ?? preflightDrawRemote;
+      let cleanedPrompt: string;
       try {
-        const result = await run({
+        cleanedPrompt = preflight({
           provider,
-          model,
-          prompt,
-          ...(images.length > 0 ? { images } : {}),
-          ...(args.aspect_ratio !== undefined ? { aspectRatio: args.aspect_ratio } : {}),
-          mediaRoot: deps.mediaRoot,
-          // 每次调用现读 models.json（及同目录的 auth.json）：主人改配置、换凭据零重启生效
-          modelsPath: deps.modelsPath ?? MODELS_CONFIG_PATH,
-          onSubmitted: () => {
-            // 提交前二次复核：适配器读完 models.json / auth.json、做完前置刷新、即将 POST 的那一刻再读一次热值。
-            // 关闭就在这里抛出阻止 POST，submitted 保持 false（重新打开后同轮可重试）
-            if (configOf().enabled === false) {
-              throw new DrawRemoteError(provider, "disabled", "draw_remote 已被热关闭（drawRemote.enabled=false），请求未发出", false);
-            }
-            state.submitted = true;
-            deps.onLongWork?.("draw_remote", round);
-          },
-          signal: context.abortSignal,
+          prompt: rawPrompt,
+          imagesCount: images.length,
+          modelsPath,
         });
-        // 出图后、入队前的取消闸：超时晚到的图不再入 outbox；submitted 保持 true（请求已发出），
-        // 本轮重试吃 draw_remote_uncertain，不重 POST
-        context.abortSignal?.throwIfAborted();
-        const files = result.files.filter((file) => typeof file === "string" && file.length > 0);
-        if (files.length === 0) throw new Error("draw_remote_empty");
-        state.used = true;
-        // 机械发图（主人裁定 2026-11-13）：出图即经 outbox 直发，不再让模型调 say_media。
-        // 走 enqueueOutbound（同提交写 fish.outbound transcript + outbox，压缩 / 记忆看得到）；
-        // 不占开口额度、不经模型文本校验（gen/ 路径宿主生成、可信）。
-        const trigger = deps.triggerOf?.(round);
-        const ref = (file: string): string => `gen/${file}`;
-        const sent: string[] = [];
-        try {
-          for (const file of files) {
-            // 多图逐张复核：前一张入队排队期间被取消，后一张不再入队
-            context.abortSignal?.throwIfAborted();
-            const payload: OutboundPayload = {
-              items: [],
-              media: ref(file),
-              quote: false,
-              ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
-              ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
-              at: Date.now(),
-              key: `${api.conversationId}:draw_remote:${String(round)}:${file}`,
-            };
-            await enqueueOutbound(api, payload, context);
-            sent.push(file);
-          }
-          console.log(
-            `[fish] draw_remote ok: ${provider} ${model} / ${files.length} 张 / ${Date.now() - started}ms / 参考图${images.length}张`,
-          );
-          return { output: [{ type: "text", text: say("done", { provider, file: files.map(ref).join("、") }) }] };
-        } catch (error) {
-          // 取消不是「入队失败」：不回退成补发提示，原样上抛（晚到的结果已被超时看门狗丢弃）
-          context.abortSignal?.throwIfAborted();
-          // 入队失败回退提示模型手动 say_media 补发，图不丢；只点名没发出去的那几张
-          const unsent = files.filter((file) => !sent.includes(file));
-          console.error("[fish] draw_remote auto-send failed", error instanceof Error ? error.message : error);
-          return { output: [{ type: "text", text: say("done_fallback", { provider, file: unsent.map(ref).join("、") }) }] };
-        }
       } catch (error) {
         if (error instanceof DrawRemoteError) {
-          // 精准维护锁：确定性拒绝（含 POST 之后被 4xx 拒）把钩子置上的 submitted 复位，本轮不锁死；
-          // 结果不明保持 true。回执原因用适配器已脱敏、已清洗的原文
-          state.submitted = error.submitted;
-          const detail = error.message;
-          console.error(`[fish] draw_remote failed(${error.code}${error.submitted ? ", submitted" : ""}): ${detail}`);
           switch (error.code) {
             case "disabled":
               throw new Error(say("disabled"));
             case "unconfigured":
-              throw new Error(say("unconfigured", { reason: detail }));
+              throw new Error(say("unconfigured", { reason: error.message }));
             case "prompt":
-              throw new Error(say("prompt", { reason: detail }));
+              throw new Error(say("prompt", { reason: error.message }));
             case "bad_ref":
-              // 适配器层的张数防御（与 prepareReferences 同一张上限表，经工具调用正常走不到）：按整批张数点名
               throw badRef(`${images.length} 张`);
             case "failed":
-              throw new Error(say(error.submitted ? "failed_uncertain" : "failed", { reason: detail }));
+              throw new Error(say("unconfigured", { reason: error.message }));
           }
         }
-        // 宿主取消 / 工具超时：AbortError 原样上抛，submitted 保持钩子记下的状态
-        if (isAbortError(error)) throw error;
-        // 其它异常：原始报错不出境；钩子触发过就按结果不明锁轮，否则本轮可重试
-        console.error("[fish] draw_remote failed:", error instanceof Error ? error.message : error);
-        throw new Error(
-          say(state.submitted ? "failed_uncertain" : "failed", { reason: say("failed_internal") }),
-        );
-      } finally {
-        state.pending = false;
+        throw error;
       }
+
+      // 最后一刻再核对本轮取消与群并发槽位（snapshot / 预检期间无异步让出，此处作防御）
+      context.abortSignal?.throwIfAborted();
+      if (inflight.has(slotKey)) throw new Error(say("inflight"));
+
+      // 快照引用锚点：工具返回后原轮会清空 triggerOf，后台必须使用此处的只读快照
+      const trigger = deps.triggerOf?.(round);
+      const snapshotQuoteId = trigger?.messageId;
+      const snapshotQuoteForce = trigger ? trigger.mentionsBot : undefined;
+      const aspectRatio = args.aspect_ratio;
+      const started = now();
+      const run = deps.drawRemoteRun ?? runDrawRemote;
+      const jobController = new AbortController();
+      let jobTimedOut = false;
+
+      const onShutdownAbort = (): void => {
+        jobController.abort(deps.drawRemoteSignal?.reason ?? new DOMException("draw_remote shutdown", "AbortError"));
+      };
+      deps.drawRemoteSignal?.addEventListener("abort", onShutdownAbort, { once: true });
+
+      const jobTimeoutMs = deps.drawRemoteJobTimeoutMs ?? DRAW_REMOTE_JOB_TIMEOUT_MS;
+      const jobTimer = setTimeout(() => {
+        jobTimedOut = true;
+        jobController.abort(new DOMException(`draw_remote job timeout (${jobTimeoutMs}ms)`, "TimeoutError"));
+      }, jobTimeoutMs);
+      jobTimer.unref?.();
+
+      inflight.set(slotKey, jobController);
+      lastRound.set(convKey, round);
+
+      // 后台独立异步执行：不碰当前轮的 api/context，不触发 onLongWork；失败静默只打已脱敏日志
+      void (async () => {
+        const stages: DrawRemoteStageEvent[] = [];
+        let settled: { status: "ok" | "failed" | "aborted"; files?: string[]; error?: unknown } = { status: "failed" };
+        try {
+          const result = await run({
+            provider,
+            model,
+            prompt: cleanedPrompt,
+            ...(images.length > 0 ? { images } : {}),
+            ...(aspectRatio !== undefined ? { aspectRatio } : {}),
+            mediaRoot: deps.mediaRoot,
+            modelsPath,
+            timeoutMs: DRAW_REMOTE_TIMEOUT_MS,
+            signal: jobController.signal,
+            onStage: (ev) => {
+              stages.push(ev);
+            },
+            onSubmitted: () => {
+              if (configOf().enabled === false) {
+                throw new DrawRemoteError(provider, "disabled", "draw_remote 已被热关闭（drawRemote.enabled=false），请求未发出", false);
+              }
+            },
+          });
+
+          if (jobController.signal.aborted) {
+            const elapsed = now() - started;
+            if (jobTimedOut) {
+              console.error(
+                `[fish] draw_remote background timeout: ${provider} ${model} / ${elapsed}ms / ${formatStages(stages)}`,
+              );
+              settled = { status: "failed" };
+            } else {
+              console.log(
+                `[fish] draw_remote background aborted(shutdown): ${provider} ${model} / ${elapsed}ms / ${formatStages(stages)}`,
+              );
+              settled = { status: "aborted" };
+            }
+            return;
+          }
+
+          const files = result.files.filter((file) => typeof file === "string" && file.length > 0);
+          if (files.length === 0) throw new Error("draw_remote_empty");
+
+          const payloads: OutboundPayload[] = files.map((file) => ({
+            items: [],
+            media: `gen/${file}`,
+            quote: false,
+            ...(snapshotQuoteId !== undefined ? { quoteId: snapshotQuoteId } : {}),
+            ...(snapshotQuoteForce !== undefined ? { quoteForce: snapshotQuoteForce } : {}),
+            at: now(),
+            key: `${convKey}:draw_remote:${String(round)}:${file}`,
+          }));
+
+          if (jobController.signal.aborted) {
+            settled = { status: jobTimedOut ? "failed" : "aborted" };
+            return;
+          }
+
+          await deliver(convId, payloads);
+          console.log(
+            `[fish] draw_remote ok: ${provider} ${model} / ${files.length} 张 / ${now() - started}ms / 参考图${images.length}张 / ${formatStages(stages)}`,
+          );
+          settled = { status: "ok", files };
+        } catch (error) {
+          const elapsed = now() - started;
+          const stageSummary = formatStages(stages);
+          if (deps.drawRemoteSignal?.aborted && !jobTimedOut) {
+            console.log(
+              `[fish] draw_remote background aborted(shutdown): ${provider} ${model} / ${elapsed}ms / ${stageSummary}`,
+            );
+            settled = { status: "aborted", error };
+          } else if (jobTimedOut) {
+            console.error(
+              `[fish] draw_remote background failed(job_timeout): ${provider} ${model} / ${elapsed}ms / ${stageSummary}`,
+            );
+            settled = { status: "failed", error };
+          } else if (error instanceof DrawRemoteError) {
+            // 只打印已脱敏的 error.message，绝不传整个 error 对象（cause 链里可能有未脱敏上游正文）
+            console.error(
+              `[fish] draw_remote background failed(${error.code}${error.submitted ? ", submitted" : ""}): ${provider} ${model} / ${elapsed}ms / ${stageSummary} / ${error.message}`,
+            );
+            settled = { status: "failed", error };
+          } else {
+            const safeMessage = cleanUpstreamText(errorMessage(error), []);
+            console.error(
+              `[fish] draw_remote background failed(internal): ${provider} ${model} / ${elapsed}ms / ${stageSummary} / ${safeMessage}`,
+            );
+            settled = { status: "failed", error };
+          }
+        } finally {
+          clearTimeout(jobTimer);
+          deps.drawRemoteSignal?.removeEventListener("abort", onShutdownAbort);
+          if (inflight.get(slotKey) === jobController) inflight.delete(slotKey);
+          try {
+            deps.onDrawRemoteSettled?.({ conversationId: convKey, ...settled });
+          } catch {
+            // 观察回调异常不影响后台收尾
+          }
+        }
+      })().catch(() => {});
+
+      return { output: [{ type: "text", text: say("accepted", { provider }) }] };
     },
   });
 }

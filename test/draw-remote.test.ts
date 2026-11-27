@@ -1,16 +1,15 @@
 /**
- * draw_remote 工具包（统一远程生图的工具层）的工具级测试（draw_remote 计划 Task 3 / Spec §3.3）。
+ * draw_remote 工具包（异步远程生图）的工具级测试。
  *
- * 适配器（runDrawRemote 的四条通道）由桩替代——通道协议、OAuth、脱敏与落盘在
- * test/draw-remote-media.test.ts 里已经验过；这里只验工具层自己的契约：
- *  - 入口热读配置，通道与模型跟着 fish.config.json 现值走，同一实例不重建；
- *  - 总开关两道闸：入口关闭即拒不占轮；onSubmitted 瞬间翻为关闭同样拒绝且 submitted 保持 false；
- *  - 出图经 outbox 机械直发（幂等键 / 引用锚点），入队失败回退引导 say_media；
- *  - submitted 防重提矩阵：submitted=false 的失败不锁轮、true 的锁轮；
- *  - 参考图安全围栏（方括号 / 穿越 / 符号链接 / 非图 / 魔数不符 / 体积 / 按通道的张数与类型上限）；
- *  - 取消围栏：返回后已中止则不入 outbox。
- *
- * 任何用例都不碰真实适配器：drawRemoteRun 一律是桩，绝不读仓库的 config/、不发网络请求。
+ * 覆盖：
+ *  - 即时受理返回 draw_remote_accepted（含通道名、引导 say_words、劝阻 say_media），绝不调 onLongWork；
+ *  - 后台成功经 deliverDrawRemote 机械直发，且受理时快照的 trigger 引用锚点不受原轮清理 triggerOf 影响；
+ *  - 每群同时最多 1 个在途（按 chatKeyOf 归群，同群不同人格共享槽位），不同群可并发；
+ *  - 单轮最多提交 1 次（即使上一张瞬间完成，同轮仍报 draw_remote_used）；
+ *  - 同步预检（总开关 / 停机态 / 缺 deliverDrawRemote / prompt / 参考图安全围栏 / models.json & auth.json 真预检）
+ *    失败立即抛错给模型，不占槽、不锁轮；
+ *  - 后台失败（4xx/5xx/超时/空结果/deliver 抛错/onSubmitted 热关闭）静默只打已脱敏日志、不发群消息、释放槽位；
+ *  - 停机信号 drawRemoteSignal 中止与整体硬超时（660s）不漏投递、不永久占槽。
  */
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
@@ -20,18 +19,22 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LiveDoc } from "@earendil-works/pi-durable";
 import { DRAW_REMOTE_DEFAULTS, type DrawRemoteConfig, type DrawRemoteProvider } from "../src/fish-config.ts";
-import { DrawRemoteError, type DrawRemoteRunRequest } from "../src/media/draw-remote/index.ts";
+import {
+  DRAW_REMOTE_TIMEOUT_MS,
+  DrawRemoteError,
+  validateDrawRemoteInput,
+  type DrawRemoteRunRequest,
+} from "../src/media/draw-remote/index.ts";
 import { loadPrompts } from "../src/prompt/index.ts";
 import { loadToolManifests } from "../src/tools/manifest.ts";
 import { mergeToolMessages } from "../src/tools/loader.ts";
 import type { OutboundPayload } from "../src/tools/say-shared.ts";
-import type { ToolPackageDeps } from "../src/tools/types.ts";
+import type { RoundTrigger, ToolPackageDeps } from "../src/tools/types.ts";
 import { createDrawRemoteTool } from "../src/tools/draw_remote/tool.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const prompts = loadPrompts(join(ROOT, "prompt"));
 const manifests = loadToolManifests(fileURLToPath(new URL("../src/tools/", import.meta.url)), { memeTags: prompts.memeTags });
-// 与 loader 同款合并：工具回执文案来自 src/tools/draw_remote/messages.json（线上由 loadToolSurface 完成）
 mergeToolMessages(manifests, prompts.messages);
 const manifest = manifests.get("draw_remote")!;
 
@@ -43,7 +46,6 @@ const png = (bytes: number) => Buffer.concat([PNG_MAGIC, Buffer.alloc(Math.max(0
 const jpeg = (bytes: number) => Buffer.concat([JPEG_MAGIC, Buffer.alloc(Math.max(0, bytes - JPEG_MAGIC.length), 1)]);
 const gif = (bytes: number) => Buffer.concat([GIF_MAGIC, Buffer.alloc(Math.max(0, bytes - GIF_MAGIC.length), 1)]);
 
-/** 每个用例的临时目录都登记在这里，文件结束时统一清理。 */
 const work: string[] = [];
 after(() => {
   for (const dir of work) rmSync(dir, { recursive: true, force: true });
@@ -51,33 +53,37 @@ after(() => {
 
 let seq = 0;
 
-/** 固定触发消息：带消息 id 且 @ 了鱼（机械必答引用）；要改用 deps.triggerOf 覆盖。 */
-const trigger = { messageId: 5001, mentionsBot: true, userId: 10001 };
-
-interface CommitOptions {
-  /** 按提交序号决定这次 commit 是否失败。 */
-  failCommit?: (n: number) => boolean;
-  /** 提交瞬间的副作用（用来模拟「两张图之间宿主取消」）。 */
-  onCommit?: (n: number) => void;
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
+
+type SettledEvent = { conversationId: string; status: "ok" | "failed" | "aborted"; files?: string[]; error?: unknown };
 
 interface Fixture {
   tool: ReturnType<typeof createDrawRemoteTool>;
   mediaRoot: string;
   inbound: string;
+  delivered: Array<{ conversationId: string; payloads: OutboundPayload[] }>;
   outbox: OutboundPayload[];
   longWorks: Array<[string, unknown]>;
   calls: DrawRemoteRunRequest[];
-  commits: () => number;
+  settled: SettledEvent[];
   conv: string;
   setConfig: (next: Partial<Omit<DrawRemoteConfig, "models">> & { models?: DrawRemoteConfig["models"] }) => void;
-  config: () => DrawRemoteConfig;
+  setTrigger: (next: RoundTrigger | undefined) => void;
   behave: (next: (request: DrawRemoteRunRequest) => Promise<{ files: string[] }>) => void;
-  /** 假 api：LiveDoc 快照给本轮轮标识（null = 拿不到）；commit 把 payload 落进 outbox。 */
-  api: (round?: unknown, opts?: CommitOptions) => never;
+  setDeliver: (next: (conversationId: string, payloads: readonly OutboundPayload[]) => Promise<void>) => void;
+  waitSettled: (count?: number) => Promise<SettledEvent[]>;
+  api: (round?: unknown, convId?: string) => never;
 }
 
-function setup(extraDeps: Partial<ToolPackageDeps> = {}): Fixture {
+function setup(extraDeps: Partial<ToolPackageDeps> = {}, opts: { useRealPreflight?: boolean } = {}): Fixture {
   const mediaRoot = mkdtempSync(join(tmpdir(), "yg-draw-remote-"));
   work.push(mediaRoot);
   const inbound = join(mediaRoot, "inbound");
@@ -88,15 +94,26 @@ function setup(extraDeps: Partial<ToolPackageDeps> = {}): Fixture {
   writeFileSync(join(inbound, "anim.gif"), gif(39));
 
   let config: DrawRemoteConfig = DRAW_REMOTE_DEFAULTS;
+  let currentTrigger: RoundTrigger | undefined = { messageId: 5001, mentionsBot: true, userId: 10001 };
   let behaviour: (request: DrawRemoteRunRequest) => Promise<{ files: string[] }> = async (request) => {
     request.onSubmitted?.();
     return { files: ["1-test.png"] };
   };
   const calls: DrawRemoteRunRequest[] = [];
   const longWorks: Array<[string, unknown]> = [];
+  const delivered: Array<{ conversationId: string; payloads: OutboundPayload[] }> = [];
   const outbox: OutboundPayload[] = [];
-  let commits = 0;
+  const settled: SettledEvent[] = [];
+  const waiters: Array<{ target: number; resolve: (events: SettledEvent[]) => void }> = [];
+
+  let deliverImpl: (conversationId: string, payloads: readonly OutboundPayload[]) => Promise<void> = async (conversationId, payloads) => {
+    const copy = payloads.map((p) => ({ ...p }));
+    delivered.push({ conversationId, payloads: copy });
+    outbox.push(...copy);
+  };
+
   const conv = `conv-draw-remote-${++seq}`;
+  const externalSettled = extraDeps.onDrawRemoteSettled;
 
   const deps: ToolPackageDeps = {
     prompts,
@@ -107,383 +124,380 @@ function setup(extraDeps: Partial<ToolPackageDeps> = {}): Fixture {
       const outcome = await behaviour(request);
       return { provider: request.provider, model: request.model, files: outcome.files };
     },
+    ...(opts.useRealPreflight
+      ? {}
+      : {
+          drawRemotePreflight: (req) => validateDrawRemoteInput(req.provider, req.prompt, req.imagesCount),
+        }),
+    deliverDrawRemote: async (conversationId, payloads) => {
+      await deliverImpl(String(conversationId), payloads);
+    },
     onLongWork: (tool, round) => {
       longWorks.push([tool, round]);
     },
-    triggerOf: () => trigger,
-    modelsPath: "/tmp/yg-draw-remote-models.json",
+    triggerOf: () => currentTrigger,
+    modelsPath: join(mediaRoot, "models.json"),
     ...extraDeps,
+    onDrawRemoteSettled: (event) => {
+      settled.push(event);
+      for (let i = waiters.length - 1; i >= 0; i--) {
+        if (settled.length >= waiters[i]!.target) {
+          waiters.splice(i, 1)[0]!.resolve([...settled]);
+        }
+      }
+      externalSettled?.(event);
+    },
   };
+
   const tool = createDrawRemoteTool(manifest, deps);
   return {
     tool,
     mediaRoot,
     inbound,
+    delivered,
     outbox,
     longWorks,
     calls,
-    commits: () => commits,
+    settled,
     conv,
     setConfig: (next) => {
-      config = { ...config, ...next };
+      config = {
+        enabled: next.enabled ?? config.enabled,
+        provider: next.provider ?? config.provider,
+        models: next.models ?? config.models,
+      };
     },
-    config: () => config,
+    setTrigger: (next) => {
+      currentTrigger = next;
+    },
     behave: (next) => {
       behaviour = next;
     },
-    api: (round: unknown = 1, opts: CommitOptions = {}) =>
-      ({
-        conversationId: conv,
-        callId: "call_test",
-        snapshot: async (doc: unknown) => (doc === LiveDoc && round !== null ? { run: { inputs: [round] } } : undefined),
-        commit: async (fn: (tx: unknown) => Promise<void>) => {
-          commits += 1;
-          const n = commits;
-          opts.onCommit?.(n);
-          if (opts.failCommit?.(n)) throw new Error("commit boom");
-          return fn({
-            appendEntry: async () => ({ id: n }),
-            doc: async () => ({ queue: outbox }),
-          });
-        },
-      }) as never,
+    setDeliver: (next) => {
+      deliverImpl = next;
+    },
+    waitSettled: (count = settled.length + 1) => {
+      if (settled.length >= count) return Promise.resolve([...settled]);
+      return new Promise<SettledEvent[]>((resolve) => {
+        waiters.push({ target: count, resolve });
+      });
+    },
+    api: (round: unknown = 1, convId: string = conv) => ({
+      conversationId: convId,
+      callId: `call-${++seq}`,
+      snapshot: async (doc: unknown) => (doc === LiveDoc && round !== null ? { run: { inputs: [round] } } : undefined),
+      commit: async () => {
+        throw new Error("异步 draw_remote 不得复用工具 api.commit");
+      },
+    }) as never,
   };
 }
 
-/** 工具返回值的第一段文本（回执）。 */
+const ctx = (signal?: AbortSignal) => (signal ? { abortSignal: signal } : {}) as never;
+
 function text(result: unknown): string {
-  return String((result as { output: { type: string; text: string }[] }).output[0]?.text ?? "");
+  const output = (result as { output?: Array<{ type: string; text?: string }> })?.output ?? [];
+  return output.map((item) => item.text ?? "").join("");
 }
 
-/** 工具以错误拒绝时的回执文本。 */
-async function rejection(run: () => Promise<unknown>): Promise<string> {
-  return run().then(
-    () => "",
-    (error: unknown) => (error instanceof Error ? error.message : String(error)),
-  );
+async function rejection(fn: () => Promise<unknown>): Promise<string> {
+  try {
+    await fn();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  assert.fail("期望抛错但成功返回了");
 }
 
-const ctx = (signal?: AbortSignal) => (signal === undefined ? {} : { abortSignal: signal }) as never;
-
-test("createDrawRemoteTool 恒返回注册：依赖不全也在册，参数 Schema 唯一来自 manifest", async () => {
-  // 没注入 drawRemote / drawRemoteRun / modelsPath / onLongWork 的装配（离线、无凭据环境）也照样注册，
-  // 缺凭据留到执行期由适配器以 draw_remote_unconfigured 回执，不在装配期静默消失
-  const bare = createDrawRemoteTool(manifest, { prompts, mediaRoot: "/tmp/yg-draw-remote-bare" });
-  assert.ok(bare, "工厂不得返回 undefined");
-  assert.equal(bare.name, "draw_remote");
-  assert.deepEqual(bare.callers, ["model"]);
-  assert.deepEqual(bare.parameters, manifest.parameters);
-  assert.equal(bare.description, [manifest.description, manifest.guide].join("\n\n"), "说明逐字来自 TOOL.md");
-});
-
-test("没注入配置读取函数时按冻结默认值走；modelsPath 缺省落到仓库 config/models.json", async () => {
-  const fixture = setup({ drawRemote: undefined, modelsPath: undefined });
-  const result = await fixture.tool.execute({ prompt: "一只猫" } as never, fixture.api(), ctx());
-  assert.equal(fixture.calls[0]?.provider, "qwen");
-  assert.equal(fixture.calls[0]?.model, "qwen-image-3.0-pro");
-  assert.equal(typeof fixture.calls[0]?.modelsPath, "string");
-  assert.ok(fixture.calls[0]?.modelsPath.endsWith(join("config", "models.json")));
-  assert.equal(fixture.calls[0]?.mediaRoot, fixture.mediaRoot);
-  assert.match(text(result), /画好了/);
-});
-
-test("热切换：同一实例不重建，通道与模型跟着 drawRemote 现值走", async () => {
+test("异步受理与后台直发：立即返回 accepted、不调 onLongWork、清空 triggerOf 后仍保留引用锚点并释放槽位", async () => {
   const fixture = setup();
-  const first = await fixture.tool.execute({ prompt: "第一张" } as never, fixture.api(1), ctx());
-  assert.equal(fixture.calls[0]?.provider, "qwen", "缺省通道是 qwen");
-  assert.equal(fixture.calls[0]?.model, "qwen-image-3.0-pro");
-  assert.match(text(first), /qwen/);
-
-  // 主人热切到 gpt 并换模型（models 浅合并：其余通道的默认值不动）；同一个工具实例、同一个会话
-  fixture.setConfig({ provider: "gpt", models: { ...DRAW_REMOTE_DEFAULTS.models, gpt: "gpt-image-custom" } });
-  const second = await fixture.tool.execute({ prompt: "第二张" } as never, fixture.api(2), ctx());
-  assert.equal(fixture.calls[1]?.provider, "gpt");
-  assert.equal(fixture.calls[1]?.model, "gpt-image-custom");
-  assert.match(text(second), /gpt 画好了/);
-  assert.equal(fixture.calls[1]?.mediaRoot, fixture.mediaRoot);
-  assert.equal(fixture.calls[1]?.modelsPath, "/tmp/yg-draw-remote-models.json");
-  assert.equal(fixture.calls[1]?.prompt, "第二张");
-});
-
-test("总开关入口关闭：立即拒绝，不发「稍等」不占轮；重新打开后同轮可成功", async () => {
-  const fixture = setup();
-  const api = fixture.api();
-  fixture.setConfig({ enabled: false });
-  assert.match(await rejection(() => fixture.tool.execute({ prompt: "一只猫" } as never, api, ctx())), /已被主人关闭/);
-  assert.equal(fixture.calls.length, 0, "关闭时不碰适配器");
-  assert.equal(fixture.longWorks.length, 0, "关闭时不触发 onLongWork");
-  assert.equal(fixture.commits(), 0);
-
-  fixture.setConfig({ enabled: true });
-  assert.match(text(await fixture.tool.execute({ prompt: "一只猫" } as never, api, ctx())), /画好了/);
-  assert.equal(fixture.outbox.length, 1);
-});
-
-test("总开关提交前二次复核：onSubmitted 瞬间翻为关闭则拒绝，submitted 保持 false 不锁轮", async () => {
-  const fixture = setup();
-  const api = fixture.api();
-  fixture.behave(async (request) => {
-    // 入口时是开的；适配器读完配置、即将 POST 的那一刻主人把开关关了
-    fixture.setConfig({ enabled: false });
-    request.onSubmitted?.();
-    return { files: ["1-test.png"] };
-  });
-  assert.match(await rejection(() => fixture.tool.execute({ prompt: "一只猫" } as never, api, ctx())), /已被主人关闭/);
-  assert.equal(fixture.longWorks.length, 0, "没到 onLongWork 就被拦下，不发「稍等」");
-  assert.equal(fixture.outbox.length, 0);
-
-  // 重新打开：同一轮直接重试成功（上一次没有留下 submitted / used 状态）
-  fixture.setConfig({ enabled: true });
+  const gate = deferred<{ files: string[] }>();
   fixture.behave(async (request) => {
     request.onSubmitted?.();
-    return { files: ["2-test.png"] };
+    return gate.promise;
   });
-  assert.match(text(await fixture.tool.execute({ prompt: "一只猫" } as never, api, ctx())), /gen\/2-test\.png/);
-  assert.deepEqual(fixture.longWorks, [["draw_remote", 1]]);
-  assert.equal(fixture.outbox.length, 1);
-});
 
-test("成功后经 outbox 机械直发：幂等键、引用锚点、回执含 gen/ 路径与通道名", async () => {
-  const fixture = setup();
-  fixture.setConfig({ provider: "gemini" });
-  fixture.behave(async (request) => {
-    request.onSubmitted?.();
-    return { files: ["111-a.png", "222-b.png"] };
-  });
-  const result = await fixture.tool.execute({ prompt: "一只猫", aspect_ratio: "3:4" } as never, fixture.api(77), ctx());
-  assert.deepEqual(fixture.longWorks, [["draw_remote", 77]], "onSubmitted 之后才发一次「稍等」");
+  // execute 立刻返回，不等待后台生图完成
+  const result = await fixture.tool.execute({ prompt: "画一只橘猫" } as never, fixture.api(77), ctx());
+  const reply = text(result);
+  assert.match(reply, /qwen/);
+  assert.match(reply, /say_words/);
+  assert.match(reply, /say_media/);
+  assert.equal(fixture.longWorks.length, 0, "异步工具不再调用宿主 onLongWork 发机械稍等");
+  assert.equal(fixture.outbox.length, 0, "返回瞬间图尚未画完");
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(fixture.calls[0]?.timeoutMs, DRAW_REMOTE_TIMEOUT_MS);
 
-  assert.equal(fixture.outbox.length, 2, "两张图各入队一条");
+  // 模拟原轮结束：宿主清理 triggerOf Map（Review Focus #1）
+  fixture.setTrigger(undefined);
+
+  // 后台完成返回两张图
+  const settledPromise = fixture.waitSettled(1);
+  gate.resolve({ files: ["111-a.png", "222-b.png"] });
+  const events = await settledPromise;
+  assert.equal(events[0]?.status, "ok");
+  assert.deepEqual(events[0]?.files, ["111-a.png", "222-b.png"]);
+  assert.equal(fixture.delivered.length, 1);
+  assert.equal(fixture.delivered[0]?.conversationId, fixture.conv);
   assert.deepEqual(
-    fixture.outbox.map((item) => ({
-      media: item.media,
-      key: item.key,
-      items: item.items,
-      quote: item.quote,
-      quoteId: item.quoteId,
-      quoteForce: item.quoteForce,
-    })),
+    fixture.outbox.map(({ at: _at, ...rest }) => rest),
     [
       { media: "gen/111-a.png", key: `${fixture.conv}:draw_remote:77:111-a.png`, items: [], quote: false, quoteId: 5001, quoteForce: true },
       { media: "gen/222-b.png", key: `${fixture.conv}:draw_remote:77:222-b.png`, items: [], quote: false, quoteId: 5001, quoteForce: true },
     ],
   );
-  const done = text(result);
-  assert.match(done, /gen\/111-a\.png/);
-  assert.match(done, /gen\/222-b\.png/);
-  assert.match(done, /gemini/, "回执带当前通道名");
-  assert.match(done, /不用再调 say_media/);
 
-  // 适配器收到本轮透传的参数：比例原样交给通道决定认不认；没传参考图就不带 images
-  assert.equal(fixture.calls[0]?.aspectRatio, "3:4");
-  assert.equal(fixture.calls[0]?.prompt, "一只猫");
-  assert.equal(fixture.calls[0]?.images, undefined);
-});
-
-test("触发消息没有锚点时 payload 不带 quoteId、quoteForce=false；已移除的 background 不再透传给适配器", async () => {
-  const fixture = setup({ triggerOf: () => ({ messageId: undefined, mentionsBot: false }) });
-  // background 已从 Schema 移除：模型若照旧带上，工具层也不再透传给适配器
-  await fixture.tool.execute({ prompt: "抠个素材", background: "transparent" } as never, fixture.api(5), ctx());
-  assert.ok(!("background" in (fixture.calls[0] ?? {})));
-  assert.equal(fixture.outbox.length, 1);
-  assert.equal(fixture.outbox[0]?.quoteId, undefined);
-  assert.equal(fixture.outbox[0]?.quoteForce, false);
-  assert.equal(fixture.outbox[0]?.key, `${fixture.conv}:draw_remote:5:1-test.png`);
-});
-
-test("outbox 入队失败：回退回执引导 say_media 补发，图不丢且本轮不再重复画", async () => {
-  const fixture = setup();
+  // 槽位已释放，下一轮可正常受理
   fixture.behave(async (request) => {
     request.onSubmitted?.();
-    return { files: ["111-a.png", "222-b.png"] };
+    return { files: ["333-c.png"] };
   });
-  // 第二次 commit（第二张图）失败：第一张已入队，回退只点名没发出去的那张
-  const api = fixture.api(9, { failCommit: (n) => n === 2 });
-  const fallback = text(await fixture.tool.execute({ prompt: "一只猫" } as never, api, ctx()));
-  assert.match(fallback, /自动发送没成功/);
-  assert.match(fallback, /gen\/222-b\.png/);
-  assert.doesNotMatch(fallback, /gen\/111-a\.png/);
-  assert.match(fallback, /say_media/);
-  assert.equal(fixture.outbox.length, 1, "第一张已入队");
-
-  // 入队失败也算「这轮画过了」：同轮再调报 used，不让模型再画一张
-  assert.match(await rejection(() => fixture.tool.execute({ prompt: "再来一张" } as never, api, ctx())), /已经用远程画过/);
-  assert.equal(fixture.calls.length, 1);
-
-  // 第一张都入不了队：回退点名全部
-  const fresh = setup();
-  const single = text(await fresh.tool.execute({ prompt: "一只猫" } as never, fresh.api(9, { failCommit: () => true }), ctx()));
-  assert.match(single, /gen\/1-test\.png.*自动发送没成功.*say_media/);
-  assert.equal(fresh.outbox.length, 0);
+  const nextSettled = fixture.waitSettled(2);
+  await fixture.tool.execute({ prompt: "再画一只" } as never, fixture.api(78), ctx());
+  await nextSettled;
+  assert.equal(fixture.outbox.length, 3);
 });
 
-test("并发二次调用拒绝：任务在途时不重复提交", async () => {
-  const fixture = setup();
-  let release: (() => void) | undefined;
+test("每群单飞 + 跨群真并发 + 同群不同人格共享槽位（S7）+ 单轮最多 1 次", async () => {
+  const chatMap = new Map<string, string>([
+    ["conv-g1-a", "qq:group:1"],
+    ["conv-g1-b", "qq:group:1"],
+    ["conv-g2-a", "qq:group:2"],
+  ]);
+  const fixture = setup({ chatKeyOf: (id) => chatMap.get(id) });
+  const g1Gate = deferred<{ files: string[] }>();
+  const g2Gate = deferred<{ files: string[] }>();
+  let callIndex = 0;
   fixture.behave(async (request) => {
     request.onSubmitted?.();
-    await new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    return { files: ["1-test.png"] };
+    return ++callIndex === 1 ? g1Gate.promise : g2Gate.promise;
   });
-  const api = fixture.api();
-  const first = fixture.tool.execute({ prompt: "一只猫" } as never, api, ctx());
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.match(await rejection(() => fixture.tool.execute({ prompt: "再来" } as never, api, ctx())), /还在处理/);
-  assert.equal(fixture.calls.length, 1);
-  release?.();
-  assert.match(text(await first), /画好了/);
-  assert.equal(fixture.outbox.length, 1);
-});
 
-test("同轮成功后二次调用拒绝 used，新一轮恢复", async () => {
-  const fixture = setup();
-  const api = fixture.api();
-  await fixture.tool.execute({ prompt: "一只猫" } as never, api, ctx());
-  assert.match(await rejection(() => fixture.tool.execute({ prompt: "再来一张" } as never, api, ctx())), /已经用远程画过/);
+  // 群 1 人格 A 受理
+  await fixture.tool.execute({ prompt: "群1第一张" } as never, fixture.api(1, "conv-g1-a"), ctx());
+  // 群 1 新轮次仍被在途挡住
+  assert.match(await rejection(() => fixture.tool.execute({ prompt: "群1第二张" } as never, fixture.api(2, "conv-g1-a"), ctx())), /正在画/);
+  // 群 1 切到人格 B 仍共享同一群槽位，被挡住（S7）
+  assert.match(await rejection(() => fixture.tool.execute({ prompt: "群1人格B" } as never, fixture.api(1, "conv-g1-b"), ctx())), /正在画/);
   assert.equal(fixture.calls.length, 1);
-  await fixture.tool.execute({ prompt: "新的一轮" } as never, fixture.api(2), ctx());
+
+  // 群 2 独立并发不受群 1 阻塞
+  await fixture.tool.execute({ prompt: "群2第一张" } as never, fixture.api(1, "conv-g2-a"), ctx());
   assert.equal(fixture.calls.length, 2);
+
+  // 群 1 画完释放槽位后，同一轮（round=1）仍受单轮限制报 draw_remote_used，新轮（round=2）放行
+  const done1 = fixture.waitSettled(1);
+  g1Gate.resolve({ files: ["g1.png"] });
+  await done1;
+  assert.match(await rejection(() => fixture.tool.execute({ prompt: "同轮再来" } as never, fixture.api(1, "conv-g1-a"), ctx())), /这轮已经提交过/);
+
+  const done2 = fixture.waitSettled(2);
+  g2Gate.resolve({ files: ["g2.png"] });
+  await done2;
 });
 
-test("拿不到轮标识时拒绝 round_missing，不碰适配器", async () => {
-  const fixture = setup();
-  assert.match(await rejection(() => fixture.tool.execute({ prompt: "一只猫" } as never, fixture.api(null), ctx())), /无法确认当前轮次/);
-  assert.equal(fixture.calls.length, 0);
+test("同步预检与开关围栏：总开关关闭 / 缺 deliverDrawRemote / 停机信号已中止 / 缺轮次 / 真预检缺配置 均同步拒绝且不占槽", async () => {
+  // 1. 总开关关闭
+  const disabled = setup();
+  disabled.setConfig({ enabled: false });
+  assert.match(await rejection(() => disabled.tool.execute({ prompt: "猫" } as never, disabled.api(1), ctx())), /已被主人关闭/);
+  assert.equal(disabled.calls.length, 0);
+  // 重新打开同轮可直接受理
+  disabled.setConfig({ enabled: true });
+  const s1 = disabled.waitSettled(1);
+  await disabled.tool.execute({ prompt: "猫" } as never, disabled.api(1), ctx());
+  await s1;
+  assert.equal(disabled.calls.length, 1);
+
+  // 2. 未注入 deliverDrawRemote：同步报 unconfigured，绝不谎报 accepted（S2）
+  const noDeliver = setup({ deliverDrawRemote: undefined });
+  assert.match(await rejection(() => noDeliver.tool.execute({ prompt: "猫" } as never, noDeliver.api(1), ctx())), /还没配置好/);
+  assert.equal(noDeliver.calls.length, 0);
+
+  // 3. drawRemoteSignal 已 aborted：同步拒（S2）
+  const stopped = new AbortController();
+  stopped.abort();
+  const stopping = setup({ drawRemoteSignal: stopped.signal });
+  assert.match(await rejection(() => stopping.tool.execute({ prompt: "猫" } as never, stopping.api(1), ctx())), /暂时用不了/);
+  assert.equal(stopping.calls.length, 0);
+
+  // 4. 缺轮次
+  const noRound = setup();
+  assert.match(await rejection(() => noRound.tool.execute({ prompt: "猫" } as never, noRound.api(null), ctx())), /无法确认当前轮次/);
+
+  // 5. 空 prompt / 超 4000 字
+  const badPrompt = setup();
+  assert.match(await rejection(() => badPrompt.tool.execute({ prompt: "   " } as never, badPrompt.api(1), ctx())), /画面描述不合适/);
+  assert.match(await rejection(() => badPrompt.tool.execute({ prompt: "a".repeat(4001) } as never, badPrompt.api(1), ctx())), /画面描述不合适/);
+  assert.equal(badPrompt.calls.length, 0);
+
+  // 6. C1 回归：生产总是传入 drawRemoteRun，未覆盖 drawRemotePreflight 时必须真正走 preflightDrawRemote
+  const realPreflight = setup({}, { useRealPreflight: true });
+  // modelsPath 不存在 → 同步抛 unconfigured
+  assert.match(
+    await rejection(() => realPreflight.tool.execute({ prompt: "画只猫" } as never, realPreflight.api(1), ctx())),
+    /还没配置好.*models\.json/,
+  );
+  assert.equal(realPreflight.calls.length, 0);
+  // 补齐 models.json 与 auth.json 后同轮可受理
+  writeFileSync(join(realPreflight.mediaRoot, "models.json"), JSON.stringify({
+    providers: { "qwen-token-plan-cn": { baseUrl: "https://dashscope.test/compatible-mode/v1" } },
+  }));
+  writeFileSync(join(realPreflight.mediaRoot, "auth.json"), JSON.stringify({ "qwen-token-plan-cn": "sk-real-preflight" }));
+  const doneReal = realPreflight.waitSettled(1);
+  await realPreflight.tool.execute({ prompt: "画只猫" } as never, realPreflight.api(1), ctx());
+  await doneReal;
+  assert.equal(realPreflight.calls.length, 1);
 });
 
-test("submitted=false 的失败不锁轮：修正后同轮可重试成功", async () => {
-  const cases: Array<{
-    name: string;
-    provider: DrawRemoteProvider;
-    args?: Record<string, unknown>;
-    error: DrawRemoteError;
-    rejected: RegExp;
-    /** 失败那一次之后 onLongWork 的次数：提交前失败 = 0；POST 之后被 4xx 拒 = 1（「稍等」已发出）。 */
-    longWorks: number;
-  }> = [
-    {
-      name: "unconfigured（缺 models.json provider / 凭据）",
-      provider: "gemini",
-      error: new DrawRemoteError("gemini", "unconfigured", "draw_remote 未配置：models.json（/x/config/models.json）里没有 provider「google-antigravity」", false),
-      rejected: /还没配置好.*google-antigravity/,
-      longWorks: 0,
-    },
-    {
-      name: "bad_ref（qwen 通道参考图超 3 张：工具层放行的 3 张之外，适配器层的张数防御拦下第 4 张）",
-      provider: "qwen",
-      args: { images: ["inbound/a.png", "inbound/b.png", "inbound/p.jpg"] },
-      error: new DrawRemoteError("qwen", "bad_ref", "qwen 通道最多接受 3 张参考图", false),
-      rejected: /用不了.*最多 3 张/,
-      longWorks: 0,
-    },
-    {
-      name: "prompt（超 4000 字）",
-      provider: "qwen",
-      error: new DrawRemoteError("qwen", "prompt", "draw_remote 的 prompt 去首尾空白后不能为空，且不得超过 4000 字（当前 4001 字）", false),
-      rejected: /画面描述不合适.*4000 字/,
-      longWorks: 0,
-    },
-    {
-      name: "上游 400（请求发出后被确定性拒绝）",
-      provider: "gpt",
-      error: new DrawRemoteError("gpt", "failed", "gpt 生图请求失败（HTTP 400）", false),
-      rejected: /没成功.*HTTP 400/,
-      longWorks: 1,
-    },
-  ];
-  for (const item of cases) {
-    const fixture = setup();
-    fixture.setConfig({ provider: item.provider });
-    let attempt = 0;
-    fixture.behave(async (request) => {
-      attempt += 1;
-      // 提交前的失败适配器不会调 onSubmitted；POST 之后的 4xx 会先调一次
-      if (attempt > 1 || item.longWorks > 0) request.onSubmitted?.();
-      if (attempt === 1) throw item.error;
-      return { files: ["retry-ok.png"] };
+test("后台失败静默只打已脱敏日志、绝不往群里发失败提示、释放槽位且 settle 只调一次（S4/S5/Review Focus #3）", async () => {
+  const logs: unknown[][] = [];
+  const origError = console.error;
+  console.error = (...args: unknown[]) => logs.push(args);
+  try {
+    let settleThrows = true;
+    const fixture = setup({
+      onDrawRemoteSettled: () => {
+        if (settleThrows) {
+          settleThrows = false;
+          throw new Error("observer boom");
+        }
+      },
     });
-    const api = fixture.api(3);
-    const args = { prompt: "一只猫", ...(item.args ?? {}) };
-    const failed = await rejection(() => fixture.tool.execute(args as never, api, ctx()));
-    assert.match(failed, item.rejected, item.name);
-    assert.doesNotMatch(failed, /结果不明/, `${item.name}：确定性失败不说结果不明`);
-    if (item.longWorks > 0) assert.match(failed, /say_words/, `${item.name}：已发过「稍等」的失败要引导告知群友`);
-    assert.equal(fixture.longWorks.length, item.longWorks, `${item.name}：onLongWork 次数`);
-    assert.equal(fixture.outbox.length, 0, `${item.name}：失败不入队`);
-    // 同轮修正后重试：没被上一次失败锁住
-    const result = await fixture.tool.execute({ prompt: "一只猫" } as never, api, ctx());
-    assert.match(text(result), /gen\/retry-ok\.png/, item.name);
-    assert.equal(fixture.calls.length, 2, item.name);
-  }
-});
 
-test("submitted=true 的失败锁轮：上游 500 / 超时后同轮重试报 uncertain", async () => {
-  const errors = [
-    new DrawRemoteError("gpt", "failed", "gpt 生图请求失败（HTTP 500）", true),
-    new DrawRemoteError("gemini", "failed", "gemini 生图请求超时（180000ms），结果不明", true),
-  ];
-  for (const error of errors) {
-    const fixture = setup();
+    // 1. 后台抛带未脱敏 cause 的 DrawRemoteError：不投递任何消息、不打印 cause 对象里的秘密、observer 抛错也不二次触发
+    const rawCause = new Error("UPSTREAM_SECRET_TOKEN_XYZ_999");
     fixture.behave(async (request) => {
       request.onSubmitted?.();
-      throw error;
+      throw new DrawRemoteError("qwen", "failed", "qwen 生图超时（600 秒，阶段：post），结果不明", true, { cause: rawCause });
     });
-    const api = fixture.api();
-    const rejected = await rejection(() => fixture.tool.execute({ prompt: "一只猫" } as never, api, ctx()));
-    assert.match(rejected, /结果不明/);
-    assert.match(rejected, /不要.*draw_remote/, "明确告知本轮不要重试");
-    assert.match(rejected, /say_words/, "失败回执引导用 say_words 告知群友");
-    assert.doesNotMatch(rejected, /画好了/);
-    assert.equal(fixture.longWorks.length, 1, "请求发出前的「稍等」已经发过");
-    assert.equal(fixture.outbox.length, 0, "失败不出图");
+    const s1 = fixture.waitSettled(1);
+    await fixture.tool.execute({ prompt: "猫" } as never, fixture.api(1), ctx());
+    const ev1 = await s1;
+    assert.equal(ev1.length, 1);
+    assert.equal(ev1[0]?.status, "failed");
+    assert.equal(fixture.outbox.length, 0, "后台失败绝不往群里发提示");
+    assert.ok(logs.length >= 1);
+    const joined = logs.map((row) => row.map(String).join(" ")).join("\n");
+    assert.match(joined, /600 秒/);
+    assert.doesNotMatch(joined, /UPSTREAM_SECRET_TOKEN_XYZ_999/, "日志绝不打印未脱敏 cause 内容");
 
-    assert.match(await rejection(() => fixture.tool.execute({ prompt: "再来" } as never, api, ctx())), /状态未确认/);
-    assert.equal(fixture.calls.length, 1, "锁轮后不再碰适配器");
+    // 2. 后台 onSubmitted 瞬间发现热关闭（Review Focus #3）：释放槽位、不发消息
+    const gate = deferred<void>();
+    fixture.behave(async (request) => {
+      await gate.promise;
+      request.onSubmitted?.();
+      return { files: ["never.png"] };
+    });
+    const s2 = fixture.waitSettled(2);
+    await fixture.tool.execute({ prompt: "狗" } as never, fixture.api(2), ctx());
+    fixture.setConfig({ enabled: false });
+    gate.resolve();
+    await s2;
+    assert.equal(fixture.outbox.length, 0);
+
+    // 3. 重新打开后新轮次正常受理，deliverDrawRemote 抛错也静默释放槽位
+    fixture.setConfig({ enabled: true });
+    fixture.behave(async (request) => {
+      request.onSubmitted?.();
+      return { files: ["fail-deliver.png"] };
+    });
+    fixture.setDeliver(async () => {
+      throw new Error("outbox write error");
+    });
+    const s3 = fixture.waitSettled(3);
+    await fixture.tool.execute({ prompt: "鸟" } as never, fixture.api(3), ctx());
+    await s3;
+    assert.equal(fixture.settled[2]?.status, "failed");
+
+    // 4. 空 files 同样按静默失败释放槽位
+    fixture.setDeliver(async (_convId, payloads) => {
+      fixture.outbox.push(...payloads);
+    });
+    fixture.behave(async (request) => {
+      request.onSubmitted?.();
+      return { files: [] };
+    });
+    const s4 = fixture.waitSettled(4);
+    await fixture.tool.execute({ prompt: "鱼" } as never, fixture.api(4), ctx());
+    await s4;
+    assert.equal(fixture.settled[3]?.status, "failed");
+    assert.equal(fixture.outbox.length, 0);
+  } finally {
+    console.error = origError;
   }
 });
 
-test("非 DrawRemoteError 的异常：已提交按结果不明锁轮，提交前不锁；原始报错不出境", async () => {
-  const posted = setup();
-  posted.behave(async (request) => {
+test("停机取消信号与整体硬超时（C2 / Review Focus #2）：中止后即使晚到也不投递并释放槽位", async () => {
+  // 1. 停机信号中止：即使桩无视 signal 晚到返回了图片，绝不调 deliverDrawRemote
+  const stop = new AbortController();
+  const late = deferred<{ files: string[] }>();
+  const fixture = setup({ drawRemoteSignal: stop.signal });
+  let seenSignal: AbortSignal | undefined;
+  fixture.behave(async (request) => {
+    seenSignal = request.signal;
     request.onSubmitted?.();
-    throw new TypeError("write EEXIST");
+    return late.promise;
   });
-  const api = posted.api();
-  const message = await rejection(() => posted.tool.execute({ prompt: "一只猫" } as never, api, ctx()));
-  assert.match(message, /结果不明/);
-  assert.match(message, /内部错误/);
-  assert.doesNotMatch(message, /EEXIST/);
-  assert.match(await rejection(() => posted.tool.execute({ prompt: "再来" } as never, api, ctx())), /状态未确认/);
-  assert.equal(posted.calls.length, 1);
+  const s1 = fixture.waitSettled(1);
+  await fixture.tool.execute({ prompt: "停机测试" } as never, fixture.api(1), ctx());
+  stop.abort();
+  assert.equal(seenSignal?.aborted, true, "停机信号应立即传播到后台运行信号");
+  late.resolve({ files: ["too-late.png"] });
+  await s1;
+  assert.equal(fixture.settled[0]?.status, "aborted");
+  assert.equal(fixture.outbox.length, 0, "停机后晚到的图绝不投递");
 
-  const early = setup();
-  early.behave(async () => {
-    throw new TypeError("boom before submit");
-  });
-  const earlyApi = early.api();
-  const earlyMessage = await rejection(() => early.tool.execute({ prompt: "一只猫" } as never, earlyApi, ctx()));
-  assert.match(earlyMessage, /没成功.*内部错误/);
-  assert.doesNotMatch(earlyMessage, /结果不明/);
-  assert.doesNotMatch(earlyMessage, /boom/);
-  assert.equal(early.longWorks.length, 0);
-  early.behave(async (request) => {
+  // 2. 后台整体硬超时（覆盖 POST 前的 refreshTokens 等挂死，C2）
+  const hung = setup({ drawRemoteJobTimeoutMs: 40 });
+  hung.behave(async (request) => new Promise((_resolve, reject) => {
+    request.signal?.addEventListener("abort", () => reject(request.signal?.reason ?? new DOMException("aborted", "AbortError")), { once: true });
+  }));
+  const s2 = hung.waitSettled(1);
+  await hung.tool.execute({ prompt: "前置刷新挂死" } as never, hung.api(1), ctx());
+  await s2;
+  assert.equal(hung.settled[0]?.status, "failed");
+  assert.equal(hung.outbox.length, 0);
+  // 槽位已释放，下一轮可恢复
+  hung.behave(async (request) => {
     request.onSubmitted?.();
-    return { files: ["after-boom.png"] };
+    return { files: ["recovered.png"] };
   });
-  assert.match(text(await early.tool.execute({ prompt: "一只猫" } as never, earlyApi, ctx())), /gen\/after-boom\.png/);
+  const s3 = hung.waitSettled(2);
+  await hung.tool.execute({ prompt: "恢复" } as never, hung.api(2), ctx());
+  await s3;
+  assert.equal(hung.outbox.length, 1);
+});
+
+test("热切配置：通道与模型随 fish.config.json 现值切换，不传比例不透传 aspectRatio", async () => {
+  const fixture = setup();
+  const s1 = fixture.waitSettled(1);
+  await fixture.tool.execute({ prompt: "第一张" } as never, fixture.api(1), ctx());
+  await s1;
+  assert.equal(fixture.calls[0]?.provider, "qwen");
+  assert.equal(fixture.calls[0]?.model, "qwen-image-3.0-pro");
+  assert.equal(fixture.calls[0]?.aspectRatio, undefined);
+
+  fixture.setConfig({ provider: "gemini", models: { ...DRAW_REMOTE_DEFAULTS.models, gemini: "gemini-custom" } });
+  const s2 = fixture.waitSettled(2);
+  await fixture.tool.execute({ prompt: "第二张", aspect_ratio: "16:9" } as never, fixture.api(2), ctx());
+  await s2;
+  assert.equal(fixture.calls[1]?.provider, "gemini");
+  assert.equal(fixture.calls[1]?.model, "gemini-custom");
+  assert.equal(fixture.calls[1]?.aspectRatio, "16:9");
 });
 
 test("参考图：方括号兼容，按真实字节读图交给适配器", async () => {
   const fixture = setup();
   fixture.setConfig({ provider: "gpt" });
+  const s1 = fixture.waitSettled(1);
   const result = await fixture.tool.execute(
     { prompt: "把这几张拼起来", images: ["[inbound/a.png]", " inbound/p.jpg ", "[inbound/anim.gif]"] } as never,
     fixture.api(),
     ctx(),
   );
-  assert.match(text(result), /画好了/);
+  assert.match(text(result), /已交给在线画师/);
+  await s1;
   const images = fixture.calls[0]?.images ?? [];
   assert.equal(images.length, 3);
   assert.deepEqual(
@@ -498,7 +512,6 @@ test("参考图：方括号兼容，按真实字节读图交给适配器", async
 });
 
 test("参考图围栏：穿越 / 绝对路径 / 符号链接 / 非图 / 魔数不符 / 0 字节 / 超限 / 超出通道张数上限 一律 bad_ref", async () => {
-  // 这条用例跑在缺省通道上（qwen，最多 3 张）：类型与张数的逐通道边界见下面两条用例
   const fixture = setup();
   const outside = mkdtempSync(join(tmpdir(), "yg-draw-remote-outside-"));
   work.push(outside);
@@ -516,7 +529,7 @@ test("参考图围栏：穿越 / 绝对路径 / 符号链接 / 非图 / 魔数�
     ["目录本身", ["inbound"]],
     ["不存在的文件", ["inbound/missing.png"]],
     ["指向目录外的符号链接", ["inbound/link-out.png"]],
-    ["指向目录内的符号链接（最终分量是链接一律不跟随）", ["inbound/link-in.png"]],
+    ["指向目录内的符号链接", ["inbound/link-in.png"]],
     ["非图片", ["inbound/note.txt"]],
     ["魔数与后缀不符", ["inbound/fake.png"]],
     ["0 字节", ["inbound/empty.png"]],
@@ -529,12 +542,13 @@ test("参考图围栏：穿越 / 绝对路径 / 符号链接 / 非图 / 魔数�
     const rejected = await rejection(() => fixture.tool.execute({ prompt: "改这张", images } as never, fixture.api(), ctx()));
     assert.match(rejected, /用不了/, name);
   }
-  assert.equal(fixture.calls.length, 0, "围栏在任何请求之前：适配器一次都没被调");
-  assert.equal(fixture.longWorks.length, 0);
-  assert.equal(fixture.commits(), 0);
+  assert.equal(fixture.calls.length, 0);
+  assert.equal(fixture.outbox.length, 0);
 
   // 拒绝之后同一轮仍可修正重试
-  assert.match(text(await fixture.tool.execute({ prompt: "改这张", images: ["[inbound/a.png]"] } as never, fixture.api(), ctx())), /画好了/);
+  const done = fixture.waitSettled(1);
+  assert.match(text(await fixture.tool.execute({ prompt: "改这张", images: ["[inbound/a.png]"] } as never, fixture.api(), ctx())), /已交给在线画师/);
+  await done;
 });
 
 test("bad_ref 回执点名具体是哪张图（去掉方括号后的原路径）", async () => {
@@ -542,7 +556,7 @@ test("bad_ref 回执点名具体是哪张图（去掉方括号后的原路径）
   writeFileSync(join(fixture.inbound, "fake.png"), jpeg(40));
   const mismatch = await rejection(() => fixture.tool.execute({ prompt: "改这张", images: ["[inbound/fake.png]"] } as never, fixture.api(), ctx()));
   assert.match(mismatch, /inbound\/fake\.png.*用不了/);
-  assert.doesNotMatch(mismatch, /\[/, "回执里不带方括号");
+  assert.doesNotMatch(mismatch, /\[/);
   const missing = await rejection(() => fixture.tool.execute({ prompt: "改这张", images: ["inbound/gone.png"] } as never, fixture.api(), ctx()));
   assert.match(missing, /inbound\/gone\.png.*用不了/);
 });
@@ -561,16 +575,21 @@ test("gemini 通道的参考图能力：gif 与聚合超过 15MiB 拒掉；同�
     fixture.tool.execute({ prompt: "拼起来", images: ["inbound/m8-a.png", "inbound/m8-b.png"] } as never, fixture.api(2), ctx()),
   );
   assert.match(totalRejected, /inbound\/m8-b\.png.*用不了/);
-  assert.equal(fixture.calls.length, 0, "gemini 通道：两次都没发出去");
+  assert.equal(fixture.calls.length, 0);
 
   fixture.setConfig({ provider: "gpt" });
+  const s1 = fixture.waitSettled(1);
   await fixture.tool.execute({ prompt: "参考这张", images: ["inbound/anim.gif"] } as never, fixture.api(3), ctx());
+  await s1;
   assert.equal(fixture.calls[0]?.images?.[0]?.mimeType, "image/gif");
+
+  const s2 = fixture.waitSettled(2);
   await fixture.tool.execute({ prompt: "拼起来", images: ["inbound/m8-a.png", "inbound/m8-b.png"] } as never, fixture.api(4), ctx());
-  assert.equal(fixture.calls[1]?.images?.length, 2, "gpt 通道只限单张体积，不限聚合");
+  await s2;
+  assert.equal(fixture.calls[1]?.images?.length, 2);
 });
 
-test("参考图张数按通道：qwen 最多 3 张（第 4 张起拒），gpt / wan / gemini 最多 5 张（第 6 张起拒）", async () => {
+test("参考图张数与类型按通道：qwen 最多 3 张且认 gif，gpt/wan/gemini 最多 5 张且 wan/gemini 不认 gif", async () => {
   for (const [provider, limit] of [
     ["qwen", 3],
     ["gpt", 5],
@@ -578,131 +597,86 @@ test("参考图张数按通道：qwen 最多 3 张（第 4 张起拒），gpt / 
     ["gemini", 5],
   ] as const) {
     const fixture = setup();
-    fixture.setConfig({ provider });
-    // 只用四条通道都认的 png / jpg：把「类型不认」从这条用例里排除，只验张数
+    fixture.setConfig({ provider: provider as DrawRemoteProvider });
     writeFileSync(join(fixture.inbound, "c.png"), png(64));
     writeFileSync(join(fixture.inbound, "d.png"), png(64));
     writeFileSync(join(fixture.inbound, "e.png"), png(64));
     const refs = ["inbound/a.png", "inbound/b.png", "inbound/p.jpg", "inbound/c.png", "inbound/d.png", "inbound/e.png"];
 
-    const accepted = await fixture.tool.execute({ prompt: "拼起来", images: refs.slice(0, limit) } as never, fixture.api(), ctx());
-    assert.match(text(accepted), /画好了/, `${provider}：恰好 ${limit} 张放行`);
+    const s1 = fixture.waitSettled(1);
+    const accepted = await fixture.tool.execute({ prompt: "拼起来", images: refs.slice(0, limit) } as never, fixture.api(1), ctx());
+    assert.match(text(accepted), /已交给在线画师/, `${provider}：恰好 ${limit} 张放行`);
+    await s1;
     assert.equal(fixture.calls[0]?.images?.length, limit);
 
-    // 第 limit+1 张起拒：回执点名这一张，并如实写出通道上限
     const over = refs[limit]!;
     const rejected = await rejection(() =>
       fixture.tool.execute({ prompt: "拼起来", images: refs.slice(0, limit + 1) } as never, fixture.api(2), ctx()),
     );
     assert.match(rejected, new RegExp(`${over.replaceAll(".", "\\.")}.*用不了`), `${provider}：第 ${limit + 1} 张起拒`);
     assert.match(rejected, provider === "qwen" ? /qwen 通道最多 3 张/ : /最多 5 张（qwen 通道最多 3 张）/, provider);
-    assert.equal(fixture.calls.length, 1, `${provider}：超限的那次没到适配器`);
+    assert.equal(fixture.calls.length, 1);
   }
-});
 
-test("参考图类型按通道：wan / gemini 不认 gif，gpt / qwen 认 gif；缺省通道 qwen 不切配置也认", async () => {
   for (const provider of ["wan", "gemini"] as const) {
     const fixture = setup();
     fixture.setConfig({ provider });
-    const rejected = await rejection(() =>
-      fixture.tool.execute({ prompt: "参考这张", images: ["inbound/anim.gif"] } as never, fixture.api(), ctx()),
+    assert.match(
+      await rejection(() => fixture.tool.execute({ prompt: "参考这张", images: ["inbound/anim.gif"] } as never, fixture.api(), ctx())),
+      /inbound\/anim\.gif.*用不了/,
     );
-    assert.match(rejected, /inbound\/anim\.gif.*用不了/, provider);
-    assert.equal(fixture.calls.length, 0, `${provider}：没发出去`);
   }
-  // gpt 认 gif 是老行为；qwen（缺省通道）同样认
   for (const provider of ["gpt", "qwen"] as const) {
     const fixture = setup();
     fixture.setConfig({ provider });
+    const done = fixture.waitSettled(1);
     await fixture.tool.execute({ prompt: "参考这张", images: ["inbound/anim.gif"] } as never, fixture.api(), ctx());
-    assert.equal(fixture.calls[0]?.images?.[0]?.mimeType, "image/gif", provider);
+    await done;
+    assert.equal(fixture.calls[0]?.images?.[0]?.mimeType, "image/gif");
   }
-  const byDefault = setup();
-  await byDefault.tool.execute({ prompt: "参考这张", images: ["[inbound/anim.gif]"] } as never, byDefault.api(), ctx());
-  assert.equal(byDefault.calls[0]?.provider, "qwen");
-  assert.equal(byDefault.calls[0]?.model, "qwen-image-3.0-pro");
-  assert.equal(byDefault.calls[0]?.images?.[0]?.mimeType, "image/gif");
-  assert.match(text(await byDefault.tool.execute({ prompt: "再来" } as never, byDefault.api(2), ctx())), /qwen 画好了/);
 });
 
-test("取消围栏：返回后已中止则不入 outbox、直接抛取消异常", async () => {
-  // 适配器返回前宿主已取消（工具超时 / 人工中断）：晚到的图不落 outbox，整体按取消上抛
-  const before = setup();
-  const first = new AbortController();
-  before.behave(async (request) => {
-    request.onSubmitted?.();
-    first.abort();
-    return { files: ["late-1.png", "late-2.png"] };
-  });
-  const isAbort = (error: unknown) => (error as { name?: string }).name === "AbortError";
-  await assert.rejects(() => before.tool.execute({ prompt: "一只猫" } as never, before.api(), ctx(first.signal)), isAbort);
-  assert.equal(before.commits(), 0, "已取消：一次 outbox 提交都不发生");
-  assert.equal(before.outbox.length, 0);
-  // 信号早已中止的调用连适配器都进不去
-  await assert.rejects(() => before.tool.execute({ prompt: "一只猫" } as never, before.api(2), ctx(first.signal)), isAbort);
-  assert.equal(before.calls.length, 1);
-
-  // 多图循环中途取消：第一张已入队，第二张入队前复核后停下；整体按取消上抛，不回退成「请补发」提示
-  const mid = setup();
-  const second = new AbortController();
-  mid.behave(async (request) => {
-    request.onSubmitted?.();
-    return { files: ["111-a.png", "222-b.png"] };
-  });
-  const api = mid.api(8, {
-    onCommit: (n) => {
-      if (n === 2) second.abort();
-    },
-  });
-  await assert.rejects(() => mid.tool.execute({ prompt: "一只猫" } as never, api, ctx(second.signal)), isAbort);
-  assert.equal(mid.outbox.length, 1, "只有第一张入了队");
-
-  // 提交后取消的轮同轮不能再画（结果不明）；新一轮不受影响
-  assert.match(await rejection(() => before.tool.execute({ prompt: "再来" } as never, before.api(1), ctx())), /状态未确认/);
-  before.behave(async (request) => {
-    request.onSubmitted?.();
-    return { files: ["fresh.png"] };
-  });
-  assert.match(text(await before.tool.execute({ prompt: "新的一轮" } as never, before.api(3), ctx())), /gen\/fresh\.png/);
-});
-
-test("文案契约：done 带通道名与路径并劝阻 say_media，failed 引导 say_words，key 全部 draw_remote_*", () => {
+test("文案与 TOOL.md 契约：异步受理文案含通道名/say_words/say_media，移除旧同步死文案", () => {
   const messages = manifest.messages;
   for (const key of Object.keys(messages)) assert.match(key, /^draw_remote_[a-z0-9_]*$/);
-  assert.match(messages["draw_remote_done"], /\{\{provider\}\}/);
-  assert.match(messages["draw_remote_done"], /\{\{file\}\}/);
-  assert.match(messages["draw_remote_done"], /say_media/);
-  assert.match(messages["draw_remote_done_fallback"], /\{\{file\}\}/);
-  assert.match(messages["draw_remote_done_fallback"], /say_media/);
-  assert.match(messages["draw_remote_failed"], /say_words/);
-  assert.match(messages["draw_remote_failed_uncertain"], /say_words/);
-  for (const key of ["draw_remote_disabled", "draw_remote_round_missing", "draw_remote_inflight", "draw_remote_used", "draw_remote_uncertain"]) {
+  assert.match(messages["draw_remote_accepted"] ?? "", /\{\{provider\}\}/);
+  assert.match(messages["draw_remote_accepted"] ?? "", /say_words/);
+  assert.match(messages["draw_remote_accepted"] ?? "", /say_media/);
+  for (const key of [
+    "draw_remote_disabled",
+    "draw_remote_round_missing",
+    "draw_remote_inflight",
+    "draw_remote_used",
+    "draw_remote_prompt",
+    "draw_remote_bad_ref",
+    "draw_remote_unconfigured",
+    "draw_remote_accepted",
+  ]) {
     assert.ok(messages[key], `缺文案 ${key}`);
   }
-  // bad_ref：点名是哪张，并如实写出张数上限（qwen 通道更少）；wan / qwen 都支持改图后 no_ref 整条删除，不留死文案
+  // 同步旧文案已退役，不留死文案
+  for (const removed of [
+    "draw_remote_done",
+    "draw_remote_done_fallback",
+    "draw_remote_failed",
+    "draw_remote_failed_uncertain",
+    "draw_remote_failed_internal",
+    "draw_remote_uncertain",
+    "draw_remote_no_ref",
+  ]) {
+    assert.equal(messages[removed], undefined, `不应残留旧同步文案 ${removed}`);
+  }
   assert.match(messages["draw_remote_bad_ref"], /\{\{ref\}\}.*用不了/);
   assert.match(messages["draw_remote_bad_ref"], /最多 5 张（qwen 通道最多 3 张）/);
-  assert.equal(messages["draw_remote_no_ref"], undefined);
-  // 参数 Schema：prompt 必填（四通道同一个 4000 字上限），images 最多 5 张（qwen 通道 3 张在执行期拦），比例是枚举；
-  // 只暴露 prompt / images / aspect_ratio 三个参数（background 与透明底分支已移除）
+
   const properties = manifest.parameters.properties as Record<string, Record<string, unknown>>;
   assert.deepEqual(manifest.parameters.required, ["prompt"]);
   assert.equal(properties["images"]?.["maxItems"], 5);
   assert.deepEqual(properties["aspect_ratio"]?.["enum"], ["1:1", "3:4", "4:3", "9:16", "16:9"]);
   assert.deepEqual(Object.keys(properties).sort(), ["aspect_ratio", "images", "prompt"]);
-  for (const name of ["prompt", "images", "aspect_ratio"]) {
-    assert.doesNotMatch(String(properties[name]?.["description"]), /800 字/, `${name}：wan 的 800 字上限已统一成 4000 字`);
-  }
-  assert.match(String(properties["prompt"]?.["description"]), /4000 字/);
-  assert.match(String(properties["images"]?.["description"]), /最多 5 张.*qwen 通道最多 3 张/);
-  assert.match(String(properties["aspect_ratio"]?.["description"]), /qwen \/ wan \/ gemini 通道生效，gpt 通道忽略/);
-  // TOOL.md：四通道说明；images 四通道都能改图；比例对 qwen / wan / gemini 生效；通道不由模型选，出图自动发出
   assert.match(manifest.description, /GPT Image \/ Wan \/ Qwen \/ Gemini/);
-  assert.match(manifest.guide, /gpt \/ wan \/ qwen \/ gemini/);
-  assert.match(manifest.guide, /qwen \/ wan \/ gemini 通道生效，gpt 通道忽略/);
-  assert.match(manifest.guide, /最多 5 张（qwen 通道最多 3 张）/);
-  assert.match(manifest.guide, /gpt \/ qwen 通道额外认 gif/);
-  assert.doesNotMatch(manifest.guide, /800 字|不支持参考图|wan 不收参考图|background/);
-  assert.match(manifest.guide, /drawRemote\.provider/);
+  assert.match(manifest.guide, /异步|立刻返回|后台/);
+  assert.match(manifest.guide, /say_words/);
   assert.match(manifest.guide, /say_media/);
+  assert.match(manifest.guide, /drawRemote\.provider/);
 });

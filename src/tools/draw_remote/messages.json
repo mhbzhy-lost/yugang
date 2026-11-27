@@ -1,15 +1,10 @@
 {
   "draw_remote_disabled": "远程画图已被主人关闭，暂时用不了",
   "draw_remote_round_missing": "无法确认当前轮次，暂时不能画图",
-  "draw_remote_inflight": "远程画图任务还在处理，请不要重复提交",
-  "draw_remote_used": "这轮已经用远程画过并自动发出了，不用再画",
-  "draw_remote_uncertain": "上次提交状态未确认，为避免重复出图本轮不能重试",
+  "draw_remote_inflight": "这个群还有一张远程画图正在画，等这张画完再提下一张",
+  "draw_remote_used": "这轮已经提交过远程画图任务了，不用再画",
   "draw_remote_prompt": "画面描述不合适：{{reason}}",
   "draw_remote_bad_ref": "参考图 {{ref}} 用不了：只能是媒体目录里的图片文件（png/jpg/webp/gif，部分通道不认 gif），单张 10MB 以内、最多 5 张（qwen 通道最多 3 张），不能是目录外的路径或链接",
   "draw_remote_unconfigured": "远程画图还没配置好：{{reason}}",
-  "draw_remote_done": "{{provider}} 画好了：{{file}} — 已经自动发出去了，不用再调 say_media",
-  "draw_remote_done_fallback": "{{provider}} 画好了：{{file}} — 但自动发送没成功，用 say_media 把它发出去",
-  "draw_remote_failed": "远程画图没成功：{{reason}}。用 say_words 简单告诉群友这次为什么没画出来",
-  "draw_remote_failed_uncertain": "远程画图结果不明：{{reason}}。本轮不要再调 draw_remote（重试会重复出图）；用 say_words 简单告诉群友这次没画出来",
-  "draw_remote_failed_internal": "画图过程中出了内部错误"
+  "draw_remote_accepted": "已交给在线画师（{{provider}}）后台绘制，画好会自动发到群里；现在用 say_words 简短告诉群友已经开始画了，不用等出图，也不要再调 say_media"
 }

@@ -147,6 +147,8 @@ export interface ToolPackageDeps {
   deliverDrawRemote?: (conversationId: ConversationId, payloads: readonly import("./say-shared.ts").OutboundPayload[]) => Promise<void>;
   /** 进程停机时中止在途异步 draw_remote 任务的取消信号。 */
   drawRemoteSignal?: AbortSignal;
+  /** 后台异步 draw_remote 整体硬超时（毫秒，缺省 660s；仅供测试缩短等待）。 */
+  drawRemoteJobTimeoutMs?: number;
   /** 异步 draw_remote 后台任务收敛时的观察回调（测试用于确定性等待，不改变业务行为）。 */
   onDrawRemoteSettled?: (event: { conversationId: string; status: "ok" | "failed" | "aborted"; files?: string[]; error?: unknown }) => void;
   /** ComfyUI 环回隧道地址；给了才有本地画图。 */
