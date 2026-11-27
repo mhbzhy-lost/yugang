@@ -16,9 +16,12 @@
  * TS 注释为准）与 mtime 热加载器，供工具层（bili_search 文本硬筛等）共用。
  */
 import { DATA_HOME } from "../paths.ts";
-import { readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { randomBytes } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { localDay } from "../records/usage.ts";
+
+const BILI_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 export type BiliEndpoint = "popular" | "ranking" | "related" | "view" | "dm" | "reply" | "card" | "spi";
 
@@ -169,19 +172,19 @@ export interface BiliClientOptions {
 
 export interface BiliClient {
   /** 综合热门（一页 20 条）。 */
-  popular(page?: number): Promise<BiliVideoCard[]>;
+  popular(page?: number, signal?: AbortSignal): Promise<BiliVideoCard[]>;
   /** 排行榜 v2（rid=0 为全站）。 */
-  ranking(rid?: number): Promise<BiliVideoCard[]>;
+  ranking(rid?: number, signal?: AbortSignal): Promise<BiliVideoCard[]>;
   /** 单视频的相关推荐（算法序，最多 40 条）：不需要 Cookie/WBI，用 BV 当种子。 */
-  related(bvid: string): Promise<BiliVideoCard[]>;
+  related(bvid: string, signal?: AbortSignal): Promise<BiliVideoCard[]>;
   /** 单视频详情（含 cid）。 */
-  view(bvid: string): Promise<BiliVideoCard>;
+  view(bvid: string, signal?: AbortSignal): Promise<BiliVideoCard>;
   /** 弹幕原始 XML（dm/list.so 是 XML 不是 JSON，解析归调用方）。 */
-  danmakuXml(cid: string): Promise<string>;
+  danmakuXml(cid: string, signal?: AbortSignal): Promise<string>;
   /** 热评（reply/main mode=3，type 缺省 1=视频）。 */
-  hotReplies(oid: string | number, type?: number): Promise<BiliReply[]>;
+  hotReplies(oid: string | number, type?: number, signal?: AbortSignal): Promise<BiliReply[]>;
   /** UP 主卡片（粉丝/等级/认证，软筛评级用）。 */
-  upCard(mid: string | number): Promise<BiliUpCard>;
+  upCard(mid: string | number, signal?: AbortSignal): Promise<BiliUpCard>;
   /** 热更新每日预算（ammo.dailyBudget 配置读取/变更时由宿主灌入）；缺省 60。 */
   setDailyBudget(n: number): void;
   /** 观测口：预算/熔断/buvid 现状（审计与验证用）。 */
@@ -288,6 +291,99 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function writeJsonAtomic(filePath: string, data: unknown): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(data));
+    renameSync(tmp, filePath);
+  } finally {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // 清理临时文件失败不影响结果
+    }
+  }
+}
+
+function abortReasonOf(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+}
+
+function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal === undefined) return promise;
+  if (signal.aborted) return Promise.reject(abortReasonOf(signal));
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      reject(abortReasonOf(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function readBiliBodyCapped(
+  res: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+  endpoint: BiliEndpoint,
+): Promise<string> {
+  const declared = Number(res.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await Promise.resolve(res.body?.cancel()).catch(() => undefined);
+    throw new Error(`B站响应超限（${declared}B > ${maxBytes}B，${endpoint}）`);
+  }
+  const reader = res.body?.getReader();
+  if (reader === undefined) {
+    const text = await raceAbort(res.text(), signal);
+    if (Buffer.byteLength(text, "utf8") > maxBytes) {
+      throw new Error(`B站响应超限（>${maxBytes}B，${endpoint}）`);
+    }
+    return text;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await raceAbort(reader.read(), signal);
+      if (done) break;
+      if (value === undefined) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await Promise.resolve(reader.cancel()).catch(() => undefined);
+        throw new Error(`B站响应超限（>${maxBytes}B，${endpoint}）`);
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    await Promise.resolve(reader.cancel()).catch(() => undefined);
+    throw error;
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8").decode(merged);
+}
+
 export function createBiliClient(options: BiliClientOptions = {}): BiliClient {
   const varDir = options.varDir ?? defaultVarDir();
   const budgetPath = join(varDir, "bili-budget.json");
@@ -334,7 +430,7 @@ export function createBiliClient(options: BiliClientOptions = {}): BiliClient {
   function persistBudget(): void {
     if (budget === undefined) return;
     try {
-      writeFileSync(budgetPath, JSON.stringify(budget));
+      writeJsonAtomic(budgetPath, budget);
     } catch (error) {
       log(`预算落盘失败：${describeError(error)}`);
     }
@@ -362,11 +458,28 @@ export function createBiliClient(options: BiliClientOptions = {}): BiliClient {
     return run;
   }
 
-  async function spacingWait(endpoint: BiliEndpoint): Promise<void> {
+  async function spacingWait(endpoint: BiliEndpoint, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const last = lastStartAt.get(endpoint);
     if (last === undefined || intervalMs <= 0) return;
     const wait = intervalMs - (now().getTime() - last);
-    if (wait > 0) await new Promise<void>((resolve) => setTimeout(resolve, wait));
+    if (wait <= 0) return;
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(abortReasonOf(signal!));
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, wait);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   // —— buvid3：finger/spi 获取一次，落盘长期复用 ——
@@ -406,7 +519,7 @@ export function createBiliClient(options: BiliClientOptions = {}): BiliClient {
     buvid = { buvid3: b3, ...(b4 ? { buvid4: b4 } : {}) };
     const file: BuvidFile = { ...buvid, acquiredAt: now().getTime() };
     try {
-      writeFileSync(statePath, JSON.stringify(file));
+      writeJsonAtomic(statePath, file);
     } catch (error) {
       log(`buvid3 落盘失败：${describeError(error)}（本进程仍可用）`);
     }
@@ -426,60 +539,92 @@ export function createBiliClient(options: BiliClientOptions = {}): BiliClient {
   async function send(
     endpoint: BiliEndpoint,
     params: BiliEndpointParams = {},
-    opts: { skipBuvid?: boolean } = {},
+    opts: { skipBuvid?: boolean; signal?: AbortSignal } = {},
   ): Promise<unknown> {
+    const external = opts.signal;
+    external?.throwIfAborted();
     assertLive(endpoint);
-    if (!opts.skipBuvid) await ensureBuvid();
-    return enqueue(async () => {
-      assertLive(endpoint);
-      const bucket = currentBudget();
-      if (bucket.count >= budgetCap) {
-        throw new Error(`B站日预算已用尽（${bucket.count}/${budgetCap}）`);
-      }
-      await spacingWait(endpoint);
-      lastStartAt.set(endpoint, now().getTime());
+    if (!opts.skipBuvid) await raceAbort(ensureBuvid(), external);
+    external?.throwIfAborted();
 
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      let res: Response;
-      try {
-        res = await doFetch(endpointUrl(endpoint, params), { headers: headers(), signal: ctrl.signal });
-      } catch (error) {
-        throw new Error(`B站请求失败（${endpoint}）`, { cause: error });
-      } finally {
-        clearTimeout(timer);
-      }
-      // 拿到响应即记账：风控与接口错误同样消耗预算
-      bucket.count += 1;
-      persistBudget();
+    return raceAbort(
+      enqueue(async () => {
+        external?.throwIfAborted();
+        assertLive(endpoint);
+        const bucket = currentBudget();
+        if (bucket.count >= budgetCap) {
+          throw new Error(`B站日预算已用尽（${bucket.count}/${budgetCap}）`);
+        }
+        await spacingWait(endpoint, external);
+        lastStartAt.set(endpoint, now().getTime());
 
-      const raw = await res.text();
-      if (endpoint === "dm") {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(new DOMException("timeout", "TimeoutError")), timeoutMs);
+        const onAbort = (): void => ctrl.abort(abortReasonOf(external!));
+        external?.addEventListener("abort", onAbort, { once: true });
+
+        let res: Response;
+        let raw: string;
+        try {
+          try {
+            res = await doFetch(endpointUrl(endpoint, params), { headers: headers(), signal: ctrl.signal });
+          } catch (error) {
+            if (external?.aborted) throw abortReasonOf(external);
+            throw new Error(`B站请求失败（${endpoint}）`, { cause: error });
+          }
+          // 拿到响应即记账：风控与接口错误同样消耗预算
+          bucket.count += 1;
+          persistBudget();
+
+          try {
+            raw = await readBiliBodyCapped(res, BILI_MAX_RESPONSE_BYTES, ctrl.signal, endpoint);
+          } catch (error) {
+            if (external?.aborted) throw abortReasonOf(external);
+            if (ctrl.signal.aborted) throw new Error(`B站请求超时（${endpoint}）`, { cause: error });
+            throw error;
+          }
+        } finally {
+          clearTimeout(timer);
+          external?.removeEventListener("abort", onAbort);
+        }
+
+        if (endpoint === "dm") {
+          if (!res.ok) throw new Error(`B站 HTTP ${res.status}（${endpoint}）`);
+          return raw;
+        }
+        let env: unknown;
+        try {
+          env = JSON.parse(raw);
+        } catch {
+          if (!res.ok) throw new Error(`B站 HTTP ${res.status}（${endpoint}）`);
+          throw new Error(`B站响应解析失败（${endpoint}）`);
+        }
+        if (env === null || typeof env !== "object" || Array.isArray(env)) {
+          if (!res.ok) throw new Error(`B站 HTTP ${res.status}（${endpoint}）`);
+          throw new Error(`B站响应格式错误（${endpoint}）`);
+        }
+        const envelope = env as RawRecord;
+        const rawCode = envelope["code"];
+        if (typeof rawCode !== "number" || !Number.isFinite(rawCode)) {
+          if (!res.ok) throw new Error(`B站 HTTP ${res.status}（${endpoint}）`);
+          throw new Error(`B站响应缺少 code（${endpoint}）`);
+        }
+        const code = rawCode;
+        if (code === -412 || code === -352) {
+          tripped.set(endpoint, today());
+          throw new Error(`B站 ${endpoint} 触发风控（${code}），当日熔断`);
+        }
         if (!res.ok) throw new Error(`B站 HTTP ${res.status}（${endpoint}）`);
-        return raw;
-      }
-      let env: unknown;
-      try {
-        env = JSON.parse(raw);
-      } catch {
-        if (!res.ok) throw new Error(`B站 HTTP ${res.status}（${endpoint}）`);
-        throw new Error(`B站响应解析失败（${endpoint}）`);
-      }
-      const envelope = rec(env);
-      const code = numOf(envelope["code"]);
-      if (code === -412 || code === -352) {
-        tripped.set(endpoint, today());
-        throw new Error(`B站 ${endpoint} 触发风控（${code}），当日熔断`);
-      }
-      if (!res.ok) throw new Error(`B站 HTTP ${res.status}（${endpoint}）`);
-      if (code !== 0) throw new Error(`B站接口 code=${code} ${strOf(envelope["message"]).slice(0, 40)}`);
-      return envelope["data"];
-    });
+        if (code !== 0) throw new Error(`B站接口 code=${code} ${strOf(envelope["message"]).slice(0, 40)}`);
+        return envelope["data"];
+      }),
+      external,
+    );
   }
 
-  function list(endpoint: "popular" | "ranking", params: BiliEndpointParams): Promise<BiliVideoCard[]> {
+  function list(endpoint: "popular" | "ranking", params: BiliEndpointParams, signal?: AbortSignal): Promise<BiliVideoCard[]> {
     return (async () => {
-      const data = rec(await send(endpoint, params));
+      const data = rec(await send(endpoint, params, { signal }));
       return arrOf(data["list"]).map(mapCard);
     })();
   }
@@ -489,32 +634,32 @@ export function createBiliClient(options: BiliClientOptions = {}): BiliClient {
   }
 
   return {
-    popular(page?: number): Promise<BiliVideoCard[]> {
-      return list("popular", { page });
+    popular(page?: number, signal?: AbortSignal): Promise<BiliVideoCard[]> {
+      return list("popular", { page }, signal);
     },
-    ranking(rid?: number): Promise<BiliVideoCard[]> {
-      return list("ranking", { rid });
+    ranking(rid?: number, signal?: AbortSignal): Promise<BiliVideoCard[]> {
+      return list("ranking", { rid }, signal);
     },
-    async related(bvid: string): Promise<BiliVideoCard[]> {
+    async related(bvid: string, signal?: AbortSignal): Promise<BiliVideoCard[]> {
       if (!isValidBvid(bvid)) throw new Error("BV 号格式不对");
       // 该端点的 data 直接是数组，不是 { list } 信封
-      const data = await send("related", { bvid });
+      const data = await send("related", { bvid }, { signal });
       return arrOf(data).map(mapCard);
     },
-    async view(bvid: string): Promise<BiliVideoCard> {
+    async view(bvid: string, signal?: AbortSignal): Promise<BiliVideoCard> {
       if (!isValidBvid(bvid)) throw new Error("BV 号格式不对");
-      return mapCard(await send("view", { bvid }));
+      return mapCard(await send("view", { bvid }, { signal }));
     },
-    async danmakuXml(cid: string): Promise<string> {
+    async danmakuXml(cid: string, signal?: AbortSignal): Promise<string> {
       if (!/^\d{1,16}$/.test(cid)) throw new Error("cid 格式不对");
-      return (await send("dm", { cid })) as string;
+      return (await send("dm", { cid }, { signal })) as string;
     },
-    async hotReplies(oid: string | number, type?: number): Promise<BiliReply[]> {
-      const data = rec(await send("reply", { oid, type }));
+    async hotReplies(oid: string | number, type?: number, signal?: AbortSignal): Promise<BiliReply[]> {
+      const data = rec(await send("reply", { oid, type }, { signal }));
       return arrOf(data["replies"]).map(mapReply);
     },
-    async upCard(mid: string | number): Promise<BiliUpCard> {
-      return mapUpCard(await send("card", { mid }));
+    async upCard(mid: string | number, signal?: AbortSignal): Promise<BiliUpCard> {
+      return mapUpCard(await send("card", { mid }, { signal }));
     },
     setDailyBudget(n: number): void {
       const next = Math.max(0, Math.floor(Number.isFinite(n) ? n : 60));
@@ -728,7 +873,7 @@ export function createBiliFiltersLoader(options: { varDir?: string } = {}): () =
   const path = join(options.varDir ?? defaultVarDir(), "bili-filters.json");
   const mtimeOf = (): number => {
     try {
-      return existsSync(path) ? statSync(path).mtimeMs : -1;
+      return statSync(path).mtimeMs;
     } catch {
       return -1;
     }
@@ -747,15 +892,37 @@ export function createBiliFiltersLoader(options: { varDir?: string } = {}): () =
   };
 }
 
-/** 把 JSON 里的正则字符串编译成 RegExp（忽略大小写）；非法条目跳过并告警，不炸筛选。 */
+interface CompiledPatternEntry {
+  snapshot: string[];
+  compiled: RegExp[];
+  bad: string[];
+}
+
+const compiledPatternCache = new WeakMap<readonly string[], CompiledPatternEntry>();
+
+/** 把 JSON 里的正则字符串编译成 RegExp（忽略大小写）；按数组引用缓存，非法条目跳过并告警，不炸筛选。 */
 export function compileFilterPatterns(patterns: readonly string[], log?: (message: string) => void): RegExp[] {
+  const cached = compiledPatternCache.get(patterns);
+  if (
+    cached !== undefined &&
+    cached.snapshot.length === patterns.length &&
+    cached.snapshot.every((p, i) => p === patterns[i])
+  ) {
+    if (log !== undefined) {
+      for (const pattern of cached.bad) log(`筛选正则非法，已跳过：${pattern}`);
+    }
+    return cached.compiled;
+  }
   const out: RegExp[] = [];
+  const bad: string[] = [];
   for (const pattern of patterns) {
     try {
       out.push(new RegExp(pattern, "i"));
     } catch {
+      bad.push(pattern);
       log?.(`筛选正则非法，已跳过：${pattern}`);
     }
   }
+  compiledPatternCache.set(patterns, { snapshot: [...patterns], compiled: out, bad });
   return out;
 }

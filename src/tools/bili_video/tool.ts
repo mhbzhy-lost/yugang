@@ -103,8 +103,11 @@ function pickHighEnergy(danmaku: { time: number; text: string }[], limit: number
 export async function buildBiliVideoReport(
   client: BiliClient,
   args: { bvid: string; withComments?: boolean; withDanmaku?: boolean },
+  signal?: AbortSignal,
 ): Promise<string> {
-  const card = await client.view(args.bvid);
+  const isCancelled = (error: unknown): boolean =>
+    Boolean(signal?.aborted) || (error instanceof Error && error.name === "AbortError");
+  const card = await client.view(args.bvid, signal);
   const lines: string[] = [];
 
   lines.push(`《${sanitizeExternalText(card.title, { maxLen: LIMITS.title })}》`);
@@ -127,7 +130,7 @@ export async function buildBiliVideoReport(
   // UP 评级（card 端点）：软筛信号，评级段落拉不到不影响主卡片
   if (card.owner.mid > 0) {
     try {
-      const up = await client.upCard(card.owner.mid);
+      const up = await client.upCard(card.owner.mid, signal);
       const kind = up.officialType === 0 ? "个人认证" : up.officialType === 1 ? "机构认证" : "";
       const auth = kind
         ? `${kind}${up.officialDesc ? `（${sanitizeExternalText(up.officialDesc, { maxLen: LIMITS.officialDesc })}）` : ""}`
@@ -136,7 +139,8 @@ export async function buildBiliVideoReport(
         `UP 评级（软筛参考）：${sanitizeExternalText(up.name, { maxLen: LIMITS.name })}` +
           ` · 粉丝 ${count(up.fans)} · 等级 ${up.level} · ${auth}`,
       );
-    } catch {
+    } catch (error) {
+      if (isCancelled(error)) throw error;
       // 评级拉不到就略过
     }
   }
@@ -144,7 +148,7 @@ export async function buildBiliVideoReport(
   // 可选热评前 5（reply 端点，type=1 视频评论区，mode=3 热评序）
   if (args.withComments === true && card.aid > 0) {
     try {
-      const messages = (await client.hotReplies(card.aid, 1))
+      const messages = (await client.hotReplies(card.aid, 1, signal))
         .slice(0, HOT_REPLIES)
         .map((r) => sanitizeExternalText(r.message, { maxLen: LIMITS.reply }))
         .filter((m) => m.length > 0);
@@ -152,7 +156,8 @@ export async function buildBiliVideoReport(
         lines.push("热评：");
         messages.forEach((m, i) => lines.push(`${i + 1}. ${m}`));
       }
-    } catch {
+    } catch (error) {
+      if (isCancelled(error)) throw error;
       // 评论区拉不到不影响
     }
   }
@@ -160,12 +165,13 @@ export async function buildBiliVideoReport(
   // 可选高能弹幕 top 10（dm 端点；多 P 视频只取第一段，cid 即 view 映射的第一段 cid）
   if (args.withDanmaku === true && card.cid !== undefined && card.cid > 0) {
     try {
-      const picks = pickHighEnergy(parseDanmakuXml(await client.danmakuXml(String(card.cid))), HIGH_ENERGY);
+      const picks = pickHighEnergy(parseDanmakuXml(await client.danmakuXml(String(card.cid), signal)), HIGH_ENERGY);
       if (picks.length > 0) {
         lines.push("高能弹幕：");
         for (const text of picks) lines.push(`· ${text}`);
       }
-    } catch {
+    } catch (error) {
+      if (isCancelled(error)) throw error;
       // 弹幕拉不到不影响
     }
   }
@@ -179,19 +185,25 @@ export function createBiliVideoTool(manifest: ToolManifest, deps: ToolPackageDep
     description: toolFullDescription(manifest),
     callers: ["model"],
     parameters: manifestParameters<BiliVideoArgs>(manifest),
-    execute: async (args) => {
+    execute: async (args, _api, context) => {
       const bvid = args.bvid.trim();
       if (!isValidBvid(bvid)) {
         throw new Error(deps.prompts.messages["bili_video_invalid"] ?? "这不是合法的 BV 号");
       }
+      const signal = context?.abortSignal;
       let text: string;
       try {
-        text = await buildBiliVideoReport(getBiliClient(), {
-          bvid,
-          withComments: args.withComments === true,
-          withDanmaku: args.withDanmaku === true,
-        });
+        text = await buildBiliVideoReport(
+          getBiliClient(),
+          {
+            bvid,
+            withComments: args.withComments === true,
+            withDanmaku: args.withDanmaku === true,
+          },
+          signal,
+        );
       } catch (error) {
+        if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
         const detail = error instanceof Error ? error.message : String(error);
         throw new Error(
           renderTemplate(deps.prompts.messages["bili_video_failed"] ?? "视频卡片没取到", { bvid, detail }),

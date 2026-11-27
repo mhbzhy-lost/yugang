@@ -305,7 +305,10 @@ export function createBiliSearchTool(manifest: ToolManifest, deps: ToolPackageDe
       }
       lease.count += 1;
       const held = lease;
+      let released = false;
       const release = (): void => {
+        if (released) return;
+        released = true;
         if (BILI_SEARCHED.get(api.conversationId) === held) {
           held.count -= 1;
           if (held.count <= 0) BILI_SEARCHED.delete(api.conversationId);
@@ -385,6 +388,10 @@ export function createBiliSearchTool(manifest: ToolManifest, deps: ToolPackageDe
             applyVideoPoolSeen(doc, result.bvids, nowMs);
           }, context);
         } catch (error) {
+          if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+            release();
+            throw error;
+          }
           console.warn("[鱼缸] bili_search 展示记账失败", error instanceof Error ? error.message : error);
         }
         const text = [

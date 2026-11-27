@@ -297,3 +297,33 @@ test("createSearchTool 透传 context.abortSignal：外部取消原样上抛 Abo
     (error: unknown) => error instanceof Error && error.name === "AbortError",
   );
 });
+
+test("deepseekSearch 在 !res.ok 与 content-length 超限路径调用 res.body.cancel()", async () => {
+  let errCancelled = false;
+  const errRes = new Response(
+    new ReadableStream<Uint8Array>({
+      start() {},
+      cancel() { errCancelled = true; },
+    }),
+    { status: 502 },
+  );
+  await assert.rejects(
+    () => deepseekSearch({ apiKey: "k", query: "q", count: 4, fetch: mockFetch([errRes]).fn }),
+    SearchResponseError,
+  );
+  assert.equal(errCancelled, true, "!res.ok 应调用 res.body.cancel()");
+
+  let oversizedCancelled = false;
+  const oversizedRes = new Response(
+    new ReadableStream<Uint8Array>({
+      start() {},
+      cancel() { oversizedCancelled = true; },
+    }),
+    { status: 200, headers: { "content-length": String(SEARCH_RESPONSE_MAX_BYTES + 1) } },
+  );
+  await assert.rejects(
+    () => deepseekSearch({ apiKey: "k", query: "q", count: 4, fetch: mockFetch([oversizedRes]).fn }),
+    SearchResponseError,
+  );
+  assert.equal(oversizedCancelled, true, "content-length 超限应调用 res.body.cancel()");
+});

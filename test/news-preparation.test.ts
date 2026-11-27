@@ -15,7 +15,7 @@ import {
   type NewsRunRecord,
   type NewsRunStore,
 } from "../src/external/news-runs.ts";
-import type { NewsTopicFeed } from "../src/external/news-client.ts";
+import { createNewsClient, type NewsTopicFeed } from "../src/external/news-client.ts";
 import { loadFishConfig } from "../src/fish-config.ts";
 import { createSession, MemoryStorage } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -436,4 +436,106 @@ test("新闻配置与候选成品校验守住窗口合同", () => {
   assert.equal(validateNewsDigest({
     sections: [{ topic: "AI", items: [{ summary: "错 topic 引用", sourceRef: "1" }] }], closing: "",
   }, FEEDS, input, 5).ok, false);
+});
+
+test("news-client：!res.ok 与 content-length 超限调用 body.cancel()；parseRss 走 textOf 并支持 GBK 编码", async () => {
+  // 1. !res.ok 与 content-length 超限均 cancel body
+  {
+    let errCancelled = false;
+    let overCancelled = false;
+    let call = 0;
+    const client = createNewsClient({
+      fetchImpl: (async () => {
+        call += 1;
+        if (call === 1) {
+          return new Response(new ReadableStream({ start() {}, cancel() { errCancelled = true; } }), { status: 503 });
+        }
+        return new Response(new ReadableStream({ start() {}, cancel() { overCancelled = true; } }), {
+          status: 200,
+          headers: { "content-length": String(5_000_000) },
+        });
+      }) as unknown as typeof fetch,
+    });
+    await assert.rejects(client.fetchSource("ithome"));
+    assert.equal(errCancelled, true, "!res.ok 应 cancel body");
+    await assert.rejects(client.fetchSource("ithome"));
+    assert.equal(overCancelled, true, "content-length 超限应 cancel body");
+  }
+
+  // 2. parseRss 混合节点 textOf（含子节点/数组）与 GBK XML encoding
+  {
+    const gbkBytes = Buffer.from([
+      ...Buffer.from('<?xml version="1.0" encoding="GBK"?><rss><channel><item><title>'),
+      0xd6, 0xd0, 0xce, 0xc4, // "中文" in GBK
+      ...Buffer.from('<b>新闻</b></title><link>https://example.com/gbk</link><link>https://example.com/dup</link><description>简介<i>补充</i></description></item></channel></rss>'),
+    ]);
+    const client = createNewsClient({
+      fetchImpl: (async () =>
+        new Response(gbkBytes, {
+          status: 200,
+          headers: { "content-type": "application/rss+xml" },
+        })) as unknown as typeof fetch,
+    });
+    const items = await client.fetchSource("people");
+    assert.equal(items.length, 1);
+    assert.ok(items[0]!.title.includes("中文"), `GBK 标题应正确解码，实际: ${items[0]!.title}`);
+    assert.equal(items[0]!.url, "https://example.com/gbk");
+  }
+});
+
+test("news-job：collect() 抛错或返回空数组时触发退避而非零延迟紧循环；stop() 重置 expired 与候选缓存", async () => {
+  // 1. collect 抛错与返回空料均带 15s / 30s 退避
+  {
+    const times: number[] = [];
+    let attempt = 0;
+    const f = fixture({
+      collect: async () => {
+        times.push(f.clock.now - START);
+        attempt += 1;
+        if (attempt === 1) throw new Error("fetch_down");
+        if (attempt === 2) return [];
+        return structuredClone(FEEDS);
+      },
+    });
+    const starting = f.job.start("10:30", DAY, CHAT, 10);
+    await flush();
+    // 刚启动时仅触发第 1 次 collect，未零延迟紧循环
+    assert.deepEqual(times, [0]);
+    // 推进 14s 仍未重试
+    await f.clock.advanceTo(START + 14_000);
+    assert.deepEqual(times, [0]);
+    // 到 15s 触发第 2 次 collect（返回空数组）
+    await f.clock.advanceTo(START + 15_000);
+    assert.deepEqual(times, [0, 15_000]);
+    // 第 2 次失败后退避 30s（到 15s+29s 仍未重试，15s+30s=45s 触发第 3 次并成功）
+    await f.clock.advanceTo(START + 44_000);
+    assert.deepEqual(times, [0, 15_000]);
+    await f.clock.advanceTo(START + 45_000);
+    assert.deepEqual(times, [0, 15_000, 45_000]);
+    await starting;
+    assert.equal((await f.store.read(DAY, GROUP))?.state, "prepared");
+  }
+
+  // 2. stop() 取消退避、清候选缓存与 expired
+  {
+    const f = fixture({
+      collect: async () => {
+        if (f.calls.collect === 0) {
+          f.calls.collect += 1;
+          return structuredClone(FEEDS);
+        }
+        return [];
+      },
+      submit: async () => {
+        f.calls.submit += 1;
+        return "retry";
+      },
+    });
+    const starting = f.job.start("10:30", DAY, CHAT, 10);
+    await flush();
+    assert.equal(f.candidates.has(RUN_ID), true);
+    f.job.stop();
+    await starting;
+    assert.equal(f.candidates.has(RUN_ID), false, "stop() 应清空候选缓存");
+  }
 });

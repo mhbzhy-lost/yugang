@@ -76,7 +76,10 @@ export async function deepseekSearch(options: DeepSeekSearchOptions): Promise<De
       headers: { "content-type": "application/json", authorization: `Bearer ${options.apiKey}` },
       body: JSON.stringify({ query: options.query, count: options.count }),
     });
-    if (!res.ok) throw new SearchResponseError(`HTTP ${res.status}`);
+    if (!res.ok) {
+      await Promise.resolve(res.body?.cancel()).catch(() => undefined);
+      throw new SearchResponseError(`HTTP ${res.status}`);
+    }
     const body = await readResponseBodyCapped(res);
     let j: unknown;
     try {
@@ -125,6 +128,7 @@ export async function deepseekSearch(options: DeepSeekSearchOptions): Promise<De
 async function readResponseBodyCapped(res: Response): Promise<string> {
   const declared = Number(res.headers.get("content-length") ?? "");
   if (Number.isFinite(declared) && declared > SEARCH_RESPONSE_MAX_BYTES) {
+    await Promise.resolve(res.body?.cancel()).catch(() => undefined);
     throw new SearchResponseError(`响应超限(>${SEARCH_RESPONSE_MAX_BYTES}B)`);
   }
   const reader = res.body?.getReader();
