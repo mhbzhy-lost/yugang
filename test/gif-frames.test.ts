@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildGifExtractArgs,
+  extractGifFramesAsync,
   finalizeGifFrame,
+  finalizeGifFrameAsync,
   GIF_FRAME_QSCALE,
   GIF_FRAME_TARGET_BYTES,
 } from "../src/media/gif-frames.ts";
@@ -66,4 +68,24 @@ test("单帧超过 50KB 时调用 shrink 压回预算内；shrink 失败或未�
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("finalizeGifFrameAsync 与 extractGifFramesAsync：支持异步 shrink 桩且响应 AbortSignal", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "yg-gif-async-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, "big.jpg");
+  const big = Buffer.alloc(GIF_FRAME_TARGET_BYTES + 2048, 0xbb);
+  writeFileSync(file, big);
+
+  const smaller = Buffer.alloc(16 * 1024, 0xcc);
+  const shrunk = await finalizeGifFrameAsync(file, async () => {
+    await new Promise((r) => setTimeout(r, 10));
+    return { ok: true, buffer: smaller, mimeType: "image/jpeg" };
+  });
+  assert.deepEqual(shrunk, smaller);
+
+  const ac = new AbortController();
+  ac.abort();
+  const cancelled = await extractGifFramesAsync(join(dir, "missing.gif"), 4, { signal: ac.signal });
+  assert.equal(cancelled, null);
 });

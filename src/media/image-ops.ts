@@ -21,8 +21,10 @@
  * 格式正确、尺寸边界正确、质量档位正确、失败形状正确。
  */
 import { spawnSync } from "node:child_process";
-import { closeSync, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, fstatSync, mkdtempSync, openSync, readSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnCapture } from "./spawn-capture.ts";
 
 /** 与 shrink-image.ts 共用同一套规格常量，两个后端不许各写一份。 */
 export const IMAGE_SPEC = {
@@ -92,6 +94,79 @@ export function normalizeInitViaWorker(file: string): Buffer | null {
 export function toJpegViaWorker(file: string): Buffer | null {
   const r = runWorker("jpeg", { file });
   return r.ok ? Buffer.from(r.b64, "base64") : null;
+}
+
+/**
+ * 异步调 worker 完成一次图像操作：父进程创建调用级临时目录并在 finally 兜底清理，
+ * 避免 worker 跑 heif-convert 期间被 SIGKILL 遗留临时 PNG。
+ */
+async function runWorkerAsync(
+  op: string,
+  args: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<WorkerResult> {
+  if (signal?.aborted) return { ok: false, reason: "aborted" };
+  const tempDir = mkdtempSync(join(tmpdir(), "yugang-img-"));
+  try {
+    const res = await spawnCapture(
+      process.execPath,
+      [WORKER, op, JSON.stringify({ ...args, tempDir })],
+      { timeoutMs: 60_000, maxBytes: 64 * 1024 * 1024, signal },
+    );
+    if (res.status !== 0) {
+      console.error(`[鱼缸] 图像处理失败 op=${op} rc=${res.status} ${res.stderr.toString("utf8").slice(0, 200)}`);
+      return { ok: false, reason: "worker" };
+    }
+    const parsed = JSON.parse(res.stdout.toString("utf8")) as WorkerResult;
+    if (!parsed.ok) console.error(`[鱼缸] 图像处理未产出 op=${op} reason=${parsed.reason}`);
+    return parsed;
+  } catch (err) {
+    console.error(`[鱼缸] 图像处理异常 op=${op} ${err instanceof Error ? err.message : "unknown"}`);
+    return { ok: false, reason: "worker" };
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+/** inline 附图压图异步版（≤50KB，含阶梯下探）。 */
+export function shrinkViaWorkerAsync(file: string, signal?: AbortSignal): Promise<WorkerResult> {
+  return runWorkerAsync("shrink", { file }, signal);
+}
+
+/** look 转述前压图异步版：长边 ≤1280、JPEG q70。 */
+export async function lookShrinkViaWorkerAsync(file: string, signal?: AbortSignal): Promise<Buffer | null> {
+  const r = await runWorkerAsync("look", { file }, signal);
+  return r.ok ? Buffer.from(r.b64, "base64") : null;
+}
+
+/** draw 的 ref 初图归一化异步版：受限像素预算 + 16 对齐 + PNG。 */
+export async function normalizeInitViaWorkerAsync(file: string, signal?: AbortSignal): Promise<Buffer | null> {
+  const r = await runWorkerAsync("init", { file }, signal);
+  return r.ok ? Buffer.from(r.b64, "base64") : null;
+}
+
+/** 入站 HEIC/HEIF/BMP/TIFF → JPEG 异步版（不缩放，默认质量）。 */
+export async function toJpegViaWorkerAsync(file: string, signal?: AbortSignal): Promise<Buffer | null> {
+  const r = await runWorkerAsync("jpeg", { file }, signal);
+  return r.ok ? Buffer.from(r.b64, "base64") : null;
+}
+
+/** 只读文件前 bytes 字节（魔数嗅探专用，避免为看 16B 头把 32MB 大图整份读入内存）。 */
+export function readFileHead(file: string, bytes: number): Buffer {
+  if (bytes <= 0) return Buffer.alloc(0);
+  const fd = openSync(file, "r");
+  try {
+    const buf = Buffer.alloc(bytes);
+    let off = 0;
+    while (off < bytes) {
+      const n = readSync(fd, buf, off, bytes - off, off);
+      if (n <= 0) break;
+      off += n;
+    }
+    return buf.subarray(0, off);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**

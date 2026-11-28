@@ -15,8 +15,10 @@
  * 若不接这条分支，压图会静默失败、模型一张图也看不到。规格常量两边共用。
  */
 import { spawnSync } from "node:child_process";
-import { shrinkViaWorker, usesSips } from "./image-ops.ts";
+import { readFileHead, shrinkViaWorker, shrinkViaWorkerAsync, usesSips } from "./image-ops.ts";
+import { spawnCapture } from "./spawn-capture.ts";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -75,9 +77,11 @@ export function shrinkForModel(input: { file: string }): ShrinkResult {
     const buffer = Buffer.from(r.b64, "base64");
     return r.floor ? { ok: true, buffer, mimeType: "image/jpeg", floor: true } : { ok: true, buffer, mimeType: "image/jpeg" };
   }
-  let raw: Buffer;
+  let head: Buffer;
+  let fileSize: number;
   try {
-    raw = readFileSync(input.file);
+    fileSize = statSync(input.file).size;
+    head = readFileHead(input.file, 16);
   } catch {
     return { ok: false, reason: "read" };
   }
@@ -86,8 +90,12 @@ export function shrinkForModel(input: { file: string }): ShrinkResult {
   const long = Math.max(size.w, size.h);
 
   // JPEG 小图直通：不重编码（字节即证据，F3 的小图分支）
-  if (sniff(raw) === "jpeg" && long <= MAX_LONG_SIDE && raw.length <= TARGET_BYTES) {
-    return { ok: true, buffer: raw, mimeType: "image/jpeg" };
+  if (sniff(head) === "jpeg" && long <= MAX_LONG_SIDE && fileSize <= TARGET_BYTES) {
+    try {
+      return { ok: true, buffer: readFileSync(input.file), mimeType: "image/jpeg" };
+    } catch {
+      return { ok: false, reason: "read" };
+    }
   }
 
   // 初次转码：超尺寸先归到 1280；不超尺寸只转格式。GIF 由 sips 取首帧（防御，上游已排除）
@@ -122,5 +130,90 @@ export function inlineImageOf(
   shrink: (input: { file: string }) => ShrinkResult = shrinkForModel,
 ): InlineImageResult {
   const shrunk = shrink({ file });
+  return shrunk.ok ? { ok: true, buffer: shrunk.buffer, mimeType: shrunk.mimeType } : { ok: false, reason: shrunk.reason };
+}
+
+async function dimensionsAsync(file: string, signal?: AbortSignal): Promise<{ w: number; h: number } | null> {
+  const res = await spawnCapture("sips", ["-g", "pixelWidth", "-g", "pixelHeight", file], { timeoutMs: 10_000, signal });
+  if (res.status !== 0) return null;
+  const out = res.stdout.toString();
+  const w = Number(/pixelWidth:\s*(\d+)/.exec(out)?.[1]);
+  const h = Number(/pixelHeight:\s*(\d+)/.exec(out)?.[1]);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
+  return { w, h };
+}
+
+async function runSipsAsync(args: string[], source: string, signal?: AbortSignal): Promise<Buffer | null> {
+  if (signal?.aborted) return null;
+  const dir = mkdtempSync(join(tmpdir(), "shrink-"));
+  const out = join(dir, "o.jpg");
+  try {
+    const res = await spawnCapture("sips", [...args, source, "--out", out], { timeoutMs: 20_000, signal });
+    if (res.status !== 0) return null;
+    const buf = await readFile(out);
+    return buf.length > 0 ? buf : null;
+  } catch {
+    return null;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** shrinkForModel 异步版：事件循环无阻塞且支持取消信号。 */
+export async function shrinkForModelAsync(input: { file: string; signal?: AbortSignal }): Promise<ShrinkResult> {
+  if (input.signal?.aborted) return { ok: false, reason: "aborted" };
+  if (!usesSips()) {
+    const r = await shrinkViaWorkerAsync(input.file, input.signal);
+    if (!r.ok) return { ok: false, reason: r.reason };
+    const buffer = Buffer.from(r.b64, "base64");
+    return r.floor ? { ok: true, buffer, mimeType: "image/jpeg", floor: true } : { ok: true, buffer, mimeType: "image/jpeg" };
+  }
+  let head: Buffer;
+  let fileSize: number;
+  try {
+    fileSize = statSync(input.file).size;
+    head = readFileHead(input.file, 16);
+  } catch {
+    return { ok: false, reason: "read" };
+  }
+  const size = await dimensionsAsync(input.file, input.signal);
+  if (input.signal?.aborted) return { ok: false, reason: "aborted" };
+  if (!size) return { ok: false, reason: "sips" };
+  const long = Math.max(size.w, size.h);
+
+  if (sniff(head) === "jpeg" && long <= MAX_LONG_SIDE && fileSize <= TARGET_BYTES) {
+    try {
+      return { ok: true, buffer: await readFile(input.file), mimeType: "image/jpeg" };
+    } catch {
+      return { ok: false, reason: "read" };
+    }
+  }
+
+  const first = long > MAX_LONG_SIDE
+    ? await runSipsAsync(["-Z", String(MAX_LONG_SIDE), "-s", "format", "jpeg", "-s", "formatOptions", QUALITY], input.file, input.signal)
+    : await runSipsAsync(["-s", "format", "jpeg", "-s", "formatOptions", QUALITY], input.file, input.signal);
+  if (input.signal?.aborted) return { ok: false, reason: "aborted" };
+  if (!first) return { ok: false, reason: "sips" };
+  if (first.length <= TARGET_BYTES) return { ok: true, buffer: first, mimeType: "image/jpeg" };
+
+  let last = first;
+  for (let z = Math.floor(Math.min(long, MAX_LONG_SIDE) / LADDER_STEP) * LADDER_STEP - LADDER_STEP; z >= LADDER_FLOOR; z -= LADDER_STEP) {
+    if (input.signal?.aborted) return { ok: false, reason: "aborted" };
+    const next = await runSipsAsync(["-Z", String(z), "-s", "format", "jpeg", "-s", "formatOptions", QUALITY], input.file, input.signal);
+    if (!next) continue;
+    last = next;
+    if (next.length <= TARGET_BYTES) return { ok: true, buffer: next, mimeType: "image/jpeg" };
+  }
+  return { ok: true, buffer: last, mimeType: "image/jpeg", floor: true };
+}
+
+/** inline 附图异步取图（可注入同步或异步 shrink 桩）。 */
+export async function inlineImageOfAsync(
+  file: string,
+  shrink: (input: { file: string; signal?: AbortSignal }) => ShrinkResult | Promise<ShrinkResult> = shrinkForModelAsync,
+  signal?: AbortSignal,
+): Promise<InlineImageResult> {
+  if (signal?.aborted) return { ok: false, reason: "aborted" };
+  const shrunk = await shrink({ file, signal });
   return shrunk.ok ? { ok: true, buffer: shrunk.buffer, mimeType: shrunk.mimeType } : { ok: false, reason: shrunk.reason };
 }

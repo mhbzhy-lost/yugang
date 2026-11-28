@@ -30,6 +30,7 @@ export const isVideoName = (name: string): boolean => /\.(mp4|mov|m4v|webm|mkv|a
 export class InboundVideoStore {
   readonly root: string;
   #rounds = new Map<string, { conversationId: string; chatKey: string; refs: ReadonlySet<string> }>();
+  #seenCache = new Map<string, Array<{ ref: string; expiresAt: number }>>();
   constructor(mediaRoot: string) { this.root = resolve(mediaRoot, "inbound-video"); }
 
   #group(chatKey: string): string {
@@ -98,10 +99,44 @@ export class InboundVideoStore {
   }
   bind(conversationId: string, round: string, chatKey: string, injected: readonly string[]): void {
     if (!/^\d+$/.test(conversationId)) throw new Error("video_source_invalid");
+    const cacheKey = `${chatKey}:${conversationId}`;
+    const now = Date.now();
+    const cached = this.#seenCache.get(cacheKey);
+    if (cached && injected.length === 0) {
+      const live = cached.filter((item) => item.expiresAt > now);
+      if (live.length !== cached.length) this.#seenCache.set(cacheKey, live);
+      this.#rounds.set(round, { conversationId, chatKey, refs: new Set(live.map((item) => item.ref)) });
+      return;
+    }
+
     const name = `seen-${conversationId}.json`;
-    const old = this.#read<SeenIndex>(chatKey, name);
-    const previous = old?.version === 1 && old.conversationId === conversationId && old.chatKey === chatKey && Array.isArray(old.refs) ? old.refs : [];
-    const refs = [...new Set([...previous, ...injected])].filter((ref) => typeof ref === "string" && this.resolve(chatKey, ref)).slice(-CAP);
+    const base = new Map<string, number>();
+    if (cached) {
+      for (const item of cached) {
+        if (item.expiresAt > now) base.set(item.ref, item.expiresAt);
+      }
+    } else {
+      const old = this.#read<SeenIndex>(chatKey, name);
+      const previous = old?.version === 1 && old.conversationId === conversationId && old.chatKey === chatKey && Array.isArray(old.refs) ? old.refs : [];
+      for (const ref of previous) {
+        if (typeof ref !== "string") continue;
+        const resolved = this.resolve(chatKey, ref);
+        if (resolved) base.set(ref, resolved.expiresAt);
+      }
+    }
+
+    for (const ref of injected) {
+      if (typeof ref !== "string") continue;
+      const resolved = this.resolve(chatKey, ref);
+      if (resolved) {
+        base.delete(ref);
+        base.set(ref, resolved.expiresAt);
+      }
+    }
+
+    const entries = [...base.entries()].slice(-CAP).map(([ref, expiresAt]) => ({ ref, expiresAt }));
+    const refs = entries.map((item) => item.ref);
+    this.#seenCache.set(cacheKey, entries);
     if (injected.length > 0) this.#write(chatKey, name, { version: 1, conversationId, chatKey, refs });
     this.#rounds.set(round, { conversationId, chatKey, refs: new Set(refs) });
   }

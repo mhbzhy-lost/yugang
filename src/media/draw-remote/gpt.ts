@@ -10,7 +10,7 @@
  * 不带本机绝对路径与运维命令；上游正文（含前置刷新失败的 token 端点回复）先按这条通道的凭据脱敏。
  */
 import { fileCredentialStore } from "../../auth/credentials.ts";
-import { generateGptImages } from "../gpt-image.ts";
+import { generateGptImages, REMOTE_REF_TOTAL_MAX_BYTES } from "../gpt-image.ts";
 import { cleanUpstreamText, collectSecrets } from "./redact.ts";
 import {
   DRAW_REMOTE_TIMEOUT_MS,
@@ -27,6 +27,10 @@ const GPT = "gpt" as const;
 const DEFAULT_TIMEOUT_MS = DRAW_REMOTE_TIMEOUT_MS;
 
 export async function runGptChannel(request: DrawRemoteChannelRequest): Promise<string[]> {
+  const totalRefBytes = (request.images ?? []).reduce((sum, image) => sum + image.bytes.length, 0);
+  if (totalRefBytes > REMOTE_REF_TOTAL_MAX_BYTES) {
+    throw new DrawRemoteError(GPT, "bad_ref", "gpt 参考图总大小超过 20MB 上限，请减少张数或压缩后再试", false);
+  }
   const dataUrls = (request.images ?? []).map((image) => `data:${image.mimeType};base64,${image.bytes.toString("base64")}`);
   // 脱敏名单：这条通道在 auth.json 里的凭据（access / refresh / clientSecret）。前置刷新失败时 token 端点的
   // 正文可能回显它们；读不出就不收（随后的凭据校验会报 unconfigured）
@@ -79,7 +83,7 @@ export async function runGptChannel(request: DrawRemoteChannelRequest): Promise<
     }
     // 走到这里的 AbortError / TimeoutError 只剩内部请求超时（宿主取消已在上面原样上抛）
     if (isTimeoutError(error) || isAbortError(error)) {
-      throw new DrawRemoteError(GPT, "failed", `gpt 生图超时（${formatTimeoutLabel(request.timeoutMs ?? DEFAULT_TIMEOUT_MS)}），结果不明`, true, {
+      throw new DrawRemoteError(GPT, "failed", `gpt 生图超时（${formatTimeoutLabel(request.timeoutMs ?? DEFAULT_TIMEOUT_MS)}），结果不明`, phase() === "posted", {
         cause: error,
       });
     }

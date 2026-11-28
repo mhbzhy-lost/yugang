@@ -17,6 +17,7 @@
  */
 import type { Models } from "@earendil-works/pi-ai";
 import type { PromptSet } from "../prompt/index.ts";
+import { sleepCancellable } from "./wan-video.ts";
 
 export interface DescribeDeps {
   models?: Models;
@@ -110,7 +111,11 @@ async function describeWithModel(
       : 400 * attempt;
     const what = outcome.kind === "empty" ? "描述为空" : "失败";
     console.warn(`[鱼缸] 看图${what} ${outcome.kind} 第${attempt}次 ${waitMs}ms ${outcome.detail}`.trim());
-    await new Promise((r) => setTimeout(r, waitMs));
+    try {
+      await sleepCancellable(waitMs, signal);
+    } catch {
+      return { ok: false, reason: "failed" };
+    }
   }
   return { ok: false, reason: "failed" };
 }

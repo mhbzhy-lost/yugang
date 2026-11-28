@@ -17,9 +17,11 @@
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { shrinkForModel, type ShrinkResult } from "./shrink-image.ts";
+import { shrinkForModel, shrinkForModelAsync, type ShrinkResult } from "./shrink-image.ts";
+import { spawnCapture } from "./spawn-capture.ts";
 
 /** GIF 帧的目标长边（px）：比静态图 1280 低一档，控制单帧 token。 */
 export const GIF_FRAME_LONG_SIDE = 640;
@@ -166,6 +168,121 @@ export function extractGifFrames(
   const frames = extractFrames(file, unique, shrink);
   if (frames.length === 0) {
     const fallback = extractFrames(file, [0], shrink);
+    return fallback.length > 0
+      ? { frames: [fallback[0].toString("base64")], count: 1, total: info.frames }
+      : { frames: [], count: 0, total: info.frames };
+  }
+  return { frames: frames.map((b) => b.toString("base64")), count: frames.length, total: info.frames };
+}
+
+export async function finalizeGifFrameAsync(
+  framePath: string,
+  shrink: (input: { file: string; signal?: AbortSignal }) => ShrinkResult | Promise<ShrinkResult> = shrinkForModelAsync,
+  signal?: AbortSignal,
+): Promise<Buffer | null> {
+  if (signal?.aborted) return null;
+  const buf = await readFile(framePath);
+  if (buf.length === 0) return null;
+  if (buf.length <= GIF_FRAME_TARGET_BYTES) return buf;
+  const shrunk = await shrink({ file: framePath, signal });
+  if (shrunk.ok && shrunk.buffer.length > 0 && shrunk.buffer.length < buf.length) {
+    return shrunk.buffer;
+  }
+  return buf;
+}
+
+async function probeGifAsync(file: string, signal?: AbortSignal): Promise<{ frames: number; seconds: number } | null> {
+  try {
+    const res = await spawnCapture(
+      "ffprobe",
+      ["-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries", "stream=nb_read_frames,duration", "-of", "json", file],
+      { timeoutMs: 20_000, signal },
+    );
+    if (res.status !== 0 || res.stdout.length === 0) return null;
+    let parsed: { streams?: Array<{ nb_read_frames?: string; duration?: string }> };
+    try {
+      parsed = JSON.parse(res.stdout.toString()) as typeof parsed;
+    } catch {
+      return null;
+    }
+    const stream = parsed.streams?.[0];
+    if (!stream) return null;
+    const frames = Number(stream.nb_read_frames);
+    const seconds = Number(stream.duration);
+    if (!Number.isFinite(frames) || frames <= 0) return null;
+    return { frames: Math.floor(frames), seconds: Number.isFinite(seconds) && seconds > 0 ? seconds : 0 };
+  } catch {
+    return null;
+  }
+}
+
+async function extractFramesAsync(
+  file: string,
+  indices: readonly number[],
+  shrink: (input: { file: string; signal?: AbortSignal }) => ShrinkResult | Promise<ShrinkResult> = shrinkForModelAsync,
+  signal?: AbortSignal,
+): Promise<Buffer[]> {
+  if (signal?.aborted) return [];
+  const dir = mkdtempSync(join(tmpdir(), "gif-frames-"));
+  try {
+    const res = await spawnCapture(
+      "ffmpeg",
+      buildGifExtractArgs(file, indices, join(dir, "f%03d.jpg")),
+      { timeoutMs: 30_000, signal },
+    );
+    if (res.status !== 0 || signal?.aborted) return [];
+    const names = (await readdir(dir))
+      .filter((name) => name.startsWith("f") && name.endsWith(".jpg"))
+      .sort();
+    const out: Buffer[] = [];
+    for (const name of names) {
+      if (signal?.aborted) return [];
+      const buf = await finalizeGifFrameAsync(join(dir, name), shrink, signal);
+      if (buf) out.push(buf);
+    }
+    return out;
+  } catch {
+    return [];
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** 等距抽帧异步版：无事件循环阻塞，支持注入同步/异步 shrink 桩与取消信号。 */
+export async function extractGifFramesAsync(
+  file: string,
+  maxFrames: number,
+  opts?: { shrink?: (input: { file: string }) => ShrinkResult | Promise<ShrinkResult>; signal?: AbortSignal },
+): Promise<GifFramePlan | null> {
+  const signal = opts?.signal;
+  if (signal?.aborted) return null;
+  const shrink = opts?.shrink ?? shrinkForModelAsync;
+  const cap = Math.max(2, Math.min(maxFrames, 8));
+  const info = await probeGifAsync(file, signal);
+  if (signal?.aborted) return null;
+  if (!info) {
+    const fallback = await extractFramesAsync(file, [0], shrink, signal);
+    if (signal?.aborted) return null;
+    return fallback.length > 0 ? { frames: [fallback[0].toString("base64")], count: 1, total: 0 } : { frames: [], count: 0, total: 0 };
+  }
+  if (info.frames <= 1) {
+    const single = await extractFramesAsync(file, [0], shrink, signal);
+    if (signal?.aborted) return null;
+    if (single.length > 0) return { frames: [single[0].toString("base64")], count: 1, total: info.frames };
+    return { frames: [], count: 0, total: info.frames };
+  }
+  const byDuration = info.seconds > 0 ? Math.max(2, Math.ceil(info.seconds)) : 2;
+  const want = Math.min(cap, byDuration, info.frames);
+  const indices = Array.from({ length: want }, (_, i) =>
+    want === 1 ? 0 : Math.min(info.frames - 1, Math.round((i * (info.frames - 1)) / (want - 1))),
+  );
+  const unique = [...new Set(indices)];
+  if (unique.length === 1) unique.push(info.frames - 1);
+  const frames = await extractFramesAsync(file, unique, shrink, signal);
+  if (signal?.aborted) return null;
+  if (frames.length === 0) {
+    const fallback = await extractFramesAsync(file, [0], shrink, signal);
+    if (signal?.aborted) return null;
     return fallback.length > 0
       ? { frames: [fallback[0].toString("base64")], count: 1, total: info.frames }
       : { frames: [], count: 0, total: info.frames };

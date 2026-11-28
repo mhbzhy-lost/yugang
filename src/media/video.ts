@@ -33,29 +33,51 @@ export async function extractVideoFrames(source: VideoSource, out: string, signa
   const args = [join(REPO_ROOT, "scripts", "video-frames.py"), "--out", out];
   if (source.kind === "local") args.push("--input", source.file);
   else args.push("--bvid", source.bvid, "--cid", source.cid, "--timestamps", source.timestamps.join(","));
-  const result = await spawnCapture(python, args, { timeoutMs: 90_000, signal, maxBytes: 1024 * 1024 });
+  const result = await spawnCapture(python, args, { timeoutMs: 75_000, signal, maxBytes: 1024 * 1024 });
   signal?.throwIfAborted();
   if (result.status !== 0) throw new Error("video_decode_failed");
-  const data = JSON.parse(result.stdout.toString("utf8").trim().split("\n").pop() ?? "") as VideoFrames;
-  if (!Number.isFinite(data.durationSeconds) || data.durationSeconds <= 0 || !Number.isFinite(data.coveredSeconds)
-    || data.coveredSeconds <= 0 || data.coveredSeconds > 1800 || !Array.isArray(data.frames) || data.frames.length > 6) throw new Error("video_decode_failed");
-  const root = realpathSync(out) + sep;
-  for (const frame of data.frames) {
-    const stat = lstatSync(frame.path);
-    if (!Number.isFinite(frame.time) || frame.time < 0 || frame.time > data.coveredSeconds || !stat.isFile() || stat.isSymbolicLink()
-      || stat.size > 2 * 1024 * 1024 || !realpathSync(frame.path).startsWith(root)) throw new Error("video_decode_failed");
+  let data: VideoFrames;
+  try {
+    const parsed = JSON.parse(result.stdout.toString("utf8").trim().split("\n").pop() ?? "") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("video_decode_failed");
+    data = parsed as VideoFrames;
+    if (!Number.isFinite(data.durationSeconds) || data.durationSeconds <= 0 || !Number.isFinite(data.coveredSeconds)
+      || data.coveredSeconds <= 0 || data.coveredSeconds > 1800 || !Array.isArray(data.frames) || data.frames.length > 6) {
+      throw new Error("video_decode_failed");
+    }
+    const root = realpathSync(out) + sep;
+    for (const frame of data.frames) {
+      if (!frame || typeof frame !== "object" || typeof frame.path !== "string") throw new Error("video_decode_failed");
+      const stat = lstatSync(frame.path);
+      if (!Number.isFinite(frame.time) || frame.time < 0 || frame.time > data.coveredSeconds || !stat.isFile() || stat.isSymbolicLink()
+        || stat.size > 2 * 1024 * 1024 || !realpathSync(frame.path).startsWith(root)) throw new Error("video_decode_failed");
+    }
+  } catch {
+    throw new Error("video_decode_failed");
   }
   return data;
 }
 export async function describeVideoFrames(deps: DescribeDeps, data: VideoFrames, signal?: AbortSignal): Promise<{ lines: string[]; failed: number }> {
   if (!deps.models || !deps.visionModel) throw new Error("video_vision_missing");
-  const lines = await Promise.all(data.frames.map(async (frame) => {
-    signal?.throwIfAborted();
-    try {
-      const described = await describeImage(deps, readFileSync(frame.path).toString("base64"), "image/jpeg", signal);
-      return described.ok ? `[${videoTime(frame.time)}] ${described.text.replace(/\s+/g, " ").slice(0, 220)}` : null;
-    } catch { signal?.throwIfAborted(); return null; }
-  }));
+  const results: (string | null)[] = new Array(data.frames.length).fill(null);
+  let next = 0;
+  const concurrency = Math.min(2, data.frames.length);
+  const worker = async () => {
+    while (next < data.frames.length) {
+      const idx = next++;
+      signal?.throwIfAborted();
+      const frame = data.frames[idx]!;
+      try {
+        const described = await describeImage(deps, readFileSync(frame.path).toString("base64"), "image/jpeg", signal);
+        signal?.throwIfAborted();
+        results[idx] = described.ok ? `[${videoTime(frame.time)}] ${described.text.replace(/\s+/g, " ").slice(0, 220)}` : null;
+      } catch {
+        signal?.throwIfAborted();
+        results[idx] = null;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
   signal?.throwIfAborted();
-  return { lines: lines.filter((line): line is string => line !== null), failed: data.failedFrames + lines.filter((line) => line === null).length };
+  return { lines: results.filter((line): line is string => line !== null), failed: data.failedFrames + results.filter((line) => line === null).length };
 }
