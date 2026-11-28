@@ -481,3 +481,47 @@ test("probeModelConfig：不覆写全局 scopedProxies、通过局部代理发�
   assert.equal(directHits, 1);
   assert.equal(proxyHits, hitsBefore, "probeModelConfig 不得覆写全局 scopedProxies");
 });
+
+test("compose.yaml 与 config/cliproxyapi.example.yaml 结构兜底：sidecar 固定 digest、内网直连、NO_PROXY 与标准协议模板一致", () => {
+  const composePath = fileURLToPath(new URL("../compose.yaml", import.meta.url));
+  const cliproxyExamplePath = fileURLToPath(new URL("../config/cliproxyapi.example.yaml", import.meta.url));
+  const compose = readFileSync(composePath, "utf8");
+
+  assert.match(compose, /^\s{2}cliproxyapi:/m, "compose.yaml 必须声明 cliproxyapi sidecar 服务");
+  assert.match(
+    compose,
+    /image:\s*eceasy\/cli-proxy-api@sha256:[0-9a-f]{64}/,
+    "cliproxyapi 镜像必须固定 @sha256: digest，不得使用浮动 tag",
+  );
+  assert.match(compose, /\.\/var\/cliproxyapi:\/data/, "cliproxyapi 必须 bind mount ./var/cliproxyapi:/data");
+  assert.doesNotMatch(compose, /8317:8317/, "cliproxyapi 不得向宿主机发布 8317 端口（避免冲突）");
+  assert.match(compose, /depends_on:\s*(?:\n\s+-\s+\S+)*\n\s+-\s+cliproxyapi/, "fish.depends_on 必须包含 cliproxyapi");
+  const noProxyLine = compose.split("\n").find((line) => line.includes("NO_PROXY:")) ?? "";
+  assert.ok(noProxyLine.includes("cliproxyapi"), `fish 的 NO_PROXY 必须包含 cliproxyapi：${noProxyLine}`);
+
+  const exampleYaml = readFileSync(cliproxyExamplePath, "utf8");
+  assert.match(exampleYaml, /^config-version:\s*8\b/m);
+  assert.match(exampleYaml, /^\s*host:\s*"0\.0\.0\.0"/m);
+  assert.match(exampleYaml, /^\s*port:\s*8317\b/m);
+  assert.match(exampleYaml, /^\s*auth-dir:\s*"\/data\/auth"/m);
+  assert.ok(!/sk-[A-Za-z0-9_-]{16,}|AIza[A-Za-z0-9_-]{20,}|ya29\./.test(exampleYaml), "cliproxyapi 模板不得含真实密钥");
+
+  const rawModels = JSON.parse(readFileSync(EXAMPLE_MODELS, "utf8")) as {
+    providers: Record<string, Record<string, unknown>>;
+  };
+  const codex = rawModels.providers["cliproxyapi-codex"];
+  const claude = rawModels.providers["cliproxyapi-claude"];
+  const gemini = rawModels.providers["cliproxyapi-gemini"];
+  assert.equal(codex?.["api"], "openai-responses");
+  assert.equal(codex?.["baseUrl"], "http://cliproxyapi:8317/v1");
+  assert.equal(claude?.["api"], "anthropic-messages");
+  assert.equal(claude?.["baseUrl"], "http://cliproxyapi:8317");
+  assert.equal(gemini?.["api"], "google-generative-ai");
+  assert.equal(gemini?.["baseUrl"], "http://cliproxyapi:8317/v1beta");
+  for (const [id, provider] of Object.entries(rawModels.providers)) {
+    assert.equal(provider["auth"], undefined, `${id} 不得再含 auth`);
+    assert.equal(provider["oauthClient"], undefined, `${id} 不得再含 oauthClient`);
+    assert.equal(provider["userAgent"], undefined, `${id} 不得再含 userAgent`);
+    assert.equal(provider["transport"], undefined, `${id} 不得再含 transport`);
+  }
+});

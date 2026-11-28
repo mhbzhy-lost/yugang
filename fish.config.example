@@ -58,7 +58,7 @@
   "compact": {
     "maxTokens": 100000,
     "byModel": {
-      "google-antigravity": 90000
+      "cliproxyapi-claude": 90000
     }
   },
   "_compact": "注释：换页只按最近一次真实模型请求的 input+cacheRead tokens，在完整轮次结束后触发，不截断消息。maxTokens 为默认阈值；byModel 可按 provider 或 provider/model 覆盖，精确模型键优先。旧 maxEntries/maxChars 已停用",

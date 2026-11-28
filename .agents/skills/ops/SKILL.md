@@ -16,7 +16,7 @@ scripts/fish.sh log 60               # 鱼日志尾部
 scripts/fish-logs.sh -m 30 -g 659976571 # 一次拉齐最近消息/DB事件/在途任务/鱼日志/协议端日志
 scripts/fish.sh deploy               # git pull + 平滑重启（标准部署入口）
 scripts/fish.sh memes                # 表情包库状态（本地批量导入：主人把图放进 media/meme-inbox/ 再让鱼逐批登记）
-scripts/fish.sh quota [provider]     # 查各 provider 剩余额度/余额（容器内执行，支持 --json / --no-refresh）
+scripts/fish.sh quota [provider]     # 查 DeepSeek / ZAI 剩余额度与余额（容器内执行，支持 --json）
 scripts/fish.sh help                 # 全部子命令（其它命令原样透传）
 ```
 
@@ -42,22 +42,23 @@ scripts/fish.sh help                 # 全部子命令（其它命令原样透�
 `memeCooldownMinutes` / `toolTimeoutSeconds` / `voices`（人格 → 单实例 TTS 地址、模型路径与参考音频）。
 优先级：`fish.config.json` > `.env` > 内置默认；文件写坏时保留上一次的有效值。
 `compact` 只按 tokens 换页：`maxTokens` 缺省 100000，`byModel` 可按 provider 或 provider/model 覆盖，
-`google-antigravity` 缺省 90000；最近一次真实请求 input+cacheRead 达阈值后，等完整轮次结束再换页，
+`cliproxyapi-claude` 缺省 90000；最近一次真实请求 input+cacheRead 达阈值后，等完整轮次结束再换页，
 不截断消息。旧 `maxEntries/maxChars` 已停用。config 的 set 支持对象 JSON 字符串与点路径修改。
 
 音色只认 `voices`，`.env` 里的 `TTS_*` 已经删了——**没有任何兜底**，没配或缺少 `gptModel`/`sovitsModel`/`referWav`/`referText` 就是那个会话没有语音能力；多个音色共用一个常驻服务并按请求热切。
 
 ## 容器形态（2026-11-14 起，先看这节）
 
-**鱼与新闻源在 OrbStack 容器**（`yugang-fish` / `yugang-60s`）；**协议端 QQ+NapCat 于 2026-11-16 回退 mac native 宿主**（Linux QQ 容器风控频繁掉线）。语音于 2026-11-25 切换至 **Qwen Token Plan 云端 TTS**（`engine: "qwen-tts"`，`qwen-audio-3.0-tts-plus` + 复刻爱莉希雅 27.3s 舰桥干声音色，`rate=1.08`，凭据读 `config/auth.json` 的 `qwen-token-plan-cn`；声音复刻专用 `DASHSCOPE_API_KEY` 在 macmini `~/yugang/.env`）；本地 GPT-SoVITS（`com.yugang.tts.elysia4` 9884）保留兼容。ComfyUI 在 **WSL** `~/anima-prod`，经宿主 SSH 隧道 18190。native 协议端搭建/恢复见 `mac-qq-napcat` skill。
+**鱼、新闻源与订阅模型网关在 OrbStack 容器**（`yugang-fish` / `yugang-60s` / `yugang-cliproxyapi`）；**协议端 QQ+NapCat 于 2026-11-16 回退 mac native 宿主**（Linux QQ 容器风控频繁掉线）。语音于 2026-11-25 切换至 **Qwen Token Plan 云端 TTS**（`engine: "qwen-tts"`，`qwen-audio-3.0-tts-plus` + 复刻爱莉希雅 27.3s 舰桥干声音色，`rate=1.08`，凭据读 `config/auth.json` 的 `qwen-token-plan-cn`；声音复刻专用 `DASHSCOPE_API_KEY` 在 macmini `~/yugang/.env`）；本地 GPT-SoVITS（`com.yugang.tts.elysia4` 9884）保留兼容。ComfyUI 在 **WSL** `~/anima-prod`，经宿主 SSH 隧道 18190。native 协议端搭建/恢复见 `mac-qq-napcat` skill。
 
 ```bash
 ssh macmini
 cd ~/yugang
-/usr/local/bin/docker compose ps                    # 容器服务状态（fish/sixty）
+/usr/local/bin/docker compose ps                    # 容器服务状态（fish/sixty/cliproxyapi）
 /usr/local/bin/docker compose logs -f fish          # 看鱼日志（不再 tail var/fish-console.log）
+/usr/local/bin/docker compose logs -f cliproxyapi   # 看订阅网关日志
 /usr/local/bin/docker compose exec fish node scripts/doctor.ts   # 容器内体检
-/usr/local/bin/docker compose exec -T fish node scripts/quota.ts [provider]   # 查各 provider 额度/余额
+/usr/local/bin/docker compose exec -T fish node scripts/quota.ts [provider]   # 查 DeepSeek / ZAI 额度/余额
 git pull && /usr/local/bin/docker compose restart fish           # 日常部署，1–3 秒
 ```
 
@@ -123,9 +124,9 @@ npm run ping
 - 报 `400 ... unsupported field "max_completion_tokens"` → `config/models.json` 里这个 provider 缺 `compat.maxTokensField: "max_tokens"`
 - 换模型不改代码：编辑 `config/models.json` 的 `models.main` / `models.vision` / `models.vision_fallback` / `models.image`，再让鱼 restart
 - 主人在私聊让鱼切换前，可先让它用 `config` 的 `models_probe` 探测目标 provider/model：真实最小请求、不改配置，失败就不要切
-- `Google stream ended without a finish reason` 且正文是 `This version of Antigravity is no longer supported`
-  → Antigravity 客户端指纹过旧，不是单个模型故障；`providers.google-antigravity.userAgent` 可覆盖完整 UA，
-  缺省用当前 IDE 指纹。保持 `daily-cloudcode-pa.sandbox.googleapis.com`，不要改去生产端点硬试。
+- 订阅制渠道（Codex / Claude / Gemini）统一由 `cliproxyapi` sidecar 承接（内网 `http://cliproxyapi:8317`，配置与 OAuth 目录 `./var/cliproxyapi/`，模板 `config/cliproxyapi.example.yaml`）；凭据过期或需重新登录时在宿主机执行：
+  `docker compose exec -it cliproxyapi ./CLIProxyAPI -config /data/config.yaml -no-browser -codex-login`（或 `-antigravity-login` / `-claude-login`）。
+- 核对四个标准协议的 `baseUrl`：`openai-completions` / `openai-responses` 带 `/v1`，`anthropic-messages` **不带 `/v1`**，`google-generative-ai` **必须带 `/v1beta`**；并确认 `compose.yaml` 的 `NO_PROXY` 包含 `cliproxyapi`。
 - `ping` 会把 `stopReason:error/aborted` 当失败；不能再把一段网关错误文本误判为「通了」。
 
 ## 查各 provider 额度
@@ -133,24 +134,16 @@ npm run ping
 ```bash
 # 本地开发机经 fish.sh（走容器内执行）：
 bash .agents/skills/ops/scripts/fish.sh quota                      # 全部已配置 provider
-bash .agents/skills/ops/scripts/fish.sh quota google-antigravity   # 只查一家（精确匹配 provider id）
+bash .agents/skills/ops/scripts/fish.sh quota deepseek             # 只查一家（精确匹配 provider id）
 bash .agents/skills/ops/scripts/fish.sh quota --json               # 结构化 JSON（不含任何密钥/token）
-bash .agents/skills/ops/scripts/fish.sh quota --no-refresh         # OAuth 过期不刷新不写盘，只报过期状态
 
 # 若当前环境走 home-connect MCP（无 connect.sh），直接在 home_exec(target="mac") 执行：
-cd ~/yugang && /usr/local/bin/docker compose exec -T fish node scripts/quota.ts [provider] [--json] [--no-refresh]
+cd ~/yugang && /usr/local/bin/docker compose exec -T fish node scripts/quota.ts [provider] [--json]
 ```
 
-真实查询支持四类：**google-antigravity**（loadCodeAssist 套餐 + fetchAvailableModels 配额，
-按家族/剩余比例/重置时间折叠成 Claude/Gemini 配额桶）、**openai-codex**（/wham/usage 的 5h/7d
-窗口与 plan）、**deepseek**（/user/balance 余额）、**zai-coding-cn**（monitor quota/limit 的
-小时/周额度与剩余百分比）。全部按 `config/models.json` 里该 provider 的实际 `baseUrl` 查对应
-配额桶（Antigravity 的 prod/daily/sandbox 是三个独立桶，不要查错端点），并遵循 `provider.proxy`。
-其余 provider 标 unsupported，缺凭据标 unconfigured；OAuth 过期默认在跨进程文件锁内自动刷新
-并原子回写（防并发丢 refresh_token），`--no-refresh` 则只报过期。任一 provider 查询报错退出码 1。
+真实查询支持两类公开 API key 接口：**deepseek**（`/user/balance` 余额）与 **zai-coding-cn**（`/api/monitor/usage/quota/limit` 小时/周额度与剩余百分比），按 `config/models.json` 里该 provider 的 `baseUrl` 与 `proxy` 执行。订阅制渠道（含 CLIProxyAPI 代理的 Codex / Claude / Gemini）与其余无公开接口的 provider 统一标 `unsupported`（订阅额度请在 CLIProxyAPI 侧查看），缺有效 API key 标 `unconfigured`。任一 provider 查询报错退出码 1。
 
-**优先在容器内跑**（`fish.sh quota` 已自动这么做）：容器内才有 `host.docker.internal:7897`
-代理、Linux `node_modules`，且凭据文件锁与线上鱼同域，刷新回写不会和鱼互踩。
+**优先在容器内跑**（`fish.sh quota` 已自动这么做）：容器内才有 `host.docker.internal:7897` 代理与 Linux `node_modules`。
 
 ## 群视频看不了怎么查
 

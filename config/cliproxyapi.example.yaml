@@ -1,0 +1,31 @@
+# CLIProxyAPI v8 最小配置模板（供 compose.yaml 的 cliproxyapi sidecar 消费）。
+#
+# 首次启用（在 macmini ~/yugang 目录）：
+#   mkdir -p var/cliproxyapi/auth
+#   cp config/cliproxyapi.example.yaml var/cliproxyapi/config.yaml
+#   docker compose up -d cliproxyapi
+#
+# 无头 OAuth 登录（凭据落盘到 ./var/cliproxyapi/auth，随 var/ 留宿主）：
+#   docker compose exec -it cliproxyapi ./CLIProxyAPI -config /data/config.yaml -no-browser -codex-login
+#   docker compose exec -it cliproxyapi ./CLIProxyAPI -config /data/config.yaml -no-browser -antigravity-login
+#   docker compose exec -it cliproxyapi ./CLIProxyAPI -config /data/config.yaml -no-browser -claude-login
+#
+# 鉴权说明：
+#   - 默认 access.api-keys 为空时仅容器内网可访问（不发布宿主机端口），config/auth.json 填 "local" 即可。
+#   - 若需启用静态网关密钥，在下方 access.api-keys 填入自定义随机串，并在 config/auth.json 的
+#     cliproxyapi-codex / cliproxyapi-claude / cliproxyapi-gemini 填写同一密钥（严禁写入本模板）。
+
+config-version: 8
+
+server:
+  host: "0.0.0.0"
+  port: 8317
+
+requests:
+  proxy-url: "http://host.docker.internal:7897"
+
+oauth:
+  auth-dir: "/data/auth"
+
+access:
+  api-keys: []

@@ -199,7 +199,7 @@ importer 继续从 `./memory/index.ts` 取，导入面不变。
   符号链接 / 目录 / 非图片 / 超限一律跳过并逐项报给模型；仅主人触发的轮可用；每批最多 50 张，`cursor` 续批，
   同一轮的清单合并保留；登记结果只写入本轮 manifest，round 结束即清
 
-主会话有一条条件式 inline 直读通道（docs/plans/2026-11-01-inline-vision.md）：`models.vision` 解析结果 == `models.main` 且 main 的 api 在白名单（`google-code-assist` / `antigravity-code-assist` 真机验证过；`openai-completions` 即 zai/deepseek 2026-11-02 经主人决定放开——describe 路径本就向该通道发 image_url，且附图已压到 ≤50KB；codex 适配器不支持图片输入，仍排除）时，锚点消息的图经压图（`src/media/shrink-image.ts`：1280px 上限 / 50KB 阈值 / q80 只降分辨率）后以 image block 直接附在本轮 user message 上（`@` 必答轮 ≤8 张 / GIF 最多 4 帧，直发图优先、被回复的引用图排在后面；自由拍 shard 轮独立收紧至 ≤4 张 / GIF 最多 2 帧；ref 缺失/压图失败跳过不阻塞）。**GIF 走抽帧多 block**（2026-11-06 实测：glm 网关对 image/gif 只解码首帧，token 按首帧分辨率计费、与体积帧数无关）：`src/media/gif-frames.ts` 等距抽 2-4 帧（按时长自适应、含首末）、`ffmpeg` 显式 `-q:v 6` 压缩到长边 ≤640px JPEG（单帧超 50KB 再走 `shrinkForModel` 压回预算，失败回退不丢帧），一个 GIF 占 1 个编号 N 个 block；行内标签带 `·动图N帧`、末尾标签声明帧序与同一性（社区实践：Qwen fps 语义 / MiniCPM image_id）；抽帧失败降级首帧。`/关看图` 同时关掉 inline 附图（止损：当年 zai 网关曾被无压图的大图撞挂）。**当轮结算立刻剥离图片上下文（2026-11-27）**：轮内重试在当前页已有落盘输入时优先走 `type: "continue"` 不重复写带图消息；整轮结束在 `finally` 中通过 `src/round-image-strip.ts` 写 `fish.image_strip`（`ContextEdit`）仅剥离当轮 user entry 的 `image` block（保留 `[图片#N inbound/…]` 文本占位、不动更早轮次以保全前缀缓存），摘要永远只吃文本。**编号标签始终带 inbound 路径**（`[图片#N inbound/…]`）：模型可直接把路径填给 draw / gpt_image，读图不必 look。**被回复的引用图两种读图模式都要给到模型**：inline 模式编号成 `[图片#N inbound/…]` 附压缩图（answer 轮与开窗 shard 批共用），look 模式在 `[引用原文]` 里保留 `[图片 inbound/…]` 并触发 look 提示（2026-11-05 修复：此前 `quoted.images` 从不渲染，回复一张图说「收图」时模型拿不到引用，收不了）。
+主会话有一条条件式 inline 直读通道（docs/plans/2026-11-01-inline-vision.md）：`models.vision` 解析结果 == `models.main` 且 main 的 api 在白名单（`openai-completions` / `openai-responses` / `anthropic-messages` / `google-generative-ai` 四大标准协议均原生支持图片输入，是否直读仍由 `vision == main` 约束把关）时，锚点消息的图经压图（`src/media/shrink-image.ts`：1280px 上限 / 50KB 阈值 / q80 只降分辨率）后以 image block 直接附在本轮 user message 上（`@` 必答轮 ≤8 张 / GIF 最多 4 帧，直发图优先、被回复的引用图排在后面；自由拍 shard 轮独立收紧至 ≤4 张 / GIF 最多 2 帧；ref 缺失/压图失败跳过不阻塞）。**GIF 走抽帧多 block**（2026-11-06 实测：glm 网关对 image/gif 只解码首帧，token 按首帧分辨率计费、与体积帧数无关）：`src/media/gif-frames.ts` 等距抽 2-4 帧（按时长自适应、含首末）、`ffmpeg` 显式 `-q:v 6` 压缩到长边 ≤640px JPEG（单帧超 50KB 再走 `shrinkForModel` 压回预算，失败回退不丢帧），一个 GIF 占 1 个编号 N 个 block；行内标签带 `·动图N帧`、末尾标签声明帧序与同一性（社区实践：Qwen fps 语义 / MiniCPM image_id）；抽帧失败降级首帧。`/关看图` 同时关掉 inline 附图（止损：当年 zai 网关曾被无压图的大图撞挂）。**当轮结算立刻剥离图片上下文（2026-11-27）**：轮内重试在当前页已有落盘输入时优先走 `type: "continue"` 不重复写带图消息；整轮结束在 `finally` 中通过 `src/round-image-strip.ts` 写 `fish.image_strip`（`ContextEdit`）仅剥离当轮 user entry 的 `image` block（保留 `[图片#N inbound/…]` 文本占位、不动更早轮次以保全前缀缓存），摘要永远只吃文本。**编号标签始终带 inbound 路径**（`[图片#N inbound/…]`）：模型可直接把路径填给 draw / draw_remote，读图不必 look。**被回复的引用图两种读图模式都要给到模型**：inline 模式编号成 `[图片#N inbound/…]` 附压缩图（answer 轮与开窗 shard 批共用），look 模式在 `[引用原文]` 里保留 `[图片 inbound/…]` 并触发 look 提示（2026-11-05 修复：此前 `quoted.images` 从不渲染，回复一张图说「收图」时模型拿不到引用，收不了）。
 
 **群视频**：OneBot 的 video/file 视频段与 group_upload 只登记 QQ 附件引用，不自动下载；`video(ref)` 校验群、会话已见索引与轮级快照后受控下载（100 MiB），复用 B 站抽帧和视觉描述（前 30 分钟、最多 6 帧），无声音/完整台词。登记保留 24 小时、每群最多 200 项，不接受任意 URL 或本地路径。
 
@@ -247,7 +247,7 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
 
 - **换页只按 token 阈值**（2026-11-07）：最近一次普通模型请求的 `input + cacheRead` 达到
   `compact.maxTokens`（缺省 100000）或 `compact.byModel` 的 provider / provider/model 覆盖值
-  （`google-antigravity` 缺省 90000）后，等完整轮次结束再换页；不按消息条数/字数，不截断当前消息。
+  （`cliproxyapi-claude` 缺省 90000）后，等完整轮次结束再换页；不按消息条数/字数，不截断当前消息。
   旧 `maxEntries/maxChars` 仅作退役告警，不参与触发。config set 支持对象 JSON 字符串和点路径合并写入
 - **禁止打开 pi-durable 内置的 compaction**（它会在中途注入库里写死的提示词，不可审查）
 - 压缩 = `src/compact.ts` 的换页 + `prompt/handoff.md` 的剖面提示词 + `prompt/messages.md` 的渲染模板（时间头与卡片，降级与剖面共用）
@@ -281,25 +281,22 @@ fallback 模式保留 inbound 路径由 look 转述。**收录能力受 `fish.co
   （`vision` 省略 = main，`vision_fallback` 省略 = 无兜底；`models.image` / `models.wan_image` 是兼容角色：`image` 自 2026-11-25 起运行时不再消费，`wan_image` 只给 `wan_gif`），改完让鱼 `restart` 生效；没有 `MODEL_PROVIDER` / `MODEL_ID` / `GATE_*` / `VISION_*` / `YUGANG_MODELS` 这类入口
 - **远程生图的模型与通道不在 `models.json` 选**（2026-11-25，`draw_remote`）：只认 `fish.config.json` 的 `drawRemote`
   （`enabled` 总开关 / `provider`：gpt·wan·qwen·gemini，缺省 qwen / `models.<通道>`，热加载；私聊 `config set drawRemote.provider gpt` 即时生效，无需重启）。
-  端点与代理按通道取 `providers.<id>`（gpt→`openai-codex`、wan / qwen→`qwen-token-plan-cn`、gemini→`google-antigravity`），
-  凭据取 `auth.json` 同名条目，每次调用现读；凭据不得写进 `fish.config.json`。`draw_remote` 恒注册，缺配置在执行期回执 `draw_remote_unconfigured`
-- 验证：`npm run creds show` / `npm run ping`（都只报长度，不打印 key）
+  端点与代理按通道取 `providers.<id>`（gpt→`cliproxyapi-codex`、wan / qwen→`qwen-token-plan-cn`、gemini→`cliproxyapi-gemini`），
+  凭据取 `auth.json` 同名条目（四通道统一纯 API key：`gpt` 走标准 OpenAI Images API `/images/generations` JSON 与 `/images/edits` FormData，`gemini` 走标准 Gemini `/models/<model>:generateContent` + `x-goog-api-key`），每次调用现读；凭据不得写进 `fish.config.json`。`draw_remote` 恒注册，缺配置在执行期回执 `draw_remote_unconfigured`
+- 验证：`npm run creds show` / `npm run ping`（都只报长度，不打印 key）；`npm run ping` 对 stopReason:error/aborted 必须非零退出
+- **标准协议与 CLIProxyAPI sidecar（2026-11-28）**：鱼缸侧彻底移除自维护 OAuth（`src/auth/`、`google-code-assist.ts`、`scripts/login.ts` 已删除），
+  只消费 `@earendil-works/pi-ai` 内置四大标准协议（纯 API key）；所有订阅 OAuth 登录与协议适配下沉到 `compose.yaml` 内的 `cliproxyapi` sidecar
+  （容器内网 `http://cliproxyapi:8317`，不发布宿主端口，数据挂 `./var/cliproxyapi:/data`，模板 `config/cliproxyapi.example.yaml`）。
+  四个协议的 `baseUrl` 规则严格遵守：
+  - `openai-completions`: `http://cliproxyapi:8317/v1`（缺省 `https://api.openai.com/v1`）
+  - `openai-responses`: `http://cliproxyapi:8317/v1`（缺省 `https://api.openai.com/v1`）
+  - `anthropic-messages`: `http://cliproxyapi:8317`（**不带 `/v1`**；缺省 `https://api.anthropic.com`）
+  - `google-generative-ai`: `http://cliproxyapi:8317/v1beta`（**必须带 `/v1beta`**；缺省 `https://generativelanguage.googleapis.com/v1beta`）
+  旧 `auth: "oauth"` 或退役私有 `api` 在加载与构模期直接报错并给出迁移提示。
 - **provider 级代理**：`config/models.json` 的 `providers.<id>.proxy`（只认 http/https）。配了它，这个 provider
-  的**全部**请求走隧道（模型流、`draw_remote`、内部 OAuth 刷新），其它 provider 与 SD/QQ 仍直连；
-  不设进程级的 `--use-env-proxy`（那会把 zai / deepseek 也拖进代理）。codex 过代理必须同时 `transport: "sse"`——
-  WebSocket 不吃 fetch 注入；`main` / `vision` / `vision_fallback` 复用同一个 provider、或 `draw_remote` 当前通道的 provider 与它们相同时共用这条代理。
-  google-antigravity（Antigravity 通道）是 AI Pro 订阅的**现通道**——个人账户 2026-06-18 起 gemini-cli
-  通道整体停用，新登录一律走它；端点 `daily-cloudcode-pa.sandbox.googleapis.com`，同款 provider 代理
-  （token 刷新的 `oauth2.googleapis.com` 一并进隧道）。oauthClient 同样只放本机 `config/models.json` 的
-  `providers.google-antigravity.oauthClient`（模板空串占位）；登录 `npm run login -- google-antigravity`，
-  回调页是 `http://localhost:51121/oauth-callback`，无头机打不开是正常的，把地址栏整条 URL 复制回来。
-  2026-11-07 实测：旧 `antigravity/1.11.5` 与旧 Gemini x-goog/client-metadata 头会被整通道拒绝，
-  现按真实平台发送当前 IDE User-Agent；`providers.google-antigravity.userAgent` 可覆盖完整值，
-  端点必须保持 sandbox（生产端点实测 429）。`npm run ping` 对 stopReason:error/aborted 必须非零退出
-- **OAuth client 常量只放本机配置**：Antigravity 的 id/secret 只写本机 `config/models.json` 的
-  `providers.google-antigravity.oauthClient`（模板留空串占位），源码里不出现——git 里含明文 client 会被
-  GitHub push protection 拦推送；登录成功后 client 随凭据落盘（`config/auth.json`），token 刷新从
-  凭据自带字段读，不依赖启动配置
+  的**全部**请求走隧道（模型流与 `draw_remote`），其它 provider 与 SD/QQ 仍直连；
+  不设进程级的 `--use-env-proxy`（那会把 zai / deepseek 也拖进代理）；`compose.yaml` 的 `NO_PROXY` 必须包含 `cliproxyapi` 保证内网直连。
+  注意：`@earendil-works/pi-ai` 的 `google-generative-ai` 适配器拒绝自定义 `options.fetch`，探活隔离路径下不会向其注入局部 `proxyFetch`。
 
 ### 7. 主人与陌生人
 
@@ -637,7 +634,7 @@ npm run probe      # QQ 侧验收：连 OneBot、报身份和群、发测试消�
 npm run ops status # 数据目录 / 幂等表 / 原话簿概况
 npm run memory     # 长期记忆查看与审批（--persona / --chat / --json / --pending / --approve / --reject，见第 16 节）
 npm run creds show  # 凭据状态（只有长度）
-npm run login -- google-antigravity [--browser | --finish '<授权码>']  # Antigravity 登录（只有浏览器流程；openai-codex 同入口）
+npm run quota       # 查 DeepSeek / ZAI 公开余额与额度（订阅制渠道请在 CLIProxyAPI 侧查看）
 npm run ping        # 模型连通性 + 用量（不打印 key）
 npm start          # 真跑（自动读 .env）——只在 macmini 上
 npm run deploy     # 部署：git pull + 平滑重启鱼（宿主形态，只在 macmini 上跑；容器形态下拒绝）

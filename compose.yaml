@@ -9,9 +9,9 @@
 # 鱼是快速迭代项目，源码从宿主仓库 bind mount 进 /app，改代码只需 git pull + 重启容器。
 # 镜像里只有运行时环境（node / ffmpeg / socat / python+av / heif-convert）与 node_modules 初值。
 #
-# 三个服务：napcat（协议端，官方镜像）/ fish（鱼）/ sixty（新闻源）。
-# 语音不在这里：GPT-SoVITS 留宿主机 launchd + MPS 加速，容器拿不到 Metal。
-# ComfyUI 也不在这里：仍在 Windows，经宿主机 SSH 隧道，容器内由 socat 转发。
+# 三个容器服务：fish（鱼）/ sixty（新闻源）/ cliproxyapi（订阅模型与生图协议网关，内网直连）。
+# 协议端 QQ+NapCat 在宿主机 native 运行；语音在云端 Qwen TTS 或宿主机 GPT-SoVITS。
+# ComfyUI 在 WSL，经宿主机 SSH 隧道，容器内由 socat 转发。
 #
 # 关键约束（改之前先读 docs/plans/2026-11-14-dockerize-fish-napcat.md）：
 #   • 依赖挂 `.node_modules-linux/`，**不能用仓库的 `node_modules/`**——后者是 macOS
@@ -38,6 +38,7 @@ services:
     user: "501:501"
     depends_on:
       - sixty
+      - cliproxyapi
     # .env 提供必填项（MASTER_QQ / GROUPS / ONEBOT_TOKEN / PROTOCOL_QQ / COMFYUI_URL …）。
     # 下面 environment 的值**胜过** env_file，用于覆盖容器内必须不同的地址。
     env_file: .env
@@ -51,10 +52,10 @@ services:
       VIDEO_PYTHON: /opt/video-venv/bin/python
       # 代理：.env 里是宿主 loopback，容器内必须改指宿主（否则 npm ci / 模型请求
       # / 外部 HTTP 全部 ECONNREFUSED）。NO_PROXY 补上内网服务名与宿主别名，
-      # 让 napcat/sixty/socat 转发走直连，不绕代理。
+      # 让 napcat/sixty/cliproxyapi/socat 转发走直连，不绕代理。
       HTTP_PROXY: http://host.docker.internal:7897
       HTTPS_PROXY: http://host.docker.internal:7897
-      NO_PROXY: "localhost,127.0.0.1,::1,napcat,sixty,host.docker.internal,.bilibili.com,.hdslb.com,.bilivideo.com,.bilivideo.cn,.bilivideo.net,.b23.tv"
+      NO_PROXY: "localhost,127.0.0.1,::1,napcat,sixty,cliproxyapi,host.docker.internal,.bilibili.com,.hdslb.com,.bilivideo.com,.bilivideo.cn,.bilivideo.net,.b23.tv"
       # COMFYUI_URL 故意不覆盖：保持 .env 里的 http://127.0.0.1:18190，
       # 由 entrypoint 的 socat 转发到宿主机隧道（安全不变量不放宽）。
       # fish.config.json 用仓库根默认路径（仓库整目录挂载，原子写可用），
@@ -87,6 +88,21 @@ services:
     restart: unless-stopped
     environment:
       TZ: Asia/Shanghai
+
+  cliproxyapi:
+    # 订阅模型与远程生图协议网关（eceasy/cli-proxy-api:v8.1.7 多架构 OCI index）。
+    # 仅在 compose 内网暴露 http://cliproxyapi:8317，不发布宿主机端口（避免与宿主 8317 冲突）。
+    # 配置与 OAuth 凭据全部落在 ./var/cliproxyapi（模板见 config/cliproxyapi.example.yaml）。
+    image: eceasy/cli-proxy-api@sha256:fd49f56bfcfbfc424709e501f4f8c9ff6e28ff8d8d039eb75d28850201511879
+    container_name: yugang-cliproxyapi
+    restart: unless-stopped
+    user: "501:501"
+    command: ["./CLIProxyAPI", "-config", "/data/config.yaml"]
+    environment:
+      HOME: /data
+      TZ: Asia/Shanghai
+    volumes:
+      - ./var/cliproxyapi:/data
 
 # **没有任何 named volume**（主人 2026-11-14：「那就直接都外挂吧」）。
 # 源码 / 依赖 / 数据 全部宿主 bind mount：
