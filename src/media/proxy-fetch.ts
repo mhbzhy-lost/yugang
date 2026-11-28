@@ -69,20 +69,30 @@ function toAbortError(reason: unknown): Error {
   return err;
 }
 
-async function resolveBody(input: string | URL | Request, init: RequestInit): Promise<string | Buffer | undefined> {
+interface ResolvedBody {
+  body?: string | Buffer;
+  contentType?: string;
+}
+
+async function resolveBody(input: string | URL | Request, init: RequestInit): Promise<ResolvedBody> {
   const raw = init.body !== undefined ? init.body : undefined;
   if (raw !== undefined) {
-    if (raw === null) return undefined;
-    if (typeof raw === "string") return raw;
-    if (raw instanceof URLSearchParams) return raw.toString();
-    if (ArrayBuffer.isView(raw)) return Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
-    if (raw instanceof ArrayBuffer) return Buffer.from(raw);
-    return Buffer.from(await new Response(raw).arrayBuffer());
+    if (raw === null) return {};
+    if (typeof raw === "string") return { body: raw };
+    if (raw instanceof URLSearchParams) return { body: raw.toString() };
+    if (ArrayBuffer.isView(raw)) return { body: Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength) };
+    if (raw instanceof ArrayBuffer) return { body: Buffer.from(raw) };
+    const response = new Response(raw);
+    const contentType = response.headers.get("content-type") ?? undefined;
+    return {
+      body: Buffer.from(await response.arrayBuffer()),
+      ...(contentType ? { contentType } : {}),
+    };
   }
   if (input instanceof Request && input.body !== null) {
-    return Buffer.from(await input.arrayBuffer());
+    return { body: Buffer.from(await input.arrayBuffer()) };
   }
-  return undefined;
+  return {};
 }
 
 /**
@@ -120,7 +130,10 @@ export function createProxyFetch(proxy: string, options: ProxyFetchOptions = {})
         : (init.signal ?? (input instanceof Request ? input.signal : undefined));
     if (signal?.aborted) throw toAbortError(signal.reason);
 
-    const body = await resolveBody(input, init);
+    const { body, contentType } = await resolveBody(input, init);
+    if (!headers.has("content-type") && contentType) {
+      headers.set("content-type", contentType);
+    }
     if (signal?.aborted) throw toAbortError(signal.reason);
 
     return await new Promise<Response>((resolve, reject) => {

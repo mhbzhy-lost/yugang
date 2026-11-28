@@ -3,7 +3,7 @@
  *
  * 这一层不认识 fish.config.json，也不碰 prompt：通道选择、热开关与轮状态机在工具层
  * （src/tools/draw_remote/）。这里只负责「按给定通道把图画出来」，并把失败分成两类——
- * 上层据此决定本轮锁不锁（spec §3.3.5）：
+ * 上层据此决定本轮锁不锁：
  *   submitted=false：生成请求没发出去，或上游确定性拒绝（4xx / 明确安全拒答）。
  *                    不锁轮，改参数或切通道后同轮可重试。
  *   submitted=true ：请求发出后结果不明（5xx / 超时 / 断网 / 落盘前取消）。
@@ -18,7 +18,7 @@ export type DrawRemoteAspectRatio = "1:1" | "3:4" | "4:3" | "9:16" | "16:9";
 
 /** 单次远程生图 HTTP 请求默认超时（10 分钟）。 */
 export const DRAW_REMOTE_TIMEOUT_MS = 600_000;
-/** 异步后台任务的整体超时硬顶（含前置 OAuth 刷新 / discoverProject，比生成超时多留 60 秒余量）。 */
+/** 异步后台任务的整体超时硬顶（比单次 HTTP 生成超时多留 60 秒余量）。 */
 export const DRAW_REMOTE_JOB_TIMEOUT_MS = 660_000;
 
 export type DrawRemoteStage = "prepare" | "post" | "parse" | "download";
@@ -46,6 +46,18 @@ export function formatTimeoutLabel(timeoutMs: number): string {
   return timeoutMs < 1000 ? `${timeoutMs}ms` : `${Math.round(timeoutMs / 1000)} 秒`;
 }
 
+/** 严格校验 baseUrl：必须是合法 http(s) URL 且包含主机名。 */
+export function isValidHttpUrl(raw: string | undefined): boolean {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") && Boolean(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /** 参考图：MIME 由上层按真实字节魔数核实过，bytes 是原始文件内容（只在内存里过一遍）。 */
 export interface DrawRemoteReferenceImage {
   mimeType: string;
@@ -62,12 +74,12 @@ export interface DrawRemoteRunRequest {
   aspectRatio?: DrawRemoteAspectRatio;
   /** 媒体根目录；成品落 `<mediaRoot>/gen/`。 */
   mediaRoot: string;
-  /** config/models.json：每次调用现读该通道 provider 的 baseUrl / userAgent / proxy。 */
+  /** config/models.json：每次调用现读该通道 provider 的 baseUrl / proxy。 */
   modelsPath: string;
   /** 凭据文件（config/auth.json）；缺省取 models.json 同目录的 auth.json。 */
   credentialsPath?: string;
   /**
-   * 同步提交钩子：通道读完 models.json / auth.json、做完前置 OAuth 刷新之后，发起首个生成 POST
+   * 同步提交钩子：通道读完 models.json / auth.json 校验通过后，发起首个生成 POST
    * 之前被调用一次（不等待返回值）。这里抛错 = 请求不发出，错误原样上抛。
    */
   onSubmitted?: () => void;
@@ -85,7 +97,7 @@ export interface DrawRemoteRunResult {
   provider: DrawRemoteProviderId;
   model: string;
   /**
-   * 成品图在 `<mediaRoot>/gen/` 下的文件名（`<ts>-<uuid>.<ext>`，与 generateGptImages / generateWanImage 同约定）。
+   * 成品图在 `<mediaRoot>/gen/` 下的文件名（`<ts>-<uuid>.<ext>`）。
    * 媒体引用写作 `gen/${file}`（OutboundPayload.media），幂等键用 `${file}`。
    */
   files: string[];
@@ -94,7 +106,7 @@ export interface DrawRemoteRunResult {
 export type DrawRemoteErrorCode =
   /** 总开关关闭（工具层在 onSubmitted 里二次复核时抛）。 */
   | "disabled"
-  /** models.json 缺该通道的 provider，或 auth.json 缺该通道的凭据。 */
+  /** models.json 缺该通道的 provider / baseUrl，或 auth.json 缺该通道的 API key。 */
   | "unconfigured"
   /** prompt 为空或超长（四通道同一上限 4000 字）。 */
   | "prompt"
@@ -126,7 +138,7 @@ export class DrawRemoteError extends Error {
 
 /**
  * index 解析完 models.json 之后交给单条通道的入参。通道不再读 models.json，
- * 但凭据仍由通道自己从 authPath 读出来（它们本来就各读各的：OAuth 整块 token / API key）。
+ * 但 API key 仍由通道自己从 authPath 读取。
  */
 export interface DrawRemoteChannelRequest {
   model: string;
@@ -139,7 +151,6 @@ export interface DrawRemoteChannelRequest {
   /** models.json 里的 provider 条目名，同时也是 auth.json 里的凭据条目名。 */
   providerId: string;
   baseUrl?: string;
-  userAgent?: string;
   proxy?: string;
   onSubmitted?: () => void;
   signal?: AbortSignal;

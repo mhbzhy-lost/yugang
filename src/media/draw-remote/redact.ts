@@ -5,11 +5,11 @@
  * （硬约束 17：外部文本一律清洗后才见模型）。
  *
  * 有意不复用 src/model/quota.ts 的 redactSecrets：那是额度查询模块的实现细节，生图链路
- * 反向依赖它等于把两件事绑死。两边规则保持一致——已知秘密字面量 + 通用 Bearer / sk- 形态。
+ * 反向依赖它等于把两件事绑死。两边规则保持一致——已知秘密字面量 + 通用凭证形态。
  */
 import { sanitizeExternalText } from "../../external/sanitize.ts";
 
-/** 秘密的可能来源：凭据对象里的 access / refresh / key / clientSecret 字段。 */
+/** 秘密的可能来源：凭据对象里的 key / access / refresh / clientSecret 字段（保留纵深防御）。 */
 export type SecretSource = Record<string, unknown> | null | undefined;
 
 const SECRET_FIELDS = ["access", "refresh", "key", "clientSecret"] as const;
@@ -27,7 +27,7 @@ export function collectSecrets(...sources: SecretSource[]): string[] {
   return secrets;
 }
 
-/** 抹除已知秘密字面量 + 通用 Bearer / sk- 形态。 */
+/** 抹除已知秘密字面量 + 通用 Bearer / sk- / x-goog-api-key / AIza / ?key= / ya29 形态。 */
 export function redactSecrets(text: string, secrets: readonly string[]): string {
   let out = text;
   // 长的先换：一个秘密是另一个的前缀时不会留下尾巴
@@ -35,6 +35,10 @@ export function redactSecrets(text: string, secrets: readonly string[]): string 
     out = out.split(secret).join("***");
   }
   out = out.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer ***");
+  out = out.replace(/(x-goog-api-key\s*[:=]\s*)[^\s,;"]+/gi, "$1***");
+  out = out.replace(/([?&]key=)[^\s&"']+/gi, "$1***");
+  out = out.replace(/\bAIza[A-Za-z0-9_-]{20,}/g, "***");
+  out = out.replace(/\bya29\.[A-Za-z0-9._-]{10,}/g, "***");
   out = out.replace(/\bsk-[A-Za-z0-9_-]{6,}/g, "***");
   return out;
 }

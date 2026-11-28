@@ -20,6 +20,7 @@ import {
   httpStatusOf,
   isAbortError,
   isTimeoutError,
+  isValidHttpUrl,
 } from "./types.ts";
 import type { DrawRemoteAspectRatio, DrawRemoteChannelRequest } from "./types.ts";
 
@@ -57,11 +58,11 @@ export async function runDashScopeImageChannel(provider: DashScopeImageProvider,
     throw new DrawRemoteError(provider, "bad_ref", `${provider} 参考图总大小超过 20MB 上限，请减少张数或压缩后再试`, false);
   }
   const baseUrl = (request.baseUrl ?? "").trim().replace(/\/+$/, "").replace(COMPAT_PREFIX, "");
-  if (!/^https?:\/\/[^\s/]+/i.test(baseUrl)) {
+  if (!isValidHttpUrl(baseUrl)) {
     throw new DrawRemoteError(
       provider,
       "unconfigured",
-      `draw_remote 未配置：models.json 的 provider「${request.providerId}」缺少 baseUrl（${provider} 通道要用它拼原生生图接口）`,
+      `draw_remote 未配置：models.json 的 provider「${request.providerId}」缺少合法 baseUrl（${provider} 通道要用它拼原生生图接口）`,
       false,
     );
   }
@@ -74,10 +75,11 @@ export async function runDashScopeImageChannel(provider: DashScopeImageProvider,
     stored = undefined;
   }
   // 错误文案会经工具回执原样到模型：只点名缺的是哪个来源，不带本机绝对路径与运维命令
-  if (!stored || stored.type !== "api_key" || typeof stored.key !== "string" || stored.key === "") {
+  const apiKey = stored?.type === "api_key" && typeof stored.key === "string" ? stored.key.trim() : "";
+  if (!apiKey) {
     throw new DrawRemoteError(provider, "unconfigured", `draw_remote 未配置：auth.json 缺少「${request.providerId}」的 API key`, false);
   }
-  const secrets = collectSecrets({ key: stored.key });
+  const secrets = collectSecrets({ key: apiKey });
 
   // 参考图转 data URI（MIME 由上层按真实字节核实过）；不传比例就不编造 size
   const images = (request.images ?? []).map((image) => `data:${image.mimeType};base64,${image.bytes.toString("base64")}`);
@@ -88,7 +90,7 @@ export async function runDashScopeImageChannel(provider: DashScopeImageProvider,
   const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   try {
     return await generateWanImage({
-      apiKey: stored.key,
+      apiKey,
       baseUrl,
       model: request.model,
       prompt: request.prompt,

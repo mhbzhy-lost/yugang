@@ -7,8 +7,8 @@
  * 顺序有意如此——越便宜的检查越靠前，且全部在 onSubmitted 之前：
  *   1. prompt（去首尾空白后非空；四通道同一个上限 ≤ 4000 字）
  *   2. 通道能力（参考图：qwen 最多 3 张、其余最多 5 张）
- *   3. models.json 里有没有这条通道的 provider
- *   4. 通道内部：读 auth.json 凭据、前置 OAuth 刷新、projectId 兜底——缺了同样在提交前报 unconfigured
+ *   3. models.json 里有没有这条通道的 provider 与合法 baseUrl
+ *   4. auth.json 里有没有这条通道的非空 API key
  * 以上任何一步失败都不会触发 onSubmitted，也不会发出任何 HTTP 请求；修正后同一个请求可直接重试。
  */
 import { readFileSync } from "node:fs";
@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { readCredentialFile, type ModelsFile, type ProviderConfig } from "../../model/config.ts";
 import { runGeminiChannel } from "./gemini.ts";
 import { runGptChannel } from "./gpt.ts";
-import { DrawRemoteError } from "./types.ts";
+import { DrawRemoteError, isValidHttpUrl } from "./types.ts";
 import type {
   DrawRemoteChannelRequest,
   DrawRemotePreflightRequest,
@@ -28,10 +28,10 @@ import { runQwenChannel, runWanChannel } from "./wan.ts";
 
 /** 通道 → models.json 的 provider 条目名（auth.json 的凭据条目同名）。wan 与 qwen 同属百炼 Token Plan，共用一条。 */
 export const DRAW_REMOTE_PROVIDER_IDS: Readonly<Record<DrawRemoteProviderId, string>> = Object.freeze({
-  gpt: "openai-codex",
+  gpt: "cliproxyapi-codex",
   wan: "qwen-token-plan-cn",
   qwen: "qwen-token-plan-cn",
-  gemini: "google-antigravity",
+  gemini: "cliproxyapi-gemini",
 });
 
 const PROMPT_MAX = 4000;
@@ -72,8 +72,8 @@ export function validateDrawRemoteInput(provider: DrawRemoteProviderId, rawPromp
 }
 
 /**
- * 同步预检（不发任何网络请求）：校验 prompt/参考图上限、models.json provider 与 baseUrl，
- * 以及 auth.json 凭据存在且类型形状合规。所有 JSON 读取异常均吞掉原文统一报 unconfigured。
+ * 同步预检（不发任何网络请求）：四通道统一校验 prompt/参考图上限、models.json provider 与合法 baseUrl，
+ * 以及 auth.json 存在非空 API key。所有 JSON 读取异常均吞掉原文统一报 unconfigured。
  */
 export function preflightDrawRemote(request: DrawRemotePreflightRequest): string {
   const { provider } = request;
@@ -82,6 +82,17 @@ export function preflightDrawRemote(request: DrawRemotePreflightRequest): string
   const config = readProviderConfig(request.modelsPath, providerId, provider);
   const authPath = request.credentialsPath ?? join(dirname(request.modelsPath), "auth.json");
 
+  const rawBaseUrl = (config.baseUrl ?? "").trim().replace(/\/+$/, "");
+  const effectiveBaseUrl = provider === "wan" || provider === "qwen" ? rawBaseUrl.replace(COMPAT_PREFIX, "") : rawBaseUrl;
+  if (!isValidHttpUrl(effectiveBaseUrl)) {
+    throw new DrawRemoteError(
+      provider,
+      "unconfigured",
+      `draw_remote 未配置：models.json 的 provider「${providerId}」缺少合法 baseUrl（${provider} 通道要用它拼生图接口）`,
+      false,
+    );
+  }
+
   let stored: ReturnType<typeof readCredentialFile>;
   try {
     stored = readCredentialFile(authPath, providerId);
@@ -89,50 +100,14 @@ export function preflightDrawRemote(request: DrawRemotePreflightRequest): string
     // JSON 解析错误会截一段原文，凭据文件内容绝不经错误文案出境
     stored = undefined;
   }
-
-  if (provider === "wan" || provider === "qwen") {
-    const baseUrl = (config.baseUrl ?? "").trim().replace(/\/+$/, "").replace(COMPAT_PREFIX, "");
-    if (!/^https?:\/\/[^\s/]+/i.test(baseUrl)) {
-      throw new DrawRemoteError(
-        provider,
-        "unconfigured",
-        `draw_remote 未配置：models.json 的 provider「${providerId}」缺少 baseUrl（${provider} 通道要用它拼原生生图接口）`,
-        false,
-      );
-    }
-    if (!stored || stored.type !== "api_key" || typeof stored.key !== "string" || stored.key === "") {
-      throw new DrawRemoteError(provider, "unconfigured", `draw_remote 未配置：auth.json 缺少「${providerId}」的 API key`, false);
-    }
-    return prompt;
-  }
-
-  if (provider === "gpt") {
-    const accountId = stored && stored.type === "oauth" ? stored["accountId"] : undefined;
-    if (
-      !stored
-      || stored.type !== "oauth"
-      || typeof stored.access !== "string"
-      || stored.access === ""
-      || typeof stored.refresh !== "string"
-      || stored.refresh === ""
-      || typeof accountId !== "string"
-      || accountId === ""
-    ) {
-      throw new DrawRemoteError(provider, "unconfigured", `draw_remote 未配置：auth.json 缺少「${providerId}」的 OAuth 凭据`, false);
-    }
-    return prompt;
-  }
-
-  // gemini：projectId 允许在后台走 discoverProject 兜底，同步预检只核对 OAuth 凭据就绪
-  if (
-    !stored
-    || stored.type !== "oauth"
-    || typeof stored.access !== "string"
-    || stored.access === ""
-    || typeof stored.refresh !== "string"
-    || stored.refresh === ""
-  ) {
-    throw new DrawRemoteError(provider, "unconfigured", `draw_remote 未配置：auth.json 缺少「${providerId}」的 OAuth 凭据`, false);
+  const apiKey = stored?.type === "api_key" && typeof stored.key === "string" ? stored.key.trim() : "";
+  if (!apiKey) {
+    throw new DrawRemoteError(
+      provider,
+      "unconfigured",
+      `draw_remote 未配置：auth.json 缺少「${providerId}」的 API key`,
+      false,
+    );
   }
   return prompt;
 }
@@ -156,7 +131,6 @@ export async function runDrawRemote(request: DrawRemoteRunRequest): Promise<Draw
     authPath: request.credentialsPath ?? join(dirname(request.modelsPath), "auth.json"),
     providerId,
     ...(config.baseUrl !== undefined ? { baseUrl: config.baseUrl } : {}),
-    ...(config.userAgent !== undefined ? { userAgent: config.userAgent } : {}),
     ...(config.proxy !== undefined ? { proxy: config.proxy } : {}),
     onSubmitted: request.onSubmitted,
     signal: request.signal,
@@ -184,8 +158,6 @@ function readProviderConfig(modelsPath: string, providerId: string, provider: Dr
   const config =
     file && typeof file === "object" && !Array.isArray(file) ? (file as Partial<ModelsFile>).providers?.[providerId] : undefined;
   if (!config || typeof config !== "object") {
-    // 错误文案会经工具回执原样到模型：只点名缺的是哪个来源（models.json 的 provider / auth.json 的凭据），
-    // 不带本机绝对路径与运维命令
     throw new DrawRemoteError(provider, "unconfigured", `draw_remote 未配置：models.json 缺少 provider「${providerId}」（${provider} 通道要用）`, false);
   }
   return config;
