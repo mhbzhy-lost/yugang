@@ -8,11 +8,11 @@
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest（factory 只消费它，不再有第二份运行时定义）。
  */
 import { readFileSync, statSync } from "node:fs";
-import { extname, resolve } from "node:path";
+import { extname, isAbsolute, resolve } from "node:path";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { assertTriggeredByMaster, audited, BIN_EXT, ensureSandRoot, fenceReadablePath, READ_CAP, resolveReadable } from "../fs-shared.ts";
+import { assertTriggeredByMaster, audited, BIN_EXT, ensureSandRoot, fenceReadablePath, READ_CAP, resolveReadable, SAND_ROOT } from "../fs-shared.ts";
 import { REPO_ROOT } from "../../paths.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
@@ -39,7 +39,7 @@ export function createReadTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const target = resolveReadable(root, args.path);
       if (!target) throw new Error(p.messages["fs_outside"] ?? "fs_outside");
       // 符号链接围栏：最终分量是链接或 realpath 越界都拒，防止越界读凭据或仓库外文件
-      const fence = fenceReadablePath(root, target.full);
+      const fence = fenceReadablePath(isAbsolute(args.path) ? SAND_ROOT : root, target.full);
       if (!fence.ok) {
         if (fence.reason === "missing") throw new Error(p.messages["fs_missing"] ?? "fs_missing");
         if (fence.reason === "link") throw new Error(p.messages["fs_link"] ?? "fs_link");
@@ -57,19 +57,21 @@ export function createReadTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       const from = args.startLine !== undefined ? Math.max(1, Math.floor(args.startLine)) : undefined;
       const to = args.endLine !== undefined ? Math.max(1, Math.floor(args.endLine)) : undefined;
 
-      // 不带行号：整文件，受大小上限保护；带行号：按行切片，大文件也能分段读
+      // 不带行号：整文件，受大小上限保护；带行号：按行切片，同样受文件大小与返回字符数上限保护
       if (from === undefined && to === undefined) {
         if (st.size > READ_CAP) throw new Error(p.messages["fs_too_big"] ?? "fs_too_big");
         audited("read", target.label, `${st.size}B`);
         return { output: [{ type: "text", text: readFileSync(target.full, "utf8") }] };
       }
 
+      if (st.size > 2 * 1024 * 1024) throw new Error(p.messages["fs_too_big"] ?? "fs_too_big");
       const lines = readFileSync(target.full, "utf8").split("\n");
       const start = (from ?? 1) - 1;
       const end = Math.min(lines.length, to ?? lines.length);
       if (start >= lines.length) throw new Error(p.messages["fs_missing"] ?? "fs_missing");
       const slice = lines.slice(start, Math.max(start + 1, end));
       const text = slice.map((line, i) => `${start + i + 1}\t${line}`).join("\n");
+      if (text.length > READ_CAP) throw new Error(p.messages["fs_too_big"] ?? "fs_too_big");
       audited("read", target.label, `${start + 1}-${start + slice.length}行`);
       return { output: [{ type: "text", text }] };
     },

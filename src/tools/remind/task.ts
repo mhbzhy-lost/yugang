@@ -135,21 +135,34 @@ export function makeReminderTask(host: ReminderHost): Task<ReminderInput, Remind
         const conv = await runtime.conversation(runtime.conversationId, context);
         if (!conv) {
           host.log(`[鱼缸] reminder ${selfId} no conversation`);
-          await runtime.commit(
-            () => ({ status: "terminal", outcome: { status: "failed", error: { message: "conversation_missing" } } }),
-            context,
-          );
+          await runtime.commit(async (tx) => {
+            const d = await tx.doc(RemindersDoc, runtime.conversationId);
+            d.items = d.items.filter((i) => i.id !== selfId);
+            return { status: "terminal", outcome: { status: "failed", error: { message: "conversation_missing" } } };
+          }, context);
           return;
         }
         // 直接提交的轮不走 runtime 的 submitRound：不登记 triggerOf（say_* 的
         // mentions/身份闸见无触发者信息即 fail closed，提醒不需要这些）、无正文
         // 兜底（模板里已写明必须开口）、无机械提示。entry kind 用 fish.engage_tick
         // 口径：背景板非对话输入，不进摘要与记忆抽取。
-        const submission = await conv.submit(
-          { type: "input", content, entry: { kind: MEMORY_ENGAGE_KIND } },
-          context,
-        );
-        const settled = await submission.wait(context);
+        let settled;
+        try {
+          const submission = await conv.submit(
+            { type: "input", content, entry: { kind: MEMORY_ENGAGE_KIND } },
+            context,
+          );
+          settled = await submission.wait(context);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          host.log(`[鱼缸] reminder ${selfId} submit failed: ${message}`);
+          await runtime.commit(async (tx) => {
+            const d = await tx.doc(RemindersDoc, runtime.conversationId);
+            d.items = d.items.filter((i) => i.id !== selfId);
+            return { status: "terminal", outcome: { status: "failed", error: { message } } };
+          }, context);
+          return;
+        }
         host.log(`[鱼缸] reminder ${selfId} fired -> ${settled.status}`);
         // 顺带把 outbox 冲出去：宿主不会在这轮结束时顺手 flush
         await host.drain().catch(() => {});

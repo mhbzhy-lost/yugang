@@ -70,7 +70,6 @@ export function createQwenDrawTool(manifest: ToolManifest, deps: ToolPackageDeps
       if (args.fast !== undefined && typeof args.fast !== "boolean") throw new Error(deps.prompts.messages["qwen_fast"] ?? "qwen_fast");
       if (args.seed !== undefined && (!Number.isInteger(args.seed) || args.seed < 0 || args.seed > 4294967295)) throw new Error(deps.prompts.messages["qwen_seed"] ?? "qwen_seed");
       if (args.ref !== undefined && typeof args.ref !== "string") throw new Error(renderTemplate(deps.prompts.messages["qwen_ref_type"] ?? "{{ref}}", { ref: String(args.ref) }));
-      deps.onLongWork?.("qwen_draw", round);
       if (round === undefined) throw new Error(deps.prompts.messages["draw_round_missing"] ?? "draw_round_missing");
       const previous = rounds.get(api.conversationId);
       if (previous?.pending) throw new Error(deps.prompts.messages["draw_inflight"] ?? "draw_inflight");
@@ -80,7 +79,11 @@ export function createQwenDrawTool(manifest: ToolManifest, deps: ToolPackageDeps
       const state: RoundState = { round, pending: true, submitted: false, used: false };
       rounds.set(api.conversationId, state);
       // 提交前二次复核：execGraph 在真正 POST 前同步调 onSubmitted，关闭则抛、不置 submitted（可重试）。
-      const onSubmitted = () => { if (!enabled()) throw new QwenDrawDisabledError(); state.submitted = true; };
+      const onSubmitted = () => {
+        if (!enabled()) throw new QwenDrawDisabledError();
+        state.submitted = true;
+        deps.onLongWork?.("qwen_draw", round);
+      };
       try {
         const png = await runQwenDraw(deps.comfyUrl, {
           prompt,

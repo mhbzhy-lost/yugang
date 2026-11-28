@@ -30,7 +30,7 @@ import { describeImage, isDescribeFiltered } from "../../media/describe.ts";
 import { lookShrinkViaWorker, readBoundedFile, sniffImageMagic, usesSips } from "../../media/image-ops.ts";
 import { checkMemeSource } from "../../media/meme-store.ts";
 import { DEFAULT_LIMITS } from "../../egress/policy.ts";
-import type { OutboundPayload } from "../say-shared.ts";
+import { throwIfSayCancelled, type OutboundPayload } from "../say-shared.ts";
 import { OutboxDoc } from "../../store.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
@@ -165,10 +165,13 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         // 机械直发（同宿主 fish.enqueue 语义，src/fish/output.ts）：只入 outbox，不写
         // fish.outbound transcript entry——正文不进 active context / compact / memory / 普通历史；
         // 不经 say_*、不占开口额度。发送仍走唯一出口 drain → emit（幂等表按 key 去重）。
+        throwIfSayCancelled(context);
         await api.commit(async (tx) => {
+          throwIfSayCancelled(context);
           const box = await tx.doc(OutboxDoc, api.conversationId);
           box.queue.push({ ...payload, status: "queued", attempts: 0 });
         }, context);
+        throwIfSayCancelled(context);
         // 机械审计摘要：只有 ref/条数/长度/hash/key，正文不落 transcript、也不进日志。
         console.log(`[鱼缸] look metadata ref=${localRef} items=${items.length} chars=${text.length} hash=${hash.slice(0, 32)} key=${key}`);
         return { output: [{ type: "text", text: deps.prompts.messages["look_metadata_sent"] ?? "metadata_sent" }] };
@@ -216,7 +219,9 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       // 图不进主会话：独立请求让模型把图描述成文字，只返回描述。
       // 描述失败（网关视觉管线间歇不稳）也不退回原图块——那会让图永久留在 transcript，
       // 拖垮之后每一轮；宁可这次看不了，让模型告诉用户稍后再看。
-      const described = await describeImage(deps, data, outMime);
+      throwIfSayCancelled(context);
+      const described = await describeImage(deps, data, outMime, context.abortSignal);
+      throwIfSayCancelled(context);
       if (isDescribeFiltered(described)) {
         // 内容审核拒（主模型或兜底）：确定性失败，明确说这张看不了、可换一张，别让人等重试
         throw new Error(deps.prompts.messages["look_filtered"] ?? "这张图被内容审核拦下了");

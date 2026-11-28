@@ -528,3 +528,127 @@ test("createDrawTool 启动期必调后端 validateStartup，坏契约后端立�
     /contract mismatch: tampered node/,
   );
 });
+
+test("submitAndWait：/queue 与复查 /history 连续 3 次均无作业时快速报错并释放单飞锁；间隙完成不误判", async () => {
+  const { createServer } = await import("node:http");
+  const { ComfyExecutionFailed, execGraph, runExclusive } = await import("../src/tools/draw/engine.ts");
+
+  let mode: "vanished" | "race_finish" = "vanished";
+  let trace: string[] = [];
+
+  const server = createServer((req, res) => {
+    const url = req.url ?? "";
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      if (url === "/queue") {
+        trace.push("queue");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ queue_running: [], queue_pending: [] }));
+        return;
+      }
+      if (url === "/prompt") {
+        const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { prompt_id: string };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ prompt_id: parsed.prompt_id }));
+        return;
+      }
+      if (url.startsWith("/history/")) {
+        const id = url.slice("/history/".length);
+        trace.push("history");
+        res.writeHead(200, { "content-type": "application/json" });
+        // race_finish: 刚查完轮询里的 /queue（第 2 次 /queue）为空后的复查 /history 返回已完成
+        if (mode === "race_finish" && trace.filter((x) => x === "queue").length >= 2 && trace.at(-2) === "queue") {
+          res.end(JSON.stringify({
+            [id]: {
+              status: { status_str: "success", completed: true },
+              outputs: { "9": { images: [{ filename: "out.png", type: "temp", subfolder: "" }] } },
+            },
+          }));
+          return;
+        }
+        res.end(JSON.stringify({}));
+        return;
+      }
+      if (url.startsWith("/view?")) {
+        res.writeHead(200, { "content-type": "image/png", "content-length": String(PNG.length) });
+        res.end(PNG);
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const addr = server.address() as { port: number };
+  const baseUrl = `http://127.0.0.1:${addr.port}/`;
+
+  try {
+    // 1. vanished: 连续 3 次 (/queue 空 -> 复查 /history 空) 后立刻抛 ComfyExecutionFailed，不等 60s deadline，且释放 runExclusive
+    mode = "vanished";
+    trace = [];
+    const t0 = Date.now();
+    await assert.rejects(
+      () => runExclusive(() => execGraph(baseUrl, {}, {
+        deadline: 2_500,
+        pollIntervalMs: 5,
+        outputNode: "9",
+        outputType: "temp",
+        onSubmitted: () => {},
+      })),
+      (err: unknown) => err instanceof ComfyExecutionFailed && /vanished/.test(err.message),
+    );
+    assert.ok(Date.now() - t0 < 1_000, "应在远早于 deadline 时快速结束");
+    // 验证每次 miss 顺序（跳过 execGraph 首检 /queue）：先 3 轮 history，然后 queue 再 history
+    const pollTrace = trace.slice(1);
+    assert.equal(pollTrace.filter((x) => x === "queue").length, 3);
+    for (let i = 0; i < pollTrace.length; i++) {
+      if (pollTrace[i] === "queue") assert.equal(pollTrace[i + 1], "history", "先查 /queue 后必须立刻复查 /history");
+    }
+    // 锁必须已释放
+    assert.equal(await runExclusive(async () => "lock-free"), "lock-free");
+
+    // 2. race_finish: 查完 /queue 为空后任务恰好进入 /history，复查命中并正常取图
+    mode = "race_finish";
+    trace = [];
+    const png = await runExclusive(() => execGraph(baseUrl, {}, {
+      deadline: 2_500,
+      pollIntervalMs: 5,
+      outputNode: "9",
+      outputType: "temp",
+      onSubmitted: () => {},
+    }));
+    assert.ok(png.equals(PNG));
+    assert.equal(trace.slice(1).filter((x) => x === "queue").length, 1);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("qwen_draw 参数非法时不触发 onLongWork", async () => {
+  const { createQwenDrawTool } = await import("../src/tools/qwen_draw/tool.ts");
+  const prompts = loadPrompts(join(ROOT, "prompt"));
+  const manifests = loadToolManifests(join(ROOT, "src", "tools"), { memeTags: prompts.memeTags });
+  mergeToolMessages(manifests, prompts.messages);
+
+  let longWorkCalls = 0;
+  const tool = createQwenDrawTool(manifests.get("qwen_draw")!, {
+    prompts,
+    mediaRoot: WORK,
+    comfyUrl: "http://127.0.0.1:18190/",
+    onLongWork: () => { longWorkCalls++; },
+    react: () => {},
+  });
+  const api = {
+    conversationId: "conv-qwen-test",
+    callId: "c1",
+    snapshot: async (doc: unknown) => (doc === LiveDoc ? { run: { inputs: ["r1"] } } : undefined),
+  } as never;
+
+  await assert.rejects(() => tool.execute({ prompt: "" } as never, api, {} as never));
+  await assert.rejects(() => tool.execute({ prompt: "a cat", ratio: "99:1" } as never, api, {} as never));
+  await assert.rejects(() => tool.execute({ prompt: "a cat", ref: "inbound/missing.png" } as never, api, {} as never));
+  assert.equal(longWorkCalls, 0, "参数或 ref 非法时不得触发 onLongWork");
+});

@@ -17,7 +17,8 @@
  *
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest（factory 只消费它，不再有第二份运行时定义）。
  */
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { renderTemplate } from "../../prompt/index.ts";
@@ -162,20 +163,25 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
     }
     const result = spec.check(candidate);
     const target = `${spec.name}${path.length > 0 ? `.${path.join(".")}` : ""}`;
+    const prefixes = path.map((_, idx) => `${spec.name}.${path.slice(0, idx + 1).join(".")}`);
     const targetProblem = result.ok && path.length > 0
-      ? result.problems?.find((problem) => problem.includes(target))
+      ? result.problems?.find((problem) =>
+          problem.includes(target) || prefixes.some((prefix) => problem === prefix || problem.startsWith(`${prefix} `)),
+        )
       : undefined;
     if (targetProblem) return { ok: false, reason: targetProblem };
     if (!result.ok) return result;
     current[spec.name] = result.value;
+    const tmp = `${fishConfigPath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     try {
-      const tmp = `${fishConfigPath}.tmp`;
       writeFileSync(tmp, `${JSON.stringify(current, null, 2)}\n`);
       renameSync(tmp, fishConfigPath);
     } catch (error) {
       throw new Error(renderTemplate(p.messages["config_write_failed"] ?? "{{error}}", {
         error: error instanceof Error ? error.message : String(error),
       }));
+    } finally {
+      rmSync(tmp, { force: true });
     }
     console.log(`[鱼缸] config set fish.config.json ${target}=${show(result.value)} (${spec.effect})`);
     // ammo.dailyBudget 配置变更即灌入共享 bili 客户端（终验 #8）：热配置真正生效，
@@ -209,14 +215,16 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
     }
     file.models = file.models ?? {};
     file.models[role] = { provider, model };
+    const tmp = `${modelsPath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     try {
-      const tmp = `${modelsPath}.tmp`;
       writeFileSync(tmp, `${JSON.stringify(file, null, 2)}\n`);
       renameSync(tmp, modelsPath);
     } catch (error) {
       throw new Error(renderTemplate(p.messages["models_write_failed"] ?? "{{error}}", {
         error: error instanceof Error ? error.message : String(error),
       }));
+    } finally {
+      rmSync(tmp, { force: true });
     }
     console.log(`[鱼缸] config models ${role} -> ${provider}/${model}`);
   }
@@ -290,8 +298,11 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
 
       // set：白名单外的字段与不合法的值都以 tool 错误拒绝，不落盘
       const field = args.field?.trim() ?? "";
-      const segments = field.split(".");
+      let segments = field.split(".");
       const top = segments.shift() ?? "";
+      if (top === "compact" && segments[0] === "byModel" && segments.length > 2) {
+        segments = [segments[0], segments.slice(1).join(".")];
+      }
       const spec = CONFIG_FIELDS.find((candidate) => candidate.name === top);
       const invalidPath = segments.some((segment) => !segment || ["__proto__", "prototype", "constructor"].includes(segment));
       if (!spec || invalidPath || (segments.length > 0 && !OBJECT_CONFIG_FIELDS.has(top))) {
