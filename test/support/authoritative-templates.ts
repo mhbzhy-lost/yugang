@@ -1,7 +1,7 @@
 /**
  * 权威模板只读解析（decisions §10 机械测试合同的唯一权威输入）。
  *
- * 唯一事实源是 `docs/decisions/2026-11-04-model-input-templates.md`：本 helper 直接读那个
+ * 唯一事实源是 `test/fixtures/model-input-templates.md`：本 helper 直接读那个
  * 文件里的 `<!-- input-scene-matrix -->` 与 `<!-- input-template:<id> -->` 标记后紧跟的
  * **一个** fenced code block，测试内不另抄任何期望模板，生产代码也不读这份文档。
  *
@@ -16,8 +16,8 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-/** decisions 相对仓库根的位置（缺省路径；可被 YUGANG_DECISIONS_PATH 覆盖）。 */
-const DECISIONS_RELATIVE = "docs/decisions/2026-11-04-model-input-templates.md";
+/** 权威模板夹具相对仓库根的位置（缺省路径；可被 YUGANG_DECISIONS_PATH 覆盖）。 */
+const DECISIONS_RELATIVE = "test/fixtures/model-input-templates.md";
 
 /** 矩阵必须覆盖的 scene 数量（decisions §10：scene 数与常量一致，一个都不能少）。 */
 export const AUTHORITATIVE_SCENE_COUNT = 14;

@@ -24,9 +24,8 @@ fish.config.json
 *.bak-*
 .env.bak*
 
-# 过程性计划/报告/交接文档不入库（保留 test/model-input-templates.test.ts 依赖的 docs/decisions/）
-/docs/*
-!/docs/decisions/
+# 过程性计划/报告/决策文档一律不入库（测试夹具放在 test/fixtures/）
+/docs/
 
 # 本地模型训练与实验脚本不入库
 /scripts/regional-training/
