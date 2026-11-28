@@ -898,6 +898,21 @@ test("gpt：缺 baseUrl/凭据/损坏 auth.json 报 unconfigured 不泄路径；
     runDrawRemote(runRequest(ws, { provider: "gpt", model: "gpt-image-2.6-flare", fetchImpl: fakeFetch(() => jsonResponse({ data: [{ b64_json: TINY_PNG.toString("base64") }] })).impl })),
     expectDrawRemoteError("gpt", "failed", true, ["返回的图片过小"], ["gpt_image_too_small"]),
   );
+
+  // 畸形 200 响应（data 非数组 / 元素为 null）归入 gpt_image_empty，不抛裸 TypeError
+  for (const weird of [null, {}, { data: null }, { data: [null] }]) {
+    await assert.rejects(
+      runDrawRemote(runRequest(ws, { provider: "gpt", model: "gpt-image-2.6-flare", fetchImpl: fakeFetch(() => jsonResponse(weird)).impl })),
+      expectDrawRemoteError("gpt", "failed", true, ["上游没有返回图片"], ["TypeError"]),
+    );
+  }
+
+  // 短占位 key ("local") 不应把上游错误中的 "localhost" 误替换为 "***host"
+  ws.credentials({ [CODEX_PROVIDER_ID]: "local" });
+  await assert.rejects(
+    runDrawRemote(runRequest(ws, { provider: "gpt", model: "gpt-image-2.6-flare", fetchImpl: fakeFetch(() => textResponse("connect localhost:8317 failed", 502)).impl })),
+    expectDrawRemoteError("gpt", "failed", true, ["localhost:8317"], ["***host"]),
+  );
 });
 
 // =====================================================================

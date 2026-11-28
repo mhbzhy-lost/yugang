@@ -1,14 +1,16 @@
 # CLIProxyAPI v8 最小配置模板（供 compose.yaml 的 cliproxyapi sidecar 消费）。
 #
 # 首次启用（在 macmini ~/yugang 目录）：
-#   mkdir -p var/cliproxyapi/auth
+#   mkdir -p var/cliproxyapi/auth var/cliproxyapi/logs
 #   cp config/cliproxyapi.example.yaml var/cliproxyapi/config.yaml
 #   docker compose up -d cliproxyapi
 #
-# 无头 OAuth 登录（凭据落盘到 ./var/cliproxyapi/auth，随 var/ 留宿主）：
-#   docker compose exec -it cliproxyapi ./CLIProxyAPI -config /data/config.yaml -no-browser -codex-login
-#   docker compose exec -it cliproxyapi ./CLIProxyAPI -config /data/config.yaml -no-browser -antigravity-login
-#   docker compose exec -it cliproxyapi ./CLIProxyAPI -config /data/config.yaml -no-browser -claude-login
+# OAuth 登录（凭据落盘到 ./var/cliproxyapi/auth，随 var/ 留宿主）：
+#   方式 1：直接把宿主机或别处 CLIProxyAPI 已登录好的 auth JSON 放进 ./var/cliproxyapi/auth/（推荐，免回调端口）。
+#   方式 2：一次性临时映射本地回调端口执行无头登录（按渠道选端口：Codex 1455 / Claude 54545 / Antigravity 8085）：
+#     docker compose run --rm -it -p 127.0.0.1:1455:1455 cliproxyapi ./CLIProxyAPI -config /data/config.yaml -no-browser -codex-login
+#     docker compose run --rm -it -p 127.0.0.1:8085:8085 cliproxyapi ./CLIProxyAPI -config /data/config.yaml -no-browser -antigravity-login
+#     docker compose run --rm -it -p 127.0.0.1:54545:54545 cliproxyapi ./CLIProxyAPI -config /data/config.yaml -no-browser -claude-login
 #
 # 鉴权说明：
 #   - 默认 access.api-keys 为空时仅容器内网可访问（不发布宿主机端口），config/auth.json 填 "local" 即可。
@@ -20,6 +22,8 @@ config-version: 8
 server:
   host: "0.0.0.0"
   port: 8317
+
+logs-dir: "/data/logs"
 
 requests:
   proxy-url: "http://host.docker.internal:7897"

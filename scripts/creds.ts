@@ -20,6 +20,16 @@ const TARGET = join(dirname(MODELS), "auth.json");
 const [command = "show", ...rest] = process.argv.slice(2);
 const flags = parseFlags(rest);
 
+function readJsonStrict(path: string, label: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    // 严禁打印 JSON.parse 原始异常：V8 SyntaxError 可能携带明文 key 片段
+    console.error(`${label} JSON 损坏或无法读取（${path}）`);
+    process.exit(1);
+  }
+}
+
 function extractKey(entry: unknown): string | undefined {
   if (typeof entry === "string") return entry.trim() ? entry : undefined;
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
@@ -48,8 +58,13 @@ if (command === "import") {
     process.exit(1);
   }
 
-  const wanted = Object.keys((JSON.parse(readFileSync(MODELS, "utf8")) as { providers: object }).providers);
-  const rawSource = JSON.parse(readFileSync(from, "utf8")) as unknown;
+  const rawModels = readJsonStrict(MODELS, "模型配置") as { providers?: unknown };
+  if (!rawModels || typeof rawModels !== "object" || !rawModels.providers || typeof rawModels.providers !== "object") {
+    console.error(`模型配置缺少 providers（${MODELS}）`);
+    process.exit(1);
+  }
+  const wanted = Object.keys(rawModels.providers);
+  const rawSource = readJsonStrict(from, "来源凭据文件");
   const source = rawSource && typeof rawSource === "object" && !Array.isArray(rawSource)
     ? (rawSource as Record<string, unknown>)
     : {};
@@ -78,8 +93,8 @@ if (command === "import") {
     process.exit(0);
   }
   const stat = statSync(TARGET);
+  const parsed = readJsonStrict(TARGET, "凭据文件");
   console.log(`${TARGET}  ${(stat.mode & 0o777).toString(8)}  ${stat.size}B`);
-  const parsed = JSON.parse(readFileSync(TARGET, "utf8")) as unknown;
   const entries = parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? Object.entries(parsed as Record<string, unknown>)
     : [];

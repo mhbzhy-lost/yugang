@@ -525,3 +525,25 @@ test("compose.yaml 与 config/cliproxyapi.example.yaml 结构兜底：sidecar �
     assert.equal(provider["transport"], undefined, `${id} 不得再含 transport`);
   }
 });
+
+test("scripts/creds.ts：损坏的 auth.json 不得在 stderr 回显明文 key 片段", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "fish-creds-cli-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const configDir = join(dir, "config");
+  const credsCli = fileURLToPath(new URL("../scripts/creds.ts", import.meta.url));
+  writeFileSync(join(dir, "keep"), "");
+  spawnSync("mkdir", ["-p", configDir]);
+  writeFileSync(
+    join(configDir, "auth.json"),
+    '{"deepseek": {"type": "api_key", "key": "sk-SECRET-LEAK-CHECK-9999"}, "broken": oops}',
+    { mode: 0o600 },
+  );
+  const res = spawnSync(process.execPath, [credsCli, "show"], {
+    env: { ...process.env, YUGANG_ROOT: dir },
+    encoding: "utf8",
+  });
+  assert.equal(res.status, 1);
+  assert.ok(!res.stderr.includes("sk-SECRET-LEAK-CHECK-9999"), `stderr 不得泄露密钥：${res.stderr}`);
+  assert.ok(!res.stdout.includes("sk-SECRET-LEAK-CHECK-9999"), `stdout 不得泄露密钥：${res.stdout}`);
+  assert.match(res.stderr, /JSON 损坏/);
+});

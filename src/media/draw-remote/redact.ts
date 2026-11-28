@@ -35,8 +35,12 @@ export function redactSecrets(text: string, secrets: readonly string[]): string 
     out = out.split(secret).join("***");
   }
   out = out.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer ***");
-  out = out.replace(/(x-goog-api-key\s*[:=]\s*)[^\s,;"]+/gi, "$1***");
-  out = out.replace(/([?&]key=)[^\s&"']+/gi, "$1***");
+  out = out.replace(
+    /(\\"|")((?:x-goog-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret))\1\s*:\s*\1(?:\\.|[^"\\])*\1/gi,
+    "$1$2$1: $1***$1",
+  );
+  out = out.replace(/((?:x-goog-api-key|api[_-]?key)\s*[:=]\s*)[^\s,;"]+/gi, "$1***");
+  out = out.replace(/([?&](?:api_)?key=)[^\s&"']+/gi, "$1***");
   out = out.replace(/\bAIza[A-Za-z0-9_-]{20,}/g, "***");
   out = out.replace(/\bya29\.[A-Za-z0-9._-]{10,}/g, "***");
   out = out.replace(/\bsk-[A-Za-z0-9_-]{6,}/g, "***");

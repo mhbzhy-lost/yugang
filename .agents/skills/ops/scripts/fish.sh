@@ -41,7 +41,7 @@ case "$CMD" in
   usage [日期]           当天用量
   probe     QQ 侧验收（连 OneBot、报身份和群）
   ping      模型连通性 + 用量
-  quota [provider] [--json] [--no-refresh]   查各 provider 剩余额度/余额（容器内执行）
+  quota [provider] [--json]   查 DeepSeek / ZAI 剩余额度与余额（容器内执行）
   log [N]   鱼日志尾部（默认 40 行）
   ps        进程状态（鱼 / meme import）
   deploy    git pull + 平滑重启鱼（标准部署入口）

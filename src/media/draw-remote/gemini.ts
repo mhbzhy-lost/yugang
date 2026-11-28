@@ -156,8 +156,9 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
 
   if (!response.ok) {
     const detail = await readErrorText(response);
+    const cleaned = detail.trim() ? clean(detail) : "";
     throw fail(
-      `gemini 生图请求失败（HTTP ${response.status}）${detail.trim() ? `：${clean(detail)}` : ""}`,
+      `gemini 生图请求失败（HTTP ${response.status}）${cleaned ? `：${cleaned}` : ""}`,
       response.status >= 500,
     );
   }
@@ -176,7 +177,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   const candidate = (envelope.response?.candidates ?? envelope.candidates)?.[0];
   const responseParts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
   const images = responseParts
-    .map((part) => part.inlineData ?? part.inline_data)
+    .map((part) => (part && typeof part === "object" ? part.inlineData ?? part.inline_data : undefined))
     .filter((item): item is GeminiInlineData & { data: string } => typeof item?.data === "string" && item.data.length > 0);
   request.onStage?.({ stage: "parse", ms: Date.now() - parseStart, urls: images.length });
 
@@ -184,7 +185,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
     const blockReason = textOf(envelope.response?.promptFeedback?.blockReason) || textOf(envelope.promptFeedback?.blockReason);
     const finishReason = textOf(candidate?.finishReason);
     const apiError = textOf(envelope.response?.error?.message) || textOf(envelope.error?.message);
-    const reply = responseParts.map((part) => textOf(part.text)).filter(Boolean).join(" ");
+    const reply = responseParts.map((part) => (part && typeof part === "object" ? textOf(part.text) : "")).filter(Boolean).join(" ");
     const explicit = Boolean(blockReason || finishReason || apiError || reply);
     const detail = [blockReason && `blockReason=${blockReason}`, finishReason && `finishReason=${finishReason}`, apiError, reply]
       .filter(Boolean)

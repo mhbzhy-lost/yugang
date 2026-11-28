@@ -10,7 +10,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { createProxyFetch } from "./proxy-fetch.ts";
-import { redactSecrets } from "./draw-remote/redact.ts";
+import { collectSecrets, redactSecrets } from "./draw-remote/redact.ts";
 import { isValidHttpUrl } from "./draw-remote/types.ts";
 
 export const REMOTE_JSON_MAX_BYTES = 48 * 1024 * 1024;
@@ -202,7 +202,8 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
 
   if (!response.ok) {
     const rawDetail = await readErrorText(response);
-    const safeDetail = redactSecrets(rawDetail, [apiKey]).trim();
+    // 用 collectSecrets（≥6 字符才替换）防占位短 key 如 "local" 误伤 "localhost"
+    const safeDetail = redactSecrets(rawDetail, collectSecrets({ key: apiKey })).trim();
     throw httpError(
       safeDetail ? `gpt_image_http_${response.status}: ${safeDetail}` : `gpt_image_http_${response.status}`,
       response.status,
@@ -211,15 +212,19 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
 
   const parseStart = Date.now();
   const rawJson = await readResponseBytes(response, REMOTE_JSON_MAX_BYTES, "gpt_image_response_too_large");
-  const parsed = JSON.parse(rawJson.toString("utf8")) as { data?: { b64_json?: string }[] };
-  const entries = (parsed.data ?? []).filter((item) => typeof item.b64_json === "string");
+  const parsed = JSON.parse(rawJson.toString("utf8")) as { data?: unknown } | null;
+  const rawData = parsed && typeof parsed === "object" && Array.isArray(parsed.data) ? parsed.data : [];
+  const entries = rawData.filter(
+    (item): item is { b64_json: string } =>
+      Boolean(item) && typeof item === "object" && typeof (item as { b64_json?: unknown }).b64_json === "string",
+  );
   request.onStage?.({ stage: "parse", ms: Date.now() - parseStart, urls: entries.length });
   if (entries.length === 0) throw new Error("gpt_image_empty");
 
   // 取消后不落盘，且全部解码校验通过后再统一落盘；异常时回滚删已写文件
   combinedSignal.throwIfAborted();
   const decoded = entries.map((entry) => {
-    const bytes = Buffer.from(entry.b64_json as string, "base64");
+    const bytes = Buffer.from(entry.b64_json, "base64");
     if (bytes.length < 1024) throw new Error("gpt_image_too_small");
     return bytes;
   });
@@ -231,7 +236,7 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
     for (const bytes of decoded) {
       combinedSignal.throwIfAborted();
       const file = `${Date.now()}-${randomUUID().slice(0, 8)}.${extensionOf(bytes)}`;
-      writeFileSync(join(outDir, file), bytes);
+      writeFileSync(join(outDir, file), bytes, { flag: "wx" });
       files.push(file);
     }
     return files;

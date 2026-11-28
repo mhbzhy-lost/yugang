@@ -679,7 +679,7 @@ mini 上并没有 `home-mac-connect` 这个 skill（今天有子代理在 mini �
 （Linux QQ 容器风控频繁掉线，一天两次 ErrCode 3/1；native mac QQ 更稳）。容器化原始设计见
 `docs/plans/2026-11-14-dockerize-fish-napcat.md`，回退见 `docs/plans/2026-11-16-revert-native-qq.md`。
 
-**两个容器服务**（`compose.yaml`）：`fish`（自建）/ `sixty`（新闻源）。**协议端 native QQ+NapCat 在宿主**（见下「native 协议端」）。
+**三个容器服务**（`compose.yaml`）：`fish`（自建）/ `sixty`（新闻源）/ `cliproxyapi`（订阅模型与远程生图协议网关，内网 `http://cliproxyapi:8317`，不发布宿主端口，数据挂 `./var/cliproxyapi:/data`）。**协议端 native QQ+NapCat 在宿主**（见下「native 协议端」）。
 **语音与 ComfyUI 留宿主机**：GPT-SoVITS 靠宿主 launchd + MPS（2026-11-25 恢复单实例 `com.yugang.tts.elysia4` 监听 9884，容器经 `host.docker.internal:9884` 按请求热切模型，当前 `voices` 仅配爱莉希雅）；ComfyUI 在 **WSL**，经宿主 SSH 隧道。
 
 ### 镜像只是环境，源码与数据全外挂
@@ -724,8 +724,9 @@ VirtioFS 有约 3 秒属性缓存：长驻容器内宿主删除的文件会残�
 |---|---|
 | ComfyUI `:18190` | 容器内 **socat 转发** `127.0.0.1:18190` → `host.docker.internal:18190`。**`comfy.ts` 的 loopback 校验不放宽**（防 SSRF） |
 | TTS `:9884` | `fish.config.json` 的 `voices[*].url` → `http://host.docker.internal:9884`；`gptModel`/`sovitsModel`/`referWav` 保持宿主绝对路径（服务端自己读） |
-| provider 代理 `:7897` | `config/models.json` 的 `providers.*.proxy` → `http://host.docker.internal:7897` |
+| provider 代理 `:7897` | `config/models.json` 的 `providers.*.proxy` → `http://host.docker.internal:7897`（仅用于 `https://` 外部直连 provider；`cliproxyapi-*` 不配 `proxy`，其出站代理在 `var/cliproxyapi/config.yaml` 的 `requests.proxy-url`） |
 | 60s `:4399` | compose 同网服务名 `http://sixty:4399` |
+| CLIProxyAPI `:8317` | compose 同网服务名 `http://cliproxyapi:8317`（`NO_PROXY` 必须包含 `cliproxyapi`；不发布宿主端口） |
 | 协议端 | `ONEBOT_WS_URL=ws://host.docker.internal:3001`；native NapCat 监听宿主 **`127.0.0.1:3001`**（host.docker.internal 直达 loopback，不需 0.0.0.0） |
 
 **不写 `extra_hosts: host-gateway`**：会覆盖 OrbStack 自带的 `host.docker.internal` 映射（实测它本就直达宿主 loopback）。
