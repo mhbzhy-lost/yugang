@@ -24,13 +24,7 @@ export interface ModelProbeOptions {
 
 function safeError(error: unknown, config: FishModelConfig): string {
   const text = error instanceof Error ? error.message : String(error);
-  const secrets = [
-    config.key,
-    config.oauth?.access,
-    config.oauth?.refresh,
-    config.oauthClient?.secret,
-    typeof config.oauth?.["clientSecret"] === "string" ? config.oauth["clientSecret"] : undefined,
-  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+  const secrets = config.key ? [config.key] : [];
   return redactSecrets(text, secrets).slice(0, 500);
 }
 
@@ -44,10 +38,7 @@ export async function probeModelConfig(config: FishModelConfig, options: ModelPr
   try {
     const message = await models.streamSimple(model, {
       messages: [{ role: "user", content: "只回复两个字：在的" }],
-    }, {
-      signal,
-      ...(config.transport ? { transport: config.transport } : {}),
-    }).result();
+    }, { signal }).result();
     const text = message.content
       .filter((block): block is { type: "text"; text: string } => block.type === "text")
       .map((block) => block.text)

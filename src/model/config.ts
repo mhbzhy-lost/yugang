@@ -4,14 +4,38 @@
  * 两件事分开：
  *   config/models.json           provider 地址、角色（main / vision / vision_fallback / image）、模型清单、兼容值；
  *                                模板是 config/models.example.json（进仓库），首次使用 cp 一份再改
- *   config/auth.json             只有 key —— gitignore，由 `npm run creds` 写，权限 0600
+ *   config/auth.json             只有 API key —— gitignore，由 `npm run creds` 写，权限 0600
  *
  * 模型选择只有一个入口：config/models.json 的 models 角色表。没有环境变量、没有启动参数，
- * 鱼自己（read / edit）也能看到并修改；改完用 restart 工具生效。
+ * 鱼自己（read / config）也能看到并修改；改完用 restart 工具生效。
  */
 import { MODELS_CONFIG_PATH } from "../paths.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+
+export type SupportedProviderApi =
+  | "openai-completions"
+  | "openai-responses"
+  | "anthropic-messages"
+  | "google-generative-ai";
+
+export const SUPPORTED_PROVIDER_APIS: readonly SupportedProviderApi[] = Object.freeze([
+  "openai-completions",
+  "openai-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+]);
+
+export const DEFAULT_BASE_URLS: Readonly<Record<SupportedProviderApi, string>> = Object.freeze({
+  "openai-completions": "https://api.openai.com/v1",
+  "openai-responses": "https://api.openai.com/v1",
+  "anthropic-messages": "https://api.anthropic.com",
+  "google-generative-ai": "https://generativelanguage.googleapis.com/v1beta",
+});
+
+export function isSupportedProviderApi(value: unknown): value is SupportedProviderApi {
+  return typeof value === "string" && (SUPPORTED_PROVIDER_APIS as readonly string[]).includes(value);
+}
 
 export interface ProviderModelConfig {
   id: string;
@@ -27,30 +51,12 @@ export interface ProviderModelConfig {
 }
 
 export interface ProviderConfig {
-  /** 默认 openai-completions；openai-codex-responses 走 ChatGPT/Codex 的 Responses 接口；google-code-assist 走 Google 订阅的 Code Assist v1internal 通道。 */
+  /** 标准协议：openai-completions（默认）/ openai-responses / anthropic-messages / google-generative-ai。 */
   api?: string;
   baseUrl?: string;
   compat?: Record<string, unknown>;
-  /** key（默认，一把 API key）或 oauth（订阅登录，凭据是一整块 token）。 */
-  auth?: "key" | "oauth";
-  /**
-   * 流式传输方式，只有 main 角色的 provider 这一项生效（进程级设置）：
-   * Node 的 WS 不吃 --use-env-proxy，过代理时必须写 "sse"。
-   */
-  transport?: "sse";
-  /** Antigravity 的完整 User-Agent 覆盖；缺省用当前 IDE 指纹与真实平台。 */
-  userAgent?: string;
-  /**
-   * provider 级代理：配了它就这一个 provider 的全部请求走代理（聊天 / 生图 / token 刷新），
-   * 其它 provider 仍直连。codex 记得同时写 transport: "sse"（WS 不吃 fetch 注入）。
-   */
+  /** provider 级代理：配了它就这一个 provider 的全部请求走代理，其它 provider 仍直连。 */
   proxy?: string;
-  /**
-   * OAuth client（google-code-assist 专用）：gemini-cli 的公开 id/secret，但 GitHub push
-   * protection 会拦含明文 client 的提交，所以只放本机 config/models.json，模板留空串占位。
-   * 两个字段都非空才生效；登录时随凭据落盘，之后刷新从凭据自带字段读。
-   */
-  oauthClient?: { id?: string; secret?: string };
   models: ProviderModelConfig[];
 }
 
@@ -70,27 +76,18 @@ export interface FishModelConfig {
   providerId: string;
   modelId: string;
   baseUrl: string;
-  /** provider 的 api 形状；空 = openai-completions。 */
-  api: string;
-  authMode: "key" | "oauth";
+  /** provider 的标准 api 形状。 */
+  api: SupportedProviderApi;
   models: ProviderModelConfig[];
-  /** 只在内存里用；不要打印、不要写文件、不要进 prompt。oauth 下为空。 */
+  /** 只在内存里用；不要打印、不要写文件、不要进 prompt。 */
   key: string;
-  /** oauth 凭据（整块 token）；有没有值只在内存里判断，不打印内容。 */
-  oauth?: { refresh: string; access: string; expires: number; [key: string]: unknown };
   keySource: string;
   /** 配置文件本身的位置，方便排查。 */
   configSource: string;
-  /** 凭据文件位置：oauth 刷新后要写回这里。 */
+  /** 凭据文件（config/auth.json）位置：qwen-tts 与 searchKey 等附属模块同源读取。 */
   credentialsPath: string;
-  /** Antigravity 的完整 User-Agent 覆盖；只来自本机 models.json。 */
-  userAgent?: string;
-  /** provider 级代理；空 = 直连。只影响这个 provider 的域名（含 oauth token 主机）。 */
+  /** provider 级代理；空 = 直连。只影响这个 provider 的域名。 */
   proxy?: string;
-  /** 该 provider 的请求传输；codex 过代理时强制 SSE，与主角色运行时一致。 */
-  transport?: "sse";
-  /** OAuth client（google-code-assist 用）；来自本机配置，不要打印。 */
-  oauthClient?: { id: string; secret: string };
 }
 
 /** 与 fish-config 的 ThinkingLevel 结构一致（就地声明避开循环 import）。 */
@@ -106,11 +103,8 @@ function modelEntry(config: FishModelConfig): ProviderModelConfig | undefined {
 /**
  * 思考两态 → 具体档位。provider 差异全部交给模型自带的 thinkingLevelMap。
  *
- *   false → "off"（发什么字段由 SDK 按 thinkingFormat 决定）
+ *   false → "off"（发什么字段由 SDK 按 thinkingFormat / 协议决定）
  *   true  → 该模型 thinkingLevelMap 里**最低的非 null 档**；没配映射时回落 low
- *
- * 为何不再暴露七档：群聊只需要「开/关」，而七档里的中间值在各 provider 上语义不一，
- * 反而容易配出「以为关了其实没关」（见 thinkingOffWarning）。
  */
 export function resolveThinking(thinking: boolean, config: FishModelConfig): ResolvedThinking {
   if (!thinking) return "off";
@@ -125,34 +119,28 @@ export function resolveThinking(thinking: boolean, config: FishModelConfig): Res
 
 /**
  * thinking=false 时该模型能不能真关思考；不能则返回告警文案。
- *
- * 背景（2026-11-14 实测）：pi-ai 的 openai-completions 兜底分支只在
- * `typeof thinkingLevelMap.off === "string"` 时才发 reasoning_effort；
- * 为 null/缺失时**什么都不发**，而不发字段的实际含义是「用服务端默认」
- * （qwen4-max-preview 默认 xhigh）——于是 off 成了静默空档。
- * 其它 thinkingFormat（zai / qwen / together 等）会主动发禁用字段，不受此影响。
  */
 export function thinkingOffWarning(config: FishModelConfig): string | undefined {
-  const api = config.api || "openai-completions";
-  if (api !== "openai-completions") return undefined; // 其它 adapter 自己管思考
   const md = modelEntry(config);
   if (!md?.reasoning) return undefined;
+  const label = `${config.providerId}/${config.modelId}`;
+  const off = md.thinkingLevelMap?.["off"];
+
+  if (config.api !== "openai-completions") {
+    return off === null ? `${label} 声明不支持关思考（thinkingLevelMap.off=null），thinking=false 对它无效` : undefined;
+  }
+
   const compat = md.compat ?? {};
   const fmt = compat["thinkingFormat"];
-  const off = md.thinkingLevelMap?.["off"];
-  const label = `${config.providerId}/${config.modelId}`;
   const offText = JSON.stringify(off) ?? "缺失";
 
-  // 这些格式在 off 时主动发禁用字段，与映射值无关
   if (fmt === "zai" || fmt === "qwen" || fmt === "qwen-chat-template" || fmt === "together") return undefined;
-  // 这些格式用 `off !== null` 判定：null 是「显式声明不支持关」
   if (fmt === "deepseek" || fmt === "openrouter" || fmt === "string-thinking") {
     return off === null ? `${label} 声明不支持关思考（thinkingLevelMap.off=null），thinking=false 对它无效` : undefined;
   }
   if (fmt === "ant-ling") return `${label} 的 ant-ling 通道 off 时不发字段，thinking=false 关不掉`;
-  if (fmt === "chat-template") return undefined; // 由 buildChatTemplateValues 决定，不在此断言
+  if (fmt === "chat-template") return undefined;
 
-  // 兜底（无 thinkingFormat，含写了 "openai" 但 SDK 无此分支的情形）与 baseten
   if (compat["supportsReasoningEffort"] !== true) {
     return `${label} 未声明 supportsReasoningEffort，off 无字段可发；能不能关取决于服务端默认`;
   }
@@ -172,13 +160,11 @@ export interface FishModelsSelection {
   visionFallback?: FishModelConfig;
   /**
    * 远程生图角色（兼容保留，2026-11-25 起运行时不再消费）：画图模型与通道已收归 fish.config.json 的 drawRemote 热配置，
-   * draw_remote 按 drawRemote.provider 直接读 providers 里的端点与代理。保留解析只为旧 models.json 不拒启、ping / smoke 仍可展示。
+   * draw_remote 按 drawRemote.provider 直接读 providers 里的端点与代理。保留解析只为旧 models.json 不拒启、ping 仍可展示。
    */
   image?: { provider: string; modelId: string; proxy?: string };
   /** 百炼 Token Plan Wan 通道（models.wan_image）：wan_gif（视频转 GIF）消费；省略 = wan_gif 不可用。 */
   wanImage?: { provider: string; modelId: string; apiKey: string; baseUrl: string; proxy?: string };
-  /** 进程级流式传输；取自 main provider 的 transport。 */
-  transport?: "sse";
 }
 
 export interface LoadOptions {
@@ -222,7 +208,7 @@ function roleRef(roles: Partial<Record<ModelRole, RoleRef>>, role: ModelRole): R
 
 /**
  * 读角色表（运行时唯一入口）。
- * 严格：旧 default 键、未知角色、缺失 provider 都直接报错，不做静默默认。
+ * 严格：旧 default 键、未知角色、缺失 provider、退役 auth/api 都直接报错，不做静默默认。
  */
 export function loadFishModels(options: LoadOptions = {}): FishModelsSelection {
   const { file, configSource } = readModelsFile(options.modelsPath ?? defaultModelsPath());
@@ -239,14 +225,11 @@ export function loadFishModels(options: LoadOptions = {}): FishModelsSelection {
   const credentialsPath = options.credentialsPath ?? defaultAuthPath(configSource);
   const main = buildConfig(file.providers, configSource, credentialsPath, "main", mainRef);
 
-  // vision 省略 = 直接用 main（同一个 provider、同一个模型）
   const visionRef = roles.vision ?? mainRef;
   const vision = visionRef.provider === mainRef.provider && visionRef.model === mainRef.model
     ? main
     : buildConfig(file.providers, configSource, credentialsPath, "vision", visionRef);
 
-  // vision_fallback 省略 = 无兜底：look/video 主模型失败后不再换模型重试（不隐式兜底）。
-  // 与 main/vision 完全相同时直接复用实例：同一个模型兜底没有意义，也避免重复挂 provider。
   let visionFallback: FishModelConfig | undefined;
   if (roles.vision_fallback) {
     const fallbackRef = roleRef(roles, "vision_fallback");
@@ -277,7 +260,7 @@ export function loadFishModels(options: LoadOptions = {}): FishModelsSelection {
     image = { provider: imageRef.provider, modelId: imageRef.model, ...(imageProvider.proxy ? { proxy: imageProvider.proxy } : {}) };
   }
 
-  return { main, vision, ...(visionFallback ? { visionFallback } : {}), ...(image ? { image } : {}), ...(wanImage ? { wanImage } : {}), ...(main.transport ? { transport: main.transport } : {}) };
+  return { main, vision, ...(visionFallback ? { visionFallback } : {}), ...(image ? { image } : {}), ...(wanImage ? { wanImage } : {}) };
 }
 
 /**
@@ -311,43 +294,36 @@ function buildConfig(
   const modelId = ref.model;
   if (!modelId) throw new Error(`${role ? `models.${role}` : ref.provider} 缺少 model`);
 
-  const authMode = provider.auth === "oauth" ? "oauth" : "key";
-  const stored = readCredentialFile(credentialsPath, ref.provider);
-  const oauth = authMode === "oauth" && stored && stored.type === "oauth" ? stored : undefined;
-  const key = authMode === "key" && stored && stored.type === "api_key" ? stored.key : undefined;
+  if ((provider as { auth?: unknown }).auth === "oauth") {
+    throw new Error(`provider「${ref.provider}」的 auth: "oauth" 已退役，请改用 CLIProxyAPI + API key`);
+  }
+  const rawApi = provider.api ?? "openai-completions";
+  if (!isSupportedProviderApi(rawApi)) {
+    throw new Error(
+      `provider「${ref.provider}」使用了不支持的 api「${rawApi}」（支持 ${SUPPORTED_PROVIDER_APIS.join(" / ")}；旧 OAuth 通道请改走 CLIProxyAPI）`,
+    );
+  }
 
-  // id/secret 都非空字符串才透传，缺一半按没配处理（不报错：非 google-code-assist 的
-  // provider 用不到它，不该被启动校验拦住）
-  const oc = provider.oauthClient;
-  const oauthClient =
-    oc && typeof oc.id === "string" && oc.id && typeof oc.secret === "string" && oc.secret
-      ? { id: oc.id, secret: oc.secret }
-      : undefined;
+  const stored = readCredentialFile(credentialsPath, ref.provider);
+  const key = stored?.type === "api_key" ? stored.key : undefined;
 
   return {
     providerId: ref.provider,
     modelId,
     baseUrl: provider.baseUrl ?? "",
-    api: provider.api ?? "openai-completions",
-    authMode,
-    models: withCompat(provider.models, provider.compat),
+    api: rawApi,
+    models: withCompat(provider.models, rawApi, provider.compat),
     key: key ?? "",
-    ...(oauth ? { oauth } : {}),
     keySource: credentialsPath,
     configSource,
     credentialsPath,
-    ...(provider.userAgent ? { userAgent: provider.userAgent } : {}),
     ...(provider.proxy ? { proxy: provider.proxy } : {}),
-    ...(provider.transport === "sse" || (Boolean(provider.proxy) && provider.api === "openai-codex-responses") ? { transport: "sse" as const } : {}),
-    ...(oauthClient ? { oauthClient } : {}),
   };
 }
 
-type StoredCredential =
-  | { type: "api_key"; key?: string }
-  | { type: "oauth"; refresh: string; access: string; expires: number; [key: string]: unknown };
+export type StoredCredential = { type: "api_key"; key: string };
 
-/** auth.json 的一个 provider 条目：字符串/`{key}` 当 api_key，`{type:"oauth"}` 当订阅凭据。 */
+/** auth.json 的一个 provider 条目：仅认非空字符串或 `{ key }`，残留 `{ type: "oauth" }` 忽略返回 undefined。 */
 export function readCredentialFile(path: string, providerId: string): StoredCredential | undefined {
   if (!existsSync(path)) return undefined;
   let parsed: unknown;
@@ -358,48 +334,42 @@ export function readCredentialFile(path: string, providerId: string): StoredCred
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
   const entry = (parsed as Record<string, unknown>)[providerId];
-  if (typeof entry === "string") return { type: "api_key", key: entry };
+  if (typeof entry === "string") {
+    return entry.trim() ? { type: "api_key", key: entry } : undefined;
+  }
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
   const rec = entry as Record<string, unknown>;
-  if (
-    rec["type"] === "oauth" &&
-    typeof rec["refresh"] === "string" &&
-    typeof rec["access"] === "string" &&
-    typeof rec["expires"] === "number" &&
-    Number.isFinite(rec["expires"])
-  ) {
-    return rec as StoredCredential;
+  if (rec["type"] === "oauth") return undefined;
+  if (typeof rec["key"] === "string" && rec["key"].trim()) {
+    return { type: "api_key", key: rec["key"] };
   }
-  if (typeof rec["key"] === "string") return { type: "api_key", key: rec["key"] };
   return undefined;
 }
 
-/** provider 级 compat 兜底，模型自带的覆盖它。 */
-function withCompat(models: ProviderModelConfig[], providerCompat: Record<string, unknown> = {}): ProviderModelConfig[] {
-  const base = { maxTokensField: "max_tokens", ...providerCompat };
-  return models.map((model) => ({ ...model, compat: { ...base, ...model.compat } }));
+/** provider 级 compat 兜底：仅 openai-completions 注入默认 maxTokensField，其余协议只合并显式声明项。 */
+function withCompat(
+  models: ProviderModelConfig[],
+  api: SupportedProviderApi,
+  providerCompat?: Record<string, unknown>,
+): ProviderModelConfig[] {
+  if (api === "openai-completions") {
+    const base = { maxTokensField: "max_tokens", ...(providerCompat ?? {}) };
+    return models.map((model) => ({ ...model, compat: { ...base, ...model.compat } }));
+  }
+  return models.map((model) => {
+    if (!providerCompat && !model.compat) return { ...model };
+    return { ...model, compat: { ...(providerCompat ?? {}), ...(model.compat ?? {}) } };
+  });
 }
 
 /** 打印用：不含任何 key 内容。 */
 export function describeModel(config: FishModelConfig): Record<string, string | number> {
-  const expiryText =
-    config.oauth && typeof config.oauth.expires === "number" && Number.isFinite(config.oauth.expires)
-      ? new Date(config.oauth.expires).toISOString()
-      : "未知";
   return {
     provider: config.providerId,
     model: config.modelId,
-    baseUrl: config.baseUrl || "(provider 默认)",
-    key:
-      config.authMode === "oauth"
-        ? config.oauth
-          ? `oauth 已登录 / 有效期至 ${expiryText}`
-          : "oauth 未登录"
-        : config.key
-          ? `已加载 / ${config.key.length} 字符`
-          : "缺失",
+    baseUrl: config.baseUrl || DEFAULT_BASE_URLS[config.api],
+    key: config.key ? `已加载 / ${config.key.length} 字符` : "缺失",
     api: config.api,
-    auth: config.authMode,
     keySource: config.keySource,
     models: config.models.map((m) => m.id).join(", "),
     config: config.configSource,

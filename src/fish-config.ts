@@ -244,7 +244,7 @@ export type DrawRemoteProvider = "gpt" | "wan" | "qwen" | "gemini";
 export interface DrawRemoteConfig {
   /** 总开关：false 时 draw_remote 入口即拒（提交前再复核一次）。 */
   readonly enabled: boolean;
-  /** 当前通道：gpt = Codex 订阅生图，wan / qwen = 百炼 Token Plan 生图（万相 / Qwen Image），gemini = Antigravity 订阅生图。 */
+  /** 当前通道：gpt = 标准 OpenAI Images API（CLIProxyAPI / 官方），wan / qwen = 百炼 Token Plan 生图（万相 / Qwen Image），gemini = 标准 Gemini API（CLIProxyAPI / 官方）。 */
   readonly provider: DrawRemoteProvider;
   /** 通道 → 模型名；没显式配置的通道回落内置默认。 */
   readonly models: Readonly<Record<DrawRemoteProvider, string>>;
@@ -988,7 +988,7 @@ const DEFAULTS: FishConfig = {
   news: NEWS_DEFAULTS,
   sendPacingSeconds: 6,
   thinking: false,
-  compact: { maxTokens: 100_000, byModel: { "google-antigravity": 90_000 } },
+  compact: { maxTokens: 100_000, byModel: { "cliproxyapi-claude": 90_000 } },
   memeCooldownMinutes: 8,
   voices: {},
   toolTimeoutSeconds: 30,

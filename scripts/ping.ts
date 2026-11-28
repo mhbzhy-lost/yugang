@@ -19,7 +19,6 @@ console.log("vision   :", `${selection.vision.providerId}/${selection.vision.mod
 console.log("image    :", selection.image ? `${selection.image.provider}/${selection.image.modelId}` : "(未配置)");
 console.log("baseUrl  :", shown.baseUrl);
 console.log("key      :", shown.key, "←", shown.keySource);
-console.log("transport:", selection.transport ?? "默认");
 
 const models = createFishModels(main);
 assertModelExists(models, main.providerId, main.modelId);

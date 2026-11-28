@@ -118,11 +118,6 @@ export interface FishOptions {
   toolTimeoutSeconds?: number;
   /** 个别工具的单独超时（秒）：只放宽指定工具，其余仍按 toolTimeoutSeconds。 */
   toolTimeoutOverrides?: Record<string, number>;
-  /**
-   * 模型请求的传输方式；缺省 auto（provider 自己挑，codex 会优先 WebSocket）。
-   * 走 HTTP 代理时必须设 sse：Node 的 WebSocket 不吃 --use-env-proxy，会直接报 WebSocket error。
-   */
-  streamTransport?: "sse" | "websocket" | "websocket-cached" | "auto";
   /** 按会话取 TTS 配置（人格相关）；返回 undefined 表示这个会话没有语音能力。 */
   ttsOf?: (conversationId: string) => TtsConfig | undefined;
   /** 搭话模式现取（热）：runtime 的「自由活动群」小节仅 free（GROUPS 群）注入；缺省 = legacy（裁掉）。 */

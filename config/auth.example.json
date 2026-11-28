@@ -1,3 +1,6 @@
 {
-  "qoder-pool": { "key": "把 key 填在这里。这个文件是模板，config/auth.json 才是真凭据，已被 gitignore" }
+  "qoder-pool": { "key": "把 key 填在这里。这个文件是模板，config/auth.json 才是真凭据，已被 gitignore" },
+  "cliproxyapi-codex": { "key": "local" },
+  "cliproxyapi-claude": { "key": "local" },
+  "cliproxyapi-gemini": { "key": "local" }
 }

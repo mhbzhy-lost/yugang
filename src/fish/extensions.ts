@@ -17,7 +17,6 @@ export interface ExtensionParts {
   settings: {
     compaction: { enabled: boolean };
     extensions: readonly Extension[];
-    stream?: { transport: NonNullable<FishBase["options"]["streamTransport"]> };
     restartLimit: number;
   };
 }
@@ -76,7 +75,6 @@ export function installExtensions(
   const settings = {
     compaction: { enabled: false },
     extensions: [fishExtension],
-    ...(options.streamTransport ? { stream: { transport: options.streamTransport } } : {}),
     // 中断的轮不恢复重跑：重启后针对陈年消息的迟到回复很怪（主人定案丢了就丢）
     restartLimit: 0,
   };

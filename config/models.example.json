@@ -9,12 +9,12 @@
       "model": "glm-5.3-flash"
     },
     "vision_fallback": {
-      "provider": "openai-codex",
-      "model": "gpt-6-luna"
+      "provider": "cliproxyapi-codex",
+      "model": "gpt-5.4"
     },
     "image": {
-      "provider": "openai-codex",
-      "model": "gpt-image-2"
+      "provider": "cliproxyapi-codex",
+      "model": "gpt-image-2.6-flare"
     }
   },
   "providers": {
@@ -141,46 +141,17 @@
         }
       ]
     },
-    "openai-codex": {
-      "api": "openai-codex-responses",
-      "auth": "oauth",
-      "baseUrl": "https://chatgpt.com/backend-api",
-      "transport": "sse",
-      "proxy": "http://127.0.0.1:7890",
+    "cliproxyapi-codex": {
+      "api": "openai-responses",
+      "baseUrl": "http://cliproxyapi:8317/v1",
       "models": [
         {
-          "id": "gpt-6.1-terra",
-          "name": "GPT-6.1-Terra",
-          "api": "openai-codex-responses",
-          "baseUrl": "https://chatgpt.com/backend-api",
+          "id": "gpt-5.4",
+          "name": "GPT-5.4 (via CLIProxyAPI)",
           "reasoning": true,
           "input": [
-            "text"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 500000,
-          "maxTokens": 128000,
-          "thinkingLevelMap": {
-            "minimal": "low"
-          },
-          "compat": {
-            "supportsOpenAIGrammarTools": true,
-            "supportsToolSearch": true
-          }
-        },
-        {
-          "id": "gpt-6-astra",
-          "name": "GPT-6-Astra",
-          "api": "openai-codex-responses",
-          "baseUrl": "https://chatgpt.com/backend-api",
-          "reasoning": true,
-          "input": [
-            "text"
+            "text",
+            "image"
           ],
           "cost": {
             "input": 0,
@@ -189,23 +160,15 @@
             "cacheWrite": 0
           },
           "contextWindow": 272000,
-          "maxTokens": 128000,
-          "thinkingLevelMap": {
-            "minimal": "low"
-          },
-          "compat": {
-            "supportsOpenAIGrammarTools": true,
-            "supportsToolSearch": true
-          }
+          "maxTokens": 128000
         },
         {
-          "id": "gpt-6-luna",
-          "name": "GPT-6-Luna",
-          "api": "openai-codex-responses",
-          "baseUrl": "https://chatgpt.com/backend-api",
+          "id": "gpt-5.3-codex",
+          "name": "GPT-5.3 Codex (via CLIProxyAPI)",
           "reasoning": true,
           "input": [
-            "text"
+            "text",
+            "image"
           ],
           "cost": {
             "input": 0,
@@ -214,34 +177,21 @@
             "cacheWrite": 0
           },
           "contextWindow": 272000,
-          "maxTokens": 128000,
-          "thinkingLevelMap": {
-            "minimal": "low"
-          },
-          "compat": {
-            "supportsOpenAIGrammarTools": true,
-            "supportsToolSearch": true
-          }
+          "maxTokens": 128000
         }
       ]
     },
-    "google-antigravity": {
-      "api": "antigravity-code-assist",
-      "auth": "oauth",
-      "oauthClient": {
-        "id": "",
-        "secret": ""
-      },
-      "baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
-      "userAgent": "",
-      "proxy": "http://127.0.0.1:7890",
+    "cliproxyapi-claude": {
+      "api": "anthropic-messages",
+      "baseUrl": "http://cliproxyapi:8317",
       "models": [
         {
-          "id": "claude-opus-5-5-low",
-          "name": "Claude Opus 5.5 (Low)",
-          "reasoning": false,
+          "id": "claude-sonnet-4-5",
+          "name": "Claude Sonnet 4.5 (via CLIProxyAPI)",
+          "reasoning": true,
           "input": [
-            "text"
+            "text",
+            "image"
           ],
           "cost": {
             "input": 0,
@@ -250,11 +200,11 @@
             "cacheWrite": 0
           },
           "contextWindow": 200000,
-          "maxTokens": 65536
+          "maxTokens": 64000
         },
         {
-          "id": "gemini-3.8-flash-tiered",
-          "name": "Gemini 3.8 Flash Tiered",
+          "id": "claude-opus-4-6",
+          "name": "Claude Opus 4.6 (via CLIProxyAPI)",
           "reasoning": true,
           "input": [
             "text",
@@ -266,47 +216,18 @@
             "cacheRead": 0,
             "cacheWrite": 0
           },
-          "contextWindow": 1048576,
-          "maxTokens": 65536,
-          "thinkingLevelMap": {
-            "off": null,
-            "minimal": null,
-            "low": "low",
-            "medium": "medium",
-            "high": "high",
-            "xhigh": null,
-            "max": null
-          }
-        },
-        {
-          "id": "gemini-3-flash",
-          "name": "Gemini 3 Flash",
-          "reasoning": true,
-          "input": [
-            "text",
-            "image"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 1048576,
-          "maxTokens": 65536,
-          "thinkingLevelMap": {
-            "off": null,
-            "minimal": "minimal",
-            "low": "low",
-            "medium": "medium",
-            "high": "high",
-            "xhigh": null,
-            "max": null
-          }
-        },
+          "contextWindow": 200000,
+          "maxTokens": 64000
+        }
+      ]
+    },
+    "cliproxyapi-gemini": {
+      "api": "google-generative-ai",
+      "baseUrl": "http://cliproxyapi:8317/v1beta",
+      "models": [
         {
           "id": "gemini-2.5-pro",
-          "name": "Gemini 2.5 Pro",
+          "name": "Gemini 2.5 Pro (via CLIProxyAPI)",
           "reasoning": true,
           "input": [
             "text",
@@ -323,7 +244,7 @@
         },
         {
           "id": "gemini-2.5-flash",
-          "name": "Gemini 2.5 Flash",
+          "name": "Gemini 2.5 Flash (via CLIProxyAPI)",
           "reasoning": true,
           "input": [
             "text",
@@ -337,40 +258,6 @@
           },
           "contextWindow": 1048576,
           "maxTokens": 65536
-        },
-        {
-          "id": "claude-sonnet-5-5-medium",
-          "name": "Claude Sonnet 5.5 (Medium)",
-          "reasoning": true,
-          "input": [
-            "text",
-            "image"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 200000,
-          "maxTokens": 64000
-        },
-        {
-          "id": "claude-opus-5-5-low",
-          "name": "Claude Opus 5.5 (Low)",
-          "reasoning": true,
-          "input": [
-            "text",
-            "image"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 200000,
-          "maxTokens": 64000
         }
       ]
     },

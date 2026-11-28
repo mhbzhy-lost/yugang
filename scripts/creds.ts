@@ -9,16 +9,32 @@
  *   npm run creds clear             # 删掉本地凭据文件
  */
 import { MODELS_CONFIG_PATH } from "../src/paths.ts";
-import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { withCredentialFileLock, writeCredentialFileSync } from "../src/auth/credentials.ts";
 
 const MODELS = MODELS_CONFIG_PATH;
 const TARGET = join(dirname(MODELS), "auth.json");
 
 const [command = "show", ...rest] = process.argv.slice(2);
 const flags = parseFlags(rest);
+
+function extractKey(entry: unknown): string | undefined {
+  if (typeof entry === "string") return entry.trim() ? entry : undefined;
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+  const key = (entry as { key?: unknown }).key;
+  return typeof key === "string" && key.trim() ? key : undefined;
+}
+
+function writeAuthAtomic(path: string, data: Record<string, unknown>): void {
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true });
+  const tmp = join(dir, `.auth.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
+  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, path);
+}
 
 if (command === "import") {
   const from = resolve(flags["from"] ?? join(homedir(), "pi-config", "pi", "auth.json"));
@@ -33,10 +49,13 @@ if (command === "import") {
   }
 
   const wanted = Object.keys((JSON.parse(readFileSync(MODELS, "utf8")) as { providers: object }).providers);
-  const source = JSON.parse(readFileSync(from, "utf8")) as Record<string, { key?: string }>;
+  const rawSource = JSON.parse(readFileSync(from, "utf8")) as unknown;
+  const source = rawSource && typeof rawSource === "object" && !Array.isArray(rawSource)
+    ? (rawSource as Record<string, unknown>)
+    : {};
   const out: Record<string, { type: "api_key"; key: string }> = {};
   for (const provider of wanted) {
-    const key = source[provider]?.key;
+    const key = extractKey(source[provider]);
     if (key) out[provider] = { type: "api_key", key };
   }
 
@@ -45,8 +64,7 @@ if (command === "import") {
     process.exit(1);
   }
 
-  // 与鱼 / login 共用同一把跨进程锁：导入不会和正在进行的 OAuth 刷新互相覆盖
-  await withCredentialFileLock(TARGET, () => writeCredentialFileSync(TARGET, out));
+  writeAuthAtomic(TARGET, out);
   console.log(`✓ 写入 ${TARGET}（权限 600）`);
   for (const [provider, entry] of Object.entries(out)) {
     console.log(`  ${provider}: 已导入 / ${entry.key.length} 字符`);
@@ -61,15 +79,20 @@ if (command === "import") {
   }
   const stat = statSync(TARGET);
   console.log(`${TARGET}  ${(stat.mode & 0o777).toString(8)}  ${stat.size}B`);
-  for (const [provider, entry] of Object.entries(JSON.parse(readFileSync(TARGET, "utf8")) as Record<string, { key?: string }>)) {
-    console.log(`  ${provider}: ${entry.key ? `已加载 / ${entry.key.length} 字符` : "空"}`);
+  const parsed = JSON.parse(readFileSync(TARGET, "utf8")) as unknown;
+  const entries = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? Object.entries(parsed as Record<string, unknown>)
+    : [];
+  for (const [provider, entry] of entries) {
+    const key = extractKey(entry);
+    console.log(`  ${provider}: ${key ? `已加载 / ${key.length} 字符` : "空"}`);
   }
 } else if (command === "clear") {
   if (!existsSync(TARGET)) {
     console.log("本来就没有");
     process.exit(0);
   }
-  await withCredentialFileLock(TARGET, () => unlinkSync(TARGET));
+  unlinkSync(TARGET);
   console.log(`✓ 已删除 ${TARGET}`);
 } else {
   console.error(`不认识的命令：${command}`);

@@ -33,7 +33,7 @@ fish.config.json 受控字段白名单（生效时机逐字段标注）：
 | ammo | 对象 | 热加载 | 已停用的旧 B 站弹药管线兼容字段：仍受理与校验（旧配置不报错），但不再驱动 worker 逛轮/弹药分享；仅 dailyBudget 在 video.dailyBudget 缺省时作回退。旧键：slots / browseMinutes / ttlHours / dailyBudget / maxPicksPerRun / refillTarget |
 | news | 对象 | 热加载 | 新闻备料参数，只认六个键：at（HH:MM 开始备料时点，缺省 10:30）、preparationMinutes 1–30（备料窗口分钟数，缺省 10）、targetGroup（纯数字群号，空串 = 不启用；必须是 GROUPS 白名单内的群号，域校验在运行时）、topics（topic 数组，每条只认 name / sources / keywords / exclude 四键，sources 枚举 60s/jiemian/huxiu/ithome/people/zhihu_daily/weibo_hot/baidu_hot，坏 topic 整条剔除并告警，显式给 topics 就整体覆盖缺省五 topic：AI/时政/军事/科技数码/趣闻二次元）、perTopicInput 1–20（每 topic 送模型输入上限，条）、perTopicOutput 1–5（每 topic 输出上限，条）；未知键告警并忽略，全部非法才整块拒绝 |
 | sendPacingSeconds | 数值 | 热加载 | 0–60，出站配速：同会话相邻两条物理消息实际发送的最小间隔（秒），每条消息发送前生效，0 = 关闭 |
-| compact | 对象 | 热加载 | 换页只按 tokens：maxTokens 1000–1000000（缺省 100000）、byModel（provider 或 provider/model → 阈值，精确模型键优先；google-antigravity 缺省 90000）。完整轮次结束后才换页，不截断消息；旧 maxEntries/maxChars 已停用 |
+| compact | 对象 | 热加载 | 换页只按 tokens：maxTokens 1000–1000000（缺省 100000）、byModel（provider 或 provider/model → 阈值，精确模型键优先；cliproxyapi-claude 缺省 90000）。完整轮次结束后才换页，不截断消息；旧 maxEntries/maxChars 已停用 |
 | memeCooldownMinutes | 数值 | 热加载 | 0–240，表情包跨轮冷却（分钟） |
 | gifAutoCollect | 布尔 | 热加载 | GIF 自动收录开关：缺省 false = 动图同静态图，ambient 轮不附收录标记、meme_add 只收主人点头轮的 inbound 动图；true 才恢复旧自动收行为 |
 | drawEnabled | 布尔 | 热加载 | 本地画图总开关（资源闸）：缺省 true；false 时 draw 入口即拒、真正提交前再复核一次，热生效不重启，用来临时让出 GPU。COMFYUI_URL 仍只作连接地址 |

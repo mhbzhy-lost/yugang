@@ -265,11 +265,14 @@ function engageNextOf(chatKey: string): boolean {
 }
 
 // inline 直读开关（docs/plans/2026-11-01-inline-vision.md）：主/视觉同模型且通道在白名单。
-// 白名单＝「确认能收 image block 的 api」：两个 Gemini 订阅通道真机验证过；
-// openai-completions（zai/deepseek 等，pi-ai 映射为 image_url）2026-11-02 经主人决定
-// 放开——describe 路径本就向该通道发 image_url，且附图已压到 ≤50KB；codex 适配器
-// 不支持图片输入，保持排除。/关看图 同时关掉 inline 附图，开关每轮现算（可在线切换）
-const INLINE_IMAGE_APIS = new Set(["google-code-assist", "antigravity-code-assist", "openai-completions"]);
+// 白名单＝「确认能收 image block 的标准 api」：四大标准协议均原生支持图片输入（模型实际支持与否
+// 由 models.json 的 input 与 vision==main 约束共同决定）。/关看图 同时关掉 inline 附图，每轮现算。
+const INLINE_IMAGE_APIS = new Set([
+  "openai-completions",
+  "openai-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+]);
 const inlineVisionOn = (): boolean =>
   !isLookDisabled()
   && modelSelection.vision.providerId === modelSelection.main.providerId
@@ -458,8 +461,6 @@ export async function bootRuntime(): Promise<void> {
   // video 要下视频、抽帧、逐帧过视觉模型；draw_remote 已改异步立即返回（后台单次请求 600s / 整体 660s），不再需要覆盖；
   // 全局 toolTimeoutSeconds 保持 30 不动
   toolTimeoutOverrides: { say_voice: 250, video: 90, draw: 1800, qwen_draw: 600, wan_gif: 1200 },
-  // codex 订阅走 WebSocket（Node 的 WS 不吃 --use-env-proxy），过代理时在 main provider 写 transport: "sse"
-  ...(modelSelection.transport ? { streamTransport: modelSelection.transport } : {}),
   // 表情包跨轮冷却：每个人格会话独立计时
   memeCooldownMs: () => Math.round(fishConfig().config.memeCooldownMinutes * 60_000),
   // GIF 自动收图豁免（fish.config.json 的 gifAutoCollect，热加载）：false（缺省）= 动图同静态图，

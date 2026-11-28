@@ -69,13 +69,13 @@ test("摘要只收群友的话和鱼发出去的话", async () => {
 });
 
 test("到 token 阈值才压，完整消息不被截断并写到 pi.reset 里", async () => {
-  assert.equal(compactTokenLimitOf({ maxTokens: 100_000, byModel: { "google-antigravity": 90_000 } }, "google-antigravity", "gemini-3.8-flash-tiered"), 90_000);
-  assert.equal(compactTokenLimitOf({ maxTokens: 100_000, byModel: { "google-antigravity": 90_000 } }, "zai-coding-cn", "glm-5.3-flash"), 100_000);
+  assert.equal(compactTokenLimitOf({ maxTokens: 100_000, byModel: { "cliproxyapi-claude": 90_000 } }, "cliproxyapi-claude", "claude-sonnet-4-5"), 90_000);
+  assert.equal(compactTokenLimitOf({ maxTokens: 100_000, byModel: { "cliproxyapi-claude": 90_000 } }, "zai-coding-cn", "glm-5.3-flash"), 100_000);
   assert.equal(compactTokenLimitOf({ maxTokens: 100_000, byModel: { "zai-coding-cn/glm-5.3-flash": 110_000 } }, "zai-coding-cn", "glm-5.3-flash"), 110_000);
   const legacyPath = join(mkdtempSync(join(tmpdir(), "yg-c-")), "fish.config.json");
   writeFileSync(legacyPath, JSON.stringify({ compact: { maxEntries: 200, maxChars: 50_000 } }));
   const legacy = loadFishConfig({ path: legacyPath });
-  assert.equal(compactTokenLimitOf(legacy.config.compact, "google-antigravity", "gemini-3.8-flash-tiered"), 90_000);
+  assert.equal(compactTokenLimitOf(legacy.config.compact, "cliproxyapi-claude", "claude-sonnet-4-5"), 90_000);
   assert.equal(compactTokenLimitOf(legacy.config.compact, "zai-coding-cn", "glm-5.3-flash"), 100_000);
   const { faux, fish } = boot({ maxTokens: 2_700 });
   const open = await fish;
