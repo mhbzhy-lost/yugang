@@ -33,9 +33,10 @@
     "itbed:smoke": "node scripts/itbed/launch.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "1.5.2",
-    "@earendil-works/pi-durable": "1.5.2",
-    "@earendil-works/pi-schema": "1.5.2",
+    "@earendil-works/chord": "1.7.0",
+    "@earendil-works/pi-ai": "1.7.0",
+    "@earendil-works/pi-durable": "1.7.0",
+    "@earendil-works/pi-schema": "1.7.0",
     "fast-xml-parser": "5.11.2",
     "https-proxy-agent": "9.1.0",
     "sharp": "^0.35.5"
