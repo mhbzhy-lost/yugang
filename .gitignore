@@ -22,3 +22,7 @@ fish.config.json
 *.bak
 *.bak-*
 .env.bak*
+
+# 过程性计划/报告/交接文档不入库（保留 test/model-input-templates.test.ts 依赖的 docs/decisions/）
+/docs/*
+!/docs/decisions/
