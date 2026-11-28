@@ -26,7 +26,7 @@ import { renderTemplate } from "../../prompt/index.ts";
 import { OutboxDoc } from "../../store.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { ammoCurfewAt, ammoShareGateOf, assertMentions, chargeSayRound, enqueueOutbound, normalizeTextInput, OutboundEntry, peekSayRound, prefixAmmoLink, registerAmmoShare, resolveQuoteArg, resolveSayContext, stripOutboundLinks, throwIfSayCancelled, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
+import { ammoCurfewAt, ammoShareGateOf, assertMentions, chargeSayRound, enqueueOutbound, isQuoteForced, normalizeTextInput, OutboundEntry, peekSayRound, prefixAmmoLink, registerAmmoShare, resolveQuoteArg, resolveSayContext, stripOutboundLinks, throwIfSayCancelled, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 对应（quote 是 schema 已移除的旧布尔，运行时容忍）；
  *  运行时 Schema 只有 manifest 这一份。 */
@@ -83,7 +83,7 @@ export function createSayWordsTool(manifest: ToolManifest, deps: ToolPackageDeps
         ...(mentions.length === 0 ? {} : { mentions }),
         quote: quoteArg.quote,
         ...(quoteArg.quoteId !== undefined ? { quoteId: quoteArg.quoteId } : {}),
-        ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
+        ...(trigger ? { quoteForce: isQuoteForced(trigger) } : {}),
         at: ts,
         key: `${api.conversationId}:${api.callId}`,
       };

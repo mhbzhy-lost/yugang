@@ -5,7 +5,7 @@ import { renderTemplate } from "../../prompt/index.ts";
 import { generateWanGif, readWanGifRef } from "../../media/wan-video.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
+import { enqueueOutbound, isQuoteForced, type OutboundPayload } from "../say-shared.ts";
 
 interface WanGifArgs { prompt: string; ref?: string }
 type RoundState = { round: unknown; pending: boolean; submitted: boolean; used: boolean };
@@ -51,7 +51,7 @@ export function createWanGifTool(manifest: ToolManifest, deps: ToolPackageDeps):
         const payload: OutboundPayload = {
           items: [], media: `gen/${file}`, quote: false,
           ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
-          ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
+          ...(trigger ? { quoteForce: isQuoteForced(trigger) } : {}),
           at: Date.now(), key: `${api.conversationId}:wangif:${String(round)}:${randomUUID()}`,
         };
         await enqueueOutbound(api, payload, context);

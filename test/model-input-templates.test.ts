@@ -166,8 +166,8 @@ interface AnswerRoundOptions {
  * answer 轮的真实拼装链（index.ts flushBurst L1154-1185 → submitRound L944-956）：
  * 每一步都是生产导出函数，测试不参与任何文本组装。
  */
-function answerRound(options: AnswerRoundOptions): { text: string; submit: string | RoundContentBlock[]; blocks: readonly RoundContentBlock[] } {
-  const plan = planRoundImages(options.anchor, options.burst, mediaRoot, options.inline, messages, shrinkStub);
+async function answerRound(options: AnswerRoundOptions): Promise<{ text: string; submit: string | RoundContentBlock[]; blocks: readonly RoundContentBlock[] }> {
+  const plan = await planRoundImages(options.anchor, options.burst, mediaRoot, options.inline, messages, shrinkStub);
   const round = withContext(options.anchor, options.bucket ?? [], plan.messages, {
     master: options.master ?? "",
     messages,
@@ -364,7 +364,7 @@ interface Triggered {
 /** scene → 真实入口触发器（数量与矩阵一致，全部走生产导出实现）。 */
 const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
   // @ 轮：背景 1 条 + 锚点回复引用（decisions §4 标准群消息模板）
-  answer_reply: () => {
+  answer_reply: async () => {
     const quoted: QuotedMessage = {
       id: "1262165350",
       nickname: "Elysia",
@@ -387,7 +387,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       recent(1, 556542960, 2943084870, "最聪明的鱼", "那这榜挂着就是纯装饰，写全体并列第一，谁都不好意思说自己排第二"),
       recent(2, 1110691775, 2627618651, "[有人@我]", anchor.text),
     ];
-    const round = answerRound({
+    const round = await answerRound({
       anchor,
       bucket,
       burst: [burstLine(2, 1110691775, 2627618651, "[有人@我]", anchor.text, { mentionsBot: true, replyIds: ["1262165350"], quoted })],
@@ -397,7 +397,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
   },
 
   // 同一发送者合并组 + 特别关注 + 强制语音（decisions §5.2）
-  answer_burst_voice: () => {
+  answer_burst_voice: async () => {
     const quoted: QuotedMessage = {
       id: "1416060502",
       nickname: "Elysia",
@@ -427,7 +427,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       recent(5, 1799917601, WATCHED, "ql今天玩什么", "推销到我心里了"),
       recent(6, 690734310, WATCHED, "ql今天玩什么", `[图片 ${GIF_REF}]`),
     ];
-    const round = answerRound({
+    const round = await answerRound({
       anchor,
       bucket,
       burst,
@@ -453,7 +453,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
   },
 
   // 主会话直读压缩图（decisions §5.4）：[图片#1] 编号 + 列表后压缩图标签 + image block
-  inline_image: () => {
+  inline_image: async () => {
     const anchor = incoming({
       chatKey: GROUP,
       messageId: 1064654139,
@@ -462,7 +462,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       text: `[图片 ${JPG_REF}]`,
       images: [{ ref: JPG_REF }],
     });
-    const round = answerRound({
+    const round = await answerRound({
       anchor,
       burst: [burstLine(1, 1064654139, 2627618651, "[有人@我]", `[图片 ${JPG_REF}]`)],
       inline: true,
@@ -471,7 +471,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
   },
 
   // fallback 视觉模型路径（decisions §5.4）：保留 inbound/ 路径 + look 提示，无 image block
-  fallback_image: () => {
+  fallback_image: async () => {
     const anchor = incoming({
       chatKey: GROUP,
       messageId: 1064654139,
@@ -480,7 +480,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       text: `[图片 ${JPG_REF}]`,
       images: [{ ref: JPG_REF }],
     });
-    const round = answerRound({
+    const round = await answerRound({
       anchor,
       burst: [burstLine(1, 1064654139, 2627618651, "[有人@我]", `[图片 ${JPG_REF}]`)],
       inline: false,
@@ -505,7 +505,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
   },
 
   // 自带合集且 @（decisions §5.9 forward-direct）：父消息标准行 + 后置附件 + 子图压缩 block
-  forward_direct: () => {
+  forward_direct: async () => {
     const forward: ForwardAttachment = {
       id: "fwd-direct",
       sourceMessageId: 1111529000,
@@ -524,7 +524,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       forwardIds: ["fwd-direct"],
       forward,
     });
-    const round = answerRound({
+    const round = await answerRound({
       anchor,
       burst: [burstLine(1, 1111529000, 2627618651, "[有人@我]", "看看这个", { mentionsBot: true, forward })],
       inline: true,
@@ -533,7 +533,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
   },
 
   // 引用合集并 @（decisions §5.9 forward-reply）：只有 @ 才展开；引用原文里的父消息与合集附件分开渲染
-  forward_reply: () => {
+  forward_reply: async () => {
     const quoted: QuotedMessage = {
       id: "1111528999",
       nickname: "阿蓝",
@@ -559,7 +559,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       repliedForward: true,
       quoted,
     });
-    const round = answerRound({
+    const round = await answerRound({
       anchor,
       burst: [burstLine(1, 1111529001, 2627618651, "[有人@我]", "这个合集呢", { mentionsBot: true, replyIds: ["1111528999"], quoted })],
       inline: false,
@@ -568,7 +568,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
   },
 
   // @ 且提到「合集/转发」→ 补展开最近合集（decisions §5.9 forward-recent）：没有来源 ID 就不伪造
-  forward_recent: () => {
+  forward_recent: async () => {
     const anchor = incoming({
       chatKey: GROUP,
       messageId: 1111529100,
@@ -578,7 +578,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       mentionsBot: true,
     });
     const expanded: ForwardAttachment = { id: "fwd-recent", total: 2, children: FORWARD_CHILDREN, truncated: false };
-    const round = answerRound({
+    const round = await answerRound({
       anchor,
       burst: [burstLine(1, 1111529100, 2627618651, "[有人@我]", "看看上面的合集", { mentionsBot: true })],
       inline: false,
@@ -588,7 +588,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
   },
 
   // 背景里的合集只留短标记（decisions §5.9 forward-background）
-  forward_background: () => {
+  forward_background: async () => {
     const forwardMsg = incoming({
       chatKey: GROUP,
       messageId: 1111529200,
@@ -611,7 +611,7 @@ const TRIGGERS: Record<string, () => Triggered | Promise<Triggered>> = {
       recent(1, 1111529200, 1066598141, "阿蓝", backgroundTextOf(forwardMsg, messages)),
       recent(2, 1111529201, 2627618651, "[有人@我]", anchor.text),
     ];
-    const round = answerRound({
+    const round = await answerRound({
       anchor,
       bucket,
       burst: [burstLine(2, 1111529201, 2627618651, "[有人@我]", anchor.text, { mentionsBot: true })],

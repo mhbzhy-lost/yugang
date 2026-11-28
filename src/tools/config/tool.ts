@@ -253,7 +253,7 @@ export function createConfigTool(manifest: ToolManifest, deps: ToolPackageDeps):
         const model = args.model?.trim();
         if (!provider || !model) throw new Error(p.messages["models_probe_missing"] ?? "models_probe_missing");
         try {
-          const result = await probeFishModel(provider, model, { modelsPath });
+          const result = await probeFishModel(provider, model, { modelsPath, signal: context.abortSignal });
           console.log(`[鱼缸] config models_probe ${provider}/${model} ok ${result.elapsedMs}ms`);
           return {
             output: [{

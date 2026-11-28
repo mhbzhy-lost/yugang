@@ -63,6 +63,11 @@ export interface SayRound {
   trigger: RoundTrigger | undefined;
 }
 
+/** 本轮触发是否要求强制引用：@ 了鱼或本轮触发消息本身是回复。 */
+export function isQuoteForced(trigger: RoundTrigger | undefined): boolean {
+  return Boolean(trigger?.mentionsBot || trigger?.reply);
+}
+
 /**
  * 解析本轮出口上下文：snapshot 取轮标识 → onSayCall 回调（成败都算一次开口）→
  * 静默轮（自动收表情包）拒绝 → triggerOf 取触发消息 → worker 轮拒绝（逛轮禁言）。

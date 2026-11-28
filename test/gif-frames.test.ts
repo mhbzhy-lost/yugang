@@ -6,7 +6,6 @@ import { join } from "node:path";
 import {
   buildGifExtractArgs,
   extractGifFramesAsync,
-  finalizeGifFrame,
   finalizeGifFrameAsync,
   GIF_FRAME_QSCALE,
   GIF_FRAME_TARGET_BYTES,
@@ -26,18 +25,18 @@ test("ffmpeg 抽帧参数必须在 -i 之后显式携带输出选项 -q:v 与 64
   assert.match(args[vfIdx + 1] ?? "", /scale=w=640:h=640/);
 });
 
-test("单帧不超过 50KB 时直接返回原字节，不调用 shrink；空文件返回 null", () => {
+test("单帧不超过 50KB 时直接返回原字节，不调用 shrink；空文件返回 null", async () => {
   const dir = mkdtempSync(join(tmpdir(), "yg-gif-"));
   try {
     const empty = join(dir, "empty.jpg");
     writeFileSync(empty, Buffer.alloc(0));
-    assert.equal(finalizeGifFrame(empty), null);
+    assert.equal(await finalizeGifFrameAsync(empty), null);
 
     const file = join(dir, "small.jpg");
     const raw = Buffer.alloc(12 * 1024, 0xaa);
     writeFileSync(file, raw);
     let calls = 0;
-    const out = finalizeGifFrame(file, () => {
+    const out = await finalizeGifFrameAsync(file, () => {
       calls += 1;
       return { ok: true, buffer: Buffer.from("shrunk"), mimeType: "image/jpeg" };
     });
@@ -48,7 +47,7 @@ test("单帧不超过 50KB 时直接返回原字节，不调用 shrink；空文�
   }
 });
 
-test("单帧超过 50KB 时调用 shrink 压回预算内；shrink 失败或未变小则回退保留原帧", () => {
+test("单帧超过 50KB 时调用 shrink 压回预算内；shrink 失败或未变小则回退保留原帧", async () => {
   const dir = mkdtempSync(join(tmpdir(), "yg-gif-"));
   try {
     const file = join(dir, "big.jpg");
@@ -56,14 +55,14 @@ test("单帧超过 50KB 时调用 shrink 压回预算内；shrink 失败或未�
     writeFileSync(file, big);
 
     const smaller = Buffer.alloc(24 * 1024, 0xcc);
-    const shrunk = finalizeGifFrame(file, () => ({ ok: true, buffer: smaller, mimeType: "image/jpeg" }));
+    const shrunk = await finalizeGifFrameAsync(file, () => ({ ok: true, buffer: smaller, mimeType: "image/jpeg" }));
     assert.deepEqual(shrunk, smaller);
 
-    const failed = finalizeGifFrame(file, () => ({ ok: false, reason: "fail" }));
+    const failed = await finalizeGifFrameAsync(file, () => ({ ok: false, reason: "fail" }));
     assert.deepEqual(failed, big, "shrink 失败时应回退原帧，不能丢帧");
 
     const bigger = Buffer.alloc(big.length + 100, 0xdd);
-    const notSmaller = finalizeGifFrame(file, () => ({ ok: true, buffer: bigger, mimeType: "image/jpeg" }));
+    const notSmaller = await finalizeGifFrameAsync(file, () => ({ ok: true, buffer: bigger, mimeType: "image/jpeg" }));
     assert.deepEqual(notSmaller, big, "shrink 未变小时应保留原帧");
   } finally {
     rmSync(dir, { recursive: true, force: true });

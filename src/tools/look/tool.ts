@@ -17,7 +17,6 @@
  * 导入轮的清单状态只有 meme_import/shared.ts 一份，这里只读取与回写「已看过」。
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest（factory 只消费它，不再有第二份运行时定义）。
  */
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { inflateSync } from "node:zlib";
 import { existsSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -27,10 +26,11 @@ import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-d
 import { renderTemplate } from "../../prompt/index.ts";
 
 import { describeImage, isDescribeFiltered } from "../../media/describe.ts";
-import { lookShrinkViaWorker, readBoundedFile, sniffImageMagic, usesSips } from "../../media/image-ops.ts";
+import { lookShrinkViaWorkerAsync, readBoundedFile, sniffImageMagic, usesSips } from "../../media/image-ops.ts";
+import { spawnCapture } from "../../media/spawn-capture.ts";
 import { checkMemeSource } from "../../media/meme-store.ts";
 import { DEFAULT_LIMITS } from "../../egress/policy.ts";
-import { throwIfSayCancelled, type OutboundPayload } from "../say-shared.ts";
+import { isQuoteForced, throwIfSayCancelled, type OutboundPayload } from "../say-shared.ts";
 import { OutboxDoc } from "../../store.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
@@ -158,7 +158,7 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
           items,
           quote: true,
           ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
-          ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
+          ...(trigger ? { quoteForce: isQuoteForced(trigger) } : {}),
           at: ts,
           key,
         };
@@ -205,7 +205,7 @@ export function createLookTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       // 所以在读取时就压——GIF 取首帧、超尺寸缩到 1280px、一律 JPEG，单张控制在几十 KB。
       // 压缩件只用于观看，不回写原文件。
       if (read.bytes.length > 150_000) {
-        const shrunk = shrink(read.real);
+        const shrunk = await shrink(read.real, context.abortSignal);
         if (shrunk) {
           data = shrunk.toString("base64");
           outMime = "image/jpeg";
@@ -486,12 +486,12 @@ function formatPngMetadata(bytes: Buffer, ref: string, emptyText: string, invali
 }
 
 /** 转述前压图：GIF 取首帧、长边归 1280px，输出 JPEG；失败返回 null。
- *  macOS 走 sips（参数逐字保留），其它平台走 sharp worker。 */
-function shrink(file: string): Buffer | null {
-  if (!usesSips()) return lookShrinkViaWorker(file);
+ *  macOS 走 sips（异步 spawnCapture），其它平台走 sharp worker 异步版。 */
+async function shrink(file: string, signal?: AbortSignal): Promise<Buffer | null> {
+  if (!usesSips()) return lookShrinkViaWorkerAsync(file, signal);
   const out = `${tmpdir()}/look-shrink-${Date.now()}-${Math.random().toString(16).slice(2, 6)}.jpg`;
   try {
-    const res = spawnSync("sips", ["-s", "format", "jpeg", "-s", "formatOptions", "70", "-Z", "1280", file, "--out", out], { timeout: 20_000 });
+    const res = await spawnCapture("sips", ["-s", "format", "jpeg", "-s", "formatOptions", "70", "-Z", "1280", file, "--out", out], { timeoutMs: 20_000, signal });
     if (res.status !== 0) return null;
     const buf = readFileSync(out);
     return buf.length > 0 ? buf : null;

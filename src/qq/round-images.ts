@@ -3,8 +3,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingMessage } from "./onebot.ts";
 import type { BurstMessage } from "./debounce.ts";
-import { extractGifFrames, GIF_FRAME_LONG_SIDE, type GifFramePlan } from "../media/gif-frames.ts";
-import { inlineImageOf, shrinkForModel, type ShrinkResult } from "../media/shrink-image.ts";
+import { extractGifFramesAsync, GIF_FRAME_LONG_SIDE, type GifFramePlan } from "../media/gif-frames.ts";
+import { inlineImageOfAsync, shrinkForModelAsync, type ShrinkResult } from "../media/shrink-image.ts";
 import { gifCompressedTagOf, gifTagOf, imageCompressedTagOf, imageTagOf, type ForwardAttachment, type MessageTable } from "./model-input.ts";
 
 // vision==main 时静态图应全部直读（主人裁定 2026-11-06：不再为省额度强制 look 转述），
@@ -85,15 +85,32 @@ export interface InlineImagePlan extends Pick<RoundImagePlan, "numbers" | "block
   gifFrames: Map<string, number>;
 }
 
-export function planInlineImages(
+async function mapConcurrent<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const runWorker = async (): Promise<void> => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await worker(items[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => runWorker()));
+  return results;
+}
+
+export async function planInlineImages(
   refs: readonly string[],
   mediaRoot: string,
   inline: boolean,
   messages: MessageTable,
-  shrink: (input: { file: string }) => ShrinkResult = shrinkForModel,
-  gifFramesOf?: (file: string, maxFrames: number) => GifFramePlan,
+  shrink: (input: { file: string; signal?: AbortSignal }) => ShrinkResult | Promise<ShrinkResult> = shrinkForModelAsync,
+  gifFramesOf?: (file: string, maxFrames: number) => GifFramePlan | null | Promise<GifFramePlan | null>,
   limits?: InlineImageLimits,
-): InlineImagePlan {
+): Promise<InlineImagePlan> {
   const numbers = new Map<string, number>();
   const blocks: RoundImageBlock[] = [];
   const tags: string[] = [];
@@ -101,28 +118,41 @@ export function planInlineImages(
   if (!inline) return { numbers, blocks, tags, gifFrames };
   const maxImages = limits?.maxImages ?? INLINE_IMAGE_MAX;
   const maxGifFrames = limits?.maxGifFrames ?? GIF_MAX_FRAMES;
-  const extractGif = gifFramesOf ?? ((file: string, maxFrames: number) => extractGifFrames(file, maxFrames, shrink));
-  const eligible = refs.filter((ref) => ref && existsSync(join(mediaRoot, ref)));
+  const extractGif = gifFramesOf ?? ((file: string, maxFrames: number) => extractGifFramesAsync(file, maxFrames, { shrink }));
+  const eligible = refs.filter((ref) => ref && existsSync(join(mediaRoot, ref))).slice(0, maxImages);
+
+  type PlannedItem =
+    | { kind: "gif"; ref: string; frames: string[] }
+    | { kind: "image"; ref: string; buffer: Buffer; mimeType: string }
+    | null;
+
+  const processed = await mapConcurrent(eligible, 2, async (ref): Promise<PlannedItem> => {
+    const full = join(mediaRoot, ref);
+    if (ref.toLowerCase().endsWith(".gif")) {
+      const plan = await extractGif(full, maxGifFrames);
+      if (!plan || plan.frames.length === 0) return null;
+      return { kind: "gif", ref, frames: plan.frames };
+    }
+    const image = await inlineImageOfAsync(full, shrink);
+    if (!image.ok) return null;
+    return { kind: "image", ref, buffer: image.buffer, mimeType: image.mimeType };
+  });
+
   // 逻辑编号计数器：每张图（含 GIF）只占 1 个号；不能用 blocks.length 推编号，
   // 否则 GIF 抽帧后后续静态图的编号会按帧数跳号
   let numbered = 0;
-  for (const ref of eligible.slice(0, maxImages)) {
-    if (ref.toLowerCase().endsWith(".gif")) {
-      const plan = extractGif(join(mediaRoot, ref), maxGifFrames);
-      if (plan.frames.length === 0) continue;
-      const n = ++numbered;
-      numbers.set(ref, n);
-      for (const frame of plan.frames) blocks.push({ type: "image", data: frame, mimeType: "image/jpeg" });
-      gifFrames.set(ref, plan.frames.length);
-      tags.push(gifCompressedTagOf(n, plan.frames.length, messages));
-      continue;
-    }
-    const image = inlineImageOf(join(mediaRoot, ref), shrink);
-    if (!image.ok) continue;
+  for (const item of processed) {
+    if (!item) continue;
     const n = ++numbered;
-    numbers.set(ref, n);
-    blocks.push({ type: "image", data: image.buffer.toString("base64"), mimeType: image.mimeType });
-    tags.push(imageCompressedTagOf(n, messages));
+    numbers.set(item.ref, n);
+    if (item.kind === "gif") {
+      for (const frame of item.frames) blocks.push({ type: "image", data: frame, mimeType: "image/jpeg" });
+      gifFrames.set(item.ref, item.frames.length);
+      tags.push(gifCompressedTagOf(n, item.frames.length, messages));
+    } else {
+      blocks.push({ type: "image", data: item.buffer.toString("base64"), mimeType: item.mimeType });
+      tags.push(imageCompressedTagOf(n, messages));
+    }
   }
   return { numbers, blocks, tags, gifFrames };
 }
@@ -130,15 +160,15 @@ export function planInlineImages(
 /** 统一规划直发图与合集子图的编号、压缩 block、末尾标签和 look fallback。
  *  编号标签始终带 inbound 路径（[图片#N inbound/…]）：模型可直接把路径填给
  *  draw / draw_remote 等吃图片引用的工具，读图本身不需要 look。 */
-export function planRoundImages(
+export async function planRoundImages(
   anchor: IncomingMessage,
   burst: readonly BurstMessage[],
   mediaRoot: string,
   inline: boolean,
   messages: MessageTable,
-  shrink: (input: { file: string }) => ShrinkResult = shrinkForModel,
-  gifFramesOf: (file: string, maxFrames: number) => GifFramePlan = extractGifFrames,
-): RoundImagePlan {
+  shrink: (input: { file: string; signal?: AbortSignal }) => ShrinkResult | Promise<ShrinkResult> = shrinkForModelAsync,
+  gifFramesOf?: (file: string, maxFrames: number) => GifFramePlan | null | Promise<GifFramePlan | null>,
+): Promise<RoundImagePlan> {
   const distinct: string[] = [];
   const seen = new Set<string>();
   const push = (ref: string): void => {
@@ -159,7 +189,7 @@ export function planRoundImages(
     }
   }
 
-  const { numbers, blocks, tags, gifFrames } = planInlineImages(distinct, mediaRoot, inline, messages, shrink, gifFramesOf);
+  const { numbers, blocks, tags, gifFrames } = await planInlineImages(distinct, mediaRoot, inline, messages, shrink, gifFramesOf);
 
   // look 提示只在 fallback 模式出现（inline 模式下 look 已被机械锁死，提示反而误导）：
   // inline 时未编号的图（超 8 张、缺文件）就是「看不了」，模型没必要去调一个必被拒的工具

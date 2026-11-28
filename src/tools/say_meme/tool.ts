@@ -15,6 +15,7 @@ import {
   chargeSayRound,
   enqueueOutbound,
   inMemeInbox,
+  isQuoteForced,
   pickMeme,
   resolveQuoteArg,
   resolveSayContext,
@@ -83,7 +84,7 @@ export function createSayMemeTool(manifest: ToolManifest, deps: ToolPackageDeps)
         ...(mentions.length === 0 ? {} : { mentions }),
         quote: quoteArg.quote,
         ...(quoteArg.quoteId !== undefined ? { quoteId: quoteArg.quoteId } : {}),
-        ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
+        ...(trigger ? { quoteForce: isQuoteForced(trigger) } : {}),
         at: ts,
         key: `${api.conversationId}:${api.callId}`,
       };

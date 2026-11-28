@@ -83,18 +83,18 @@ function anchor(partial: Partial<IncomingMessage> = {}): IncomingMessage {
   } as IncomingMessage;
 }
 
-test("look 模式：引用图出现在 [引用原文] 里，并触发 look 提示", () => {
+test("look 模式：引用图出现在 [引用原文] 里，并触发 look 提示", async () => {
   const q = quoted([JPG]);
-  const plan = planRoundImages(anchor(), [burstLine(q)], mediaRoot, false, messages, shrink);
+  const plan = await planRoundImages(anchor(), [burstLine(q)], mediaRoot, false, messages, shrink);
   assert.equal(plan.blocks.length, 0, "look 模式不该有 image block");
   assert.equal(plan.lookHint, true, "引用图没触发 look 提示");
   const round = withContext(anchor(), [], plan.messages, { master: "", messages, imageNumbers: plan.numbers });
   assert.match(round.content, new RegExp(`\\[引用原文\\]\\[m:111784281\\] 遐蝶小姐的狗\\(2928390812\\)：「\\[图片 ${JPG}\\]」`));
 });
 
-test("inline 模式：引用图参与编号，原文变 [图片#1]，压缩图按编号在后", () => {
+test("inline 模式：引用图参与编号，原文变 [图片#1]，压缩图按编号在后", async () => {
   const q = quoted([JPG]);
-  const plan = planRoundImages(anchor(), [burstLine(q)], mediaRoot, true, messages, shrink);
+  const plan = await planRoundImages(anchor(), [burstLine(q)], mediaRoot, true, messages, shrink);
   assert.equal(plan.numbers.get(JPG), 1, "引用图没拿到编号");
   assert.equal(plan.blocks.length, 1);
   assert.deepEqual(plan.tags, [messages["image_compressed_tag"]?.replace("{{n}}", "1") ?? "[图片#1 压缩图]"]);
@@ -103,13 +103,13 @@ test("inline 模式：引用图参与编号，原文变 [图片#1]，压缩图�
   assert.match(round.content, /\[引用原文\]\[m:111784281\] 遐蝶小姐的狗\(2928390812\)：「\[图片#1 inbound\/replied\.jpg\]」/);
 });
 
-test("inline 模式：直发图优先编号，引用图排在后面", () => {
+test("inline 模式：直发图优先编号，引用图排在后面", async () => {
   const direct = anchor({
     text: `看看这个 [图片 ${JPG_DIRECT}]`,
     images: [{ ref: JPG_DIRECT }],
     replyIds: ["111784281"],
   });
-  const plan = planRoundImages(
+  const plan = await planRoundImages(
     direct,
     [burstLine(quoted([JPG]), `看看这个 [图片 ${JPG_DIRECT}]`)],
     mediaRoot,
@@ -124,24 +124,24 @@ test("inline 模式：直发图优先编号，引用图排在后面", () => {
   assert.match(round.content, /看看这个 \[图片#1 inbound\/direct\.jpg\]/);
 });
 
-test("look 模式：引用 GIF 不 inline，但保留引用并提示 look", () => {
+test("look 模式：引用 GIF 不 inline，但保留引用并提示 look", async () => {
   const q = quoted([GIF]);
-  const plan = planRoundImages(anchor(), [burstLine(q)], mediaRoot, false, messages, shrink);
+  const plan = await planRoundImages(anchor(), [burstLine(q)], mediaRoot, false, messages, shrink);
   assert.equal(plan.numbers.has(GIF), false, "GIF 不该 inline");
   assert.equal(plan.lookHint, true, "引用 GIF 没有别的读取路径，应提示 look");
   const round = withContext(anchor(), [], plan.messages, { master: "", messages, imageNumbers: plan.numbers });
   assert.match(round.content, new RegExp(`「\\[图片 ${GIF}\\]」`));
 });
 
-test("inline 模式：GIF 走抽帧多 block（共享 1 个编号），lookHint 恒 false", () => {
+test("inline 模式：GIF 走抽帧多 block（共享 1 个编号），lookHint 恒 false", async () => {
   const q = quoted([GIF]);
   // 抽帧 stub：两张确定性帧（绕开 ffmpeg；生产在 planInlineImages 的注入点外层）
-  const gifFramesOf = (): { frames: string[]; count: number; total: number } => ({
+  const gifFramesOf = async (): Promise<{ frames: string[]; count: number; total: number }> => ({
     frames: [Buffer.from("frame-1").toString("base64"), Buffer.from("frame-2").toString("base64")],
     count: 2,
     total: 11,
   });
-  const plan = planRoundImages(anchor(), [burstLine(q)], mediaRoot, true, messages, shrink, gifFramesOf);
+  const plan = await planRoundImages(anchor(), [burstLine(q)], mediaRoot, true, messages, shrink, gifFramesOf);
   assert.equal(plan.numbers.get(GIF), 1, "GIF 应参与编号（1 个编号）");
   assert.equal(plan.blocks.length, 2, "两个帧 block");
   assert.equal(plan.blocks[0].mimeType, "image/jpeg", "帧输出是 JPEG");
@@ -158,14 +158,23 @@ test("引用图与文字同时存在时都保留，读图失败标记不误伤",
   assert.match(round.content, /「这是我刚发的 \[图片 inbound\/replied\.jpg\]」/);
 });
 
-test("自由拍限额：planInlineImages 支持独立收紧单拍图片数与 GIF 帧数上限", () => {
+test("自由拍限额：planInlineImages 支持独立收紧单拍图片数与 GIF 帧数上限，且并发上限为 2", async () => {
   const refs: string[] = [];
   for (let i = 1; i <= 6; i++) {
     const ref = `inbound/shard-${i}.jpg`;
     writeFileSync(join(mediaRoot, ref), "fixture");
     refs.push(ref);
   }
-  const shardPlan = planInlineImages(refs, mediaRoot, true, messages, shrink, undefined, {
+  let inFlight = 0;
+  let peak = 0;
+  const boundedShrink = async (_input: { file: string }): Promise<ShrinkResult> => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise((r) => setTimeout(r, 10));
+    inFlight -= 1;
+    return shrink(_input);
+  };
+  const shardPlan = await planInlineImages(refs, mediaRoot, true, messages, boundedShrink, undefined, {
     maxImages: SHARD_INLINE_IMAGE_MAX,
     maxGifFrames: SHARD_GIF_MAX_FRAMES,
   });
@@ -173,6 +182,7 @@ test("自由拍限额：planInlineImages 支持独立收紧单拍图片数与 GI
   assert.equal(SHARD_GIF_MAX_FRAMES, 2);
   assert.equal(shardPlan.numbers.size, 4, "自由拍单拍最多编号 4 张图");
   assert.equal(shardPlan.blocks.length, 4, "超出上限的图不进 blocks");
+  assert.ok(peak <= 2, `planInlineImages 并发数应 <= 2（实测 ${peak}）`);
 
   const captured: number[] = [];
   const spyGif = (_file: string, maxFrames: number) => {
@@ -183,8 +193,8 @@ test("自由拍限额：planInlineImages 支持独立收紧单拍图片数与 GI
       total: 10,
     };
   };
-  planInlineImages([GIF], mediaRoot, true, messages, shrink, spyGif);
-  planInlineImages([GIF], mediaRoot, true, messages, shrink, spyGif, {
+  await planInlineImages([GIF], mediaRoot, true, messages, shrink, spyGif);
+  await planInlineImages([GIF], mediaRoot, true, messages, shrink, spyGif, {
     maxImages: SHARD_INLINE_IMAGE_MAX,
     maxGifFrames: SHARD_GIF_MAX_FRAMES,
   });

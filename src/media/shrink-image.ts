@@ -14,10 +14,9 @@
  * 其它平台（Linux 容器）走 image-ops 的 sharp worker——sips 在 Linux 不存在，
  * 若不接这条分支，压图会静默失败、模型一张图也看不到。规格常量两边共用。
  */
-import { spawnSync } from "node:child_process";
-import { readFileHead, shrinkViaWorker, shrinkViaWorkerAsync, usesSips } from "./image-ops.ts";
+import { readFileHead, shrinkViaWorkerAsync, usesSips } from "./image-ops.ts";
 import { spawnCapture } from "./spawn-capture.ts";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,96 +41,14 @@ function sniff(buf: Buffer): "jpeg" | "png" | "gif" | "webp" | "bmp" | "other" {
   return "other";
 }
 
-/** 读像素尺寸；sips 读不出来按失败处理。 */
-function dimensions(file: string): { w: number; h: number } | null {
-  const res = spawnSync("sips", ["-g", "pixelWidth", "-g", "pixelHeight", file], { timeout: 10_000 });
-  if (res.status !== 0) return null;
-  const out = res.stdout.toString();
-  const w = Number(/pixelWidth:\s*(\d+)/.exec(out)?.[1]);
-  const h = Number(/pixelHeight:\s*(\d+)/.exec(out)?.[1]);
-  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
-  return { w, h };
-}
-
-/** 跑一次 sips 产出 JPEG；输出落在随机临时目录，读完即删。失败返回 null。 */
-function runSips(args: string[], source: string): Buffer | null {
-  const dir = mkdtempSync(join(tmpdir(), "shrink-"));
-  const out = join(dir, "o.jpg");
-  try {
-    const res = spawnSync("sips", [...args, source, "--out", out], { timeout: 20_000 });
-    if (res.status !== 0) return null;
-    const buf = readFileSync(out);
-    return buf.length > 0 ? buf : null;
-  } catch {
-    return null;
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-export function shrinkForModel(input: { file: string }): ShrinkResult {
-  // 非 macOS：整个阶梯交给一个 sharp worker 进程干完（比逐档 spawn sips 更省）
-  if (!usesSips()) {
-    const r = shrinkViaWorker(input.file);
-    if (!r.ok) return { ok: false, reason: r.reason };
-    const buffer = Buffer.from(r.b64, "base64");
-    return r.floor ? { ok: true, buffer, mimeType: "image/jpeg", floor: true } : { ok: true, buffer, mimeType: "image/jpeg" };
-  }
-  let head: Buffer;
-  let fileSize: number;
-  try {
-    fileSize = statSync(input.file).size;
-    head = readFileHead(input.file, 16);
-  } catch {
-    return { ok: false, reason: "read" };
-  }
-  const size = dimensions(input.file);
-  if (!size) return { ok: false, reason: "sips" };
-  const long = Math.max(size.w, size.h);
-
-  // JPEG 小图直通：不重编码（字节即证据，F3 的小图分支）
-  if (sniff(head) === "jpeg" && long <= MAX_LONG_SIDE && fileSize <= TARGET_BYTES) {
-    try {
-      return { ok: true, buffer: readFileSync(input.file), mimeType: "image/jpeg" };
-    } catch {
-      return { ok: false, reason: "read" };
-    }
-  }
-
-  // 初次转码：超尺寸先归到 1280；不超尺寸只转格式。GIF 由 sips 取首帧（防御，上游已排除）
-  const first = long > MAX_LONG_SIDE
-    ? runSips(["-Z", String(MAX_LONG_SIDE), "-s", "format", "jpeg", "-s", "formatOptions", QUALITY], input.file)
-    : runSips(["-s", "format", "jpeg", "-s", "formatOptions", QUALITY], input.file);
-  if (!first) return { ok: false, reason: "sips" };
-  if (first.length <= TARGET_BYTES) return { ok: true, buffer: first, mimeType: "image/jpeg" };
-
-  // 阶梯下探：只降分辨率、质量恒 80；起点比当前档低一档，避免重复跑同一尺寸
-  let last = first;
-  for (let z = Math.floor(Math.min(long, MAX_LONG_SIDE) / LADDER_STEP) * LADDER_STEP - LADDER_STEP; z >= LADDER_FLOOR; z -= LADDER_STEP) {
-    const next = runSips(["-Z", String(z), "-s", "format", "jpeg", "-s", "formatOptions", QUALITY], input.file);
-    if (!next) continue;
-    last = next;
-    if (next.length <= TARGET_BYTES) return { ok: true, buffer: next, mimeType: "image/jpeg" };
-  }
-  return { ok: true, buffer: last, mimeType: "image/jpeg", floor: true };
-}
-
 /**
- * inline 附图的统一取图（静态图）：shrinkForModel（≤50KB）。GIF 不在此处理——
+ * inline 附图的统一取图（静态图）：shrinkForModelAsync（≤50KB）。GIF 不在此处理——
  * 网关对 image/gif 只解码首帧（2026-11-06 实测），动图一律走 gif-frames.ts 的
  * 抽帧多 block 路径。压缩注入点可测试替换。
  */
 export type InlineImageResult =
   | { ok: true; buffer: Buffer; mimeType: string }
   | { ok: false; reason: string };
-
-export function inlineImageOf(
-  file: string,
-  shrink: (input: { file: string }) => ShrinkResult = shrinkForModel,
-): InlineImageResult {
-  const shrunk = shrink({ file });
-  return shrunk.ok ? { ok: true, buffer: shrunk.buffer, mimeType: shrunk.mimeType } : { ok: false, reason: shrunk.reason };
-}
 
 async function dimensionsAsync(file: string, signal?: AbortSignal): Promise<{ w: number; h: number } | null> {
   const res = await spawnCapture("sips", ["-g", "pixelWidth", "-g", "pixelHeight", file], { timeoutMs: 10_000, signal });

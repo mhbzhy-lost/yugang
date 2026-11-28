@@ -35,7 +35,7 @@ import {
 import { cleanUpstreamText } from "../../media/draw-remote/redact.ts";
 import { readBoundedFile, sniffImageMagic } from "../../media/image-ops.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
-import type { OutboundPayload } from "../say-shared.ts";
+import { isQuoteForced, type OutboundPayload } from "../say-shared.ts";
 import { fenceReadablePath } from "../fs-shared.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 
@@ -214,7 +214,7 @@ export function createDrawRemoteTool(manifest: ToolManifest, deps: ToolPackageDe
       // 快照引用锚点：工具返回后原轮会清空 triggerOf，后台必须使用此处的只读快照
       const trigger = deps.triggerOf?.(round);
       const snapshotQuoteId = trigger?.messageId;
-      const snapshotQuoteForce = trigger ? trigger.mentionsBot : undefined;
+      const snapshotQuoteForce = trigger ? isQuoteForced(trigger) : undefined;
       const aspectRatio = args.aspect_ratio;
       const started = now();
       const run = deps.drawRemoteRun ?? runDrawRemote;

@@ -35,6 +35,8 @@ export type RoundKind = "ambient" | "injection" | "answer" | "worker" | "news";
 export interface RoundTrigger {
   messageId?: number | string;
   mentionsBot: boolean;
+  /** 本轮触发是否是回复某条消息：是则强制引用以保持回复链可读性。 */
+  reply?: boolean;
   userId?: number;
   /** 缺省 = answer（legacy 轮全部 answer）。 */
   kind?: RoundKind;

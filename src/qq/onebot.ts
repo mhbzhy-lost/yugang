@@ -7,7 +7,7 @@
 import { InboundVideoStore, isVideoName, type VideoAttachment, type QqVideoSource } from "../media/inbound-video.ts";
 import { isLookDisabled } from "../tools/look/tool.ts";
 import { DEFAULT_LIMITS } from "../egress/policy.ts";
-import { readBoundedFile, sniffImageMagic, toJpegViaWorker, usesSips } from "../media/image-ops.ts";
+import { readBoundedFile, sniffImageMagic, toJpegViaWorkerAsync, usesSips } from "../media/image-ops.ts";
 import { renderForwardAttachment, type ForwardAttachment, type ForwardChildMessage, type QuotedMessage } from "./model-input.ts";
 
 /** 入站图片下载超时（毫秒）：AbortSignal 覆盖连接与整个 body 读取，慢链接/挂死连接不会无限占用。 */
@@ -987,14 +987,14 @@ export class OneBot {
           // macOS 走自带 sips（参数逐字保留）；其它平台走 sharp worker，否则容器内这类图直接丢。
           writeFileSync(raw, bytes);
           if (!usesSips()) {
-            const buf = toJpegViaWorker(raw);
+            const buf = await toJpegViaWorkerAsync(raw);
             if (!buf || buf.length === 0) return null;
             writeFileSync(jpg, buf);
             kept = jpg;
             return { ref: `inbound/${stem}.jpg` };
           }
-          const { spawnSync } = await import("node:child_process");
-          const sips = spawnSync("sips", ["-s", "format", "jpeg", raw, "--out", jpg], { timeout: 20000 });
+          const { spawnCapture } = await import("../media/spawn-capture.ts");
+          const sips = await spawnCapture("sips", ["-s", "format", "jpeg", raw, "--out", jpg], { timeoutMs: 20_000 });
           if (sips.status !== 0 || !existsSync(jpg)) return null;
           kept = jpg;
           return { ref: `inbound/${stem}.jpg` };

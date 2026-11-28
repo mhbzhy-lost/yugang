@@ -6,7 +6,7 @@ import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-d
 import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
+import { enqueueOutbound, isQuoteForced, type OutboundPayload } from "../say-shared.ts";
 import { ComfyExecutionFailed, ComfyBusy } from "../draw/comfy.ts";
 import { runQwenDraw, RATIO_SIZES } from "./comfy.ts";
 
@@ -109,7 +109,7 @@ export function createQwenDrawTool(manifest: ToolManifest, deps: ToolPackageDeps
             media: `gen/${file}`,
             quote: false,
             ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
-            ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
+            ...(trigger ? { quoteForce: isQuoteForced(trigger) } : {}),
             at: ts,
             key: `${api.conversationId}:qwengen:${String(round)}`,
           };

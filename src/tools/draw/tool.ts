@@ -8,9 +8,9 @@ import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
 import { resolveCharacter, resolveStyle } from "../characters.ts";
-import { normalizeInitViaWorker, usesSips } from "../../media/image-ops.ts";
+import { normalizeInitViaWorkerAsync, usesSips } from "../../media/image-ops.ts";
 import { spawnCapture } from "../../media/spawn-capture.ts";
-import { enqueueOutbound, type OutboundPayload } from "../say-shared.ts";
+import { enqueueOutbound, isQuoteForced, type OutboundPayload } from "../say-shared.ts";
 import { ComfyBusy, ComfyExecutionFailed, execGraph, runExclusive, uploadRefImage, type DrawStage } from "./engine.ts";
 import { DEFAULT_DRAW_BACKEND } from "./backends/ids.ts";
 import { getDrawBackend, validateAllDrawBackends } from "./backends/registry.ts";
@@ -240,7 +240,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
             media: `gen/${file}`,
             quote: false,
             ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
-            ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
+            ...(trigger ? { quoteForce: isQuoteForced(trigger) } : {}),
             at: ts,
             key: `${api.conversationId}:drawimg:${String(round)}`,
           };
@@ -270,7 +270,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
  *  macOS 走 sips（参数逐字保留，改异步 spawn 以消费取消信号，不再阻塞 watchdog），
  *  其它平台走 sharp worker（同步契约，自带底层 timeout）；否则容器内 ref 改图不可用。 */
 async function normalizeInitImage(full: string, signal?: AbortSignal): Promise<Buffer | null> {
-  if (!usesSips()) return normalizeInitViaWorker(full);
+  if (!usesSips()) return normalizeInitViaWorkerAsync(full, signal);
   try {
     const probe = await spawnCapture("sips", ["-g", "pixelWidth", "-g", "pixelHeight", full], { timeoutMs: 20_000, signal });
     const out = probe.status === 0 ? probe.stdout.toString() : "";

@@ -17,8 +17,8 @@ import { join, resolve } from "node:path";
 import { LiveDoc, defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { DEFAULT_LIMITS } from "../../egress/policy.ts";
 import { checkMemeSource, type MemeSourceCode } from "../../media/meme-store.ts";
-import { extractGifFrames } from "../../media/gif-frames.ts";
-import { inlineImageOf } from "../../media/shrink-image.ts";
+import { extractGifFramesAsync } from "../../media/gif-frames.ts";
+import { inlineImageOfAsync } from "../../media/shrink-image.ts";
 import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
@@ -121,12 +121,14 @@ export function createMemeImportTool(manifest: ToolManifest, deps: ToolPackageDe
       for (const ref of refs) {
         const full = join(inboxDir, ref.slice("meme-inbox/".length));
         if (ref.toLowerCase().endsWith(".gif")) {
-          const frames = extractGifFrames(full, 2);
-          for (const frame of frames.frames) images.push({ type: "image", data: frame, mimeType: "image/jpeg" });
-          if (frames.frames.length > 0) memeImportMarkLooked(String(round), ref);
+          const frames = await extractGifFramesAsync(full, 2, { signal: context.abortSignal });
+          if (frames) {
+            for (const frame of frames.frames) images.push({ type: "image", data: frame, mimeType: "image/jpeg" });
+            if (frames.frames.length > 0) memeImportMarkLooked(String(round), ref);
+          }
           continue;
         }
-        const image = inlineImageOf(full);
+        const image = await inlineImageOfAsync(full, undefined, context.abortSignal);
         if (image.ok) {
           images.push({ type: "image", data: image.buffer.toString("base64"), mimeType: image.mimeType });
           memeImportMarkLooked(String(round), ref);
