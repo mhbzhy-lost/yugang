@@ -30,9 +30,11 @@ interface TagsArgs {
 
 interface Row {
   name: string;
+  nameLower: string;
   category: number;
   count: number;
   aliases: string;
+  aliasesLower: string;
 }
 
 const CATEGORY: Record<number, string> = { 0: "通用", 1: "画师", 3: "作品", 4: "角色", 5: "风格" };
@@ -44,10 +46,11 @@ const DETAIL_BUDGET = 1200;
 const RELATED_LIMIT = 3;
 const SIBLING_LIMIT = 4;
 const MAX_KEYWORD_LENGTH = 200;
-let cache: Row[] | null = null;
+const cache = new Map<string, Row[]>();
 
 function load(csvPath: string): Row[] {
-  if (cache) return cache;
+  const cached = cache.get(csvPath);
+  if (cached) return cached;
   if (!existsSync(csvPath)) return [];
   try {
     const rows: Row[] = [];
@@ -55,26 +58,55 @@ function load(csvPath: string): Row[] {
       if (!line.trim()) continue;
       const m = line.match(/^([^,]+),(\d+),(\d+),(.*)$/);
       if (!m) continue;
-      rows.push({ name: m[1], category: Number(m[2]), count: Number(m[3]), aliases: m[4].replace(/^"|"$/g, "") });
+      const name = m[1];
+      const aliases = m[4].replace(/^"|"$/g, "");
+      rows.push({
+        name,
+        nameLower: name.toLowerCase(),
+        category: Number(m[2]),
+        count: Number(m[3]),
+        aliases,
+        aliasesLower: aliases.toLowerCase(),
+      });
     }
-    cache = rows;
+    cache.set(csvPath, rows);
     return rows;
   } catch {
     return [];
   }
 }
 
-/** danbooru 行：名称或别名包含关键词，按热度取前 N。 */
+function topByCount(rows: readonly Row[], k: number): Row[] {
+  if (k <= 0 || rows.length === 0) return [];
+  if (rows.length <= k) return [...rows].sort((a, b) => b.count - a.count);
+  const top: Row[] = [];
+  for (const row of rows) {
+    if (top.length < k || row.count > top[top.length - 1]!.count) {
+      let idx = top.length;
+      while (idx > 0 && top[idx - 1]!.count < row.count) idx--;
+      top.splice(idx, 0, row);
+      if (top.length > k) top.pop();
+    }
+  }
+  return top;
+}
+
+/** danbooru 行：按精确 / 前缀 / 包含分桶，每桶按热度取前 N，避免全量排序。 */
 function related(rows: readonly Row[], keyword: string, limit: number): Row[] {
   const kw = keyword.toLowerCase().replace(/\s+/g, "_");
-  if (!kw) return [];
-  const hits: Row[] = [];
+  if (!kw || limit <= 0) return [];
+  const exact: Row[] = [];
+  const prefix: Row[] = [];
+  const contains: Row[] = [];
   for (const row of rows) {
-    const name = row.name.toLowerCase();
-    if (name === kw) hits.unshift(row);
-    else if (name.includes(kw) || row.aliases.toLowerCase().includes(kw)) hits.push(row);
+    if (row.nameLower === kw) exact.push(row);
+    else if (row.nameLower.startsWith(kw)) prefix.push(row);
+    else if (row.nameLower.includes(kw) || row.aliasesLower.includes(kw)) contains.push(row);
   }
-  return hits.sort((a, b) => b.count - a.count).slice(0, limit);
+  const out = topByCount(exact, limit);
+  if (out.length < limit) out.push(...topByCount(prefix, limit - out.length));
+  if (out.length < limit) out.push(...topByCount(contains, limit - out.length));
+  return out;
 }
 
 /** 平铺总表：每条 `key · name · weight`，按宽度折行；超预算先降级去掉 weight，再截断。 */
@@ -161,8 +193,6 @@ export function createTagsTool(manifest: ToolManifest, deps: ToolPackageDeps): T
     parameters: manifestParameters<TagsArgs>(manifest),
     execute: async (args) => {
       const messages = deps.prompts.messages;
-      const rows = deps.tagsCsv ? load(deps.tagsCsv) : [];
-      if (rows.length === 0) throw new Error(messages["tags_empty"] ?? "tags_empty");
       const keyword = (args.keyword ?? "").trim();
       if ([...keyword].length > MAX_KEYWORD_LENGTH) {
         throw new Error(messages["tags_keyword_too_long"] ?? "tags_keyword_too_long");
@@ -183,6 +213,8 @@ export function createTagsTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         return { output: [{ type: "text", text: `${label}\n${renderList(deps, listCharacters(group))}` }] };
       }
 
+      const rows = deps.tagsCsv ? load(deps.tagsCsv) : [];
+
       // 2) 角色/风格条目。
       const entry = findCharacter(keyword);
       if (entry) {
@@ -190,6 +222,7 @@ export function createTagsTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       }
 
       // 3) danbooru 词表；仍无结果时给候选，不直接说「没有」。
+      if (rows.length === 0) throw new Error(messages["tags_empty"] ?? "tags_empty");
       const top = related(rows, keyword, 10);
       if (top.length > 0) {
         return {

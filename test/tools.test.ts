@@ -5,17 +5,19 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { MemoryStorage } from "@earendil-works/pi-durable";
+import { LiveDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import { openFish } from "../src/harness.ts";
+import { loadPrompts } from "../src/prompt/index.ts";
 import { loadToolManifests, toolFullDescription } from "../src/tools/manifest.ts";
-import { makeReminderTask } from "../src/tools/remind/task.ts";
+import { mergeToolMessages } from "../src/tools/loader.ts";
+import { makeReminderTask, RemindersDoc } from "../src/tools/remind/task.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const PROMPTS = fileURLToPath(new URL("../prompt", import.meta.url));
@@ -134,4 +136,233 @@ test("工具说明逐字来自 src/tools/<name>/TOOL.md，缺文件就报错", a
   } finally {
     await open.close();
   }
+});
+
+function loadMergedManifests() {
+  const prompts = loadPrompts(PROMPTS);
+  const manifests = loadToolManifests(TOOL_ROOT, { memeTags: prompts.memeTags });
+  mergeToolMessages(manifests, prompts.messages);
+  return { prompts, manifests };
+}
+
+test("grep 跳过 var/ 并拦截嵌套量词 ReDoS；read 分段模式超限报 fs_too_big", async () => {
+  const { createGrepTool } = await import("../src/tools/grep/tool.ts");
+  const { createReadTool } = await import("../src/tools/read/tool.ts");
+  const { SAND_ROOT } = await import("../src/tools/fs-shared.ts");
+  const { prompts, manifests } = loadMergedManifests();
+  const masterDeps = {
+    prompts,
+    mediaRoot: mkdtempSync(join(tmpdir(), "yg-fs-")),
+    master: "1",
+    triggerOf: () => ({ mentionsBot: false, userId: "1" }),
+    react: () => {},
+  };
+  const api = {
+    conversationId: "conv-fs",
+    callId: "c1",
+    snapshot: async (doc: unknown) => (doc === LiveDoc ? { run: { inputs: ["r1"] } } : undefined),
+  } as never;
+
+  const grep = createGrepTool(manifests.get("grep")!, masterDeps)!;
+  // 嵌套量词 ReDoS 拦截
+  await assert.rejects(
+    () => grep.execute({ pattern: "(a+)+b", path: "src/tools/grep" } as never, api, ctx),
+    new RegExp(prompts.messages["grep_bad_regex"]!),
+  );
+  // 验证 grep 默认跳过 var/
+  const grepSrc = readFileSync(fileURLToPath(new URL("../src/tools/grep/tool.ts", import.meta.url)), "utf8");
+  assert.match(grepSrc, /"var"/);
+
+  // read 分段模式超 READ_CAP 报 fs_too_big
+  const read = createReadTool(manifests.get("read")!, masterDeps)!;
+  const bigFile = join(SAND_ROOT, `yg-big-read-${Date.now()}.txt`);
+  writeFileSync(bigFile, `${"x".repeat(100)}\n`.repeat(600)); // ~60KB > READ_CAP(32KB)
+  try {
+    await assert.rejects(
+      () => read.execute({ path: bigFile, startLine: 1 } as never, api, ctx),
+      new RegExp(prompts.messages["fs_too_big"]!),
+    );
+  } finally {
+    rmSync(bigFile, { force: true });
+  }
+});
+
+test("look 透传 abortSignal 给 describeImage", async () => {
+  const { createLookTool } = await import("../src/tools/look/tool.ts");
+  const { prompts, manifests } = loadMergedManifests();
+  const mediaRoot = mkdtempSync(join(tmpdir(), "yg-look-sig-"));
+  mkdirSync(join(mediaRoot, "inbound"), { recursive: true });
+  writeFileSync(join(mediaRoot, "inbound", "small.png"), PNG);
+
+  let seenSignal: AbortSignal | undefined;
+  const models = {
+    getModel: () => ({ id: "v-1", provider: "mock" }),
+    streamSimple: (_model: unknown, _req: unknown, opts?: { signal?: AbortSignal }) => {
+      seenSignal = opts?.signal;
+      return {
+        result: async () => ({
+          content: [{ type: "text", text: "一只小猫" }],
+          stopReason: "stop",
+        }),
+      };
+    },
+  } as never;
+
+  const look = createLookTool(manifests.get("look")!, {
+    prompts,
+    mediaRoot,
+    models,
+    visionModel: { provider: "mock", modelId: "v-1" },
+    react: () => {},
+  });
+  const ac = new AbortController();
+  const api = {
+    conversationId: "conv-look",
+    callId: "c1",
+    snapshot: async (doc: unknown) => (doc === LiveDoc ? { run: { inputs: ["r1"] } } : undefined),
+  } as never;
+  const res = (await look.execute({ ref: "inbound/small.png" } as never, api, { abortSignal: ac.signal } as never)) as {
+    output: Array<{ text: string }>;
+  };
+  assert.equal(res.output[0]?.text, "一只小猫");
+  assert.equal(seenSignal, ac.signal, "context.abortSignal 必须透传到视觉模型请求");
+});
+
+test("tags 无 danbooru.csv 时仍可查询 lora 与内置角色/风格", async () => {
+  const { createTagsTool } = await import("../src/tools/tags/tool.ts");
+  const { prompts, manifests } = loadMergedManifests();
+  const tags = createTagsTool(manifests.get("tags")!, {
+    prompts,
+    mediaRoot: mkdtempSync(join(tmpdir(), "yg-tags-")),
+    tagsCsv: join(tmpdir(), "nonexistent-danbooru.csv"),
+    react: () => {},
+  });
+  const api = { conversationId: "1", callId: "c1" } as never;
+
+  const listRes = (await tags.execute({ keyword: "lora" } as never, api, ctx)) as { output: Array<{ text: string }> };
+  assert.match(listRes.output[0]?.text ?? "", /claude/);
+
+  const charRes = (await tags.execute({ keyword: "claude" } as never, api, ctx)) as { output: Array<{ text: string }> };
+  assert.match(charRes.output[0]?.text ?? "", /claude_girl_anima_lora_clean\.safetensors/);
+
+  await assert.rejects(
+    () => tags.execute({ keyword: "nonexistent_danbooru_tag_xyz" } as never, api, ctx),
+    /danbooru\.csv/,
+  );
+});
+
+test("remind 任务在 !conv 或终态异常时清理 RemindersDoc 死条目；非法 action 拒绝", async () => {
+  const { createRemindTool } = await import("../src/tools/remind/tool.ts");
+  const { prompts, manifests } = loadMergedManifests();
+  const task = makeReminderTask({ messages: () => prompts.messages, drain: async () => {}, log: () => {} });
+
+  // 1. !conv 清理死条目
+  let docItems = [{ id: "101", at: 1000, note: "喝水", repeat: "none" as const, by: "u", createdAt: 500 }];
+  let committedOutcome: unknown;
+  await task.definition.phases.due(
+    { input: { note: "喝水", at: 1000, repeat: "none", by: "u" } } as never,
+    {
+      taskId: 101,
+      conversationId: 1,
+      snapshot: async () => ({ items: docItems }),
+      conversation: async () => undefined,
+      commit: async (fn: (tx: unknown) => Promise<unknown>) => {
+        committedOutcome = await fn({
+          doc: async (d: unknown) => {
+            assert.equal(d, RemindersDoc);
+            return { get items() { return docItems; }, set items(v) { docItems = v; } };
+          },
+        });
+      },
+      now: () => 2000,
+    } as never,
+    ctx,
+  );
+  assert.equal(docItems.length, 0, "!conv 必须清理死条目");
+  assert.equal((committedOutcome as { status?: string })?.status, "terminal");
+
+  // 2. conv.submit 抛错清理死条目
+  let docItems2 = [{ id: "102", at: 1000, note: "开会", repeat: "none" as const, by: "u", createdAt: 500 }];
+  await task.definition.phases.due(
+    { input: { note: "开会", at: 1000, repeat: "none", by: "u" } } as never,
+    {
+      taskId: 102,
+      conversationId: 1,
+      snapshot: async () => ({ items: docItems2 }),
+      conversation: async () => ({
+        submit: async () => { throw new Error("conv_closed"); },
+      }),
+      commit: async (fn: (tx: unknown) => Promise<unknown>) => {
+        committedOutcome = await fn({
+          doc: async () => ({ get items() { return docItems2; }, set items(v) { docItems2 = v; } }),
+        });
+      },
+      now: () => 2000,
+    } as never,
+    ctx,
+  );
+  assert.equal(docItems2.length, 0, "conv.submit 异常必须清理死条目");
+  assert.equal((committedOutcome as { status?: string })?.status, "terminal");
+
+  // 3. remind 非法 action 拒绝
+  const remind = createRemindTool(manifests.get("remind")!, {
+    prompts,
+    mediaRoot: mkdtempSync(join(tmpdir(), "yg-rem-")),
+    reminderTask: task,
+    react: () => {},
+  })!;
+  await assert.rejects(
+    () => remind.execute({ action: "bogus" } as never, { conversationId: 1 } as never, ctx),
+    /add|list|cancel/,
+  );
+});
+
+test("wan_gif 传错参考图返 wan_gif_ref_bad 且不触发 onLongWork / 不锁 submitted；meme_add 非法参数不触发 onLongWork", async () => {
+  const { createWanGifTool } = await import("../src/tools/wan_gif/tool.ts");
+  const { createMemeAddTool } = await import("../src/tools/meme_add/tool.ts");
+  const { prompts, manifests } = loadMergedManifests();
+  const mediaRoot = mkdtempSync(join(tmpdir(), "yg-wangif-"));
+  let wanLongWork = 0;
+
+  const wanGif = createWanGifTool(manifests.get("wan_gif")!, {
+    prompts,
+    mediaRoot,
+    wanImage: { apiKey: "k", baseUrl: "http://127.0.0.1:1" },
+    onLongWork: () => { wanLongWork++; },
+    react: () => {},
+  });
+  const api = {
+    conversationId: "conv-wg",
+    callId: "c1",
+    snapshot: async (doc: unknown) => (doc === LiveDoc ? { run: { inputs: ["r-wg"] } } : undefined),
+  } as never;
+
+  await assert.rejects(
+    () => wanGif.execute({ prompt: "挥手", ref: "inbound/missing.png" } as never, api, ctx),
+    new RegExp(prompts.messages["wan_gif_ref_bad"]!),
+  );
+  assert.equal(wanLongWork, 0, "wan_gif_ref_bad 不得触发 onLongWork");
+  // 同轮再试另一个坏 ref，应仍返 wan_gif_ref_bad 而不是 draw_uncertain（证明 submitted 未锁死）
+  await assert.rejects(
+    () => wanGif.execute({ prompt: "挥手", ref: "../escape.png" } as never, api, ctx),
+    new RegExp(prompts.messages["wan_gif_ref_bad"]!),
+  );
+
+  // meme_add 非主人/缺情绪词不触发 onLongWork
+  let memeLongWork = 0;
+  mkdirSync(join(mediaRoot, "inbound"), { recursive: true });
+  writeFileSync(join(mediaRoot, "inbound", "a.png"), PNG);
+  const memeAdd = createMemeAddTool(manifests.get("meme_add")!, {
+    prompts,
+    mediaRoot,
+    master: "1",
+    triggerOf: () => ({ mentionsBot: false, userId: "999" }),
+    onLongWork: () => { memeLongWork++; },
+    react: () => {},
+  })!;
+  await assert.rejects(
+    () => memeAdd.execute({ ref: "inbound/a.png", caption: "好笑", tags: ["开心"] } as never, api, ctx),
+    new RegExp(prompts.messages["meme_add_master"]!),
+  );
+  assert.equal(memeLongWork, 0, "meme_add 非主人不得触发 onLongWork");
 });

@@ -235,7 +235,27 @@ function summarizeRejection(body: string): string {
   } catch { return body.slice(0, 200); }
 }
 
-async function submitAndWait(base: string, graph: Graph, promptId: string, clientId: string, deadline: number, signal?: AbortSignal): Promise<ComfyHistoryJob> {
+function queueContainsPrompt(queue: { queue_running?: unknown[]; queue_pending?: unknown[] }, promptId: string): boolean {
+  for (const list of [queue.queue_running, queue.queue_pending]) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (item === promptId) return true;
+      if (Array.isArray(item) && item[1] === promptId) return true;
+      if (item && typeof item === "object" && (item as { prompt_id?: unknown }).prompt_id === promptId) return true;
+    }
+  }
+  return false;
+}
+
+async function submitAndWait(
+  base: string,
+  graph: Graph,
+  promptId: string,
+  clientId: string,
+  deadline: number,
+  signal?: AbortSignal,
+  pollIntervalMs = 1500,
+): Promise<ComfyHistoryJob> {
   // POST 只发一次：已被接受的作业不重投；提交后取消只停本地等待，
   // 服务端作业照跑（submitted 保持 true，本轮 draw_uncertain 不可重试）。
   const submitTimeout = AbortSignal.timeout(15_000);
@@ -252,6 +272,8 @@ async function submitAndWait(base: string, graph: Graph, promptId: string, clien
   if (!response.ok) throw new Error(`ComfyUI HTTP ${response.status}`);
   const submitted = await response.json() as { prompt_id?: string };
   if (submitted.prompt_id !== promptId) throw new Error("unexpected ComfyUI prompt id");
+  let emptyPolls = 0;
+  let misses = 0;
   while (Date.now() < deadline) {
     signal?.throwIfAborted();
     const history = await (await request(`${base}/history/${promptId}`, {}, 10_000, signal)).json() as Record<string, ComfyHistoryJob>;
@@ -260,7 +282,27 @@ async function submitAndWait(base: string, graph: Graph, promptId: string, clien
       if (job.status?.status_str !== "success" || job.status.completed !== true) throw new ComfyExecutionFailed("ComfyUI execution failed");
       return job;
     }
-    await pause(1500, signal);
+    emptyPolls++;
+    if (emptyPolls % 3 === 0) {
+      const queue = await (await request(`${base}/queue`, {}, 10_000, signal)).json() as { queue_running?: unknown[]; queue_pending?: unknown[] };
+      if (!Array.isArray(queue.queue_running) || !Array.isArray(queue.queue_pending)) {
+        throw new Error("invalid ComfyUI queue");
+      }
+      if (queueContainsPrompt(queue, promptId)) {
+        misses = 0;
+      } else {
+        // 先查 /queue 后立刻复查一次 /history，防作业在两次请求间隙完成出队
+        const recheck = await (await request(`${base}/history/${promptId}`, {}, 10_000, signal)).json() as Record<string, ComfyHistoryJob>;
+        const recheckedJob = recheck[promptId];
+        if (recheckedJob) {
+          if (recheckedJob.status?.status_str !== "success" || recheckedJob.status.completed !== true) throw new ComfyExecutionFailed("ComfyUI execution failed");
+          return recheckedJob;
+        }
+        misses++;
+        if (misses >= 3) throw new ComfyExecutionFailed("ComfyUI job vanished from queue");
+      }
+    }
+    await pause(pollIntervalMs, signal);
   }
   throw new Error("ComfyUI history timeout");
 }
@@ -287,6 +329,8 @@ export interface ExecOpts {
   extraModelFileFields?: Readonly<Record<string, readonly string[]>>;
   /** 工具超时/宿主取消的合并信号；提交前取消 = 未提交（可重试），提交后取消 = 状态不明（不重 POST）。 */
   signal?: AbortSignal;
+  /** 可选：history 轮询间隔（默认 1500ms；测试可调小）。 */
+  pollIntervalMs?: number;
 }
 
 /** 统一执行：queue 闸 + 模型清单核对（LoRA 与模型文件）+ 提交 + 轮询 + 取图。busy 由调用方通过 runExclusive 持有。 */
@@ -307,7 +351,7 @@ export async function execGraph(url: string, graph: Graph, opts: ExecOpts): Prom
     // 提交前最后一道取消闸：已取消就不 POST（onSubmitted 不执行，submitted 保持 false 可重试）
     opts.signal?.throwIfAborted();
     opts.onSubmitted();
-    const job = await submitAndWait(base, graph, id, clientId, Date.now() + opts.deadline, opts.signal);
+    const job = await submitAndWait(base, graph, id, clientId, Date.now() + opts.deadline, opts.signal, opts.pollIntervalMs);
     return await fetchImage(base, job, opts.outputNode, opts.outputType, opts.signal);
   } finally { sock?.close(); }
 }

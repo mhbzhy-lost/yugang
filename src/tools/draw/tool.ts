@@ -107,10 +107,13 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
 
       // 2. 轮状态检查
       if (round === undefined) throw new Error(deps.prompts.messages["draw_round_missing"] ?? "draw_round_missing");
-      const previous = rounds.get(api.conversationId);
-      if (previous?.pending) throw new Error(deps.prompts.messages["draw_inflight"] ?? "draw_inflight");
-      if (previous?.round === round && previous.used) throw new Error(deps.prompts.messages["draw_used"] ?? "draw_used");
-      if (previous?.round === round && previous.submitted) throw new Error(deps.prompts.messages["draw_uncertain"] ?? "draw_uncertain");
+      const assertRoundAvailable = () => {
+        const previous = rounds.get(api.conversationId);
+        if (previous?.pending) throw new Error(deps.prompts.messages["draw_inflight"] ?? "draw_inflight");
+        if (previous?.round === round && previous.used) throw new Error(deps.prompts.messages["draw_used"] ?? "draw_used");
+        if (previous?.round === round && previous.submitted) throw new Error(deps.prompts.messages["draw_uncertain"] ?? "draw_uncertain");
+      };
+      assertRoundAvailable();
 
       // 3. 热读后端
       const backendId = deps.drawBackend?.() ?? DEFAULT_DRAW_BACKEND;
@@ -177,6 +180,7 @@ export function createDrawTool(manifest: ToolManifest, deps: ToolPackageDeps): T
 
       // 8. 参考图预处理与单飞执行
       const ref = mode === "ref" && args.ref !== undefined ? await prepareRef(args.ref, context.abortSignal) : undefined;
+      assertRoundAvailable();
       const state: RoundState = { round, pending: true, submitted: false, used: false };
       rounds.set(api.conversationId, state);
       const uploadRef = deps.drawUploadRef ?? uploadRefImage;

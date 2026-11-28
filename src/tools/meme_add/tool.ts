@@ -51,7 +51,6 @@ export function createMemeAddTool(manifest: ToolManifest, deps: ToolPackageDeps)
       // 收图静默轮不经 submitRound、宿主没有本轮会话映射，宿主侧自行不发
       const live = await api.snapshot(LiveDoc, api.conversationId, context);
       const round = live?.run?.inputs?.[0];
-      deps.onLongWork?.("meme_add", round);
 
       const ref = args.ref.trim().replace(/^\[|\]$/g, "");
       const full = resolve(root, ref);
@@ -100,6 +99,7 @@ export function createMemeAddTool(manifest: ToolManifest, deps: ToolPackageDeps)
         );
       }
 
+      deps.onLongWork?.("meme_add", round);
       const result = await addMeme({ mediaRoot: root, source: full, caption, tags, maxBytes });
       if (result.status === "rejected") {
         // 来源校验在库里再做了一次（lstat/realpath/大小/文件头）：拒绝理由逐个翻成文案

@@ -127,6 +127,10 @@ export function createRemindTool(manifest: ToolManifest, deps: ToolPackageDeps):
         };
       }
 
+      if (args.action !== "cancel") {
+        throw new Error(messages["remind_bad_action"] ?? "remind_bad_action");
+      }
+
       // cancel：打取消标记，任务到点看见标记就静默了结并自清
       const id = (args.id ?? "").trim();
       if (id.length === 0) throw new Error(messages["remind_cancel_missing"] ?? "remind_cancel_missing");

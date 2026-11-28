@@ -5,6 +5,8 @@
  * 没有mentions 参数：语音没有文本气泡，@等于静默丢人。一轮一条附件闸照常。
  * 说明文字与参数 Schema 唯一来自 TOOL.md manifest。
  */
+import { rmSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import { validateOutbound } from "../../egress/policy.ts";
 import { ledgerOf } from "../../egress/ledger.ts";
@@ -12,7 +14,7 @@ import { synthesizeToMedia } from "../../tts.ts";
 import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { chargeSayRound, enqueueOutbound, normalizeTextInput, resolveSayContext, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
+import { chargeSayRound, enqueueOutbound, normalizeTextInput, peekSayRound, resolveSayContext, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface SayVoiceArgs {
@@ -47,6 +49,7 @@ export function createSayVoiceTool(manifest: ToolManifest, deps: ToolPackageDeps
       if (spoken.length > VOICE_MAX_CHARS) {
         throw new Error(renderTemplate(deps.prompts.messages["voice_too_long"] ?? "", { length: String(spoken.length) }));
       }
+      peekSayRound(String(api.conversationId), round, deps.prompts.messages["say_once"] ?? "already said this round");
 
       const ts = now();
       let voice: string;
@@ -60,25 +63,32 @@ export function createSayVoiceTool(manifest: ToolManifest, deps: ToolPackageDeps
         throw new Error(deps.prompts.messages["voice_failed"] ?? "voice_failed");
       }
 
-      const rejection = validateOutbound(
-        { messages: [], voice },
-        { limits, now: ts, recent: ledger.recent, secrets: ledger.secrets },
-      );
-      if (rejection) throwSayRejection(deps.prompts.messages, rejection);
+      try {
+        const rejection = validateOutbound(
+          { messages: [], voice },
+          { limits, now: ts, recent: ledger.recent, secrets: ledger.secrets },
+        );
+        if (rejection) throwSayRejection(deps.prompts.messages, rejection);
 
-      chargeSayRound(String(api.conversationId), round, deps.prompts.messages["say_once"] ?? "already said this round");
+        chargeSayRound(String(api.conversationId), round, deps.prompts.messages["say_once"] ?? "already said this round");
 
-      const payload: OutboundPayload = {
-        // 语音消息只发语音，不再重复发一条文字（说了什么全在音频里）
-        items: [],
-        voice,
-        quote: args.quote === true,
-        ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
-        ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
-        at: ts,
-        key: `${api.conversationId}:${api.callId}`,
-      };
-      await enqueueOutbound(api, payload, context);
+        const payload: OutboundPayload = {
+          // 语音消息只发语音，不再重复发一条文字（说了什么全在音频里）
+          items: [],
+          voice,
+          quote: args.quote === true,
+          ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
+          ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
+          at: ts,
+          key: `${api.conversationId}:${api.callId}`,
+        };
+        await enqueueOutbound(api, payload, context);
+      } catch (error) {
+        const mediaRoot = resolve(limits.mediaRoot);
+        const voicePath = resolve(mediaRoot, voice);
+        if (voicePath.startsWith(mediaRoot + sep)) rmSync(voicePath, { force: true });
+        throw error;
+      }
       return { output: [{ type: "text", text: deps.prompts.messages["say_sent"] ?? "ok" }] };
     },
   });

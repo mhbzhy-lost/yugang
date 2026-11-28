@@ -9,7 +9,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,7 @@ import { openFish } from "../src/harness.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { LiveDoc } from "@earendil-works/pi-durable";
 import { createSayVoiceTool } from "../src/tools/say_voice/tool.ts";
+import { chargeSayRound } from "../src/tools/say-shared.ts";
 import { loadToolManifests } from "../src/tools/manifest.ts";
 import { mergeToolMessages } from "../src/tools/loader.ts";
 import { DEFAULT_LIMITS } from "../src/egress/policy.ts";
@@ -416,4 +417,131 @@ test("fish.config voices 校验：支持 qwen-tts 与 gpt-sovits，禁止写入 
   const missing = loadFishConfig({ path: cfgPath });
   assert.equal(Object.keys(missing.config.voices).length, 0);
   assert.match(missing.problems.join(" "), /voice 缺失/);
+});
+
+test("say_voice 额度已满时在 ttsSynthesize 之前拒并零落盘；入队失败清理生成的 .wav", async () => {
+  const mediaRoot = mkdtempSync(join(tmpdir(), "yg-voice-cap-"));
+  mkdirSync(join(mediaRoot, "voice"), { recursive: true });
+  const prompts = loadPrompts(PROMPTS);
+  const manifests = loadToolManifests(TOOL_ROOT, { memeTags: prompts.memeTags });
+  mergeToolMessages(manifests, prompts.messages);
+
+  let synthCalls = 0;
+  let shouldFailCommit = false;
+  const say = createSayVoiceTool(manifests.get("say_voice")!, {
+    limits: { ...DEFAULT_LIMITS, mediaRoot },
+    prompts,
+    now: () => 1_000,
+    ttsOf: () => ({ url: "http://127.0.0.1:9/tts" }),
+    ttsSynthesize: async (_config, _text, root) => {
+      synthCalls++;
+      const file = `voice/synth-${synthCalls}.wav`;
+      writeFileSync(join(root, file), Buffer.alloc(4096, 1));
+      return { bytes: Buffer.alloc(4096, 1), ref: file };
+    },
+  })!;
+
+  const convId = "conv-voice-cap";
+  const round = "round-cap";
+  const api = {
+    conversationId: convId,
+    callId: "c1",
+    snapshot: async (doc: unknown) => (doc === LiveDoc ? { run: { inputs: [round] } } : undefined),
+    commit: async (fn: (tx: unknown) => Promise<void>) => {
+      if (shouldFailCommit) throw new Error("commit_failed");
+      await fn({ doc: async () => ({ queue: [] }), appendEntry: async () => ({ id: 1 }) });
+    },
+  } as never;
+
+  // 1. 满 3 次额度后调用 say_voice：必须在 ttsSynthesize 前抛 say_once
+  chargeSayRound(convId, round, prompts.messages["say_once"]!);
+  chargeSayRound(convId, round, prompts.messages["say_once"]!);
+  chargeSayRound(convId, round, prompts.messages["say_once"]!);
+  await assert.rejects(
+    () => say.execute({ text: "第四句" } as never, api, ctx),
+    new RegExp(prompts.messages["say_once"]!),
+  );
+  assert.equal(synthCalls, 0, "额度满后不得调 ttsSynthesize");
+  assert.equal(readdirSync(join(mediaRoot, "voice")).length, 0, "不得残留 .wav");
+
+  // 2. 新一轮但 enqueueOutbound 失败：刚生成的 .wav 必须被清理
+  shouldFailCommit = true;
+  const api2 = { ...api, conversationId: "conv-voice-cleanup" } as never;
+  await assert.rejects(() => say.execute({ text: "要清理" } as never, api2, ctx), /commit_failed/);
+  assert.equal(synthCalls, 1);
+  assert.equal(readdirSync(join(mediaRoot, "voice")).length, 0, "入队失败必须删除刚生成的 .wav");
+});
+
+test("tts.ts 音频下载超过 25MB 上限时拒绝并中止读取", async () => {
+  const mediaRoot = mkdtempSync(join(tmpdir(), "yg-tts-limit-"));
+  const originalFetch = globalThis.fetch;
+  let canceled = false;
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.endsWith("/set_model") || url.endsWith("/change_refer")) {
+      return new Response(JSON.stringify({ code: 0 }), { status: 200 });
+    }
+    const stream = new ReadableStream({
+      cancel() { canceled = true; },
+      start(controller) {
+        controller.enqueue(new Uint8Array(1024));
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { "content-length": String(26 * 1024 * 1024) },
+    });
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      () => synthesizeToMedia({
+        url: "http://tts-limit.test",
+        gptModel: "/a.ckpt",
+        sovitsModel: "/a.pth",
+        referWav: "/a.wav",
+        referText: "甲",
+      }, "超长音频", mediaRoot),
+      /tts_audio_too_large/,
+    );
+    assert.equal(canceled, true, "content-length 超限时应 cancel response body");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  // 直接测流式超限（无 content-length 头，body 超过 25MB）
+  canceled = false;
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.endsWith("/set_model") || url.endsWith("/change_refer")) {
+      return new Response(JSON.stringify({ code: 0 }), { status: 200 });
+    }
+    let sent = 0;
+    const chunk = new Uint8Array(4 * 1024 * 1024);
+    const stream = new ReadableStream({
+      pull(controller) {
+        if (sent >= 64 * 1024 * 1024) { controller.close(); return; }
+        sent += chunk.length;
+        controller.enqueue(chunk);
+      },
+      cancel() { canceled = true; },
+    });
+    return new Response(stream, { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      () => synthesizeToMedia({
+        url: "http://tts-stream-limit.test",
+        gptModel: "/a.ckpt",
+        sovitsModel: "/a.pth",
+        referWav: "/a.wav",
+        referText: "甲",
+      }, "流式超限", mediaRoot),
+      /tts_audio_too_large/,
+    );
+    assert.equal(canceled, true, "流超限时应 cancel response body");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

@@ -9,5 +9,6 @@
   "remind_time_bad": "时间没看懂：clock_time 要写成 HH:MM（24小时制），或给 offset_minutes（正整数分钟）。",
   "remind_time_past": "这个时间已经过去了，设个将来的时间。",
   "remind_time_far": "最多只能设 7 天内的提醒，更远的到时候再说。",
-  "remind_cap": "本会话已经有 {{cap}} 条活着的提醒，先取消几条再来。"
+  "remind_cap": "本会话已经有 {{cap}} 条活着的提醒，先取消几条再来。",
+  "remind_bad_action": "action 只支持 add、list 或 cancel。"
 }

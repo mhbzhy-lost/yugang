@@ -9,7 +9,7 @@
  * 校验：数值越界/枚举不对时保留旧值（或默认值）并打一行告警，绝不让鱼把自己调成刷屏机器。
  * 优先级：fish.config.json > .env > 内置默认（旧 env 仍认，避免线上配置一夜失效）。
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { FISH_CONFIG_PATH } from "./paths.ts";
 import { DEFAULT_DRAW_BACKEND, DRAW_BACKEND_IDS } from "./tools/draw/backends/ids.ts";
@@ -622,10 +622,10 @@ function checkEngageBlock(raw: unknown): FieldCheck {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, reason: "engage 必须是对象" };
   const e = raw as Record<string, unknown>;
   const specs: Array<[keyof EngageConfig, string]> = [
-    ["freeSeconds", "engage.freeSeconds 必须在 15–3600"],
-    ["freeBrowseChance", "engage.freeBrowseChance 必须是 0–1"],
-    ["freeBatchMax", "engage.freeBatchMax 必须在 1–200"],
-    ["answerContextSize", "engage.answerContextSize 必须在 1–100"],
+    ["freeSeconds", "freeSeconds 必须在 15–3600"],
+    ["freeBrowseChance", "freeBrowseChance 必须是 0–1"],
+    ["freeBatchMax", "freeBatchMax 必须在 1–200"],
+    ["answerContextSize", "answerContextSize 必须在 1–100"],
   ];
   const ranges: Record<string, [number, number]> = {
     freeSeconds: [15, 3600],
@@ -637,16 +637,17 @@ function checkEngageBlock(raw: unknown): FieldCheck {
   const problems: string[] = [];
   let any = false;
   const known = new Set<string>([...specs.map(([key]) => key), "byGroup"]);
+  const groupKnown = new Set<string>(specs.map(([key]) => key));
   for (const [key, reason] of specs) {
     if (e[key] === undefined) continue;
     const [lo, hi] = ranges[key];
     // freeBrowseChance 是概率（允许小数），其余是条数/秒数（向下取整）
-    const r = numberIn(reason, lo, hi, key !== "freeBrowseChance")(e[key]);
+    const r = numberIn(`engage.${reason}`, lo, hi, key !== "freeBrowseChance")(e[key]);
     if (r.ok) {
       (parsed as Record<string, number>)[key] = r.value as number;
       any = true;
     } else {
-      problems.push(`${reason}，已回默认`);
+      problems.push(`engage.${reason}，已回默认`);
     }
   }
   // byGroup：按群覆盖。键必须纯数字群号，值按与全局同款范围逐键校验（非法键剔除并告警，
@@ -660,7 +661,7 @@ function checkEngageBlock(raw: unknown): FieldCheck {
       let keptAny = false;
       for (const [group, rawOv] of Object.entries(rawBy as Record<string, unknown>)) {
         if (!/^\d+$/.test(group)) {
-          problems.push(`engage.byGroup 键 ${group} 不是群号，已剔除`);
+          problems.push(`engage.byGroup.${group} 不是群号，已剔除`);
           continue;
         }
         if (!rawOv || typeof rawOv !== "object" || Array.isArray(rawOv)) {
@@ -677,7 +678,7 @@ function checkEngageBlock(raw: unknown): FieldCheck {
           else problems.push(`engage.byGroup.${group}.${reason}，已剔除该键`);
         }
         for (const key of Object.keys(rawOv as Record<string, unknown>)) {
-          if (!known.has(key)) problems.push(`engage.byGroup.${group}.${key} 不是受控字段，已忽略`);
+          if (!groupKnown.has(key)) problems.push(`engage.byGroup.${group}.${key} 不是受控字段，已忽略`);
         }
         if (Object.keys(ov).length > 0) {
           kept[group] = ov;
@@ -1005,11 +1006,11 @@ export function loadFishConfig(options: { path?: string } = {}): ConfigLoadResul
   // 行为参数不再认任何 env 变量（2026-11-06 清理）：全部走 fish.config.json / 缺省
   let fromFile: Partial<FishConfig> = {};
   let hasFile = false;
-  if (existsSync(path)) {
-    try {
-      fromFile = parseFile(JSON.parse(readFileSync(path, "utf8")), problems);
-      hasFile = true;
-    } catch (error) {
+  try {
+    fromFile = parseFile(JSON.parse(readFileSync(path, "utf8")), problems);
+    hasFile = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
       problems.push(`fish.config.json 解析失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -1036,20 +1037,28 @@ export function loadFishConfig(options: { path?: string } = {}): ConfigLoadResul
   return { config, source, problems };
 }
 
+function statMtime(filePath: string): number {
+  try {
+    return statSync(filePath).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * 热加载包装：mtime 变了就重读；读坏了保留上一份好的配置。
- * 每次调用都有一次 statSync（µs 级），换取「改完立刻生效」。
+ * 每次调用都有一次 statSync（µs 级，不加 TTL），换取「改完立刻生效」。
  */
 export function createConfigLoader(options: { path?: string; env?: NodeJS.ProcessEnv } = {}): () => ConfigLoadResult {
   const path = options.path ?? FISH_CONFIG_PATH;
   let current = loadFishConfig({ ...options, path });
-  let mtime = existsSync(path) ? statSync(path).mtimeMs : 0;
+  let mtime = statMtime(path);
 
   for (const problem of current.problems) console.warn(`[鱼缸] 配置 ${problem}`);
   console.log(`[鱼缸] 配置来源 ${current.source === "file" ? path : "内置默认"}`);
 
   return () => {
-    const now = existsSync(path) ? statSync(path).mtimeMs : 0;
+    const now = statMtime(path);
     if (now !== mtime) {
       mtime = now;
       const next = loadFishConfig({ ...options, path });

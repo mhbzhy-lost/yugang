@@ -192,3 +192,55 @@ test("文档、模板与分层约束：TOOL.md 与 fish.config.example 同步登
   assert.doesNotMatch(fishConfigSrc, /draw\/backends\/registry\.ts/);
   assert.doesNotMatch(fishConfigSrc, /draw\/engine\.ts/);
 });
+
+test("config set engage.byGroup 非法子值与非法群号均被拒绝且保留原配置", async () => {
+  const tool = makeConfigTool();
+  writeConfig({
+    engage: {
+      freeSeconds: 60,
+      byGroup: {
+        "174408629": { freeSeconds: 1200 },
+      },
+    },
+  });
+  const before = readFileSync(CONFIG_PATH, "utf8");
+
+  const errVal = await setRejection(tool, "engage.byGroup.174408629.freeSeconds", 1);
+  assert.match(errVal, /engage\.byGroup\.174408629\.freeSeconds 必须在 15–3600/);
+  assert.equal(readFileSync(CONFIG_PATH, "utf8"), before, "非法值被拒后不得删改原有群配置");
+  assert.equal(loadFishConfig().config.engage.byGroup?.["174408629"]?.freeSeconds, 1200);
+
+  const errGroup = await setRejection(tool, "engage.byGroup.abc.freeSeconds", 60);
+  assert.match(errGroup, /engage\.byGroup\.abc/);
+  assert.equal(readFileSync(CONFIG_PATH, "utf8"), before, "非法群号不得删改原配置");
+});
+
+test("config set compact.byModel.* 保留含点号的模型名而不按点拆层", async () => {
+  const tool = makeConfigTool();
+  writeConfig({ compact: { maxTokens: 100_000, byModel: { "google-antigravity": 90_000 } } });
+
+  const msg = await runSet(tool, "compact.byModel.google-antigravity/gemini-3.1-pro", 80_000);
+  assert.match(msg, /已把 compact 改成/);
+  const saved = fileConfig().compact as { maxTokens: number; byModel: Record<string, unknown> };
+  assert.equal(saved.byModel["google-antigravity/gemini-3.1-pro"], 80_000);
+  assert.equal(saved.byModel["google-antigravity/gemini-3"], undefined, "不得按点拆成嵌套对象");
+  assert.equal(loadFishConfig().config.compact.byModel["google-antigravity/gemini-3.1-pro"], 80_000);
+});
+
+test("createConfigLoader 文件被删除不抛 ENOENT，重建后下一次读取立刻热生效", () => {
+  writeConfig({ drawBackend: "anima3.8b", drawEnabled: true });
+  const load = createConfigLoader({ path: CONFIG_PATH });
+  assert.equal(load().source, "file");
+  assert.equal(load().config.drawEnabled, true);
+
+  rmSync(CONFIG_PATH, { force: true });
+  const afterDelete = load();
+  assert.equal(afterDelete.source, "default");
+  assert.equal(afterDelete.config.drawEnabled, true);
+
+  writeConfig({ drawBackend: "anima3.8b", drawEnabled: false });
+  bumpMtime();
+  const afterRecreate = load();
+  assert.equal(afterRecreate.source, "file");
+  assert.equal(afterRecreate.config.drawEnabled, false);
+});

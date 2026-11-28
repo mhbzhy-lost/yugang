@@ -24,6 +24,88 @@ interface GrepArgs {
   limit?: number;
 }
 
+const MAX_GREP_FILES = 1000;
+const MAX_GREP_BYTES = 20 * 1024 * 1024;
+const MAX_PATTERN_LENGTH = 500;
+
+/** 线性通配符匹配（支持 * 和 ?），避免多通配符正则回溯。 */
+function matchGlob(pattern: string, text: string): boolean {
+  let pi = 0;
+  let ti = 0;
+  let starIdx = -1;
+  let matchIdx = 0;
+  while (ti < text.length) {
+    if (pi < pattern.length && (pattern[pi] === "?" || pattern[pi] === text[ti])) {
+      pi++;
+      ti++;
+    } else if (pi < pattern.length && pattern[pi] === "*") {
+      starIdx = pi;
+      matchIdx = ti;
+      pi++;
+    } else if (starIdx !== -1) {
+      pi = starIdx + 1;
+      matchIdx++;
+      ti = matchIdx;
+    } else {
+      return false;
+    }
+  }
+  while (pi < pattern.length && pattern[pi] === "*") pi++;
+  return pi === pattern.length;
+}
+
+/** 尽力检测高危嵌套量词（如 (a+)+、(a*)*、([a-z]+)+），拦截指数级 ReDoS。 */
+function hasNestedQuantifier(pattern: string): boolean {
+  const stack: Array<{ hasQuantifier: boolean }> = [];
+  let inClass = false;
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]!;
+    if (ch === "\\") { i++; continue; }
+    if (inClass) {
+      if (ch === "]") inClass = false;
+      continue;
+    }
+    if (ch === "[") { inClass = true; continue; }
+    if (ch === "(") {
+      stack.push({ hasQuantifier: false });
+      if (pattern[i + 1] === "?") i++;
+      continue;
+    }
+    if (ch === ")") {
+      const frame = stack.pop();
+      if (!frame) continue;
+      const next = pattern[i + 1];
+      if (next === "*" || next === "+" || next === "{") {
+        if (frame.hasQuantifier) return true;
+        if (stack.length > 0) stack[stack.length - 1]!.hasQuantifier = true;
+      } else if (frame.hasQuantifier && stack.length > 0) {
+        stack[stack.length - 1]!.hasQuantifier = true;
+      }
+      continue;
+    }
+    if (ch === "*" || ch === "+") {
+      if (stack.length > 0) stack[stack.length - 1]!.hasQuantifier = true;
+      continue;
+    }
+    if (ch === "?" && i > 0) {
+      const prev = pattern[i - 1];
+      if (prev !== "*" && prev !== "+" && prev !== "?" && prev !== "}") {
+        if (stack.length > 0) stack[stack.length - 1]!.hasQuantifier = true;
+      }
+      continue;
+    }
+    if (ch === "{") {
+      const rest = pattern.slice(i);
+      const brace = /^\{\d+(?:,\d*)?\}/.exec(rest);
+      if (brace) {
+        if (stack.length > 0) stack[stack.length - 1]!.hasQuantifier = true;
+        i += brace[0].length - 1;
+      }
+    }
+  }
+  return false;
+}
+
 /** 主人闸是硬前提：无主人配置时 factory 返回 undefined，由注册方跳过（不进工具面）。 */
 export function createGrepTool(manifest: ToolManifest, deps: ToolPackageDeps): ToolRegistration | undefined {
   if (!deps.master) return undefined;
@@ -48,6 +130,9 @@ export function createGrepTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         if (fence.reason === "link") throw new Error(p.messages["fs_link"] ?? "fs_link");
         throw new Error(p.messages["fs_outside"] ?? "fs_outside");
       }
+      if (typeof args.pattern !== "string" || args.pattern.length > MAX_PATTERN_LENGTH || hasNestedQuantifier(args.pattern)) {
+        throw new Error(p.messages["grep_bad_regex"] ?? "grep_bad_regex");
+      }
       let re: RegExp;
       try {
         re = new RegExp(args.pattern, args.ignoreCase ? "i" : "");
@@ -55,15 +140,22 @@ export function createGrepTool(manifest: ToolManifest, deps: ToolPackageDeps): T
         throw new Error(p.messages["grep_bad_regex"] ?? "grep_bad_regex");
       }
       const limit = Math.min(Math.max(1, Math.floor(args.limit ?? 60)), 200);
-      const globRe = args.glob ? new RegExp(`^${args.glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`) : undefined;
+      const glob = args.glob;
       const label = (full: string): string => (full.startsWith(root + sep) ? full.slice(root.length + 1) : full);
+      const varRoot = join(root, "var");
+      const distRoot = join(root, "dist");
+      const explicitVar = base === varRoot || base.startsWith(varRoot + sep);
+      const explicitDist = base === distRoot || base.startsWith(distRoot + sep);
 
       const hits: string[] = [];
+      let filesScanned = 0;
+      let bytesScanned = 0;
       const scanFile = (full: string): void => {
+        if (filesScanned >= MAX_GREP_FILES || bytesScanned >= MAX_GREP_BYTES) return;
         const rel = label(full);
         if (rel === ".env" || rel === join("config", "auth.json")) return;
         if (BIN_EXT.has(extname(full).toLowerCase())) return;
-        if (globRe && !globRe.test(full.split(sep).pop() ?? "") && !globRe.test(rel)) return;
+        if (glob && !matchGlob(glob, full.split(sep).pop() ?? "") && !matchGlob(glob, rel)) return;
         let stat;
         try {
           stat = statSync(full);
@@ -71,6 +163,9 @@ export function createGrepTool(manifest: ToolManifest, deps: ToolPackageDeps): T
           return;
         }
         if (!stat.isFile() || stat.size > 2_000_000) return;
+        if (filesScanned >= MAX_GREP_FILES || bytesScanned + stat.size > MAX_GREP_BYTES) return;
+        filesScanned++;
+        bytesScanned += stat.size;
         let content: string;
         try {
           content = readFileSync(full, "utf8");
@@ -86,7 +181,7 @@ export function createGrepTool(manifest: ToolManifest, deps: ToolPackageDeps): T
       };
 
       const walk = (dir: string, depth: number): void => {
-        if (hits.length >= limit || depth > 6) return;
+        if (hits.length >= limit || filesScanned >= MAX_GREP_FILES || bytesScanned >= MAX_GREP_BYTES || depth > 6) return;
         let entries;
         try {
           entries = readdirSync(dir, { withFileTypes: true });
@@ -94,10 +189,12 @@ export function createGrepTool(manifest: ToolManifest, deps: ToolPackageDeps): T
           return;
         }
         for (const entry of entries) {
-          if (hits.length >= limit) return;
+          if (hits.length >= limit || filesScanned >= MAX_GREP_FILES || bytesScanned >= MAX_GREP_BYTES) return;
           const full = join(dir, entry.name);
           if (entry.isDirectory()) {
             if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".trash" || entry.name === ".pi") continue;
+            if (!explicitVar && full === varRoot) continue;
+            if (!explicitDist && full === distRoot) continue;
             walk(full, depth + 1);
             continue;
           }

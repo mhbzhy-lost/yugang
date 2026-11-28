@@ -59,6 +59,35 @@ type ServiceState = {
 
 const services = new Map<string, ServiceState>();
 const MODEL_SWITCH_TIMEOUT_MS = 180_000;
+const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+
+async function readBoundedBytes(res: Response, limit: number, errMsg: string): Promise<Buffer> {
+  const len = Number(res.headers.get("content-length") ?? 0);
+  if (Number.isFinite(len) && len > limit) {
+    await res.body?.cancel().catch(() => {});
+    throw new Error(errMsg);
+  }
+  if (!res.body) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > limit) throw new Error(errMsg);
+    return buf;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = res.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > limit) throw new Error(errMsg);
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks);
+}
 
 function serviceState(url: string): ServiceState {
   let state = services.get(url);
@@ -130,7 +159,10 @@ async function postControl(
     body: JSON.stringify(body),
     signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
   });
-  if (!response.ok) throw new Error(`tts_http_${response.status}`);
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error(`tts_http_${response.status}`);
+  }
   let result: unknown;
   try {
     result = await response.json();
@@ -195,8 +227,11 @@ async function synthesizeLocked(config: TtsConfig, text: string, mediaRoot: stri
       body: JSON.stringify(body),
       signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
     });
-    if (!response.ok) throw new Error(`tts_http_${response.status}`);
-    return Buffer.from(await response.arrayBuffer());
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error(`tts_http_${response.status}`);
+    }
+    return await readBoundedBytes(response, MAX_AUDIO_BYTES, "tts_audio_too_large");
   };
 
   try {
@@ -301,7 +336,10 @@ async function synthesizeQwenTts(config: TtsConfig, text: string, mediaRoot: str
       body: JSON.stringify({ model, input }),
       signal: mergedSignal,
     });
-    if (!response.ok) throw new Error(`tts_http_${response.status}`);
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error(`tts_http_${response.status}`);
+    }
 
     let payload: unknown;
     try {
@@ -313,10 +351,14 @@ async function synthesizeQwenTts(config: TtsConfig, text: string, mediaRoot: str
     let raw: Buffer;
     if (typeof audio?.data === "string" && audio.data.trim()) {
       raw = Buffer.from(audio.data.trim(), "base64");
+      if (raw.length > MAX_AUDIO_BYTES) throw new Error("tts_audio_too_large");
     } else if (typeof audio?.url === "string" && audio.url.trim()) {
       const dl = await fetch(audio.url.trim(), { signal: mergedSignal });
-      if (!dl.ok) throw new Error(`tts_download_http_${dl.status}`);
-      raw = Buffer.from(await dl.arrayBuffer());
+      if (!dl.ok) {
+        await dl.body?.cancel().catch(() => {});
+        throw new Error(`tts_download_http_${dl.status}`);
+      }
+      raw = await readBoundedBytes(dl, MAX_AUDIO_BYTES, "tts_audio_too_large");
     } else {
       throw new Error("tts_invalid_response");
     }
