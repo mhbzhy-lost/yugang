@@ -442,7 +442,7 @@ test("proxy-fetch：响应头已到、正文传输中途 abort → reject；上�
 
     // 1) 响应头已到、正文传输中途被调用方 abort：必须 reject（AbortError），不能把半截正文 resolve 出去
     const controller = new AbortController();
-    const pending = proxied(`${tls.url}/slow`, { signal: controller.signal });
+    const pending = proxied(`${tls.url}/slow`, { signal: controller.signal }).then((res) => res.arrayBuffer());
     await firstChunk;
     // 首块已经交给 socket；给隧道与 TLS 记录留出送达时间，确保 abort 落在「头已到、正文未完」区间
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -451,7 +451,10 @@ test("proxy-fetch：响应头已到、正文传输中途 abort → reject；上�
 
     // 2) 上游提前断开：Content-Length 不满足 / chunked 没有终止块 → reject，不 resolve 截断数据
     for (const path of ["/truncated-length", "/truncated-chunked"]) {
-      await assert.rejects(proxied(`${tls.url}${path}`), (error: unknown) => {
+      await assert.rejects(async () => {
+        const res = await proxied(`${tls.url}${path}`);
+        await res.arrayBuffer();
+      }, (error: unknown) => {
         assert.ok(error instanceof Error, `应当以 Error 拒绝，实际：${String(error)}`);
         assert.doesNotMatch(error.message, /HTTPS targets|https targets only/);
         return true;
@@ -1804,4 +1807,212 @@ test("preflightDrawRemote：同步校验输入、models.json 与 auth.json，不
       "画只猫",
     );
   }
+});
+
+// =====================================================================
+// Task 2 加固：参考图总字节上限、原子回滚、响应体上限与 !ok cancel、gpt-image 超时与信号透传
+// =====================================================================
+
+test("Task2 加固：gpt / wan / qwen 参考图总字节超 20MB 时在 onSubmitted 前拒绝（submitted=false）", async (t) => {
+  const ws = workspace();
+  t.after(() => ws.cleanup());
+  ws.models({ [CODEX]: { auth: "oauth" }, [QWEN]: { baseUrl: "https://dashscope.test/compatible-mode/v1" } });
+  ws.credentials({
+    [CODEX]: { type: "oauth", access: "codex-access", refresh: "codex-refresh", expires: Date.now() + 3600_000, accountId: "acct-1" },
+    [QWEN]: "sk-wan-key-0123456789",
+  });
+  const big = Buffer.alloc(10 * 1024 * 1024 + 1, 0xaa);
+  const images = [
+    { mimeType: "image/png", bytes: big },
+    { mimeType: "image/png", bytes: big },
+  ];
+  const submitted = submitTracker();
+  const silent = fakeFetch(() => {
+    throw new Error("超限参考图不得发请求");
+  });
+
+  for (const provider of ["gpt", "wan", "qwen"] as const) {
+    await assert.rejects(
+      runDrawRemote(runRequest(ws, { provider, images, onSubmitted: submitted.hook, fetchImpl: silent.impl })),
+      expectDrawRemoteError(provider, "bad_ref", false),
+    );
+  }
+  assert.equal(submitted.count(), 0);
+  assert.equal(silent.calls.length, 0);
+});
+
+test("Task2 加固：gpt-image / wan-image / gemini 第 2 张失败时回滚删除第 1 张，!ok 调 body.cancel 且响应体超上限拒绝", async (t) => {
+  // 1) gpt-image：第 2 张过小 → 回滚；响应体 >48MB → 拒绝并 cancel
+  const ws = codexWorkspace(t);
+  await assert.rejects(
+    generateGptImages({
+      authPath: ws.credentialsPath,
+      provider: CODEX,
+      prompt: "two cats",
+      params: { model: "gpt-image-2.6-flare" },
+      mediaRoot: ws.mediaRoot,
+      fetchImpl: fakeFetch(() => jsonResponse({
+        data: [
+          { b64_json: PNG.toString("base64") },
+          { b64_json: TINY_PNG.toString("base64") },
+        ],
+      })).impl,
+    }),
+    /gpt_image_too_small/,
+  );
+  assert.deepEqual(ws.files(), [], "gpt-image 第 2 张失败时第 1 张不得留盘");
+
+  let gptCancelled = false;
+  const gptTooBigStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(1024));
+    },
+    pull(controller) {
+      controller.enqueue(new Uint8Array(10 * 1024 * 1024));
+    },
+    cancel() {
+      gptCancelled = true;
+    },
+  });
+  await assert.rejects(
+    generateGptImages({
+      authPath: ws.credentialsPath,
+      provider: CODEX,
+      prompt: "huge json",
+      params: { model: "gpt-image-2.6-flare" },
+      mediaRoot: ws.mediaRoot,
+      fetchImpl: fakeFetch(() => new Response(gptTooBigStream, { status: 200 })).impl,
+    }),
+  );
+  assert.equal(gptCancelled, true, "gpt-image 响应超限应 cancel 流");
+
+  // 2) wan-image：第 2 张下载 404（!ok 调 body.cancel）→ 不留第 1 张；单张图 >25MB 拒绝并 cancel
+  const wsWan = wanWorkspace(t);
+  let dlCancelled = false;
+  await assert.rejects(
+    generateWanImage({
+      apiKey: "sk-wan-key",
+      baseUrl: "https://dashscope.test",
+      model: "wan2.7-image",
+      prompt: "two cats",
+      mediaRoot: wsWan.mediaRoot,
+      fetchImpl: fakeFetch((url) => {
+        if (url.endsWith("/generation")) {
+          return jsonResponse({ output: { choices: [{ message: { content: [{ image: "https://img.test/1.png" }, { image: "https://img.test/2.png" }] } }] } });
+        }
+        if (url.endsWith("/1.png")) return bytesResponse(PNG, "image/png");
+        const stream = new ReadableStream<Uint8Array>({
+          start(c) { c.enqueue(new Uint8Array(16)); },
+          cancel() { dlCancelled = true; },
+        });
+        return new Response(stream, { status: 404 });
+      }).impl,
+    }),
+    /wan_image_download_404/,
+  );
+  assert.equal(dlCancelled, true, "wan-image 下载 !ok 应调用 body.cancel()");
+  assert.deepEqual(wsWan.files(), [], "wan-image 第 2 张失败时第 1 张不得留盘");
+
+  let wanImgCancelled = false;
+  const wanTooBigImg = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(6 * 1024 * 1024));
+    },
+    cancel() {
+      wanImgCancelled = true;
+    },
+  });
+  await assert.rejects(
+    generateWanImage({
+      apiKey: "sk-wan-key",
+      baseUrl: "https://dashscope.test",
+      model: "wan2.7-image",
+      prompt: "huge img",
+      mediaRoot: wsWan.mediaRoot,
+      fetchImpl: fakeFetch((url) => {
+        if (url.endsWith("/generation")) {
+          return jsonResponse({ output: { choices: [{ message: { content: [{ image: "https://img.test/huge.png" }] } }] } });
+        }
+        return new Response(wanTooBigImg, { status: 200, headers: { "content-type": "image/png" } });
+      }).impl,
+    }),
+  );
+  assert.equal(wanImgCancelled, true, "wan-image 图片下载超 25MB 应 cancel 流");
+
+  // 3) gemini：第 2 张过小 → 回滚；响应超 48MB → cancel
+  const wsGem = workspace();
+  t.after(() => wsGem.cleanup());
+  wsGem.models({ [AG]: AG_PROVIDER });
+  wsGem.credentials({ [AG]: agCredential() });
+  await assert.rejects(
+    generateGeminiImage({
+      ...geminiBase(wsGem),
+      fetchImpl: fakeFetch(() => jsonResponse({
+        candidates: [{ content: { parts: [geminiImageParts(PNG), geminiImageParts(TINY_PNG)] }, finishReason: "STOP" }],
+      })).impl,
+    }),
+  );
+  assert.deepEqual(wsGem.files(), [], "gemini 第 2 张失败时第 1 张不得留盘");
+
+  let gemCancelled = false;
+  const gemTooBig = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(10 * 1024 * 1024));
+    },
+    cancel() {
+      gemCancelled = true;
+    },
+  });
+  await assert.rejects(
+    generateGeminiImage({
+      ...geminiBase(wsGem),
+      fetchImpl: fakeFetch(() => new Response(gemTooBig, { status: 200 })).impl,
+    }),
+  );
+  assert.equal(gemCancelled, true, "gemini 响应超 48MB 应 cancel 流");
+});
+
+test("Task2 加固：gpt-image 将 signal 透传给 store.modify 且 timeoutMs 覆盖前置刷新", async (t) => {
+  const ws = codexWorkspace(t);
+  ws.credentials({ [CODEX]: { type: "oauth", access: "codex-access", refresh: "codex-refresh", expires: Date.now() - 1000, accountId: "acct-1" } });
+
+  // 1) timeoutMs 覆盖前置刷新
+  const slowRefreshFetch = fakeFetch((_url, init) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new DOMException("timeout", "TimeoutError")), { once: true });
+  }));
+  const t0 = Date.now();
+  await assert.rejects(
+    generateGptImages({
+      authPath: ws.credentialsPath,
+      provider: CODEX,
+      prompt: "cat",
+      params: { model: "gpt-image-2.6-flare" },
+      mediaRoot: ws.mediaRoot,
+      timeoutMs: 60,
+      fetchImpl: slowRefreshFetch.impl,
+    }),
+  );
+  assert.ok(Date.now() - t0 < 500, "timeoutMs 必须覆盖前置 OAuth 刷新");
+
+  // 2) 若外部进程锁已被持有，signal 必须透传给 store.modify 立即中止等锁（不等 30s）
+  const { hostname } = await import("node:os");
+  const lockPath = `${ws.credentialsPath}.lock`;
+  writeFileSync(lockPath, JSON.stringify({ pid: process.pid, host: hostname(), token: "other-holder", at: Date.now() }));
+  t.after(() => rmSync(lockPath, { force: true }));
+
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(new DOMException("aborted", "AbortError")), 50);
+  const t1 = Date.now();
+  await assert.rejects(
+    generateGptImages({
+      authPath: ws.credentialsPath,
+      provider: CODEX,
+      prompt: "cat",
+      params: { model: "gpt-image-2.6-flare" },
+      mediaRoot: ws.mediaRoot,
+      signal: ac.signal,
+      fetchImpl: fakeFetch(() => jsonResponse({ data: [{ b64_json: PNG.toString("base64") }] })).impl,
+    }),
+  );
+  assert.ok(Date.now() - t1 < 500, "store.modify 等锁期间应响应 signal 中止");
 });

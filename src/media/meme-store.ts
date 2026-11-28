@@ -8,10 +8,11 @@
  *
  * 这里不放 src/tools：它没有模型可调用的语义，只是文件与索引的实现细节。
  */
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { extname, join, resolve, sep } from "node:path";
 import { DEFAULT_LIMITS } from "../egress/policy.ts";
+import { readFileHead } from "./image-ops.ts";
 
 export interface MemeEntry {
   file: string;
@@ -81,7 +82,7 @@ export function checkMemeSource(mediaRoot: string, ref: string, maxBytes: number
     const stat = statSync(real);
     if (!stat.isFile()) return { ok: false, code: "type" };
     if (stat.size > maxBytes) return { ok: false, code: "big" };
-    if (!looksLikeImage(readFileSync(real).subarray(0, 16))) return { ok: false, code: "magic" };
+    if (!looksLikeImage(readFileHead(real, 16))) return { ok: false, code: "magic" };
   } catch {
     return { ok: false, code: "missing" };
   }
@@ -97,10 +98,39 @@ export function loadMemeIndex(mediaRoot: string): MemeEntry[] {
   const indexUrl = memeIndexPath(mediaRoot);
   if (!existsSync(indexUrl)) return [];
   try {
-    return JSON.parse(readFileSync(indexUrl, "utf8")) as MemeEntry[];
+    const parsed = JSON.parse(readFileSync(indexUrl, "utf8")) as unknown;
+    return Array.isArray(parsed) ? (parsed as MemeEntry[]) : [];
   } catch {
     return [];
   }
+}
+
+/** 写前读索引：存在但损坏/非数组时备份 .corrupt.<ts> 并抛错拒写，绝不清空原库。 */
+export function loadMemeIndexForWrite(mediaRoot: string): MemeEntry[] {
+  const indexUrl = memeIndexPath(mediaRoot);
+  if (!existsSync(indexUrl)) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(indexUrl, "utf8")) as unknown;
+  } catch {
+    const backup = `${indexUrl}.corrupt.${Date.now()}`;
+    try {
+      copyFileSync(indexUrl, backup);
+    } catch {
+      /* 尽力备份 */
+    }
+    throw new Error("meme_index_corrupt");
+  }
+  if (!Array.isArray(parsed)) {
+    const backup = `${indexUrl}.corrupt.${Date.now()}`;
+    try {
+      copyFileSync(indexUrl, backup);
+    } catch {
+      /* 尽力备份 */
+    }
+    throw new Error("meme_index_corrupt");
+  }
+  return parsed as MemeEntry[];
 }
 
 export function md5OfFile(path: string): string {
@@ -131,7 +161,7 @@ export function withMemeStore<T>(mediaRoot: string, task: () => T | Promise<T>):
 
 function writeIndexAtomic(mediaRoot: string, entries: readonly MemeEntry[]): void {
   const indexUrl = memeIndexPath(mediaRoot);
-  const tmp = `${indexUrl}.tmp`;
+  const tmp = `${indexUrl}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
   try {
     writeFileSync(tmp, `${JSON.stringify(entries, null, 1)}\n`);
     renameSync(tmp, indexUrl);
@@ -176,7 +206,7 @@ export function addMeme(input: AddMemeInput): Promise<AddMemeResult> {
     if (!looksLikeImage(bytes.subarray(0, 16))) return { status: "rejected" as const, code: "magic" };
 
     const md5 = createHash("md5").update(bytes).digest("hex");
-    const entries = loadMemeIndex(root);
+    const entries = loadMemeIndexForWrite(root);
     const existing = entries.find((e) => e.md5 === md5);
     if (existing) return { status: "duplicate" as const, entry: existing };
 

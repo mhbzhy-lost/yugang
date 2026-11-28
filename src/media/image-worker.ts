@@ -7,13 +7,13 @@
  * 用法：node image-worker.ts <op> <jsonArgs>
  * 输出：{ ok:true, b64:"<base64>", floor?:true } 或 { ok:false, reason:"..." }
  */
-import { closeSync, existsSync, openSync, readFileSync, readSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
-import { IMAGE_SPEC as S } from "./image-ops.ts";
+import { IMAGE_SPEC as S, readFileHead } from "./image-ops.ts";
 
 type Out = { ok: true; b64: string; floor?: true } | { ok: false; reason: string };
 
@@ -42,20 +42,13 @@ function isJpeg(buf: Buffer): boolean {
  * AVIF 不在列表里：那个 sharp 自己能解。
  */
 function isHeif(file: string): boolean {
-  let fd: number | undefined;
   try {
-    fd = openSync(file, "r");
-    const head = Buffer.alloc(32);
-    readSync(fd, head, 0, 32, 0);
-    if (head.toString("ascii", 4, 8) !== "ftyp") return false;
-    const brand = head.toString("ascii", 8, 12);
+    const head = readFileHead(file, 32);
+    if (head.length < 12 || head.toString("ascii", 4, 8) !== "ftyp") return false;
+    const brand = head.toString("ascii", 8, 12).toLowerCase();
     return ["heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1"].includes(brand);
   } catch {
     return false;
-  } finally {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch {}
-    }
   }
 }
 
@@ -63,9 +56,9 @@ function isHeif(file: string): boolean {
  * HEIC/HEIF 先转成临时 PNG（无损）再交 sharp；其它格式原样返回。
  * 转 PNG 而不是 JPEG：避免归一化阶段就多一次有损编码。
  */
-function prepareInput(file: string): { path: string; temp?: string } {
+function prepareInput(file: string, tempDir?: string): { path: string; temp?: string } {
   if (!isHeif(file)) return { path: file };
-  const temp = join(tmpdir(), `yugang-heif-${randomUUID()}.png`);
+  const temp = join(tempDir || tmpdir(), `yugang-heif-${randomUUID()}.png`);
   const r = spawnSync("heif-convert", [file, temp], { timeout: 60_000, stdio: "ignore" });
   if (r.status !== 0 || !existsSync(temp)) {
     try { unlinkSync(temp); } catch {}
@@ -90,9 +83,11 @@ function resizeLong(file: string, max: number) {
 
 /** inline 附图压图：≤50KB，超了只降分辨率、质量恒 80，按 50px 阶梯下探到 400px。 */
 async function opShrink(file: string): Promise<Out> {
-  let raw: Buffer;
+  let fileSize: number;
+  let head: Buffer;
   try {
-    raw = readFileSync(file);
+    fileSize = statSync(file).size;
+    head = readFileHead(file, 32);
   } catch {
     return fail("read");
   }
@@ -101,11 +96,22 @@ async function opShrink(file: string): Promise<Out> {
   const long = Math.max(sz.w, sz.h);
 
   // JPEG 小图直通：不重编码（字节即证据）
-  if (isJpeg(raw) && long <= S.maxLongSide && raw.length <= S.targetBytes) return done(raw);
+  if (isJpeg(head) && long <= S.maxLongSide && fileSize <= S.targetBytes) {
+    try {
+      return done(readFileSync(file));
+    } catch {
+      return fail("read");
+    }
+  }
 
-  const first = long > S.maxLongSide
-    ? await resizeLong(file, S.maxLongSide).jpeg({ quality: S.quality }).toBuffer()
-    : await sharp(file, { pages: 1 }).jpeg({ quality: S.quality }).toBuffer();
+  // 先将原图解码并缩至一次 ≤1280px 中间 Buffer，避免阶梯下探每档重解原图
+  const { data, info } = await (long > S.maxLongSide
+    ? resizeLong(file, S.maxLongSide)
+    : sharp(file, { pages: 1 }))
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const first = await sharp(data, { raw: info }).jpeg({ quality: S.quality }).toBuffer();
   if (first.length <= S.targetBytes) return done(first);
 
   let last = first;
@@ -113,7 +119,10 @@ async function opShrink(file: string): Promise<Out> {
   for (let z = start; z >= S.ladderFloor; z -= S.ladderStep) {
     let next: Buffer;
     try {
-      next = await resizeLong(file, z).jpeg({ quality: S.quality }).toBuffer();
+      next = await sharp(data, { raw: info })
+        .resize({ width: z, height: z, fit: "inside" })
+        .jpeg({ quality: S.quality })
+        .toBuffer();
     } catch {
       continue;
     }
@@ -155,9 +164,9 @@ async function main(): Promise<void> {
     process.stdout.write(JSON.stringify(fail("args")));
     return;
   }
-  let args: { file?: string };
+  let args: { file?: string; tempDir?: string };
   try {
-    args = JSON.parse(argsJson) as { file?: string };
+    args = JSON.parse(argsJson) as { file?: string; tempDir?: string };
   } catch {
     process.stdout.write(JSON.stringify(fail("args")));
     return;
@@ -169,7 +178,7 @@ async function main(): Promise<void> {
   let out: Out;
   let temp: string | undefined;
   try {
-    const prepared = prepareInput(args.file);
+    const prepared = prepareInput(args.file, args.tempDir);
     temp = prepared.temp;
     switch (op) {
       case "shrink": out = await opShrink(prepared.path); break;

@@ -19,13 +19,13 @@
  * onSubmitted 只在凭据 / projectId 就绪之后、首个生成 POST 之前同步调用一次（401 重试不重复）。
  * 前置刷新失败不触发它，报 failed / submitted=false。宿主取消（AbortSignal）原样抛 AbortError。
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { fileCredentialStore, type OAuthCredential } from "../../auth/credentials.ts";
 import { refreshTokens as refreshGoogleTokens } from "../../auth/google.ts";
 import { ANTIGRAVITY_BASE_URL, antigravityUserAgent, discoverProject } from "../../model/google-code-assist.ts";
-import { extensionOf } from "../gpt-image.ts";
+import { extensionOf, readErrorText, readResponseBytes, REMOTE_JSON_MAX_BYTES } from "../gpt-image.ts";
 import { createProxyFetch } from "../proxy-fetch.ts";
 import { cleanUpstreamText, collectSecrets } from "./redact.ts";
 import {
@@ -113,6 +113,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   const clean = (value: string) => cleanUpstreamText(value, secrets());
 
   signal?.throwIfAborted();
+  const merged = signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs);
 
   const fail = (message: string, submitted: boolean, cause?: unknown): DrawRemoteError =>
     new DrawRemoteError(GEMINI, "failed", message, submitted, cause === undefined ? undefined : { cause });
@@ -132,9 +133,9 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
         async (current) => {
           const latest = asOAuth(current);
           if (!latest || !stale(latest)) return undefined;
-          return refreshGoogleTokens(latest, signal, doFetch);
+          return refreshGoogleTokens(latest, merged, doFetch);
         },
-        { signal },
+        { signal: merged },
       );
       const refreshed = asOAuth(next);
       if (!refreshed) throw noCredential();
@@ -159,7 +160,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   if (!projectId) {
     let reason = "";
     try {
-      const found = await discoverProject(credential.access, "antigravity", doFetch, signal, { baseUrl, userAgent });
+      const found = await discoverProject(credential.access, "antigravity", doFetch, merged, { baseUrl, userAgent });
       projectId = typeof found.projectId === "string" ? found.projectId.trim() : "";
     } catch (error) {
       if (signal?.aborted) throw error;
@@ -171,8 +172,6 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
       );
     }
   }
-
-  const merged = signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs);
   /** POST 之后的异常统一在这里定级：宿主取消原样上抛，其余（超时 / 断网 / 坏包）一律结果不明。 */
   const afterPost = (error: unknown, what: string): unknown => {
     if (signal?.aborted) return error;
@@ -243,7 +242,7 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   request.onStage?.({ stage: "post", ms: Date.now() - postStart, status: response.status });
 
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
+    const detail = await readErrorText(response);
     // 4xx 是上游的确定性回答（没出图）；5xx 不知道后端算没算
     throw fail(
       `gemini 生图请求失败（HTTP ${response.status}）${detail.trim() ? `：${clean(detail)}` : ""}`,
@@ -254,7 +253,8 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   const parseStart = Date.now();
   let json: unknown;
   try {
-    json = await response.json();
+    const rawJson = await readResponseBytes(response, REMOTE_JSON_MAX_BYTES, "gemini_response_too_large");
+    json = JSON.parse(rawJson.toString("utf8"));
   } catch (error) {
     throw afterPost(error, "读取响应");
   }
@@ -294,14 +294,19 @@ export async function generateGeminiImage(request: GeminiImageRequest): Promise<
   const dir = join(request.mediaRoot, "gen");
   mkdirSync(dir, { recursive: true });
   const files: string[] = [];
-  for (const bytes of decoded) {
-    // 取消后不再写：逐张复核
-    rethrowIfAborted();
-    const file = `${Date.now()}-${randomUUID()}.${extensionOf(bytes)}`;
-    writeFileSync(join(dir, file), bytes, { flag: "wx" });
-    files.push(file);
+  try {
+    for (const bytes of decoded) {
+      // 取消后不再写：逐张复核
+      rethrowIfAborted();
+      const file = `${Date.now()}-${randomUUID()}.${extensionOf(bytes)}`;
+      writeFileSync(join(dir, file), bytes, { flag: "wx" });
+      files.push(file);
+    }
+    return files;
+  } catch (err) {
+    for (const file of files) rmSync(join(dir, file), { force: true });
+    throw err;
   }
-  return files;
 }
 
 /** runDrawRemote 的 gemini 通道：把解析好的 provider 配置转成 generateGeminiImage 的入参。 */

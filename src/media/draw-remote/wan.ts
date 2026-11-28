@@ -9,6 +9,7 @@
  * 异常都结果不明（submitted=true）。上游错误正文先脱敏再清洗。
  */
 import { readCredentialFile } from "../../model/config.ts";
+import { REMOTE_REF_TOTAL_MAX_BYTES } from "../gpt-image.ts";
 import { generateWanImage } from "../wan-image.ts";
 import { cleanUpstreamText, collectSecrets } from "./redact.ts";
 import {
@@ -51,6 +52,10 @@ const DEFAULT_TIMEOUT_MS = DRAW_REMOTE_TIMEOUT_MS;
 const COMPAT_PREFIX = /\/compatible-mode\/v1$/i;
 
 export async function runDashScopeImageChannel(provider: DashScopeImageProvider, request: DrawRemoteChannelRequest): Promise<string[]> {
+  const totalRefBytes = (request.images ?? []).reduce((sum, image) => sum + image.bytes.length, 0);
+  if (totalRefBytes > REMOTE_REF_TOTAL_MAX_BYTES) {
+    throw new DrawRemoteError(provider, "bad_ref", `${provider} 参考图总大小超过 20MB 上限，请减少张数或压缩后再试`, false);
+  }
   const baseUrl = (request.baseUrl ?? "").trim().replace(/\/+$/, "").replace(COMPAT_PREFIX, "");
   if (!/^https?:\/\/[^\s/]+/i.test(baseUrl)) {
     throw new DrawRemoteError(
