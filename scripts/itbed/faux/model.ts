@@ -73,8 +73,9 @@ function calledToolNames(messages: Record<string, unknown>[]): Set<string> {
 function choose(body: Record<string, unknown>): { tool?: string; args?: Record<string, unknown>; text?: string } {
   const messages = messagesOf(body);
   const userText = lastUserText(messages);
+  const allUserText = messages.filter((m) => m.role === "user").map((m) => textOf(m.content)).join("\n");
   if (userText.includes("模型故障")) throw new Error("itbed_model_failure");
-  if (userText.includes("零出口")) return { text: "我先想想。" };
+  if (allUserText.includes("零出口")) return { text: "我先想想。" };
 
   const names = toolNames(body);
   const called = calledToolNames(messages);
@@ -97,7 +98,10 @@ function choose(body: Record<string, unknown>): { tool?: string; args?: Record<s
     if (names.has("look")) return { tool: "look", args: { ref: "inbound/itbed.png" } };
   }
   if (messages.some((message) => message.role === "tool")) return { text: "IT bed 已收到。" };
-  if (names.has("say_words")) return { tool: "say_words", args: { text: `IT bed 已收到：${userText.slice(-80) || "测试消息"}` } };
+  if (names.has("say_words")) {
+    const summary = userText.replace(/\s+/g, " ").replace(/[>#*`]/g, "").trim().slice(-80) || "测试消息";
+    return { tool: "say_words", args: { text: `IT bed 已收到：${summary}` } };
+  }
   return { text: "IT bed 已收到。" };
 }
 
