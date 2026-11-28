@@ -255,7 +255,7 @@ export function createProxyFetch(proxy: string, options: ProxyFetchOptions = {})
                 if (streamClosed) return;
                 bodyEnded = true;
                 if (!response.complete) {
-                  failStream(new Error("proxy fetch: upstream truncated response"));
+                  failStream(new Error("proxy fetch: upstream stream ended without completion (truncated)"));
                   return;
                 }
                 streamClosed = true;
@@ -269,7 +269,7 @@ export function createProxyFetch(proxy: string, options: ProxyFetchOptions = {})
 
               response.on("close", () => {
                 if (!bodyEnded && !streamClosed) {
-                  failStream(new Error("proxy fetch: upstream connection closed prematurely"));
+                  failStream(new Error("proxy fetch: upstream stream ended without completion (connection closed)"));
                 }
               });
             },

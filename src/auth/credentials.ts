@@ -95,7 +95,11 @@ export function normalizeCredential(raw: unknown): Credential | undefined {
   }
   if (rec["type"] === "oauth") {
     if (typeof rec["refresh"] === "string" && typeof rec["access"] === "string") {
-      return raw as OAuthCredential;
+      // 非有限 expires（缺失 / NaN / 字符串）归一为 0：下游的「还有多久过期」比较遇 NaN 恒为 false，
+      // 会当成永不过期跳过刷新；归 0 后立即刷新，新 expires 由刷新回写覆盖
+      const credential = raw as OAuthCredential;
+      if (!Number.isFinite(credential.expires)) return { ...credential, expires: 0 };
+      return credential;
     }
     return undefined;
   }

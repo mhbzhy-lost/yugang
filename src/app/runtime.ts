@@ -1264,7 +1264,7 @@ export async function flushBurst(burst: PendingBurst): Promise<void> {
         const expanded = await onebot.expandForwardAttachmentById(pending, anchor);
         if (expanded) {
           // 拉取失败/空合集也要可见：renderForwardAttachment 对空 children 渲染读取失败标记，不伪造条数
-          recentForward = rewriteRoundForwardImages(expanded, plan.numbers, fish.prompts.messages);
+          recentForward = rewriteRoundForwardImages(expanded, plan.numbers, plan.gifFrames, fish.prompts.messages);
           console.log(`[鱼缸] ${anchor.chatKey} 补展开最近合集`);
         }
       }

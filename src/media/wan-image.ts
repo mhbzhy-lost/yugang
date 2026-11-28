@@ -85,8 +85,9 @@ export async function generateWanImage(request: WanImageRequest): Promise<string
     stageStart = Date.now();
     const rawJson = await readResponseBytes(response, REMOTE_JSON_MAX_BYTES, "wan_image_response_too_large");
     const parsed = JSON.parse(rawJson.toString("utf8")) as { output?: { choices?: Array<{ message?: { content?: Array<{ image?: string }> } }> } };
-    const urls = parsed.output?.choices?.flatMap((choice) => choice.message?.content ?? [])
-      .map((item) => item.image).filter((image): image is string => typeof image === "string");
+    // DashScope 偶有 200 但响应体缺 output / choices（或非数组）：按空结果处理，别漏出 TypeError
+    const choices = Array.isArray(parsed.output?.choices) ? parsed.output.choices : [];
+    const urls = choices.flatMap((choice) => choice.message?.content ?? []).map((item) => item.image).filter((image): image is string => typeof image === "string");
     request.onStage?.({ stage: "parse", ms: Date.now() - stageStart, urls: urls.length });
     if (urls.length === 0) throw new Error("wan_image_empty");
     const downloaded: Array<{ bytes: Buffer; ext: string }> = [];

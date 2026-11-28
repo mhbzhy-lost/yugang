@@ -14,7 +14,7 @@ import { synthesizeToMedia } from "../../tts.ts";
 import { renderTemplate } from "../../prompt/index.ts";
 import { manifestParameters, toolFullDescription } from "../manifest.ts";
 import type { ToolManifest, ToolPackageDeps } from "../types.ts";
-import { chargeSayRound, enqueueOutbound, normalizeTextInput, peekSayRound, resolveSayContext, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
+import { chargeSayRound, enqueueOutbound, isQuoteForced, normalizeTextInput, peekSayRound, resolveSayContext, throwSayRejection, type OutboundPayload } from "../say-shared.ts";
 
 /** args 静态类型：与 TOOL.md 的参数 Schema 一一对应；运行时 Schema 只有 manifest 这一份。 */
 interface SayVoiceArgs {
@@ -78,7 +78,7 @@ export function createSayVoiceTool(manifest: ToolManifest, deps: ToolPackageDeps
           voice,
           quote: args.quote === true,
           ...(trigger?.messageId !== undefined ? { quoteId: trigger.messageId } : {}),
-          ...(trigger ? { quoteForce: trigger.mentionsBot } : {}),
+          ...(trigger ? { quoteForce: isQuoteForced(trigger) } : {}),
           at: ts,
           key: `${api.conversationId}:${api.callId}`,
         };

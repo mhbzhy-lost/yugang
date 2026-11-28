@@ -21,6 +21,7 @@ import net from "node:net";
 import type { Duplex } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
 import { createProxyFetch } from "../src/media/proxy-fetch.ts";
 import { generateGptImages } from "../src/media/gpt-image.ts";
 import { generateWanImage } from "../src/media/wan-image.ts";
@@ -457,6 +458,11 @@ test("proxy-fetch：响应头已到、正文传输中途 abort → reject；上�
       }, (error: unknown) => {
         assert.ok(error instanceof Error, `应当以 Error 拒绝，实际：${String(error)}`);
         assert.doesNotMatch(error.message, /HTTPS targets|https targets only/);
+        // 截断是瞬时故障：文案必须命中 pi-ai 的可重试判定，pi-durable 才会重试模型流而不是当成确定性失败
+        // 正文以 Node 流的 aborted 错误冒出来时是 AbortError（本身可重试），只有带文案的截断错误才核文案
+        if (error.message !== "aborted") {
+          assert.equal(isRetryableAssistantError({ stopReason: "error", errorMessage: error.message }), true, `${path}：${error.message}`);
+        }
         return true;
       }, path);
     }
@@ -466,6 +472,15 @@ test("proxy-fetch：响应头已到、正文传输中途 abort → reject；上�
     assert.equal(whole.status, 200);
     assert.ok(Buffer.from(await whole.arrayBuffer()).equals(PNG));
   });
+});
+
+test("proxy-fetch：截断 / 提前断开的两条报错文案均命中 isRetryableAssistantError", () => {
+  for (const message of [
+    "proxy fetch: upstream stream ended without completion (truncated)",
+    "proxy fetch: upstream stream ended without completion (connection closed)",
+  ]) {
+    assert.equal(isRetryableAssistantError({ stopReason: "error", errorMessage: message }), true, message);
+  }
 });
 
 // =====================================================================
@@ -884,6 +899,54 @@ test("取消围栏：请求在途时中止 → 抛 AbortError 且 gen/ 零写入
 // =====================================================================
 // gpt 通道
 // =====================================================================
+
+/** 本地写入 auth.json 时 expires 丢失或写成非法字符串（非有限值）——下游必须当成已过期处理。 */
+test("gpt：凭据 expires 为 NaN 时仍先走 OAuth 刷新，不拿旧 access 直接发生成请求", async (t) => {
+  const ws = codexWorkspace(t);
+  // 走通道实现（store.read → 刷新 → 生成）而非 runDrawRemote：同步预检 readCredentialFile 对非法 expires 另有「视作无凭据」的既有契约
+  // JSON.stringify 会把 NaN 写成 null，这里手写文本保证落盘的就是非法的 expires
+  writeFileSync(
+    ws.credentialsPath,
+    `{"${CODEX}": {"type":"oauth","access":"stale-access","refresh":"codex-refresh","expires":"not-a-number","accountId":"acct-1"}}`,
+  );
+  // 刷新后的 access 是带账号声明的 JWT（refreshTokens 从中重取 accountId）
+  const b64 = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const freshAccess = `${b64({ alg: "none" })}.${b64({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } })}.sig`;
+  const fetch = fakeFetch((url, init) => {
+    if (url === "https://auth.openai.com/oauth/token") {
+      assert.match(String(init?.body), /refresh_token=codex-refresh(&|$)/);
+      return jsonResponse({ access_token: freshAccess, refresh_token: "codex-refresh-2", expires_in: 3600 });
+    }
+    assert.equal(headerOf(init, "authorization"), `Bearer ${freshAccess}`, "生成请求必须用刷新后的 access");
+    assert.ok(url.endsWith("/images/generations"), `不该打到别的端点：${url}`);
+    return jsonResponse({ data: [{ b64_json: PNG.toString("base64") }] });
+  });
+  const files = await generateGptImages({
+    authPath: ws.credentialsPath,
+    provider: CODEX,
+    model: "gpt-image-2.6-flare",
+    prompt: "a cat",
+    mediaRoot: ws.mediaRoot,
+    fetchImpl: fetch.impl,
+  } as never);
+  assert.equal(files.length, 1, "刷新后的凭据必须真的完成一次出图");
+});
+
+/** DashScope 返回 200 但响应体缺 output / choices（或非数组）——必须按 wan_image_empty 处理，不能漏出 TypeError。 */
+test("wan：HTTP 200 但响应体缺 output / choices 或 choices 非数组 → wan_image_empty（submitted=true），不抛 TypeError", async (t) => {
+  const ws = wanWorkspace(t);
+  const bodies: unknown[] = [{}, { output: {} }, { output: { choices: null } }, { output: { choices: "oops" } }, { output: { choices: [{ message: { content: "oops" } }] } }];
+  for (const body of bodies) {
+    const fetch = fakeFetch(() => jsonResponse(body));
+    const reason = await runDrawRemote(runRequest(ws, { provider: "wan", fetchImpl: fetch.impl })).then(
+      () => assert.fail("应当失败"),
+      (error: unknown) => error,
+    );
+    assert.ok(!(reason instanceof TypeError), `响应体 ${JSON.stringify(body)} 不应抛 TypeError：${String(reason)}`);
+    assert.ok(expectDrawRemoteError("wan", "failed", true, ["上游没有返回图片"])(reason), `响应体 ${JSON.stringify(body)}：${String(reason)}`);
+  }
+  assert.deepEqual(ws.files(), []);
+});
 
 function codexWorkspace(t: TestContext): Workspace {
   const ws = workspace();

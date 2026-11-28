@@ -155,7 +155,7 @@ export async function generateGptImages(request: GptImageRequest): Promise<strin
   // 提前一分钟刷新：生图一次十几秒，别让 token 在请求途中过期。
   // 刷新整段放在 modify 回调里（跨进程锁内）并在锁里复核过期时间：并发请求 / 进程只刷新一次，
   // 不会把已经轮换掉的 refresh token 再用一遍，也不会拿旧快照盖掉别人刚写的凭据。
-  if (Number(credential.expires) - Date.now() < 60_000) {
+  if (!(Number(credential.expires) - Date.now() >= 60_000)) {
     const post = await store.modify(
       request.provider,
       async (current) => {

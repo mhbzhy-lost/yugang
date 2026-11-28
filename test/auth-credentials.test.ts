@@ -46,6 +46,31 @@ test("fileCredentialStore：将 { key } 与裸字符串归一化为 { type: 'api
   ]);
 });
 
+test("fileCredentialStore：oauth 凭据的非有限 expires（缺失 / NaN / 字符串）归一为 0，下游据此立即刷新", async (t) => {
+  const dir = makeTempDir("auth-cred-expires-");
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const authPath = join(dir, "auth.json");
+  const future = Date.now() + 3600_000;
+  writeFileSync(
+    authPath,
+    JSON.stringify({
+      missing: { type: "oauth", access: "a", refresh: "r" },
+      nan: { type: "oauth", access: "a", refresh: "r", expires: Number.NaN },
+      text: { type: "oauth", access: "a", refresh: "r", expires: "later" },
+      inf: { type: "oauth", access: "a", refresh: "r", expires: "Infinity" },
+      valid: { type: "oauth", access: "a", refresh: "r", expires: future, extra: "keep" },
+    }),
+    { mode: 0o600 },
+  );
+  const store = fileCredentialStore(authPath);
+  for (const providerId of ["missing", "nan", "text", "inf"]) {
+    const credential = await store.read(providerId);
+    assert.equal(credential?.type, "oauth", providerId);
+    assert.equal((credential as OAuthCredential).expires, 0, `${providerId} 的非有限 expires 应归一为 0`);
+  }
+  assert.deepEqual(await store.read("valid"), { type: "oauth", access: "a", refresh: "r", expires: future, extra: "keep" });
+});
+
 test("reclaimStaleLock：同 host + 同 pid 不同 bootId 立即回收；异机过期锁自动回收；未过期活锁等待", async (t) => {
   const dir = makeTempDir("auth-cred-lock-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));

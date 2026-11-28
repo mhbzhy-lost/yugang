@@ -11,6 +11,7 @@ import { loadToolManifests } from "../src/tools/manifest.ts";
 import { mergeToolMessages } from "../src/tools/loader.ts";
 import { createSayWordsTool } from "../src/tools/say_words/tool.ts";
 import { createSayMediaTool } from "../src/tools/say_media/tool.ts";
+import { createSayVoiceTool } from "../src/tools/say_voice/tool.ts";
 import { isQuoteForced } from "../src/tools/say-shared.ts";
 import type { CompactResult } from "../src/compact.ts";
 import {
@@ -276,6 +277,26 @@ test("isQuoteForced 与出口工具：reply 触发强制引用不依赖全局 la
   await sayMedia.execute({ media: "inbound/a.png" } as never, { ...api, callId: "call-2" } as never, {} as never);
   assert.equal(outbox.at(-1)?.quoteForce, true);
   assert.equal(outbox.at(-1)?.quoteId, 9002);
+
+  // 语音出口同样必须走 isQuoteForced：回复触发（reply 且未 @）强制引用，不依赖 mentionsBot
+  const voiceRoot = mkdtempSync(join(tmpdir(), "yg-rt-say-voice-"));
+  mkdirSync(join(voiceRoot, "voice"), { recursive: true });
+  t.after(() => rmSync(voiceRoot, { recursive: true, force: true }));
+  const sayVoice = createSayVoiceTool(manifests.get("say_voice")!, {
+    prompts,
+    mediaRoot: voiceRoot,
+    limits: { ...DEFAULT_LIMITS, mediaRoot: voiceRoot },
+    ttsOf: () => ({ url: "http://127.0.0.1:9/tts" }),
+    ttsSynthesize: async (_config, _text, root) => {
+      const file = "voice/quote-test.wav";
+      writeFileSync(join(root, file), Buffer.alloc(64, 1));
+      return { bytes: Buffer.alloc(64, 1), ref: file };
+    },
+    triggerOf: () => ({ messageId: 9003, mentionsBot: false, reply: true, kind: "answer" }),
+  })!;
+  await sayVoice.execute({ text: "语音回复" } as never, { ...api, callId: "call-3" } as never, {} as never);
+  assert.equal(outbox.at(-1)?.quoteForce, true, "say_voice 对 reply 触发必须写 quoteForce: true");
+  assert.equal(outbox.at(-1)?.quoteId, 9003);
 });
 
 test("源码回归守卫：零 spawnSync 图像模块、runtime 竞态与泄露清理接线", () => {
@@ -296,6 +317,11 @@ test("源码回归守卫：零 spawnSync 图像模块、runtime 竞态与泄露�
     assert.equal(rt.includes(forbidden), false, `runtime.ts 不应再出现 ${forbidden}`);
   }
 
+  assert.match(
+    rt,
+    /rewriteRoundForwardImages\(\s*[\w.]+,\s*[\w.]+,\s*plan\.gifFrames,\s*[\w.]+\s*\)/,
+    "runtime.ts 调用 rewriteRoundForwardImages 必须传满 4 个参数（含 plan.gifFrames），否则合集内 GIF 不标帧数",
+  );
   assert.ok(rt.includes("async function compactWithGuard("), "必须保留 compactWithGuard 声明供切片测试");
   assert.match(rt, /compactQueue\.enqueue\(/, "compactWithGuard 必须接入 compactQueue");
   assert.match(rt, /drawStageSent\.delete\(subId\)/, "runSubmission finally 必须清理 drawStageSent");
